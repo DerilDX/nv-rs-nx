@@ -521,6 +521,30 @@ fn render_frame(funcs: &[Func], rows: &[FrameRow]) -> String {
     s
 }
 
+/// Live-system wiring is separate from executable translation coverage.
+fn render_wiring(table: &str) -> String {
+    let mut counts = [[0usize; 3]; 2];
+    for line in table
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with("seq\t"))
+    {
+        let fields: Vec<_> = line.split('\t').collect();
+        let depth: usize = fields[1].parse().expect("wiring depth");
+        let status = match fields[5] {
+            "system" => 0,
+            "partial" => 1,
+            "open" => 2,
+            other => panic!("unknown wiring status {other}"),
+        };
+        counts[depth - 1][status] += 1;
+    }
+    let mut out = String::from("\n### Frame system wiring\n\nEvery depth-1 and depth-2 call is listed in [frame_wiring.tsv](../research/engine-map/frame_wiring.tsv), generated and checked by `world::frame::coverage`. Partial means some behavior exists, with its placement or missing work stated in the row; it does not mean the function is fully executed in play. Queries and unsupported calls stay open. Translation counts above are separate.\n\n| Depth | system | partial | open |\n| ---: | ---: | ---: | ---: |\n");
+    for (depth, c) in counts.iter().enumerate() {
+        let _ = writeln!(out, "| {} | {} | {} | {} |", depth + 1, c[0], c[1], c[2]);
+    }
+    out
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let check = args.iter().any(|a| a == "--check");
@@ -632,7 +656,12 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let md = render(&funcs, &header, unmapped.len(), cited.len()) + &render_frame(&funcs, &frame);
+    let md = render(&funcs, &header, unmapped.len(), cited.len())
+        + &render_frame(&funcs, &frame)
+        + &render_wiring(
+            &fs::read_to_string(root.join("research/engine-map/frame_wiring.tsv"))
+                .expect("frame wiring table"),
+        );
     let out = root.join("docs/LEDGER.md");
     if check {
         let cur = fs::read_to_string(&out).unwrap_or_default();

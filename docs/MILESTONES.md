@@ -47,6 +47,16 @@ Five generated point-product cases (`00698620`) also match native
 and queued slots: [HANDOFF.md](HANDOFF.md). Next action: finish the
 interface/render acceptance and collect the remaining checked slots.
 
+2026-10-10, Phase 1 PR 7: interface/render call and gate model, explicit
+depth-2 wiring inventory, and post-swap audio/process-list scheduling
+implemented. Both workspaces passed tests (core 15,108; viewer release
+182), fmt, clippy with warnings denied and release builds; all three
+acceptance routes passed. Evidence and open work:
+[FRAME_SKELETON.md](FRAME_SKELETON.md), "PR 7 result". Original-game
+comparison remains pending. Next action: merge after CI and review,
+publish the play build, then begin Phase 2 (HANDOFF.md). Buffered
+player input remains an interface follow-up before moving menu idle.
+
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).
 

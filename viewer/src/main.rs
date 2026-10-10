@@ -871,12 +871,21 @@ fn main() {
         // calls `Main::OnIdle_UpdateProcessLists` (`0086f890`), whose
         // `ProcessLists::UpdateProcessLists` (`0096d810`) moves the lower
         // process levels (`0096b810`, `0096b470`, `0096b050`, the passes
-        // `move_offstage` follows). In that step, whose own calls aren't
-        // modelled yet (Phase 1 PR 7); `move_offstage` holds still in the
-        // dialogue menu itself.
+        // `move_offstage` follows). At its sub-step under the process-list
+        // gate, after the sound, radio and music updates (Phase 1 PR 7).
         .add_systems(
             Update,
-            ai::move_offstage.in_set(FrameSet::step(frame_order::POST_SWAP_PROCESS)),
+            ai::move_offstage.in_set(frame_order::InterfaceSet::at(
+                world::frame::interface::UPDATE_PROCESS_LISTS,
+                0x0086_f905,
+            )),
+        )
+        .add_systems(
+            Update,
+            sounds::play_sounds.in_set(frame_order::InterfaceSet::at(
+                world::frame::interface::AUDIO_UPDATE,
+                0x0086_f650,
+            )),
         )
         // After the frame (`ViewerSet::AfterFrame`): the viewer's tools and
         // output. Billboards turn to the camera once it has moved; the
@@ -891,7 +900,6 @@ fn main() {
                 update_help,
                 grab_cursor,
                 report::report_key,
-                sounds::play_sounds,
                 face_camera,
                 report_fps,
             )

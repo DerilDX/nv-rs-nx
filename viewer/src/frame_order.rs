@@ -36,6 +36,7 @@
 
 use bevy::prelude::*;
 use world::frame::ai_stage::{self, AiState};
+use world::frame::interface::{self, InterfaceState};
 use world::frame::player::{self, PlayerState, UPDATE, UPDATE_PLAYER};
 use world::frame::world_time::{self, WorldState, FUNCTIONS};
 use world::frame::{self, FrameState, Stage, STEPS};
@@ -48,6 +49,27 @@ pub enum FrameSet {
     /// One of its steps (an index into `world::frame::STEPS`).
     Step(usize),
 }
+
+/// Interface/render sub-steps with a unique main-thread caller. The idle's
+/// three alternative callers remain modelled in core; viewer menus still
+/// consume current Bevy input ahead of the player (see `ViewerSet::Interface`).
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InterfaceSet(pub u32, pub usize);
+
+impl InterfaceSet {
+    pub fn at(function: u32, site: u32) -> Self {
+        let f = interface::function(function).expect("interface function");
+        Self(
+            function,
+            interface::step_at(f, site).expect("interface sub-step"),
+        )
+    }
+}
+
+/// Only frame-derived inputs drive wired systems. Unavailable manager,
+/// renderer and input state remains model-only; no system uses those gates.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct ThisInterface(pub InterfaceState);
 
 impl FrameSet {
     /// The set of the first step that calls `address`.
@@ -90,15 +112,15 @@ pub enum ViewerSet {
     /// player's update now stops in menu mode ([`PlayerSet`], PR 4), but
     /// the player systems ordered outside its gates (`view_input`, the
     /// mouse look) still read the input the menus clear, so it stays here
-    /// until PR 7.
+    /// until the previous-frame player input boundary is implemented
+    /// (explicitly open after PR 7).
     Interface,
     /// Last: what is not in `Main::OnIdle`, the viewer's own tools
     /// (screenshots, help, the cursor, exposure, the F12 report, the frame
     /// rate, the window's focus, the present mode, the console key's switch
     /// to its free camera, billboards turned to Bevy's camera); and output
     /// whose place in the frame isn't traced, which only needs the frame's
-    /// work done (the GPU's grass and water around the camera, sounds, music
-    /// and the radio played).
+    /// work done (the GPU's grass and water around the camera).
     AfterFrame,
 }
 
@@ -320,6 +342,7 @@ pub const WAIT_FOR_THREADS: u32 = ai_stage::WAIT_FOR_THREADS;
 /// `Main::PostSwapProcess` (stage 7), whose `Main::OnIdle_UpdateProcessLists`
 /// (`0086f890`) runs `ProcessLists::UpdateProcessLists` (`0096d810`): the
 /// lower process levels' moves (`0096b810`, `0096b470`, `0096b050`).
+#[cfg(test)]
 pub const POST_SWAP_PROCESS: u32 = 0x0087_05d0;
 /// `Main::OnIdle_UpdateAnimationsAndEffects` (stage 6, after the threads
 /// start).
@@ -487,6 +510,7 @@ pub fn begin_frame(
     draw: Res<crate::game_menus::MenuDraw>,
     walker: Res<crate::walk::Player>,
     exterior: Option<Res<crate::exterior::Exterior>>,
+    mut this_interface: ResMut<ThisInterface>,
     (mut this, mut this_player, mut this_world, mut this_ai): (
         ResMut<ThisFrame>,
         ResMut<ThisPlayer>,
@@ -506,6 +530,7 @@ pub fn begin_frame(
     this_player.0 = viewer_player_state(&this.0, walker.walking, in_dialogue);
     this_world.0 = viewer_world_state(&this.0, exterior.is_none());
     this_ai.0 = viewer_ai_state(&this.0, in_dialogue, exterior.is_none());
+    this_interface.0 = interface::from_frame(&this.0, in_dialogue);
 }
 
 /// Configures the sets in `Update`: the viewer's two sets ahead, the
@@ -560,6 +585,48 @@ pub fn configure_with(app: &mut App, threads: i32) {
     configure_player(app);
     configure_world(app);
     configure_ai(app, threads);
+    configure_interface(app);
+}
+
+/// The unique main-thread calls, and their children, in executable order.
+/// Multiple-caller functions (the idle and menu background) are deliberately
+/// excluded: selecting their first call would silently lose the fallback path.
+fn configure_interface(app: &mut App) {
+    app.init_resource::<ThisInterface>();
+    let mut configured = Vec::new();
+    for f in &interface::FUNCTIONS {
+        if f.callers.len() != 1 {
+            continue;
+        }
+        let caller = f.callers[0];
+        let frame_parent =
+            (caller.function == interface::ON_IDLE).then(|| FrameSet::step(f.address));
+        let interface_parent = configured
+            .contains(&caller.function)
+            .then(|| InterfaceSet::at(caller.function, caller.site));
+        if frame_parent.is_none() && interface_parent.is_none() {
+            continue;
+        }
+        configured.push(f.address);
+        for i in 0..f.steps.len() {
+            let address = f.address;
+            let set = InterfaceSet(address, i);
+            if let Some(parent) = frame_parent {
+                app.configure_sets(Update, set.in_set(parent));
+            } else if let Some(parent) = interface_parent {
+                app.configure_sets(Update, set.in_set(parent));
+            }
+            app.configure_sets(
+                Update,
+                set.run_if(move |this: Res<ThisInterface>| {
+                    interface::step_runs(&this.0, interface::function(address).unwrap(), i)
+                }),
+            );
+            if i + 1 < f.steps.len() {
+                app.configure_sets(Update, set.before(InterfaceSet(address, i + 1)));
+            }
+        }
+    }
 }
 
 /// The AI stage's sets ([`AiSet`]) for a thread count: the threads' calls
@@ -803,6 +870,45 @@ impl Plugin for FrameOrderPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_swap_audio_precedes_process_lists_and_menu_holds_moves() {
+        for threads in [1, 2, 8] {
+            for menu in [false, true] {
+                let mut app = App::new();
+                configure_with(&mut app, threads);
+                app.init_resource::<Ran>();
+                let frame = FrameState {
+                    threads,
+                    in_menu_mode: menu,
+                    ..FrameState::default()
+                };
+                app.insert_resource(ThisFrame(frame));
+                app.insert_resource(ThisInterface(interface::from_frame(&frame, false)));
+                // Reverse registration proves set order, including the nested
+                // audio/process-list boundary, rather than insertion order.
+                for (label, function, site) in [
+                    ("moves", interface::UPDATE_PROCESS_LISTS, 0x0086_f905),
+                    ("music", interface::AUDIO_UPDATE, 0x0086_f65f),
+                    ("radio", interface::AUDIO_UPDATE, 0x0086_f657),
+                    ("sounds", interface::AUDIO_UPDATE, 0x0086_f650),
+                ] {
+                    app.add_systems(Update, note(label).in_set(InterfaceSet::at(function, site)));
+                }
+                app.update();
+                let want = if menu {
+                    vec!["sounds", "radio", "music"]
+                } else {
+                    vec!["sounds", "radio", "music", "moves"]
+                };
+                assert_eq!(
+                    app.world().resource::<Ran>().0,
+                    want,
+                    "threads={threads} menu={menu}"
+                );
+            }
+        }
+    }
 
     /// What ran, in order.
     #[derive(Resource, Default)]

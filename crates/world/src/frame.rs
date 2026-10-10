@@ -65,11 +65,18 @@
 //! [`player`] (Phase 1 PR 4); the world and time stage's callees in
 //! [`world_time`] (Phase 1 PR 5); the AI task stage (the AI linear task
 //! threads' work, the Havok step, the actor updates, the sky) in
-//! [`ai_stage`] (Phase 1 PR 6).
+//! [`ai_stage`] (Phase 1 PR 6); the interface and render stages (the
+//! interface idle, `LastMinuteUpdate`, sleeping, the menus' background,
+//! `Main::Swap`, the post-swap and post-thread work, the console) and the
+//! controls' poll in [`interface`] (Phase 1 PR 7). [`coverage`] says, for
+//! every call to depth 2, which model holds it and how it is wired (Phase
+//! 1's gate).
 
 // Translated from 0086e650 (decompiled, FalloutNV.exe 1.4.0.525)
 
 pub mod ai_stage;
+pub mod coverage;
+pub mod interface;
 pub mod player;
 pub mod world_time;
 
@@ -556,6 +563,11 @@ const fn step(
     }
 }
 
+/// The interface idle's wiring (both calls, steps 80 and 105).
+const IDLE_WIRING: &str = "interface::DO_INTERFACE_IDLE_STEPS and the interface manager's \
+    PreIdleStuff, Idle and PostIdleStuff (viewer menus remain before the frame; HUD and \
+    Pip-Boy remain at the AI idle's approximate position; input buffering and fallback routing open)";
+
 /// The calls of `Main::OnIdle` (`0086e650`), in order.
 pub const STEPS: [FrameStep; 143] = [
     step(0x0086_a830, None, Stage::FrameStart, Gate::Always, Wiring::Open),
@@ -637,7 +649,7 @@ pub const STEPS: [FrameStep; 143] = [
     step(0x0066_52e0, Some("BSTreeManager::Update"), Stage::WorldAndTime, Gate::Always, Wiring::Partial("world_time::TREE_MANAGER_UPDATE (the wind update 006658b0 is speedtree::wind, viewer: trees::blow_wind; the camera's axes in trees::sway_trees)")),
     step(0x0086_fbe0, Some("Main::OnIdle_UpdateCurrentGridCell"), Stage::WorldAndTime, Gate::Always, Wiring::Partial("world_time::UPDATE_CURRENT_GRID_CELL (world::ref_scripts has its grid-move test; viewer: exterior::stream_squares and the distant land at its sub-steps)")),
     step(0x0043_d4d0, None, Stage::InterfaceAndScene, Gate::Always, Wiring::Open),
-    step(0x0086_fd70, Some("Main::OnIdle_DoInterfaceIdle"), Stage::InterfaceAndScene, Gate::InterfaceIdleSingleThread, Wiring::Open),
+    step(0x0086_fd70, Some("Main::OnIdle_DoInterfaceIdle"), Stage::InterfaceAndScene, Gate::InterfaceIdleSingleThread, Wiring::Partial(IDLE_WIRING)),
     step(0x0048_3710, None, Stage::InterfaceAndScene, Gate::Always, Wiring::Open),
     step(0x0049_fef0, Some("BGSDecalManager::GetInstance"), Stage::InterfaceAndScene, Gate::Always, Wiring::Open),
     step(0x0049_fff0, Some("BGSDecalManager::UpdateDecals"), Stage::InterfaceAndScene, Gate::Always, Wiring::Open),
@@ -662,7 +674,7 @@ pub const STEPS: [FrameStep; 143] = [
     step(0x008c_a070, Some("AITaskManager::StartTasksDuringRendering"), Stage::AiStart, Gate::AiTaskQueueStart, Wiring::Open),
     step(0x0086_fc60, Some("Main::OnIdle_UpdateAnimationsAndEffects"), Stage::AiStart, Gate::Always, Wiring::Open),
     step(0x0043_d4d0, None, Stage::AiStart, Gate::Always, Wiring::Open),
-    step(0x0086_fd70, Some("Main::OnIdle_DoInterfaceIdle"), Stage::AiStart, Gate::InterfaceIdleThreaded, Wiring::Open),
+    step(0x0086_fd70, Some("Main::OnIdle_DoInterfaceIdle"), Stage::AiStart, Gate::InterfaceIdleThreaded, Wiring::Partial(IDLE_WIRING)),
     step(0x0070_2360, Some("Interface::IsInMenuMode"), Stage::AiStart, Gate::InterfaceIdleThreaded, Wiring::Open),
     step(0x0070_58e0, Some("Interface::LastMinuteUpdate"), Stage::AiStart, Gate::LastMinuteUpdate, Wiring::Open),
     step(0x0047_d0b0, Some("PathManager::QInstance"), Stage::AiStart, Gate::NotFrozen, Wiring::Open),
@@ -677,13 +689,13 @@ pub const STEPS: [FrameStep; 143] = [
     step(0x0071_4a00, None, Stage::AiStart, Gate::Always, Wiring::Open),
     step(0x00a8_1a80, None, Stage::AiStart, Gate::ParallelUpdateEnd, Wiring::Open),
     step(0x0070_23c0, Some("Interface::GetTopMenuID"), Stage::AiStart, Gate::Always, Wiring::Open),
-    step(0x0070_56f0, Some("Interface::UpdateSleeping"), Stage::AiStart, Gate::SleepWaitMenuTop, Wiring::Open),
+    step(0x0070_56f0, Some("Interface::UpdateSleeping"), Stage::AiStart, Gate::SleepWaitMenuTop, Wiring::Partial("interface::UPDATE_SLEEPING_STEPS (viewer: game_menus::update_sleeping)")),
     step(0x0087_1dc0, Some("Main::RenderMenuBackground"), Stage::Render, Gate::Sleeping, Wiring::Open),
     step(0x0057_ab70, None, Stage::Render, Gate::Always, Wiring::Open),
     step(0x00b6_0040, None, Stage::Render, Gate::Always, Wiring::Open),
     step(0x0047_e040, Some("TESActorBaseData::GetAlignmentForKarma"), Stage::Render, Gate::Always, Wiring::Open),
     step(0x0086_ff70, Some("Main::Swap"), Stage::Render, Gate::Always, Wiring::Open),
-    step(0x0087_05d0, Some("Main::PostSwapProcess"), Stage::Render, Gate::Always, Wiring::Open),
+    step(0x0087_05d0, Some("Main::PostSwapProcess"), Stage::Render, Gate::Always, Wiring::Partial("interface::POST_SWAP_STEPS (viewer: sounds, radio, music, ai::move_offstage)")),
     step(0x004d_c360, None, Stage::Render, Gate::DisplayModeChange, Wiring::Open),
     step(0x0043_d4d0, None, Stage::AiJoin, Gate::AiTasks, Wiring::Open),
     step(0x0071_3d80, None, Stage::AiJoin, Gate::AiThreadsJoin, Wiring::Open),

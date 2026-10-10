@@ -31,15 +31,15 @@ Map provenance:
 | | Functions | Share |
 | --- | ---: | ---: |
 | translated | 10303 | 15.5% |
-| traced | 4506 | 6.8% |
+| traced | 4510 | 6.8% |
 | platform | 3417 | 5.2% |
 | library | 21915 | 33.1% |
-| open | 26118 | 39.4% |
+| open | 26114 | 39.4% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14402 (35.5%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14406 (35.6%) are translated or traced.
 
-Rust cites 15355 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 15437 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -73,8 +73,8 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout shared | 10470 | 2065 | 3149 | 6265 | 997 | 0 | 0 | 3208 | 69.4% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 77 | 0 | 0 | 6461 | 2.0% |
 | fallout/ai | 4849 | 1475 | 1888 | 2115 | 622 | 0 | 0 | 2112 | 56.4% |
-| fallout/interface | 2645 | 991 | 1247 | 583 | 738 | 0 | 0 | 1324 | 49.9% |
-| (unplaced) | 2353 | 470 | 0 | 30 | 407 | 1 | 0 | 1915 | 18.6% |
+| fallout/interface | 2645 | 991 | 1247 | 583 | 741 | 0 | 0 | 1321 | 50.1% |
+| (unplaced) | 2353 | 470 | 0 | 30 | 408 | 1 | 0 | 1914 | 18.6% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 496 | 202 | 0 | 0 | 1090 | 39.0% |
 | NiMain | 1619 | 261 | 1134 | 3 | 76 | 0 | 0 | 1540 | 4.9% |
 | BSHavok | 1615 | 316 | 1134 | 22 | 139 | 0 | 0 | 1454 | 10.0% |
@@ -129,7 +129,7 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 96 | 34 | 3 | 0 | 10 |
-| 2 | 1575 | 583 | 1024 | 402 | 24 | 4 | 121 |
+| 2 | 1575 | 583 | 1024 | 405 | 24 | 4 | 118 |
 | 3 | 4973 | 1303 | 3315 | 1119 | 154 | 26 | 359 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
@@ -279,3 +279,12 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 141 | `00702360` | `Interface::IsInMenuMode` | translated |
 | 142 | `00950090` | - | translated |
 | 143 | `00aa7290` | - | traced |
+
+### Frame system wiring
+
+Every depth-1 and depth-2 call is listed in [frame_wiring.tsv](../research/engine-map/frame_wiring.tsv), generated and checked by `world::frame::coverage`. Partial means some behavior exists, with its placement or missing work stated in the row; it does not mean the function is fully executed in play. Queries and unsupported calls stay open. Translation counts above are separate.
+
+| Depth | system | partial | open |
+| ---: | ---: | ---: | ---: |
+| 1 | 1 | 11 | 131 |
+| 2 | 0 | 18 | 1557 |

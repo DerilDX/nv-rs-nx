@@ -44,11 +44,13 @@ impl Plugin for MusicPlugin {
             // movie holds until it ends (`movie`).
             .add_systems(
                 Update,
-                // After the frame's stages, so after the scripts
-                // (`crate::frame_order::ViewerSet::AfterFrame`).
-                play_music
-                    .run_if(not(crate::movie::playing))
-                    .in_set(crate::frame_order::ViewerSet::AfterFrame),
+                // Post-swap audio, after the radio (0086f640).
+                play_music.run_if(not(crate::movie::playing)).in_set(
+                    crate::frame_order::InterfaceSet::at(
+                        world::frame::interface::AUDIO_UPDATE,
+                        0x0086_f65f,
+                    ),
+                ),
             );
     }
 }

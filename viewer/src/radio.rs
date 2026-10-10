@@ -27,11 +27,13 @@ pub struct RadioPlugin;
 impl Plugin for RadioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RadioOut>()
-            // After the frame's stages, so after the scripts
-            // (`crate::frame_order::ViewerSet::AfterFrame`).
+            // Post-swap audio: after sound updates, before music (0086f640).
             .add_systems(
                 Update,
-                run_radio.in_set(crate::frame_order::ViewerSet::AfterFrame),
+                run_radio.in_set(crate::frame_order::InterfaceSet::at(
+                    world::frame::interface::AUDIO_UPDATE,
+                    0x0086_f657,
+                )),
             );
     }
 }

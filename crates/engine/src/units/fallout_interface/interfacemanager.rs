@@ -9442,6 +9442,159 @@ mod tests {
         (e, m)
     }
 
+    /// The calls logged since `e.call_log` was set, as the frame model's
+    /// callees.
+    fn model_log(e: &mut Engine) -> Vec<world::frame::interface::Callee> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .map(|(a, _)| world::frame::interface::Callee::Direct(a))
+            .collect()
+    }
+
+    fn check_model(
+        address: u32,
+        s: &world::frame::interface::InterfaceState,
+        log: &[world::frame::interface::Callee],
+        ignore: &[u32],
+    ) {
+        use world::frame::interface::{follows, function, Callee};
+        let model = function(address).expect("modelled");
+        let ignore: Vec<Callee> = ignore.iter().map(|&a| Callee::Direct(a)).collect();
+        follows(model, s, log, &ignore).unwrap_or_else(|why| panic!("{address:08x} {s:?}: {why}"));
+    }
+
+    /// `InterfaceManager::PreIdleStuff` (`0070b8f0`) follows
+    /// `world::frame::interface`'s model in each mode (docs/FRAME_SKELETON.md,
+    /// PR 7). The sound pause `0070bba0` is called as a Rust function.
+    #[test]
+    fn pre_idle_follows_the_frame_model() {
+        use world::frame::interface::{mode, InterfaceState};
+        for (m, locked, pausing) in [
+            (mode::GAME, false, true),
+            (mode::GAME, false, false),
+            (mode::OPENING, false, false),
+            (mode::OPENING, true, false),
+            (mode::TAKING_OVER, false, false),
+            (mode::MENUS, false, false),
+            (mode::CLOSING, false, false),
+        ] {
+            let mut e = audio_world();
+            let im = manager(&mut e);
+            e.set(im, InterfaceManager::cMenuMode, m);
+            e.set(im, InterfaceManager::bLockMenuModeForFade, u8::from(locked));
+            e.set(im, InterfaceManager::pCursor, 0x7000);
+            returns(&mut e, MENU_CONSOLE_INSTANCE, 0x1111);
+            returns(&mut e, MENU_MODE_IS_NOT_ONE, u32::from(pausing));
+            e.call_log = Some(vec![]);
+            interface_manager_pre_idle_stuff(&mut e, im);
+            let log = model_log(&mut e);
+            let s = InterfaceState {
+                mode: m,
+                fade_lock: locked,
+                ..InterfaceState::default()
+            };
+            check_model(0x0070_b8f0, &s, &log, &[0x0070_bba0]);
+        }
+    }
+
+    /// `InterfaceManager::Idle` (`0070c4a0`) in the game, back in the game,
+    /// with menus up and taking over: the game's part only in the game, the
+    /// menus' part only with menus. `0070f4e0`, `0070f690`, `0070ee80`,
+    /// `0070f6e0` and `00710ad0` are called as Rust functions.
+    #[test]
+    fn idle_follows_the_frame_model() {
+        use world::frame::interface::{mode, InterfaceState};
+        let rust = [
+            0x0070_f4e0,
+            0x0070_f690,
+            0x0070_ee80,
+            0x0070_f6e0,
+            0x0071_0ad0,
+        ];
+        for (m, changed) in [
+            (mode::GAME, false),
+            (mode::GAME, true),
+            (mode::MENUS, false),
+            (mode::TAKING_OVER, false),
+            (mode::TAKING_OVER, true),
+        ] {
+            let (mut e, im) = idle_world(m);
+            if changed {
+                e.set_global(LAST_MENU_MODE, 0u32);
+            }
+            e.call_log = Some(vec![]);
+            interface_manager_idle(&mut e, im);
+            let log = model_log(&mut e);
+            let s = InterfaceState {
+                mode: m,
+                mode_changed: changed,
+                ..InterfaceState::default()
+            };
+            check_model(0x0070_c4a0, &s, &log, &rust);
+        }
+    }
+
+    /// The last-minute update (`00713c70`) with the tiles' array empty or
+    /// not, the loading menu up, and the AI threads' pool in use. `00713c00`,
+    /// `00713d60` and `00713e20` are called as Rust functions, and the first
+    /// takes the lock too.
+    #[test]
+    fn last_minute_update_follows_the_frame_model() {
+        use world::frame::interface::InterfaceState;
+        for (empty, loading, threads, running) in [
+            (true, false, 1, false),
+            (false, false, 1, false),
+            (true, true, 1, false),
+            (true, false, 2, true),
+            (true, false, 2, false),
+        ] {
+            let (mut e, im) = tile_update_world();
+            e.register_double(COLLECTION_IS_EMPTY, move |_, a| {
+                // PreIdle's deferred queue is separate from the tile update
+                // array; making both permanently nonempty hangs its drain.
+                match a[0] {
+                    UPDATE_ARRAY => Ret {
+                        eax: u32::from(empty),
+                        ..Ret::default()
+                    },
+                    DEFERRED_QUEUE => Ret {
+                        eax: 1,
+                        ..Ret::default()
+                    },
+                    other => panic!("unexpected collection {other:08x}"),
+                }
+            });
+            returns(&mut e, IS_IN_GAME_LOADING_MENU_OPEN, u32::from(loading));
+            let setting = e.call(GET_SETTING_VALUE, &args![0u32]).u32();
+            e.mem.set_i32(setting, threads);
+            e.set_global(SEMAPHORE_POOL_IN_USE, u8::from(running));
+            e.call_log = Some(vec![]);
+            fn_00713c70(&mut e, im);
+            let log = model_log(&mut e);
+            let s = InterfaceState {
+                threads,
+                threads_running: running,
+                loading_menu: loading,
+                tile_queue_empty: empty,
+                ..InterfaceState::default()
+            };
+            check_model(
+                0x0071_3c70,
+                &s,
+                &log,
+                &[
+                    0x0071_3c00,
+                    0x0071_3d60,
+                    0x0071_3e20,
+                    LOCK_ENTER,
+                    LOCK_LEAVE,
+                ],
+            );
+        }
+    }
+
     #[test]
     fn idle_in_the_game_mode_keeps_the_hud_and_the_player_effects_going() {
         let (mut e, m) = idle_world(1);

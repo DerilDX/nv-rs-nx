@@ -6476,6 +6476,105 @@ mod tests {
         assert_eq!(r.e.call(0x0087_23d0, &args![this, 1u32]).u32(), 0);
     }
 
+    /// `log` (without the function's own entry) as the frame model's callees.
+    fn model_log(log: &Log) -> Vec<world::frame::interface::Callee> {
+        addrs(log)
+            .into_iter()
+            .map(world::frame::interface::Callee::Direct)
+            .collect()
+    }
+
+    fn check_model(
+        address: u32,
+        s: &world::frame::interface::InterfaceState,
+        log: &Log,
+        direct: &[u32],
+    ) {
+        use world::frame::interface::{follows, function};
+        let model = function(address).expect("modelled");
+        let log = model_log(log);
+        // Same-unit Rust calls do not pass through Engine::call. Check their
+        // observable work below instead of expecting a dispatch-log entry.
+        let direct: Vec<_> = direct
+            .iter()
+            .copied()
+            .map(world::frame::interface::Callee::Direct)
+            .collect();
+        follows(model, s, &log, &direct).unwrap_or_else(|why| panic!("{address:08x} {s:?}: {why}"));
+    }
+
+    /// `Main::PostSwapProcess` (`008705d0`) and `Main::OnIdle_PostThreadsProcess`
+    /// (`00870610`) follow `world::frame::interface`'s model for one and more threads
+    /// (docs/FRAME_SKELETON.md, PR 7).
+    #[test]
+    fn post_swap_and_post_threads_follow_the_frame_model() {
+        use world::frame::interface::InterfaceState;
+        for threads in [1u32, 2] {
+            let s = InterfaceState {
+                threads: threads as i32,
+                ..InterfaceState::default()
+            };
+            let mut r = Rig::new();
+            let this = r.object(0x10);
+            r.setting(SETTING_DWORD_PTR, &[threads]);
+            let (_, log) = r.run(0x008705d0, &args![this]);
+            check_model(0x0087_05d0, &s, &log, &[]);
+            let mut r = Rig::new();
+            let this = r.object(0x10);
+            let interface = r.object(0x600);
+            r.e.mem.set_u8(interface + 0x4cc, 1);
+            r.set(GET_GLOBAL_011D8A80, &[interface]);
+            r.setting(SETTING_DWORD_PTR, &[threads]);
+            let (_, log) = r.run(0x00870610, &args![this]);
+            check_model(0x0087_0610, &s, &log, &[0x0087_0680]);
+            assert_eq!(r.e.mem.u8(interface + 0x4cc), 0);
+            assert_eq!(calls_to(&log, 0x0070_6320), vec![vec![0]]);
+            assert_eq!(
+                only(&log, &[0x0070_94f0, 0x0070_6320, 0x00a0_e770]),
+                vec![0x0070_94f0, 0x0070_6320, 0x00a0_e770]
+            );
+        }
+    }
+
+    /// `Main::RenderMenuBackground` (`00871dc0`): nothing without the player's cell and
+    /// 3D; else the world drawn once under the menus' modifier.
+    #[test]
+    fn menu_background_follows_the_frame_model() {
+        use world::frame::interface::InterfaceState;
+        let hidden = InterfaceState {
+            player_shown: false,
+            ..InterfaceState::default()
+        };
+        let mut r = Rig::new();
+        let this = r.object(0x200);
+        let (_, log) = r.run(0x0087_1dc0, &args![this]);
+        check_model(0x0087_1dc0, &hidden, &log, &[]);
+        let (mut r, this, _, _) = menu_background_rig((800, 300));
+        let (_, log) = r.run(0x0087_1dc0, &args![this]);
+        check_model(
+            0x0087_1dc0,
+            &InterfaceState::default(),
+            &log,
+            &[0x0087_06b0],
+        );
+        // The direct draw helper copies the root-child position into the
+        // indexed scene object before drawing; that observable work proves
+        // it ran, without manufacturing a missing call-log entry.
+        let indexed = r.e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+        assert_eq!(
+            [
+                r.e.mem.u32(indexed + 0x1f0),
+                r.e.mem.u32(indexed + 0x1f4),
+                r.e.mem.u32(indexed + 0x1f8)
+            ],
+            [10, 20, 30],
+        );
+        assert_eq!(
+            only(&log, &[0x0052_9c90, 0x0087_4ac0]),
+            vec![0x0052_9c90, 0x0087_4ac0]
+        );
+    }
+
     /// The rig of the menu-background render: a player with a vtable, a
     /// renderer whose group answers `800 x 300`, and a menu target whose
     /// first buffer answers `target_size`.

@@ -8276,6 +8276,216 @@ mod tests {
             }
         }
 
+        // ----- the interface and render stages (docs/FRAME_SKELETON.md, PR 7) ----------------
+
+        /// The calls `address` made, as the model's callees, without its own entry.
+        fn logged(e: &mut Engine) -> Vec<world::frame::interface::Callee> {
+            take_log(e)
+                .into_iter()
+                .skip(1)
+                .map(|(a, _)| world::frame::interface::Callee::Direct(a))
+                .collect()
+        }
+
+        fn check(
+            address: u32,
+            s: &world::frame::interface::InterfaceState,
+            log: &[world::frame::interface::Callee],
+        ) {
+            use world::frame::interface::{follows, function};
+            let model = function(address).expect("modelled");
+            follows(model, s, log, &[]).unwrap_or_else(|why| panic!("{address:08x} {s:?}: {why}"));
+        }
+
+        /// `0086fd70` makes its three calls, in order, every time.
+        #[test]
+        fn interface_idle_0086fd70_follows_the_frame_model() {
+            let mut e = idle_engine();
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fd70, &args![0u32]);
+            let log = logged(&mut e);
+            check(0x0086_fd70, &Default::default(), &log);
+            assert_eq!(log.len(), 3);
+        }
+
+        /// `0086f390` polls every frame and clears the user actions only in V.A.T.S.'s
+        /// playback or as the Pip-Boy comes up, and not with the fly camera.
+        #[test]
+        fn poll_controls_0086f390_follows_the_frame_model() {
+            use world::frame::interface::InterfaceState;
+            let game = InterfaceState::default();
+            let cases = [
+                game,
+                InterfaceState {
+                    pipboy_opening: true,
+                    ..game
+                },
+                InterfaceState {
+                    vats_playback: true,
+                    ..game
+                },
+                InterfaceState {
+                    vats_playback: true,
+                    vats_test: true,
+                    ..game
+                },
+                InterfaceState {
+                    pipboy_opening: true,
+                    fly_camera: true,
+                    ..game
+                },
+            ];
+            for s in cases {
+                let (mut e, main) = poll_engine();
+                let opening = s.pipboy_opening;
+                e.register_double(0x0070_9bc0, move |_, _| u32::from(opening).into_ret());
+                let mode = if s.vats_playback { 4u32 } else { 0 };
+                e.register_double(0x0044_ddc0, move |_, _| mode.into_ret());
+                let test = s.vats_test;
+                e.register_double(0x007d_1360, move |_, _| u32::from(test).into_ret());
+                e.mem
+                    .set_u8(main.addr() + MAIN_FLY_CAMERA, u8::from(s.fly_camera));
+                e.call_log = Some(vec![]);
+                e.call(0x0086_f390, &args![main]);
+                let log = logged(&mut e);
+                check(0x0086_f390, &s, &log);
+            }
+        }
+
+        /// `0086f890` (in `Main::PostSwapProcess`) for one and more threads, in menu mode,
+        /// with fader 1, the console and the frozen world.
+        #[test]
+        fn process_lists_0086f890_follows_the_frame_model() {
+            use world::frame::interface::InterfaceState;
+            for threads in [1, 2] {
+                let game = InterfaceState {
+                    threads,
+                    ..InterfaceState::default()
+                };
+                for s in [
+                    game,
+                    InterfaceState {
+                        menu_flag: true,
+                        ..game
+                    },
+                    InterfaceState {
+                        menu_flag: true,
+                        fader_visible: true,
+                        ..game
+                    },
+                    InterfaceState {
+                        console_visible: true,
+                        ..game
+                    },
+                    InterfaceState {
+                        world_frozen: true,
+                        ..game
+                    },
+                ] {
+                    let mut e = idle_engine();
+                    let main = main_object(&mut e);
+                    set_processors(&mut e, threads as u32);
+                    e.set_global(IN_MENU_FLAG, u8::from(s.menu_flag));
+                    e.set_global(FADER_ONE_FLAG, u8::from(s.fader_visible));
+                    e.set_global(CONSOLE_VISIBLE_FLAG, u8::from(s.console_visible));
+                    e.mem
+                        .set_u8(main.addr() + MAIN_FREEZE_TIME, u8::from(s.world_frozen));
+                    e.call_log = Some(vec![]);
+                    e.call(0x0086_f890, &args![main]);
+                    let log = logged(&mut e);
+                    check(0x0086_f890, &s, &log);
+                    let model = world::frame::interface::function(0x0086_f890).unwrap();
+                    let seen = log
+                        .iter()
+                        .filter(|c| model.steps.iter().any(|st| st.callee == **c))
+                        .count();
+                    assert_eq!(
+                        seen,
+                        world::frame::interface::steps_run(&s, model).len(),
+                        "{s:?}"
+                    );
+                }
+            }
+        }
+
+        /// `0086f6a0` for one and more threads, and in dialogue.
+        #[test]
+        fn non_render_safe_0086f6a0_follows_the_frame_model() {
+            use world::frame::interface::InterfaceState;
+            for threads in [1, 2] {
+                for in_dialog in [false, true] {
+                    let mut e = idle_engine();
+                    let main = main_object(&mut e);
+                    set_processors(&mut e, threads);
+                    if in_dialog {
+                        e.register(0x0070_50d0, |_, _| 1u32.into_ret());
+                        let dialog = object_with_vtable(&mut e, &[(0x100, YES), (0x404, NOTHING)]);
+                        e.register_double(0x0076_24d0, move |_, _| dialog.into_ret());
+                    }
+                    e.call_log = Some(vec![]);
+                    e.call(0x0086_f6a0, &args![main]);
+                    let log = logged(&mut e);
+                    let s = InterfaceState {
+                        threads: threads as i32,
+                        in_dialog,
+                        ..InterfaceState::default()
+                    };
+                    check(0x0086_f6a0, &s, &log);
+                }
+            }
+        }
+
+        /// `Main::Swap` (`0086ff70`): the world drawn, or the menus over the held background,
+        /// the menu change's background, the faders' loading screen, the threads' release.
+        #[test]
+        fn swap_0086ff70_follows_the_frame_model() {
+            use world::frame::interface::InterfaceState;
+            let game = InterfaceState::default();
+            let cases = [
+                game,
+                InterfaceState { threads: 1, ..game },
+                InterfaceState {
+                    background_held: true,
+                    menus_on_screen: true,
+                    menu_flag: true,
+                    ..game
+                },
+                InterfaceState {
+                    background_held: true,
+                    ..game
+                },
+                InterfaceState {
+                    menu_changed: true,
+                    ..game
+                },
+                InterfaceState {
+                    faders_up: true,
+                    ..game
+                },
+            ];
+            for s in cases {
+                let mut e = idle_engine();
+                let main = main_object(&mut e);
+                set_processors(&mut e, s.threads as u32);
+                // The player's 3D is there.
+                let player = e.global::<u32>(PLAYER_OBJECT);
+                let table = e.mem.u32(player);
+                e.mem.set_u32(table + 0x1d0, YES);
+                e.set_global(SCENE_FLAG_29, u8::from(s.background_held));
+                let menus = s.menus_on_screen;
+                e.register_double(IS_IN_MENU_MODE, move |_, _| u32::from(menus).into_ret());
+                e.set_global(0x011d_890a, u8::from(s.menu_changed));
+                // The background's own drawing is checked on its own.
+                e.register(0x0087_1dc0, |_, _| Ret::default());
+                let faders = s.faders_up;
+                e.register_double(0x0070_1450, move |_, a| (faders && a[1] == 1).into_ret());
+                e.call_log = Some(vec![]);
+                e.call(0x0086_ff70, &args![main]);
+                let log = logged(&mut e);
+                check(0x0086_ff70, &s, &log);
+            }
+        }
+
         // ----- 0086fbe0 / 0086fc60 -----------------------------------------------------------
 
         #[test]

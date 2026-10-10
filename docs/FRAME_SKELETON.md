@@ -1,8 +1,9 @@
 # Phase 1: the frame skeleton (proposal)
 
 Drafted 2026-10-09 at the end of Phase 0 ([ENGINE_PORT_PLAN.md](ENGINE_PORT_PLAN.md),
-[LEDGER.md](LEDGER.md)); PR 1 (the frame map), PR 2 (`world::frame`), PR 3 (the viewer's order), PR 4 (the player stage), PR 5 (the world and time stage) done 2026-10-09 and PR 6 (the AI task stage) 2026-10-10, the
-rest is not implemented yet. Names are from the Xbox 360 prototype (Xbox PDB,
+[LEDGER.md](LEDGER.md)); PR 1 (the frame map), PR 2 (`world::frame`), PR 3 (the viewer's order), PR 4 (the player stage), PR 5 (the world and time stage) done 2026-10-09 and PR 6 (the AI task stage) 2026-10-10.
+PR 7's model and scoped wiring are described below, with remaining calls
+explicitly open. Names are from the Xbox 360 prototype (Xbox PDB,
 ADR-0002), PC addresses from `research/engine-map/engine_map.tsv` and
 `research/engine-map/frame.tsv`.
 
@@ -905,6 +906,74 @@ this machine's processor count, so the pair's order).
 - With more than two processors the Havok step runs before the actor
   updates' place (thread 2 before thread 1's `RunActorUpdates`); no viewer
   system sits at the actor updates, so nothing visible follows from it.
+## PR 7 result: interface and render model
+
+`world::frame::interface` records 19 functions: the interface idle's
+pre/idle/post wrappers and manager bodies, last-minute tile updates,
+sleeping, the menu background, Swap, post-swap audio and process lists,
+non-render-safe AI, post-thread work, console opening and control polling.
+Every modelled call names its PC call site, gate branches and additional
+unmodelled local conditions. The manager's large Idle body is grouped by
+work, not claimed to reproduce every query. Names are Xbox PDB names;
+`00711ea0` remains a positional lead. Source: FalloutNV.exe 1.4.0.525,
+private Ghidra server on port 8090 (read-only queries).
+
+The preserved interrupted batch has tests comparing these models with the
+translated engine functions' call logs, plus call-order checks against the
+committed frame tree. This does not execute the translated engine in play.
+The post-swap order was rechecked directly in Ghidra: `008705d0` calls
+`0086f640` before `0086f890`; audio calls `00ad7740`, `00832ad0`,
+`0082fb70`, then `0082d7c0`. Process-list work tests menu mode/fader,
+console and frozen-world state before `0096d810`.
+
+Resumption found a missing voice-pause call in the PreIdle model: the
+game-mode path calls `0070bbe0` at `0070bb03`, guarded by `0070baae` and
+`0070bab9`, after pausing sounds. The model and branch regression now
+include it. The conformance fixtures also distinguish the deferred queue
+from the tile-update array, and check direct Rust helpers through their
+side effects rather than requiring entries in Engine's dispatch log.
+
+The viewer's `InterfaceSet(function, sub-step)` nests unique main-thread
+calls and their children under the existing frame sets. Sounds, radio and
+music run at the audio calls, then `ai::move_offstage` at `0096d810` under
+the traced process-list gate. The regions' sound update remains open.
+These are CPU Update positions; Bevy still submits and presents later in
+its own render schedule. They are not proof of original GPU ordering.
+
+The interrupted WIP claimed several changes it had not implemented. Those
+claims were removed: there is no `configure_input` or background `redraw`
+system, and Bevy rendering does not count as wiring the Swap callees.
+Menus still consume current Bevy input in `ViewerSet::Interface` before
+the frame. Moving them to the executable's idle position needs the
+previous-frame player input boundary first. HUD/Pip-Boy remain at the
+existing approximate AI idle position; the one-thread and menu-mode idle
+fallbacks are modelled and tested in core, not precisely routed in the
+viewer. Fades, sleeping and menu scenes have existing partial behavior,
+but their exact sub-step placement remains open. Last-minute tile work,
+console and queued menu creation, background redraw and renderer gates
+also remain open. No default model value is used to gate a newly wired
+system unless its source is known from the viewer's frame state.
+
+`research/engine-map/frame_wiring.tsv` enumerates every depth-1 and depth-2
+call, including unsupported queries, as system, partial or open. The world
+test regenerates it with `NVRS_WRITE_FRAME_WIRING=1` and otherwise rejects
+stale output. The ledger reports these counts separately from translation
+coverage. This meets the inventory gate, not playable completeness.
+
+Validation: full core workspace tests passed (15,108 including doc tests;
+13,255 in engine); the separate viewer release suite passed all 182 tests.
+Both workspaces passed formatting and clippy with warnings denied (viewer
+clippy used release), and both release builds passed, using two jobs.
+The ledger generator's four tests and stale-output check passed. All three
+release acceptance routes passed: Doc Mitchell (59 s), Back in the Saddle
+(400 s) and Ghost Town Gunfight (337 s). Private logs and screenshots:
+%USERPROFILE%\nv-re\acceptance\pr7-resume-20261010. Startup diagnostics
+were read and Doc's screenshot inspected. No original-game comparison
+has been made.
+Outstanding interface follow-up: establish buffered player input before
+relocating menu idle. Next shared action after validation and merge: publish
+the play build, then start Phase 2 as directed in HANDOFF.md.
+
 ## PR sequence
 
 Each PR names one next action, regenerates the ledger and passes the
@@ -947,7 +1016,8 @@ acceptance routes, as in B1.
    function, more the pair; the one-thread task queue stays open).
 7. **Interface and render stage.** `Interface::Idle` and its pre/post
    steps, `LastMinuteUpdate`, the menu background, `Main::Swap`'s
-   pre/post-swap work (the renderer itself stays Bevy).
+   pre/post-swap work (the renderer itself stays Bevy). Model and scoped
+   wiring: "PR 7 result" above; exact menu input and renderer work remain open.
 
 After PR 7 every call in `Main::OnIdle` to depth 2 is either wired to a
 system or listed as `open` in the ledger, which is Phase 1's gate. Phase 2

@@ -2969,6 +2969,88 @@ mod tests {
         check_forwards_to_manager(0x0070_2840, 0x0071_1ea0);
     }
 
+    /// The calls logged so far, as the frame model's callees.
+    fn model_log(e: &Engine) -> Vec<world::frame::interface::Callee> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(a, _)| world::frame::interface::Callee::Direct(*a))
+            .collect()
+    }
+
+    fn check_model(address: u32, s: &world::frame::interface::InterfaceState, e: &Engine) {
+        use world::frame::interface::{follows, function};
+        let model = function(address).expect("modelled");
+        follows(model, s, &model_log(e), &[])
+            .unwrap_or_else(|why| panic!("{address:08x} {s:?}: {why}"));
+    }
+
+    /// The interface idle's wrappers and `Interface::LastMinuteUpdate` follow
+    /// `world::frame::interface`'s model with the manager ready, not ready, and
+    /// missing (docs/FRAME_SKELETON.md, PR 7).
+    #[test]
+    fn wrappers_follow_the_frame_model() {
+        use world::frame::interface::InterfaceState;
+        for (wrapper, callee) in [
+            (0x0070_27e0u32, 0x0070_b8f0u32),
+            (0x0070_2810, 0x0070_c4a0),
+            (0x0070_2840, 0x0071_1ea0),
+            (0x0070_58e0, MANAGER_LAST_MINUTE_UPDATE),
+        ] {
+            for ready in [true, false] {
+                let (mut e, manager) = ui_engine();
+                e.register(callee, |_, _| Ret::default());
+                e.mem.set_u8(manager, u8::from(ready));
+                e.call(wrapper, &[]);
+                let s = InterfaceState {
+                    manager_ready: ready,
+                    ..InterfaceState::default()
+                };
+                check_model(wrapper, &s, &e);
+            }
+            let mut e = engine_without_manager();
+            e.register(callee, |_, _| Ret::default());
+            e.call(wrapper, &[]);
+            let s = InterfaceState {
+                manager_ready: false,
+                ..InterfaceState::default()
+            };
+            check_model(wrapper, &s, &e);
+        }
+    }
+
+    /// `Interface::UpdateSleeping` (`007056f0`) and `Interface::OpenConsole`
+    /// (`00703e10`) follow the model.
+    #[test]
+    fn sleeping_and_the_console_follow_the_frame_model() {
+        use world::frame::interface::InterfaceState;
+        for (class, ready) in [(0x3f4i32, true), (0x3eb, true), (0x3f4, false)] {
+            let (mut e, manager, _) = menu_object_world(class, SLEEP_WAIT_MENU_TYPE);
+            stub!(e, SLEEP_UPDATE_SLEEPING, 1);
+            e.mem.set_u8(manager, u8::from(ready));
+            e.call_log = Some(vec![]);
+            e.call(0x0070_56f0, &[]);
+            let s = InterfaceState {
+                manager_ready: ready,
+                sleep_menu: class == 0x3f4,
+                ..InterfaceState::default()
+            };
+            check_model(0x0070_56f0, &s, &e);
+        }
+        for (exists, visible) in [(true, false), (true, true), (false, false)] {
+            let (mut e, _) = console_world(exists, visible, false);
+            e.call_log = Some(vec![]);
+            e.call(0x0070_3e10, &[]);
+            let s = InterfaceState {
+                console_exists: exists,
+                console_visible: visible,
+                ..InterfaceState::default()
+            };
+            check_model(0x0070_3e10, &s, &e);
+        }
+    }
+
     #[test]
     fn fn_00702870_skips_while_a_movie_plays() {
         let (mut e, manager) = ui_engine();
