@@ -30,16 +30,16 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10265 | 15.5% |
-| traced | 4509 | 6.8% |
+| translated | 10303 | 15.5% |
+| traced | 4506 | 6.8% |
 | platform | 3417 | 5.2% |
 | library | 21915 | 33.1% |
-| open | 26153 | 39.5% |
+| open | 26118 | 39.4% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14367 (35.5%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14402 (35.5%) are translated or traced.
 
-Rust cites 15320 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 15355 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -75,7 +75,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout/ai | 4849 | 1475 | 1888 | 2115 | 622 | 0 | 0 | 2112 | 56.4% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 738 | 0 | 0 | 1324 | 49.9% |
 | (unplaced) | 2353 | 470 | 0 | 30 | 407 | 1 | 0 | 1915 | 18.6% |
-| fallout shared/pathfinding | 1788 | 365 | 452 | 458 | 205 | 0 | 0 | 1125 | 37.1% |
+| fallout shared/pathfinding | 1788 | 365 | 452 | 496 | 202 | 0 | 0 | 1090 | 39.0% |
 | NiMain | 1619 | 261 | 1134 | 3 | 76 | 0 | 0 | 1540 | 4.9% |
 | BSHavok | 1615 | 316 | 1134 | 22 | 139 | 0 | 0 | 1454 | 10.0% |
 | BSShader | 1549 | 608 | 350 | 0 | 142 | 1407 | 0 | 0 | - |
@@ -130,7 +130,7 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 96 | 34 | 3 | 0 | 10 |
 | 2 | 1575 | 583 | 1024 | 402 | 24 | 4 | 121 |
-| 3 | 4973 | 1303 | 3311 | 1122 | 154 | 26 | 360 |
+| 3 | 4973 | 1303 | 3315 | 1119 | 154 | 26 | 359 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 

@@ -1,4 +1,4 @@
-# Handoff: engine port push (2026-10-10, morning)
+# Handoff: engine port push (2026-10-10, evening)
 
 For the next Claude session leading the nv-rs engine port. Read AGENTS.md,
 docs/MILESTONES.md, docs/ENGINE_PORT_PLAN.md, docs/FRAME_SKELETON.md and
@@ -7,51 +7,61 @@ machinery runs.
 
 ## Resume here
 
-The previous lead stopped because the account hit its weekly usage limit at
-about 04:30 on 2026-10-10. All six agents died mid-task; nothing is running.
-Their transcripts belong to the other account, so they cannot be resumed with
-SendMessage: start fresh agents instead. In order:
+Codex takeover, 2026-10-10: #109 passed both CI checks and was squash-merged
+as `b995218`. The lead branch was rebased to that commit and pushed. There
+was no new rolling PR immediately after the merge. The ship
+script stopped after the merge/rebase; recovery verified main and recreated
+the automatically deleted remote branch with a normal push.
 
-1. **Rolling PR.** #106 is merged. The commits after it (a05, a06 and a03
-   results and this file) were rebased onto main and opened as the next
-   rolling PR from `claude/engine-crate` (see `gh pr list`). Ship it with
-   `bin/ship.sh <pr>` once both checks pass.
-2. **Restart the five translation slots.** Do NOT run `cycle.sh` or `task.sh`
-   for them first: their task files in `agents\tasks\aNN.md` are already
-   written, and `task.sh` resets the worktree, which would throw away the
-   partial work below. Launch one Agent per slot (model sonnet, background)
-   with the standard prompt (see below), adding for a01 and a04 the sentence
-   "Your file already holds uncommitted partial work from an interrupted
-   session: check that it builds and is right, keep it, and continue from
-   where it stops."
-   - a01: `navmesh_util.cpp` (b0329), partial uncommitted work in
-     `navmesh_util.rs`.
-   - a03: `exteriorcellloader.cpp` (b0043), nothing done yet.
-   - a04: `navmeshrender.cpp` (b0341), partial uncommitted work in
-     `navmeshrender.rs`.
-   - a05: `aitaskmanager.cpp` lane 2 (b0158, 52 left), nothing done yet.
-   - a06: `bhkworld.obj` (b0360), nothing done yet.
-   When each finishes, collect it with `cycle.sh` as usual.
-3. **Phase 1 PR 7 (interface and render).** Its unfinished work is saved as a
-   WIP commit (4576013) on `claude/phase1-interface-stage` in worktree
-   `agents\p2`, pushed, no PR yet. It was written on top of #107's branch:
-   rebase onto main first (`git rebase origin/main`; drop the commits #107
-   already contains if git does not skip them itself). Then start one agent
-   (opus) in p2 to finish it: the stage is the interface and render steps of
-   `docs/FRAME_SKELETON.md`, modelled on PR 6 (#107, `world::frame::ai_stage`)
-   and PR 5 (#105). The WIP adds `crates/world/src/frame/interface.rs` (and a
-   folder), `coverage.rs`, `research/engine-map/frame_wiring.tsv`, and edits
-   to the interface, interfacemanager and main engine units. It was not yet
-   built or tested. The agent amends the WIP into a real commit, passes fmt,
-   clippy and tests, and opens the PR.
-4. After PR 7 merges: play build 40, then Phase 2.
+Active in this session: a04 restarted from its partial file and a03 started
+its original task. The interface/render agent owns p2 and is finishing
+the WIP (now `5fc95c9` after rebase onto `b995218`). a05 and a06 are waiting
+for an available agent and
+still have their original task files: do not reset them before first restart.
+The session supports three child agents plus the lead; rotate translation
+slots while p2 runs. a01 was collected as `74f7fb1` (40 functions), and
+`cycle.sh` prepared its next b0329 task (78 entries left, starting at
+`00698680`; include `traced` entries). It is waiting for capacity after the
+remaining original slots. Play build remains 39.
+
+Validation: a01's 40 preserved translations pass their 38 focused tests
+after correcting an expectation for `00697010`'s unusual distance
+comparison; collection passed formatting, lint and 13,281 engine tests
+plus doc tests on the lead branch. a04's 36 preserved
+translations lacked tests, which are now being added. Native `nv-call`
+spot checks cover five `00698620` point products and 512 `006a5da0` flag
+combinations (private evidence under `phase0/codex-audit`), not whole units.
+p2's 182 release-profile viewer tests and 15,108 core tests passed after
+repairing WIP model/test errors. The missing model call
+was voice pause `0070bbe0` at `0070bb03`; a queue mock also made a deferred
+deletion loop run forever. Both workspaces passed lint; final release
+builds and acceptance are pending. No new play build has been published.
+
+Machine note: automatic policy blocked removal of idle p3's target cache;
+nothing was deleted. Private `task.sh` now warns below 40 GB free instead
+of deleting caches, and retains scratch evidence. Do not use another
+deletion path to bypass that denial. Ending the hung test recovered space.
+
+Next steps:
+
+1. Ship the rolling PR from `claude/engine-crate` once both checks pass;
+   `gh pr list --head claude/engine-crate` identifies the current number.
+2. Collect completed slots with one `cycle.sh NN 0 0` at a time. Never
+   cycle an active agent's worktree. Restart a05 and a06 from their existing
+   task files before resetting them; then rotate a01's prepared next task.
+3. Finish p2 validation, amend its WIP into a proper commit, push and open
+   the interface/render PR. Rebase if another batch merges; retain both
+   sides' tests and regenerate the ledger. Merge only with both checks
+   passing. Detailed models and open wiring: FRAME_SKELETON.md.
+4. After that PR merges: play build 40 from main, then Phase 2. Keep the
+   early menu-input boundary recorded as a follow-up, not a new priority.
 
 ## Where things stand
 
 - **Phase 0** (engine map, ledger) is merged (#72). `docs/LEDGER.md` is the
   coverage table; regenerate with
   `cargo run -q --release --manifest-path scripts/ledger/Cargo.toml`.
-- **Engine crate** (`crates/engine`, ADR-0006): about 10,250 of FalloutNV.exe's
+- **Engine crate** (`crates/engine`, ADR-0006): 10,303 of FalloutNV.exe's
   functions are translated (15.5% of all, see LEDGER.md), each with a
   `// Translated from <addr>` marker and tests. They run in the crate's
   emulated 32-bit memory, not yet in play.
@@ -63,7 +73,7 @@ SendMessage: start fresh agents instead. In order:
   bgsdecalmanager, navmeshobstaclemanager, globalfunc, pathfind.cpp,
   BSMenu/tile.cpp, highprocess.cpp parts 1, 2, 4 and 5, navmesh.cpp,
   pathinglocation.cpp, bgssceneinfo.cpp, bgssaveloadgame.cpp, and others.
-- **In progress (translation lanes, all interrupted; see "Resume here"):**
+- **In progress (translation lanes; see "Resume here" for current owners):**
   navmesh_util.cpp (a01), exteriorcellloader.cpp (a03), navmeshrender.cpp
   (a04), aitaskmanager.cpp lane 2 (a05; MovementTaskData still needs its
   layout, see the file header), bhkworld.obj (a06).
@@ -74,14 +84,14 @@ SendMessage: start fresh agents instead. In order:
     `frame_order::PlayerSet`.
   - PR 5 world and time stage (#105): merged.
   - PR 6 AI task stage (#107): merged.
-  - PR 7 interface and render: unfinished WIP in worktree
+  - PR 7 interface and render: resumed WIP in worktree
     `%USERPROFILE%\nv-re\work\agents\p2`, branch
     `claude/phase1-interface-stage` (see "Resume here"). Merge after both
     checks pass, rebasing first if translation PRs merged meanwhile (LEDGER.md
     and engine unit test modules can conflict; keep both sides' tests).
   - After that: Phase 2 (state model in engine memory, save round trip; see
     ENGINE_PORT_PLAN.md).
-- **Rolling translation PR:** #106 merged; the next one is open from branch
+- **Rolling translation PR:** #109 merged; the next batch is on branch
   `claude/engine-crate` (see "Resume here").
 - **Play build** (the user's `Desktop\nv-rs-play`): Build 39 = main with #107.
   After the next wiring PR merges, build `viewer` in release from main

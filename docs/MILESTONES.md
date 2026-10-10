@@ -33,6 +33,20 @@ reading do not establish them.
 
 ## Active work: M1
 
+Engine-port takeover, 2026-10-10 evening: rolling translation PR #109
+passed both CI checks and merged as `b995218`; these translations are
+unit-tested engine code, not new playable behavior. Interrupted a01/a04
+work resumed; Phase 1 PR 7 remains unfinished in p2. Current owners and
+resume instructions: [HANDOFF.md](HANDOFF.md). Next action: finish and
+verify the interface/render stage while collecting checked translations.
+
+First resumed translation batch: a01's 40 navigation spatial helpers
+collected as `74f7fb1`; formatting, lint and 13,281 engine tests pass.
+Five generated point-product cases (`00698620`) also match native
+`nv-call` output. These functions are not yet wired into play. Evidence
+and queued slots: [HANDOFF.md](HANDOFF.md). Next action: finish the
+interface/render acceptance and collect the remaining checked slots.
+
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
