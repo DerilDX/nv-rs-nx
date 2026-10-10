@@ -17,8 +17,10 @@
 //! - The C++ exception frames and the stack-protector cookie checks
 //!   (`00ec408c`) are not translated.
 //! - Session 1 covers the first 40 functions in address order, `00846f30` to
-//!   `00849a70`. Session 2 covers the next 40, `00849a90` to `0084b650`; the
-//!   next session continues at `0084b6c0`.
+//!   `00849a70`. Session 2 covers the next 40, `00849a90` to `0084b650`.
+//!   Session 3 covers the last 16, `0084b6c0` to `0084bc20`: the unit is
+//!   complete. `0084b720` (the destructor body of the hash map base, vtable
+//!   `0107f4c8`) is outside the unit's queue and is called by address.
 //! - A `BGSChangeFlags` is one `u32`; `008c71b0` stores a value into one
 //!   (`this`, value) and returns `this`. The game builds temporaries of it on
 //!   its stack to pass them by value; [`change_flags`] does the same.
@@ -499,6 +501,19 @@ pub(crate) const UNLOADED_FORM_BUFFER_SIZE: u32 = 0x0086_63e0;
 pub(crate) const UNLOADED_FORM_BUFFER_INITIALIZE: u32 = 0x0086_65d0;
 pub(crate) const INITIAL_DATA_TYPE_SIZE: u32 = 0x0084_e800;
 pub(crate) const LOAD_VARIABLE_SIZED_VALUE: u32 = 0x0084_6080;
+/// The hash map base vtable `0107f4e8` of the expiry queue, and the base
+/// destructor body `(this)` of the vtable `0107f4c8` base.
+pub(crate) const EXPIRY_QUEUE_BASE_VTABLE: u32 = 0x0107_f4e8;
+pub(crate) const HASH_MAP_BASE_DESTRUCT: u32 = 0x0084_b720;
+/// Called on the map itself by both map destructors before the base
+/// destructor (also `CHANGED_FORM_ID_MAP_FLUSH`).
+pub(crate) const MAP_CLEAR_ITEMS: u32 = 0x0043_8af0;
+/// Frees a block from [`ALLOCATE_BYTES`] `(block)` (cdecl).
+pub(crate) const FREE_BYTES: u32 = 0x00aa_10f0;
+/// `(this = allocator at +0xc, item)`: frees a map item.
+pub(crate) const MAP_ITEM_FREE: u32 = 0x006b_8310;
+/// `BGSSaveLoadGlobalData::LoadGlobalData(type, buffer)` (Xbox PDB, cdecl).
+pub(crate) const LOAD_GLOBAL_DATA: u32 = 0x0084_be40;
 /// Allocates `size` bytes (the allocator the maps' bucket arrays use).
 pub(crate) const ALLOCATE_BYTES: u32 = 0x00aa_1070;
 /// `(this = array, reserved, size)`: the form buffer array's base setup.
@@ -3272,6 +3287,221 @@ pub fn fn_0084b650(e: &mut Engine, this: Ptr<NiTPointerMap>, size: u32) -> Ptr<N
     this
 }
 
+// ---- Session 3: 0084b6c0 to 0084bc20 ---------------------------------------
+
+// Translated from 0084b6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the package location map `NiTMap<unsigned int,Actor *>`:
+/// its vtable, `00438af0(this)`, then the base destructor body `0084b720`.
+/// The exception frame is not translated.
+pub fn fn_0084b6c0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), PACKAGE_LOCATION_MAP_VTABLE);
+    e.call(MAP_CLEAR_ITEMS, &args![this]);
+    e.call(HASH_MAP_BASE_DESTRUCT, &args![this]);
+}
+
+// Translated from 0084b750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base constructor of the expiry queue (`this`, bucket count): the base
+/// vtable `0107f4e8`, the bucket count at +4, a zero item count at +0xc and
+/// a zeroed bucket array of `size * 4` bytes at +8.
+pub fn fn_0084b750(e: &mut Engine, this: Ptr<NiTPointerMap>, size: u32) -> Ptr<NiTPointerMap> {
+    e.mem.set_u32(this.addr(), EXPIRY_QUEUE_BASE_VTABLE);
+    e.set(this, NiTPointerMap::m_uiHashSize, size);
+    e.set(this, NiTPointerMap::m_uiCount, 0);
+    let buckets = e.call(ALLOCATE_BYTES, &args![size << 2]).u32();
+    e.set(this, NiTPointerMap::m_ppkHashTable, buckets);
+    e.call(MEMORY_SET, &args![buckets, 0u32, size << 2]);
+    this
+}
+
+// An item of the expiry queue (`NiTMapItem<__int64,int>`, 0x18 bytes): the
+// next item at +0, the 64 bit key as two words at +8 and +0xc, the value at
+// +0x10.
+const EXPIRY_ITEM_NEXT: u32 = 0x00;
+const EXPIRY_ITEM_KEY_LOW: u32 = 0x08;
+const EXPIRY_ITEM_KEY_HIGH: u32 = 0x0c;
+const EXPIRY_ITEM_VALUE: u32 = 0x10;
+
+/// Walks the bucket of the key (hash from virtual slot +4, comparison from
+/// slot +8) and returns the bucket array address, the bucket index and the
+/// item with an equal key (0 when there is none).
+fn expiry_find_item(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32) -> (u32, u32, u32) {
+    let index = e.vcall(this.addr(), 0x4, &args![key_low, key_high]).u32();
+    let buckets = e.get(this.cast::<NiTPointerMap>(), NiTPointerMap::m_ppkHashTable);
+    let mut item = e.mem.u32(buckets + index * 4);
+    while item != 0 {
+        let item_low = e.mem.u32(item + EXPIRY_ITEM_KEY_LOW);
+        let item_high = e.mem.u32(item + EXPIRY_ITEM_KEY_HIGH);
+        let equal = e.vcall(
+            this.addr(),
+            0x8,
+            &args![key_low, key_high, item_low, item_high],
+        );
+        if equal.bool() {
+            break;
+        }
+        item = e.mem.u32(item + EXPIRY_ITEM_NEXT);
+    }
+    (buckets, index, item)
+}
+
+// Translated from 0084b7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<...,__int64,int>::SetAt` shape (the map names none): a bucket
+/// item with an equal key gets the new value; otherwise a new item (slot
+/// +0x14, `NewItem`) is filled (slot +0xc, `SetValue`), put at the head of
+/// the bucket and counted.
+pub fn fn_0084b7c0(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32, value: u32) {
+    let (buckets, index, item) = expiry_find_item(e, this, key_low, key_high);
+    if item != 0 {
+        e.mem.set_u32(item + EXPIRY_ITEM_VALUE, value);
+        return;
+    }
+    let item = e.vcall(this.addr(), 0x14, &args![]).u32();
+    e.vcall(this.addr(), 0xc, &args![item, key_low, key_high, value]);
+    let head = e.mem.u32(buckets + index * 4);
+    e.mem.set_u32(item + EXPIRY_ITEM_NEXT, head);
+    e.mem.set_u32(buckets + index * 4, item);
+    let map = this.cast::<NiTPointerMap>();
+    let count = e.get(map, NiTPointerMap::m_uiCount);
+    e.set(map, NiTPointerMap::m_uiCount, count.wrapping_add(1));
+}
+
+// Translated from 0084b8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<...,__int64,int>::GetAt` shape: finds the item of the key in
+/// its bucket and stores its value through `out`; false when there is none.
+pub fn fn_0084b8b0(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32, out: u32) -> bool {
+    let (_, _, item) = expiry_find_item(e, this, key_low, key_high);
+    if item == 0 {
+        return false;
+    }
+    let value = e.mem.u32(item + EXPIRY_ITEM_VALUE);
+    e.mem.set_u32(out, value);
+    true
+}
+
+// Translated from 0084b930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<__int64,int>>,__int64,int>::KeyToHashIndex`
+/// (Xbox PDB): the low word of the key modulo the bucket count; the high word
+/// is not read. A bucket count of zero would fault in the game.
+pub fn fn_0084b930(e: &mut Engine, this: Ptr<NiTPointerMap>, key_low: u32, _key_high: u32) -> u32 {
+    let size = e.get(this, NiTPointerMap::m_uiHashSize);
+    key_low % size
+}
+
+// Translated from 0084b950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<__int64,int>>,__int64,int>::IsKeysEqual`
+/// (Xbox PDB): both words of the two keys are equal.
+pub fn fn_0084b950(
+    _e: &mut Engine,
+    _this: Ptr,
+    low_a: u32,
+    high_a: u32,
+    low_b: u32,
+    high_b: u32,
+) -> bool {
+    low_a == low_b && high_a == high_b
+}
+
+// Translated from 0084b990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<__int64,int>>,__int64,int>::SetValue`
+/// (Xbox PDB): stores the key (two words) and the value in the item.
+pub fn fn_0084b990(e: &mut Engine, _this: Ptr, item: u32, key_low: u32, key_high: u32, value: u32) {
+    e.mem.set_u32(item + EXPIRY_ITEM_KEY_LOW, key_low);
+    e.mem.set_u32(item + EXPIRY_ITEM_KEY_HIGH, key_high);
+    e.mem.set_u32(item + EXPIRY_ITEM_VALUE, value);
+}
+
+// Translated from 0084b9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the expiry queue `NiTMap<__int64,int>`: its vtable,
+/// `00438af0(this)`, then the base destructor body `0084ba20`. The exception
+/// frame is not translated.
+pub fn fn_0084b9c0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), EXPIRY_QUEUE_VTABLE);
+    e.call(MAP_CLEAR_ITEMS, &args![this]);
+    fn_0084ba20(e, this);
+}
+
+// Translated from 0084ba20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the expiry queue's base: the base vtable,
+/// `00438af0(this)`, then the bucket array at +8 is freed (`00aa10f0`).
+pub fn fn_0084ba20(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), EXPIRY_QUEUE_BASE_VTABLE);
+    e.call(MAP_CLEAR_ITEMS, &args![this]);
+    let buckets = e.get(this.cast::<NiTPointerMap>(), NiTPointerMap::m_ppkHashTable);
+    e.call(FREE_BYTES, &args![buckets]);
+}
+
+// Translated from 0084ba50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<__int64,int>::NewItem` (Xbox PDB): a new item from the allocator
+/// member at +0xc (`0084bb30`).
+pub fn fn_0084ba50(e: &mut Engine, this: Ptr) -> u32 {
+    fn_0084bb30(e, this.byte_add(0xc))
+}
+
+// Translated from 0084ba70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<__int64,int>::DeleteItem` (Xbox PDB): clears the value at +0x10,
+/// then frees the item through the allocator member at +0xc (`006b8310`).
+pub fn fn_0084ba70(e: &mut Engine, this: Ptr, item: u32) {
+    e.mem.set_u32(item + EXPIRY_ITEM_VALUE, 0);
+    e.call(MAP_ITEM_FREE, &args![this.byte_add(0xc), item]);
+}
+
+// Translated from 0084baa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<BGSLoadFormBuffer *,1024>::scalar deleting destructor`
+/// (Xbox PDB): the destructor `0084b5a0`, then the block is freed when bit 0
+/// of `flags` is set.
+pub fn fn_0084baa0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_deleting_destructor(e, this, flags, FORM_BUFFER_ARRAY_DESTRUCT)
+}
+
+// Translated from 0084bad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned int,Actor *>>,unsigned int,Actor *>::
+/// scalar deleting destructor` (Xbox PDB): the hash map base destructor body
+/// `0084b720`, then the block is freed when bit 0 of `flags` is set.
+pub fn fn_0084bad0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    scalar_deleting_destructor(e, this, flags, HASH_MAP_BASE_DESTRUCT)
+}
+
+// Translated from 0084bb00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<__int64,int>>,__int64,int>::scalar deleting
+/// destructor` (Xbox PDB): the base destructor body `0084ba20`, then the
+/// block is freed when bit 0 of `flags` is set.
+pub fn fn_0084bb00(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0084ba20(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0084bb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The item allocator of the expiry queue (`this`, the allocator member at
+/// +0xc, is not read): a new 0x18 byte block.
+pub fn fn_0084bb30(e: &mut Engine, _this: Ptr) -> u32 {
+    e.call(OPERATOR_NEW, &args![0x18u32]).u32()
+}
+
+// Translated from 0084bc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads `count` global data records from `file` (cdecl `(file, count)`): for
+/// each, a `BGSLoadGameBuffer` is constructed, the record type (4 bytes) is
+/// read from the file, the buffer is loaded from the file, `LoadGlobalData(type,
+/// buffer)` (`0084be40`) consumes it and the buffer is destroyed. The exception
+/// frame is not translated.
+pub fn fn_0084bc20(e: &mut Engine, file: u32, count: u32) {
+    for _ in 0..count {
+        e.with_stack(0x14, |e, stack| {
+            let buffer = stack.addr();
+            let record_type = buffer + 0x10;
+            e.call(LOAD_GAME_BUFFER_CONSTRUCT, &args![buffer]);
+            e.mem.set_u32(record_type, 0);
+            e.call(LOAD_DATA_FROM_FILE, &args![file, record_type, 4u32]);
+            e.call(LOAD_GAME_BUFFER_LOAD, &args![buffer, file]);
+            let kind = e.mem.u32(record_type);
+            e.call(LOAD_GLOBAL_DATA, &args![kind, buffer]);
+            e.call(LOAD_GAME_BUFFER_DESTRUCT, &args![buffer]);
+        });
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3444,6 +3674,25 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0084b650,
             fn_0084b650(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
         ),
+        entry!(0x0084b6c0, fn_0084b6c0(Ptr)),
+        entry!(
+            0x0084b750,
+            fn_0084b750(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x0084b7c0, fn_0084b7c0(Ptr, u32, u32, u32)),
+        entry!(0x0084b8b0, fn_0084b8b0(Ptr, u32, u32, u32) -> bool),
+        entry!(0x0084b930, fn_0084b930(Ptr<NiTPointerMap>, u32, u32) -> u32),
+        entry!(0x0084b950, fn_0084b950(Ptr, u32, u32, u32, u32) -> bool),
+        entry!(0x0084b990, fn_0084b990(Ptr, u32, u32, u32, u32)),
+        entry!(0x0084b9c0, fn_0084b9c0(Ptr)),
+        entry!(0x0084ba20, fn_0084ba20(Ptr)),
+        entry!(0x0084ba50, fn_0084ba50(Ptr) -> u32),
+        entry!(0x0084ba70, fn_0084ba70(Ptr, u32)),
+        entry!(0x0084baa0, fn_0084baa0(Ptr, u32) -> Ptr),
+        entry!(0x0084bad0, fn_0084bad0(Ptr, u32) -> Ptr),
+        entry!(0x0084bb00, fn_0084bb00(Ptr, u32) -> Ptr),
+        entry!(0x0084bb30, fn_0084bb30(Ptr) -> u32),
+        entry!(0x0084bc20, fn_0084bc20(u32, u32)),
     ]
 }
 
@@ -7185,12 +7434,241 @@ mod tests {
         assert_eq!(calls(&e, ARRAY_CLEAR), vec![vec![array, 1]]);
     }
 
+    // ---- session 3: the expiry queue and the global data loop -------------------
+
+    /// An engine where only the callees outside this file are doubles; the
+    /// functions of this file run for real, the queue virtual slots included.
+    fn engine3() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011c_0000, 0x0004_5000);
+        for address in [
+            OPERATOR_DELETE,
+            MAP_CLEAR_ITEMS,
+            HASH_MAP_BASE_DESTRUCT,
+            FREE_BYTES,
+            MAP_ITEM_FREE,
+            LOAD_GLOBAL_DATA,
+            LOAD_GAME_BUFFER_CONSTRUCT,
+            LOAD_GAME_BUFFER_LOAD,
+            LOAD_GAME_BUFFER_DESTRUCT,
+            LOAD_DATA_FROM_FILE,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(OPERATOR_NEW, |e, a| rv(e.mem.alloc(a[0])));
+        e.register(ALLOCATE_BYTES, |e, a| rv(e.mem.alloc(a[0])));
+        e.register(MEMORY_SET, |e, a| {
+            for offset in 0..a[2] {
+                e.mem.set_u8(a[0] + offset, a[1] as u8);
+            }
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// An expiry queue with `size` buckets, built by the base constructor and
+    /// given the derived vtable (slots +4, +8, +0xc, +0x14, +0x18 as in the exe).
+    fn expiry_queue(e: &mut Engine, size: u32) -> Ptr {
+        let queue = Ptr::new(e.mem.alloc(0x10));
+        fn_0084b750(e, queue.cast(), size);
+        e.put_vtable(
+            0x7000_0000,
+            &[
+                0x0084_bb00,
+                0x0084_b930,
+                0x0084_b950,
+                0x0084_b990,
+                0,
+                0x0084_ba50,
+                0x0084_ba70,
+            ],
+        );
+        e.mem.set_u32(queue.addr(), 0x7000_0000);
+        queue
+    }
+
+    #[test]
+    fn package_location_map_destructor_body() {
+        let mut e = engine3();
+        let this = Ptr::new(e.mem.alloc(0x10));
+        fn_0084b6c0(&mut e, this);
+        assert_eq!(e.mem.u32(this.addr()), PACKAGE_LOCATION_MAP_VTABLE);
+        assert_eq!(order(&e), vec![MAP_CLEAR_ITEMS, HASH_MAP_BASE_DESTRUCT]);
+        assert_eq!(calls(&e, MAP_CLEAR_ITEMS), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn expiry_queue_base_constructor_allocates_zeroed_buckets() {
+        let mut e = engine3();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.mem.set_u32(this.addr() + 0xc, 9);
+        let result = fn_0084b750(&mut e, this.cast(), 5);
+        assert_eq!(result, this.cast());
+        assert_eq!(e.mem.u32(this.addr()), EXPIRY_QUEUE_BASE_VTABLE);
+        assert_eq!(e.mem.u32(this.addr() + 4), 5);
+        assert_eq!(e.mem.u32(this.addr() + 0xc), 0);
+        let buckets = e.mem.u32(this.addr() + 8);
+        assert_eq!(calls(&e, ALLOCATE_BYTES), vec![vec![20]]);
+        assert_eq!(calls(&e, MEMORY_SET), vec![vec![buckets, 0, 20]]);
+    }
+
+    #[test]
+    fn expiry_queue_hash_and_key_comparison() {
+        let mut e = engine3();
+        let queue = expiry_queue(&mut e, 7);
+        assert_eq!(e.call(0x0084_b930, &args![queue, 100u32, 5u32]).u32(), 2);
+        assert_eq!(e.call(0x0084_b930, &args![queue, 6u32, 0xffu32]).u32(), 6);
+        let same = e.call(0x0084_b950, &args![queue, 1u32, 2u32, 1u32, 2u32]);
+        assert!(same.bool());
+        let other_high = e.call(0x0084_b950, &args![queue, 1u32, 2u32, 1u32, 3u32]);
+        assert!(!other_high.bool());
+        let other_low = e.call(0x0084_b950, &args![queue, 1u32, 2u32, 4u32, 2u32]);
+        assert!(!other_low.bool());
+    }
+
+    #[test]
+    fn expiry_queue_set_value_fills_the_item() {
+        let mut e = engine3();
+        let queue = expiry_queue(&mut e, 7);
+        let item = e.mem.alloc(0x18);
+        e.call(0x0084_b990, &args![queue, item, 11u32, 22u32, 33u32]);
+        assert_eq!(e.mem.u32(item + 8), 11);
+        assert_eq!(e.mem.u32(item + 0xc), 22);
+        assert_eq!(e.mem.u32(item + 0x10), 33);
+    }
+
+    #[test]
+    fn expiry_queue_item_allocation_and_release() {
+        let mut e = engine3();
+        let queue = expiry_queue(&mut e, 7);
+        let item = e.call(0x0084_ba50, &args![queue]).u32();
+        assert_ne!(item, 0);
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x18]]);
+        e.mem.set_u32(item + 0x10, 77);
+        e.call(0x0084_ba70, &args![queue, item]);
+        assert_eq!(e.mem.u32(item + 0x10), 0);
+        assert_eq!(
+            calls(&e, MAP_ITEM_FREE),
+            vec![vec![queue.addr() + 0xc, item]]
+        );
+        assert_ne!(e.call(0x0084_bb30, &args![queue]).u32(), 0);
+    }
+
+    #[test]
+    fn expiry_queue_insert_find_and_replace() {
+        let mut e = engine3();
+        let queue = expiry_queue(&mut e, 7);
+        let out = e.mem.alloc(4);
+        // Not found in an empty queue.
+        assert!(!fn_0084b8b0(&mut e, queue, 8, 1, out));
+        // New items: keys 8 and 15 share bucket 1 (low word modulo 7).
+        fn_0084b7c0(&mut e, queue, 8, 1, 100);
+        fn_0084b7c0(&mut e, queue, 15, 1, 200);
+        assert_eq!(e.mem.u32(queue.addr() + 0xc), 2);
+        assert!(fn_0084b8b0(&mut e, queue, 8, 1, out));
+        assert_eq!(e.mem.u32(out), 100);
+        assert!(fn_0084b8b0(&mut e, queue, 15, 1, out));
+        assert_eq!(e.mem.u32(out), 200);
+        // The newest item is the head of its bucket.
+        let buckets = e.mem.u32(queue.addr() + 8);
+        let head = e.mem.u32(buckets + 4);
+        assert_eq!(e.mem.u32(head + 8), 15);
+        let second = e.mem.u32(head);
+        assert_eq!(e.mem.u32(second + 8), 8);
+        assert_eq!(e.mem.u32(second), 0);
+        // Same low word, other high word: not equal.
+        assert!(!fn_0084b8b0(&mut e, queue, 8, 2, out));
+        // An equal key replaces the value without a new item.
+        fn_0084b7c0(&mut e, queue, 8, 1, 300);
+        assert_eq!(e.mem.u32(queue.addr() + 0xc), 2);
+        assert!(fn_0084b8b0(&mut e, queue, 8, 1, out));
+        assert_eq!(e.mem.u32(out), 300);
+        assert_eq!(calls(&e, OPERATOR_NEW).len(), 2);
+    }
+
+    #[test]
+    fn expiry_queue_destructors() {
+        let mut e = engine3();
+        let this = Ptr::new(e.mem.alloc(0x10));
+        e.mem.set_u32(this.addr() + 8, 0x1234);
+        fn_0084ba20(&mut e, this);
+        assert_eq!(e.mem.u32(this.addr()), EXPIRY_QUEUE_BASE_VTABLE);
+        assert_eq!(order(&e), vec![MAP_CLEAR_ITEMS, FREE_BYTES]);
+        assert_eq!(calls(&e, FREE_BYTES), vec![vec![0x1234]]);
+        e.call_log = Some(vec![]);
+        fn_0084b9c0(&mut e, this);
+        assert_eq!(e.mem.u32(this.addr()), EXPIRY_QUEUE_BASE_VTABLE);
+        assert_eq!(
+            order(&e),
+            vec![MAP_CLEAR_ITEMS, MAP_CLEAR_ITEMS, FREE_BYTES]
+        );
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_of_session_3() {
+        let mut e = engine3();
+        let this = Ptr::new(e.mem.alloc(0x40));
+        e.register(FORM_BUFFER_ARRAY_DESTRUCT, |_, _| Ret::default());
+        assert_eq!(fn_0084baa0(&mut e, this, 0), this);
+        assert_eq!(
+            calls(&e, FORM_BUFFER_ARRAY_DESTRUCT),
+            vec![vec![this.addr()]]
+        );
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(fn_0084baa0(&mut e, this, 1), this);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 1);
+        assert_eq!(fn_0084bad0(&mut e, this, 2), this);
+        assert_eq!(calls(&e, HASH_MAP_BASE_DESTRUCT), vec![vec![this.addr()]]);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 1);
+        assert_eq!(fn_0084bad0(&mut e, this, 3), this);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 2);
+        e.mem.set_u32(this.addr() + 8, 0x55);
+        assert_eq!(fn_0084bb00(&mut e, this, 0), this);
+        assert_eq!(calls(&e, FREE_BYTES), vec![vec![0x55]]);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 2);
+        assert_eq!(fn_0084bb00(&mut e, this, 1), this);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 3);
+    }
+
+    #[test]
+    fn global_data_loop_reads_each_record() {
+        let mut e = engine3();
+        e.register(LOAD_DATA_FROM_FILE, |e, a| {
+            e.mem.set_u32(a[1], 0x40 + e.mem.u32(a[1]));
+            Ret::default()
+        });
+        fn_0084bc20(&mut e, 0x777, 0);
+        assert!(order(&e).is_empty());
+        fn_0084bc20(&mut e, 0x777, 2);
+        let seen = order(&e);
+        assert_eq!(seen.len(), 10);
+        assert_eq!(
+            &seen[..5],
+            &[
+                LOAD_GAME_BUFFER_CONSTRUCT,
+                LOAD_DATA_FROM_FILE,
+                LOAD_GAME_BUFFER_LOAD,
+                LOAD_GLOBAL_DATA,
+                LOAD_GAME_BUFFER_DESTRUCT
+            ]
+        );
+        let buffer = calls(&e, LOAD_GAME_BUFFER_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls(&e, LOAD_DATA_FROM_FILE)[0],
+            vec![0x777, buffer + 0x10, 4]
+        );
+        assert_eq!(calls(&e, LOAD_GAME_BUFFER_LOAD)[0], vec![buffer, 0x777]);
+        assert_eq!(calls(&e, LOAD_GLOBAL_DATA)[0], vec![0x40, buffer]);
+        assert_eq!(calls(&e, LOAD_GAME_BUFFER_DESTRUCT)[0], vec![buffer]);
+    }
+
     // ---- registration --------------------------------------------------------------
 
     #[test]
     fn every_function_is_registered_under_its_address() {
         let table = funcs();
-        assert_eq!(table.len(), 80);
+        assert_eq!(table.len(), 96);
         let mut e = Engine::new();
         for (address, _) in table {
             assert!(e.is_translated(address), "{address:08x}");

@@ -9,9 +9,8 @@
 //! Session 1 (this file's first 40 functions, `004a7ca0` to `004a9de0`)
 //! covers the collectors, the memory-budget text, the `NiTMap` and
 //! `BSSimpleArray` template instances the unit emits, and the small
-//! accessors. The next session continues at `004a9e00` (the
-//! `BSSimpleArray<SCENE_INFO_DATA_STRUCT, 1024>` constructor and the
-//! remaining map instances).
+//! accessors. Session 2 translated the remaining 20 functions (`004a9e00`
+//! to `004aa310` and `004bc320`): the unit is complete.
 //!
 //! Conventions used below:
 //!
@@ -110,6 +109,19 @@ const TEXTURE_FLAG_MAP_VTABLE: u32 = 0x0101_ed6c;
 const TEXTURE_FLAG_MAP_BASE_VTABLE: u32 = 0x0101_ed8c;
 /// Vtable of `BSSimpleArray<SCENE_INFO_DATA_STRUCT, 1024>`.
 const SCENE_DATA_ARRAY_VTABLE: u32 = 0x0101_edac;
+
+/// Vtable of `NiTMap<TESActorBase *, bool>`.
+const ACTOR_FLAG_MAP_VTABLE: u32 = 0x0101_edc0;
+/// Vtable of `NiTMapBase<..., TESActorBase *, bool>`.
+const ACTOR_FLAG_MAP_BASE_VTABLE: u32 = 0x0101_ede0;
+/// Vtable of `NiTMap<int, int>`.
+const INT_MAP_VTABLE: u32 = 0x0101_ee00;
+/// Vtable of `NiTMapBase<..., int, int>`.
+const INT_MAP_BASE_VTABLE: u32 = 0x0101_ee20;
+/// Vtable of `NiTMap<ShadowSceneLight *, int>`.
+const LIGHT_INT_MAP_VTABLE: u32 = 0x0101_ee40;
+/// Vtable of `NiTMapBase<..., ShadowSceneLight *, int>`.
+const LIGHT_INT_MAP_BASE_VTABLE: u32 = 0x0101_ee60;
 
 /// Size in bytes of one element of the scene-data array.
 const SCENE_DATA_SIZE: u32 = 0x40;
@@ -350,6 +362,16 @@ fn construct_map_base(e: &mut Engine, this: Ptr<NiTMap>, vtable: u32, buckets: u
     let size = e.get(this, NiTMap::m_uiHashSize) << 2;
     e.call(MEMSET, &args![table, 0u32, size]);
     this
+}
+
+/// Body shared by the `NiTMapBase` destructor bodies added in session 2:
+/// stores the base vtable, empties the map (`00438af0`) and frees the
+/// bucket array at +8 (`00aa10f0`).
+fn destroy_map_base(e: &mut Engine, this: Ptr<NiTMap>, vtable: u32) {
+    e.mem.set_u32(this.addr(), vtable);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let table = e.get(this, NiTMap::m_ppkHashTable);
+    e.call(DEALLOCATE, &args![table]);
 }
 
 // ---------------------------------------------------------------------
@@ -1358,6 +1380,242 @@ pub fn fn_004a9de0(e: &mut Engine, this: Ptr<BSSimpleArray>) {
     e.call(ARRAY_REMOVE_ALL, &args![this, 1u32]);
 }
 
+// Translated from 004a9e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor body of the scene-data array (`BSSimpleArray<SCENE_INFO_DATA_STRUCT,
+/// 1024>`, thiscall, two stack words): empties the array, reserves
+/// `max(reserve, size)` entries through the virtual allocate (slot 4) when
+/// that is not zero, and when `size` is not zero constructs `size` empty
+/// entries ([`fn_004a9ab0`]) and sets the count to `size`.
+pub fn fn_004a9e00(e: &mut Engine, this: Ptr<BSSimpleArray>, reserve: u32, size: u32) {
+    e.set(this, BSSimpleArray::pBuffer, 0);
+    e.set(this, BSSimpleArray::iSize, 0);
+    e.set(this, BSSimpleArray::iReservedSize, 0);
+    let reserve = reserve.max(size);
+    if reserve != 0 {
+        let buffer = e
+            .vcall(this.addr(), SLOT_ARRAY_ALLOCATE, &args![reserve])
+            .u32();
+        e.set(this, BSSimpleArray::pBuffer, buffer);
+        e.set(this, BSSimpleArray::iReservedSize, reserve);
+    }
+    if size != 0 {
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
+        fn_004a9ab0(e, this, buffer, size);
+        e.set(this, BSSimpleArray::iSize, size);
+    }
+}
+
+// Translated from 004a9e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `NiTMap<TESActorBase *, bool>`: the base constructor
+/// [`fn_004a9ef0`], then the vtable `0101edc0`. Returns `this`.
+pub fn fn_004a9e90(e: &mut Engine, this: Ptr<NiTMap>, buckets: u32) -> Ptr<NiTMap> {
+    fn_004a9ef0(e, this, buckets);
+    e.mem.set_u32(this.addr(), ACTOR_FLAG_MAP_VTABLE);
+    this
+}
+
+// Translated from 004a9ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<TESActorBase *, bool>::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor body [`fn_004a9f60`] and frees the block when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn ni_t_map_tes_actor_base_p_bool_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_004a9f60(e, this);
+    delete_if_flagged(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004a9ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., TESActorBase *, bool>` constructor with `buckets`
+/// buckets: the same body as [`fn_004a97e0`] with the vtable `0101ede0`.
+/// Returns `this`.
+pub fn fn_004a9ef0(e: &mut Engine, this: Ptr<NiTMap>, buckets: u32) -> Ptr<NiTMap> {
+    construct_map_base(e, this, ACTOR_FLAG_MAP_BASE_VTABLE, buckets)
+}
+
+// Translated from 004a9f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of `NiTMap<TESActorBase *, bool>` (fastcall `this`):
+/// vtable `0101edc0`, `00438af0` (empties the map), then the base
+/// destructor body [`fn_004a9fc0`]. (The compiler's exception frame is
+/// not translated.)
+pub fn fn_004a9f60(e: &mut Engine, this: Ptr<NiTMap>) {
+    e.mem.set_u32(this.addr(), ACTOR_FLAG_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_004a9fc0(e, this);
+}
+
+// Translated from 004a9fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., TESActorBase *, bool>` destructor body (fastcall
+/// `this`): vtable `0101ede0`, `00438af0` (empties the map), then frees the
+/// bucket array at +8 (`00aa10f0`).
+pub fn fn_004a9fc0(e: &mut Engine, this: Ptr<NiTMap>) {
+    destroy_map_base(e, this, ACTOR_FLAG_MAP_BASE_VTABLE);
+}
+
+// Translated from 004a9ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<TESActorBase *, bool> >, TESActorBase *, bool>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the base destructor body [`fn_004a9fc0`] and frees
+/// the block when bit 0 of `flags` is set. Returns `this`.
+pub fn ni_t_map_base_tes_actor_base_p_bool_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_004a9fc0(e, this);
+    delete_if_flagged(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004aa020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `NiTMap<int, int>`: the base constructor
+/// [`fn_004aa080`], then the vtable `0101ee00`. Returns `this`.
+pub fn fn_004aa020(e: &mut Engine, this: Ptr<NiTMap>, buckets: u32) -> Ptr<NiTMap> {
+    fn_004aa080(e, this, buckets);
+    e.mem.set_u32(this.addr(), INT_MAP_VTABLE);
+    this
+}
+
+// Translated from 004aa050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<int, int>::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor body [`fn_004aa0f0`] and frees the block when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn ni_t_map_int_int_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_004aa0f0(e, this);
+    delete_if_flagged(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004aa080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., int, int>` constructor with `buckets`
+/// buckets: the same body as [`fn_004a97e0`] with the vtable `0101ee20`.
+/// Returns `this`.
+pub fn fn_004aa080(e: &mut Engine, this: Ptr<NiTMap>, buckets: u32) -> Ptr<NiTMap> {
+    construct_map_base(e, this, INT_MAP_BASE_VTABLE, buckets)
+}
+
+// Translated from 004aa0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of `NiTMap<int, int>` (fastcall `this`):
+/// vtable `0101ee00`, `00438af0` (empties the map), then the base
+/// destructor body [`fn_004aa150`]. (The compiler's exception frame is
+/// not translated.)
+pub fn fn_004aa0f0(e: &mut Engine, this: Ptr<NiTMap>) {
+    e.mem.set_u32(this.addr(), INT_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_004aa150(e, this);
+}
+
+// Translated from 004aa150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., int, int>` destructor body (fastcall
+/// `this`): vtable `0101ee20`, `00438af0` (empties the map), then frees the
+/// bucket array at +8 (`00aa10f0`).
+pub fn fn_004aa150(e: &mut Engine, this: Ptr<NiTMap>) {
+    destroy_map_base(e, this, INT_MAP_BASE_VTABLE);
+}
+
+// Translated from 004aa180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<int, int> >, int, int>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the base destructor body [`fn_004aa150`] and frees
+/// the block when bit 0 of `flags` is set. Returns `this`.
+pub fn ni_t_map_base_int_int_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_004aa150(e, this);
+    delete_if_flagged(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004aa1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `NiTMap<ShadowSceneLight *, int>`: the base constructor
+/// [`fn_004aa210`], then the vtable `0101ee40`. Returns `this`.
+pub fn fn_004aa1b0(e: &mut Engine, this: Ptr<NiTMap>, buckets: u32) -> Ptr<NiTMap> {
+    fn_004aa210(e, this, buckets);
+    e.mem.set_u32(this.addr(), LIGHT_INT_MAP_VTABLE);
+    this
+}
+
+// Translated from 004aa1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<ShadowSceneLight *, int>::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor body [`fn_004aa280`] and frees the block when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn ni_t_map_shadow_scene_light_p_int_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_004aa280(e, this);
+    delete_if_flagged(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004aa210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., ShadowSceneLight *, int>` constructor with `buckets`
+/// buckets: the same body as [`fn_004a97e0`] with the vtable `0101ee60`.
+/// Returns `this`.
+pub fn fn_004aa210(e: &mut Engine, this: Ptr<NiTMap>, buckets: u32) -> Ptr<NiTMap> {
+    construct_map_base(e, this, LIGHT_INT_MAP_BASE_VTABLE, buckets)
+}
+
+// Translated from 004aa280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of `NiTMap<ShadowSceneLight *, int>` (fastcall `this`):
+/// vtable `0101ee40`, `00438af0` (empties the map), then the base
+/// destructor body [`fn_004aa2e0`]. (The compiler's exception frame is
+/// not translated.)
+pub fn fn_004aa280(e: &mut Engine, this: Ptr<NiTMap>) {
+    e.mem.set_u32(this.addr(), LIGHT_INT_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_004aa2e0(e, this);
+}
+
+// Translated from 004aa2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., ShadowSceneLight *, int>` destructor body (fastcall
+/// `this`): vtable `0101ee60`, `00438af0` (empties the map), then frees the
+/// bucket array at +8 (`00aa10f0`).
+pub fn fn_004aa2e0(e: &mut Engine, this: Ptr<NiTMap>) {
+    destroy_map_base(e, this, LIGHT_INT_MAP_BASE_VTABLE);
+}
+
+// Translated from 004aa310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<ShadowSceneLight *, int> >, ShadowSceneLight *, int>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the base destructor body [`fn_004aa2e0`] and frees
+/// the block when bit 0 of `flags` is set. Returns `this`.
+pub fn ni_t_map_base_shadow_scene_light_p_int_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_004aa2e0(e, this);
+    delete_if_flagged(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004bc320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSRenderedTexture::GetTexture` (Xbox PDB): the texture pointer stored at
+/// `this + 0x30 + index * 4` (loaded through `00559450`). With a null
+/// `this` the slot is a temporary smart pointer built by `00633c90(0)`
+/// (so the result is null), destroyed by `0045cec0` afterwards.
+pub fn bs_rendered_texture_get_texture(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    if !this.is_null() {
+        let slot = this.addr().wrapping_add(0x30).wrapping_add(index << 2);
+        return pointer_in_slot(e, Ptr::new(slot));
+    }
+    let mut result = 0;
+    e.with_stack(4, |e, temporary| {
+        let slot = e.call(0x0063_3c90, &args![temporary, 0u32]).u32();
+        result = pointer_in_slot(e, Ptr::new(slot));
+        e.call(0x0045_cec0, &args![temporary]);
+    });
+    result
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1468,6 +1726,59 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 -> Ptr<BSSimpleArray>
         ),
         entry!(0x004a9de0, fn_004a9de0(Ptr<BSSimpleArray>)),
+        entry!(0x004a9e00, fn_004a9e00(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(0x004a9e90, fn_004a9e90(Ptr<NiTMap>, u32) -> Ptr<NiTMap>),
+        entry!(
+            0x004a9ec0,
+            ni_t_map_tes_actor_base_p_bool_scalar_deleting_destructor(
+                Ptr<NiTMap>,
+                u32,
+            ) -> Ptr<NiTMap>
+        ),
+        entry!(0x004a9ef0, fn_004a9ef0(Ptr<NiTMap>, u32) -> Ptr<NiTMap>),
+        entry!(0x004a9f60, fn_004a9f60(Ptr<NiTMap>)),
+        entry!(0x004a9fc0, fn_004a9fc0(Ptr<NiTMap>)),
+        entry!(
+            0x004a9ff0,
+            ni_t_map_base_tes_actor_base_p_bool_scalar_deleting_destructor(
+                Ptr<NiTMap>,
+                u32,
+            )
+                -> Ptr<NiTMap>
+        ),
+        entry!(0x004aa020, fn_004aa020(Ptr<NiTMap>, u32) -> Ptr<NiTMap>),
+        entry!(
+            0x004aa050,
+            ni_t_map_int_int_scalar_deleting_destructor(Ptr<NiTMap>, u32) -> Ptr<NiTMap>
+        ),
+        entry!(0x004aa080, fn_004aa080(Ptr<NiTMap>, u32) -> Ptr<NiTMap>),
+        entry!(0x004aa0f0, fn_004aa0f0(Ptr<NiTMap>)),
+        entry!(0x004aa150, fn_004aa150(Ptr<NiTMap>)),
+        entry!(
+            0x004aa180,
+            ni_t_map_base_int_int_scalar_deleting_destructor(Ptr<NiTMap>, u32) -> Ptr<NiTMap>
+        ),
+        entry!(0x004aa1b0, fn_004aa1b0(Ptr<NiTMap>, u32) -> Ptr<NiTMap>),
+        entry!(
+            0x004aa1e0,
+            ni_t_map_shadow_scene_light_p_int_scalar_deleting_destructor(
+                Ptr<NiTMap>,
+                u32,
+            )
+                -> Ptr<NiTMap>
+        ),
+        entry!(0x004aa210, fn_004aa210(Ptr<NiTMap>, u32) -> Ptr<NiTMap>),
+        entry!(0x004aa280, fn_004aa280(Ptr<NiTMap>)),
+        entry!(0x004aa2e0, fn_004aa2e0(Ptr<NiTMap>)),
+        entry!(
+            0x004aa310,
+            ni_t_map_base_shadow_scene_light_p_int_scalar_deleting_destructor(
+                Ptr<NiTMap>,
+                u32,
+            )
+                -> Ptr<NiTMap>
+        ),
+        entry!(0x004bc320, bs_rendered_texture_get_texture(Ptr, u32) -> u32),
     ]
 }
 
@@ -2830,5 +3141,155 @@ mod tests {
         assert_eq!(calls_to(&e, ARRAY_REMOVE_ALL).len(), 1);
         e.call(0x004a_9db0, &args![array, 1u32]);
         assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![array.addr()]]);
+    }
+
+    #[test]
+    fn scene_data_array_constructor_reserves_and_fills() {
+        let mut e = scene_engine();
+        e.register(0x7ffd_0004, |e, a| eax(e.mem.alloc(a[1] * 0x40)));
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, 0x7ffd_0004);
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        e.mem.set_u32(array.addr(), vtable);
+        e.call_log = Some(vec![]);
+        // Nothing requested: stays empty, no allocation.
+        e.call(0x004a_9e00, &args![array, 0u32, 0u32]);
+        assert_eq!(e.get(array, BSSimpleArray::pBuffer), 0);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 0);
+        assert!(calls_to(&e, 0x7ffd_0004).is_empty());
+        // Reserve smaller than size: the size wins.
+        e.call(0x004a_9e00, &args![array, 2u32, 5u32]);
+        let buffer = e.get(array, BSSimpleArray::pBuffer);
+        assert_ne!(buffer, 0);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 5);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 5);
+        assert_eq!(calls_to(&e, 0x7ffd_0004), vec![vec![array.addr(), 5]]);
+        assert_ne!(buffer, 0);
+        // Reserve only: capacity without entries.
+        e.call(0x004a_9e00, &args![array, 7u32, 0u32]);
+        assert_eq!(e.get(array, BSSimpleArray::iReservedSize), 7);
+        assert_eq!(e.get(array, BSSimpleArray::iSize), 0);
+    }
+
+    /// The three map families added in session 2:
+    /// (constructor, deleting destructor, base constructor, destructor body,
+    /// base destructor body, base deleting destructor, vtable, base vtable).
+    const MAP_FAMILIES: [[u32; 8]; 3] = [
+        [
+            0x004a_9e90,
+            0x004a_9ec0,
+            0x004a_9ef0,
+            0x004a_9f60,
+            0x004a_9fc0,
+            0x004a_9ff0,
+            0x0101_edc0,
+            0x0101_ede0,
+        ],
+        [
+            0x004a_a020,
+            0x004a_a050,
+            0x004a_a080,
+            0x004a_a0f0,
+            0x004a_a150,
+            0x004a_a180,
+            0x0101_ee00,
+            0x0101_ee20,
+        ],
+        [
+            0x004a_a1b0,
+            0x004a_a1e0,
+            0x004a_a210,
+            0x004a_a280,
+            0x004a_a2e0,
+            0x004a_a310,
+            0x0101_ee40,
+            0x0101_ee60,
+        ],
+    ];
+
+    fn allocation_doubles(e: &mut Engine) {
+        e.register(ALLOCATE, |e, a| eax(e.mem.alloc(a[0])));
+        e.register(DEALLOCATE, |_, _| Ret::default());
+        e.register(MAP_REMOVE_ALL, |_, _| Ret::default());
+    }
+
+    #[test]
+    fn map_constructors_build_the_bucket_array() {
+        for [ctor, _, base_ctor, _, _, _, vtable, base_vtable] in MAP_FAMILIES {
+            let mut e = scene_engine();
+            allocation_doubles(&mut e);
+            let map: Ptr<NiTMap> = e.new_object();
+            e.mem.set_u32(map.addr() + 0x0c, 99);
+            assert_eq!(e.call(ctor, &args![map, 0x25u32]).ptr::<NiTMap>(), map);
+            assert_eq!(e.mem.u32(map.addr()), vtable);
+            assert_eq!(e.get(map, NiTMap::m_uiHashSize), 0x25);
+            assert_eq!(e.get(map, NiTMap::m_uiCount), 0);
+            let table = e.get(map, NiTMap::m_ppkHashTable);
+            assert_ne!(table, 0);
+            assert_eq!(e.mem.bytes(table, 0x25 * 4), vec![0; 0x25 * 4]);
+            // The base constructor alone stores the base vtable.
+            e.call(base_ctor, &args![map, 3u32]);
+            assert_eq!(e.mem.u32(map.addr()), base_vtable);
+            assert_eq!(e.get(map, NiTMap::m_uiHashSize), 3);
+        }
+    }
+
+    #[test]
+    fn map_destructor_bodies_empty_the_map_and_free_the_buckets() {
+        for [_, _, _, dtor, base_dtor, _, vtable, base_vtable] in MAP_FAMILIES {
+            let mut e = scene_engine();
+            allocation_doubles(&mut e);
+            let map: Ptr<NiTMap> = e.new_object();
+            e.set(map, NiTMap::m_ppkHashTable, 0x1234);
+            e.call_log = Some(vec![]);
+            e.call(dtor, &args![map]);
+            assert_eq!(e.mem.u32(map.addr()), base_vtable);
+            assert_eq!(calls_to(&e, MAP_REMOVE_ALL).len(), 2);
+            assert_eq!(calls_to(&e, DEALLOCATE), vec![vec![0x1234]]);
+            let _ = vtable;
+            e.call_log = Some(vec![]);
+            e.call(base_dtor, &args![map]);
+            assert_eq!(calls_to(&e, MAP_REMOVE_ALL), vec![vec![map.addr()]]);
+            assert_eq!(calls_to(&e, DEALLOCATE), vec![vec![0x1234]]);
+        }
+    }
+
+    #[test]
+    fn map_deleting_destructors_free_only_with_bit_zero() {
+        for [_, sdd, _, _, _, base_sdd, _, _] in MAP_FAMILIES {
+            for address in [sdd, base_sdd] {
+                let mut e = scene_engine();
+                allocation_doubles(&mut e);
+                let map: Ptr<NiTMap> = e.new_object();
+                e.call_log = Some(vec![]);
+                assert_eq!(e.call(address, &args![map, 0u32]).ptr::<NiTMap>(), map);
+                assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
+                assert_eq!(calls_to(&e, DEALLOCATE).len(), 1);
+                e.call(address, &args![map, 1u32]);
+                assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![map.addr()]]);
+            }
+        }
+    }
+
+    #[test]
+    fn rendered_texture_get_texture_reads_the_slot_or_a_null_temporary() {
+        let mut e = scene_engine();
+        e.register(0x0063_3c90, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            eax(a[0])
+        });
+        e.register(0x0045_cec0, |_, _| Ret::default());
+        let texture = e.mem.alloc(0x40);
+        e.mem.set_u32(texture + 0x30 + 8, 0xabcd);
+        e.call_log = Some(vec![]);
+        let got = e.call(0x004b_c320, &args![texture, 2u32]).u32();
+        assert_eq!(got, 0xabcd);
+        assert!(calls_to(&e, 0x0063_3c90).is_empty());
+        // Null `this`: a temporary smart pointer holding null is read and
+        // destroyed.
+        let got = e.call(0x004b_c320, &args![0u32, 2u32]).u32();
+        assert_eq!(got, 0);
+        assert_eq!(calls_to(&e, 0x0063_3c90).len(), 1);
+        assert_eq!(calls_to(&e, 0x0045_cec0).len(), 1);
     }
 }
