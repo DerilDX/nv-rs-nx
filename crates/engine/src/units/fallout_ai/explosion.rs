@@ -1,15 +1,13 @@
 //! `fallout/ai/combat/explosion.cpp` (Xbox PDB source unit), subsystem `fallout/ai`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 
-// Continuation audit (2026-10-10, round 8): translated the normal paths of
-// 009ae280 and 009b2940; both remain partial for compiler SEH cleanup.
-// Their normal-path regressions are prepared but remain unvalidated pending
-// compiler authorization and checks.
-// Thirteen functions remain partial solely for compiler SEH cleanup; resume
-// at 009acd60. Five entries remain unimplemented or skipped.
-// 009acd60 skipped: the 00404eb0/00404ee0 calls only scope TLS debug metadata;
-//   Initialize's broad effect, damage, 3D, sound and UI paths still need
-//   verified helper semantics and the untranslated 009ad670 dependency.
+// Continuation audit (2026-10-11, round 10): normal paths of 009ae280,
+// 009b2940 and 009acd60 have regression coverage; all remain partial for
+// compiler SEH cleanup. 009acd60 also calls the still-open 009ad670.
+// Fourteen functions retain explicit SEH partial markers; resume
+// at 009ad670. Four entries remain unimplemented or skipped.
+// 009acd60 has a normal-path translation; it remains partial for compiler SEH
+//   cleanup and depends on the still-open 009ad670 Init3D translation.
 // 009ad670 skipped: Init3D's per-iteration 0xe0 Havok cinfo/temporary layout
 //   and nested shape/action cleanup are not verified against PC field offsets.
 // 009ae6e0 skipped: large effect/damage flow; exception-state reconstruction,
@@ -131,6 +129,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009ac9a0, fn_009ac9a0(Ptr)),
         entry!(0x009acce0, fn_009acce0(Ptr) -> Ptr),
         entry!(0x009acd00, explosion_attach_distant(Ptr)),
+        entry!(0x009acd60, explosion_initialize(Ptr)),
         entry!(0x009ad5a0, fn_009ad5a0(Ptr) -> f32),
         entry!(0x009ad5f0, fn_009ad5f0(Ptr) -> bool),
         entry!(0x009ad610, fn_009ad610(Ptr) -> Ptr),
@@ -461,6 +460,277 @@ pub fn explosion_attach_distant(e: &mut Engine, this: Ptr) {
     if terrain != 0 {
         e.vcall(terrain, 0xdc, &args![target, 1u32]);
     }
+}
+
+// Translated from 009acd60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Explosion::Initialize` (Xbox PDB): creates the high process if absent,
+/// computes explosion power and image-space effects, initializes water and
+/// 3D, spawns its impact placed object, attaches the reference, starts sound,
+/// and registers a newly created process. The PC disassembly fixes the call order and all pending stack
+/// arguments. The debug-scope TLS pair has no gameplay state.
+// open: compiler SEH cleanup for the high process and sound temporaries.
+// Translation incomplete: 009acd60 - compiler SEH cleanup on an exception
+pub fn explosion_initialize(e: &mut Engine, this: Ptr) {
+    let scene_manager = e.global::<u32>(0x011d_df38);
+    let scene_mode = e.call(0x0042_ce10, &args![scene_manager]).bool();
+    let needs_process = e.mem.u32(this.addr() + 0x68) == 0;
+    if needs_process {
+        let allocation = e.call(0x0040_1000, &args![0x46cu32]).ptr::<()>();
+        let process = if allocation.is_null() {
+            Ptr::NULL
+        } else {
+            e.call(0x008d_7510, &args![allocation]).ptr::<()>()
+        };
+        e.mem.set_u32(this.addr() + 0x68, process.addr());
+    }
+
+    e.with_stack(0xb0, |e, frame| {
+        let difference = Ptr::<()>::new(frame.addr() + 0x10);
+        let world_position = e.vcall(this.addr(), 0x1f4, &args![]).ptr::<()>();
+        let player = e.global::<u32>(0x011d_ea3c);
+        let player_position = e.vcall(player, 0x1f4, &args![]).ptr::<()>();
+        let distance_vector = e
+            .call(
+                0x0043_9ef0,
+                &args![player_position, difference, world_position],
+            )
+            .ptr::<()>();
+        let distance = e.call(0x0045_7990, &args![distance_vector]).f32();
+        let radius = e.call(0x0064_4930, &args![this]).f32();
+        let power = e.call(0x0064_7920, &args![radius, distance]).f32();
+        let threshold = e.call(0x0040_3e20, &args![0x011d_0520u32]).ptr::<()>();
+        let in_face = e.mem.f32(threshold.addr()) < power && e.mem.u8(this.addr() + 0xd8) == 0;
+        if in_face {
+            let modifier = tes_image_space_modifier_get_explosion_in_face(e);
+            e.call(0x0052_99a0, &args![modifier, 1.0f32, 0u32]);
+        }
+
+        fn_009b2940(e, this);
+        // Init3D is the next open queue entry; the call retains its native
+        // address until that function's normal path has been translated.
+        e.call(0x009a_d670, &args![this]);
+        let distant = fn_009ad5f0(e, this);
+        if distant {
+            explosion_attach_distant(e, this);
+        } else {
+            if !scene_mode {
+                let base = e.call(0x0041_81e0, &args![this]).u32();
+                // Folded 004fd380 reads BGSExplosion::pImpactPlacedObject
+                // (Xbox PDB), at PC +0x70.
+                let impact_placed_object = e.call(0x004f_d380, &args![base]).u32();
+                if impact_placed_object != 0 {
+                    // Three zero pushes precede this no-argument getter and
+                    // belong to 004698a0 (RET 0x20), not to the getter.
+                    let worldspace = e.call(0x0057_5d70, &args![this]).u32();
+                    let cell = e.call(0x008d_6f30, &args![this]).u32();
+                    let rotation = e.call(0x0043_0830, &args![this]).u32();
+                    let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+                    let base = e.call(0x0041_81e0, &args![this]).u32();
+                    let impact_placed_object = e.call(0x004f_d380, &args![base]).u32();
+                    let data_handler = e.global::<u32>(0x011c_3f2c);
+                    e.call(
+                        0x0046_98a0,
+                        &args![
+                            data_handler,
+                            impact_placed_object,
+                            position,
+                            rotation,
+                            cell,
+                            worldspace,
+                            0u32,
+                            0u32,
+                            0u32
+                        ],
+                    );
+                }
+
+                let base = e.call(0x0041_81e0, &args![this]).u32();
+                let radiation_radius = fn_009ad5a0(e, Ptr::new(base));
+                let zero = e.global::<f64>(0x0101_2060);
+                if radiation_radius as f64 > zero {
+                    let base = e.call(0x0041_81e0, &args![this]).u32();
+                    let radiation = e.call(0x008d_01e0, &args![base]).f32();
+                    let zero = e.global::<f64>(0x0101_2060);
+                    if radiation as f64 > zero {
+                        fn_009b13a0(e, this);
+                        let base = e.call(0x0041_81e0, &args![this]).u32();
+                        let radius = fn_009ad5a0(e, Ptr::new(base));
+                        let extra = e.call(0x005d_43c0, &args![this]).u32();
+                        e.call(0x0042_2220, &args![extra, radius]);
+                        e.vcall(this.addr(), 0x48, &args![0x4000_0000u32]);
+                    }
+                }
+            }
+
+            explosion_attach_light(e, this);
+            e.vcall(this.addr(), 0x1c4, &args![]);
+            let cell = e.call(0x008d_6f30, &args![this]).u32();
+            if cell != 0 {
+                if !scene_mode {
+                    e.call(0x0054_ca90, &args![cell, this]);
+                }
+                e.call(0x0054_8230, &args![cell, this, 0u32]);
+            }
+
+            let node = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+            if node != 0 {
+                let threshold = e.call(0x0040_3e20, &args![0x011d_0520u32]).u32();
+                let close = e.mem.f32(threshold) < power && e.mem.u8(this.addr() + 0xd8) == 0;
+                e.call(0x0045_0f90, &args![node, u32::from(close)]);
+                if e.call(0x0054_97a0, &args![cell]).u32() != 0 {
+                    let scene = e.call(0x0054_97a0, &args![cell]).u32();
+                    e.vcall(scene, 0xdc, &args![node, 1u32]);
+                }
+            }
+            let scene = if node == 0 {
+                0
+            } else {
+                e.vcall(node, 0xc, &args![]).u32()
+            };
+            let object = if scene == 0 {
+                0
+            } else {
+                e.vcall(scene, 0x10, &args![]).u32()
+            };
+            if object != 0 {
+                e.call(0x0047_6ab0, &args![object]);
+            }
+            let age = e
+                .call(0x004b_6220, &args![node, 0x0102_054cu32, 0x0103_275cu32])
+                .f32();
+            e.mem.set_f32(this.addr() + 0x90, quiet_f32(age));
+        }
+
+        if !scene_mode {
+            let actor = e.vcall(this.addr(), 0x168, &args![]).u32();
+            if actor != 0 {
+                let process = e.call(0x0055_9450, &args![actor]).u32();
+                if process != 0 {
+                    let process = e.call(0x0055_9450, &args![actor]).u32();
+                    if e.call(0x008d_8520, &args![process]).u32() != 0 {
+                        let process = e.call(0x0055_9450, &args![actor]).u32();
+                        let saved = e.call(0x008d_8520, &args![process]).u32();
+                        let exploded = fn_009ad610(e, this);
+                        let base = e.call(0x0041_81e0, &args![this]).u32();
+                        // The exploded reference and 2 were pushed before
+                        // this no-argument getter; both belong to slot FC.
+                        let sound_level = e.call(0x004f_b810, &args![base]).u32();
+                        let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+                        let xyz = [
+                            e.mem.u32(position),
+                            e.mem.u32(position + 4),
+                            e.mem.u32(position + 8),
+                        ];
+                        e.vcall(
+                            saved,
+                            0xfc,
+                            &[
+                                process,
+                                xyz[0],
+                                xyz[1],
+                                xyz[2],
+                                sound_level,
+                                2,
+                                exploded.addr(),
+                            ],
+                        );
+                    }
+                }
+            }
+
+            explosion_start_sounds(e, this);
+            let first_valid = e.call(0x00ad_8ce0, &args![this.addr() + 0xac]).bool();
+            if first_valid || e.call(0x00ad_8ce0, &args![this.addr() + 0xb8]).bool() {
+                let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+                let setting = e.call(0x0040_3e20, &args![0x011d_0280u32]).u32();
+                let shake =
+                    ((e.mem.f32(this.addr() + 0x94) as f64) * (e.mem.f32(setting) as f64)) as f32;
+                e.call(0x008d_1960, &args![shake, position]);
+            }
+
+            let cell = e.call(0x008d_6f30, &args![this]).u32();
+            if cell != 0 && e.call(0x004f_b970, &args![this]).bool() {
+                let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+                let mut xyz = [
+                    e.mem.u32(position),
+                    e.mem.u32(position + 4),
+                    e.mem.u32(position + 8),
+                ];
+                let cell = e.call(0x008d_6f30, &args![this]).u32();
+                xyz[2] = e.call(0x0054_71e0, &args![cell]).f32().to_bits();
+                let radius = e.call(0x0064_4930, &args![this]).f32();
+                let setting = e.call(0x0040_3e20, &args![0x011d_0da4u32]).u32();
+                let effect_radius = ((radius as f64) / e.mem.f32(setting) as f64) as f32;
+                let matrix = Ptr::<()>::new(frame.addr() + 0x54);
+                e.call(0x0068_15c0, &args![matrix]);
+                let heading = quiet_f32(e.call(0x004a_4240, &args![]).f32());
+                e.call(0x004a_0c90, &args![matrix, heading]);
+                // MOVSD.REP captures the by-value matrix before either
+                // callback below can alter its stack storage.
+                let matrix_words: Vec<_> = (0..9)
+                    .map(|index| e.mem.u32(matrix.addr() + index * 4))
+                    .collect();
+                let particle = e.call(0x0040_3df0, &args![0x011d_0ce4u32]).u32();
+                let player = e.global::<u32>(0x011d_ea3c);
+                let world = e.call(0x008d_6f30, &args![player]).u32();
+                let mut effect_args = vec![world, 1.0f32.to_bits(), particle];
+                effect_args.extend(matrix_words);
+                effect_args.extend(xyz);
+                effect_args.extend([effect_radius.to_bits(), 7, 0]);
+                e.call(0x0068_9210, &effect_args);
+
+                let handle = Ptr::<()>::new(frame.addr() + 0x38);
+                e.call(0x0041_a250, &args![handle]);
+                let audio = e.call(0x0045_3a70, &args![]).u32();
+                let temporary = Ptr::<()>::new(frame.addr() + 4);
+                let sound = e
+                    .call(
+                        0x00ad_7550,
+                        &args![audio, temporary, 0x0108_f10cu32, 0x102u32],
+                    )
+                    .u32();
+                e.call(0x0041_8900, &args![handle, sound]);
+                e.call(0x0048_3710, &args![temporary]);
+                if e.call(0x00ad_8ce0, &args![handle]).bool() {
+                    let sound_xyz = xyz.map(|bits| quiet_f32(f32::from_bits(bits)).to_bits());
+                    e.call(
+                        0x00ad_8b60,
+                        &[handle.addr(), sound_xyz[0], sound_xyz[1], sound_xyz[2]],
+                    );
+                    e.call(0x00ad_8830, &args![handle, 0u32]);
+                }
+                e.call(0x0048_3710, &args![handle]);
+            }
+        }
+
+        let debug_setting = e.call(0x0043_d4d0, &args![0x011d_0a78u32]).u32();
+        if e.mem.i32(debug_setting) > 0 {
+            let color = Ptr::<()>::new(frame.addr() + 0x74);
+            let alpha = quiet_f32(e.global::<f32>(0x0102_3934));
+            e.call(0x0041_4430, &args![color, 1.0f32, 1.0f32, 1.0f32, alpha]);
+            let size = quiet_f32(e.global::<f32>(0x0101_84f4));
+            let point = e.call(0x004b_29b0, &args![size, color, 1u32]).u32();
+            e.call(0x00a5_a040, &args![point]);
+            let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+            e.call(0x0044_0460, &args![point, position]);
+            let duration = quiet_f32(e.global::<f32>(0x0101_7b78));
+            let tes = e.global::<u32>(0x011d_ea10);
+            e.call(0x0045_8e20, &args![tes, point, duration]);
+        }
+
+        if needs_process {
+            e.call(
+                0x0096_d450,
+                &args![0x011e_0e80u32, this, 0u32, 0u32, 0u32, 0u32],
+            );
+        }
+        let script_setting = e.call(0x0040_8d60, &args![0x011c_7ae8u32]).u32();
+        if e.mem.u8(script_setting) != 0 {
+            let value = Ptr::<()>::new(frame.addr());
+            e.mem.set_u32(value.addr(), this.addr());
+            e.call(0x0076_b660, &args![0x011c_7b8cu32, value]);
+        }
+    });
 }
 
 // Translated from 009ad5a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2162,6 +2432,19 @@ mod tests {
     fn engine_with(addrs: &[u32]) -> Engine {
         let mut e = Engine::new();
         e.call_log = Some(vec![]);
+        for page in [
+            0x0101_2000,
+            0x0101_7000,
+            0x0101_8000,
+            0x0102_3000,
+            0x011c_3000,
+            0x011c_7000,
+            0x011c_9000,
+            0x011d_d000,
+            0x011d_e000,
+        ] {
+            e.map(page, 0x1000);
+        }
         for &addr in addrs {
             e.register(addr, |_, _| Ret::default());
         }
@@ -2171,6 +2454,578 @@ mod tests {
     fn mapped(e: &mut Engine, address: u32) -> Ptr {
         e.map(address & !0xfff, 0x1000);
         Ptr::new(address)
+    }
+
+    #[test]
+    fn initialize_process_and_face_effect_gates_precede_distant_attachment() {
+        for (initially_has_process, power, allocation_succeeds) in [
+            (false, 4.0f32, true),
+            (false, 4.0, false),
+            (true, 4.0, true),
+            (false, 0.5, true),
+            (true, 0.5, true),
+        ] {
+            let mut e = engine_with(&[
+                0x0042_ce10,
+                0x0040_1000,
+                0x008d_7510,
+                0x0043_9ef0,
+                0x0045_7990,
+                0x0064_4930,
+                0x0064_7920,
+                0x0040_3e20,
+                0x0052_99a0,
+                0x008d_6f30,
+                0x009a_d670,
+                0x0043_d4d0,
+                0x0040_8d60,
+                0x0096_d450,
+            ]);
+            let this = mapped(&mut e, 0x1000);
+            mapped(&mut e, 0x2000);
+            mapped(&mut e, 0x4000);
+            mapped(&mut e, 0x5000);
+            mapped(&mut e, 0x8000);
+            let mut slots = vec![0; 0x1f4 / 4 + 1];
+            slots[0x1d0 / 4] = 0x6000;
+            slots[0x1f4 / 4] = 0x6100;
+            e.put_vtable(0x3000, &slots);
+            e.mem.set_u32(this.addr(), 0x3000);
+            e.mem.set_u32(0x2000, 0x3000);
+            e.mem.set_u32(
+                this.addr() + 0x68,
+                if initially_has_process { 0x9300 } else { 0 },
+            );
+            e.mem.set_f32(0x5000, 1.0);
+            e.mem.set_i32(0x8000, 0);
+            e.mem.set_u8(0x8100, 0);
+            e.set_global(0x011d_df38, 0x7000u32);
+            e.set_global(0x011d_ea3c, 0x2000u32);
+            e.set_global(0x011c_9708, 0x9500u32);
+            e.register(0x0042_ce10, |_, _| true.into_ret());
+            e.register_double(0x0040_1000, move |_, _| {
+                (if allocation_succeeds { 0x9000u32 } else { 0 }).into_ret()
+            });
+            e.register(0x008d_7510, |_, _| 0x9200u32.into_ret());
+            e.register(0x0000_6000, |_, _| 0u32.into_ret());
+            e.register(0x0000_6100, |_, _| 0x4000u32.into_ret());
+            e.register(0x0043_9ef0, |_, a| a[1].into_ret());
+            e.register(0x0045_7990, |_, _| 3.0f32.into_ret());
+            e.register(0x0064_4930, |_, _| 2.0f32.into_ret());
+            e.register_double(0x0064_7920, move |_, a| {
+                assert_eq!(a, &[2.0f32.to_bits(), 3.0f32.to_bits()]);
+                power.into_ret()
+            });
+            e.register(0x0040_3e20, |_, _| 0x5000u32.into_ret());
+            e.register(0x0043_d4d0, |_, _| 0x8000u32.into_ret());
+            e.register(0x0040_8d60, |_, _| 0x8100u32.into_ret());
+
+            explosion_initialize(&mut e, this);
+            assert_eq!(
+                e.mem.u32(this.addr() + 0x68),
+                if initially_has_process {
+                    0x9300
+                } else if allocation_succeeds {
+                    0x9200
+                } else {
+                    0
+                }
+            );
+            let log = e.call_log.unwrap();
+            let calls: Vec<_> = log.iter().map(|call| call.0).collect();
+            let init_3d = calls
+                .iter()
+                .position(|&address| address == 0x009a_d670)
+                .unwrap();
+            let effects: Vec<_> = log
+                .iter()
+                .enumerate()
+                .filter(|(_, call)| call.0 == 0x0052_99a0)
+                .collect();
+            assert_eq!(effects.len(), usize::from(power > 1.0));
+            if let Some((index, call)) = effects.first() {
+                assert!(*index < init_3d);
+                assert_eq!(call.1, [0x9500, 1.0f32.to_bits(), 0]);
+            }
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|&&address| address == 0x0040_1000)
+                    .count(),
+                usize::from(!initially_has_process)
+            );
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|&&address| address == 0x008d_7510)
+                    .count(),
+                usize::from(!initially_has_process && allocation_succeeds)
+            );
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|&&address| address == 0x0096_d450)
+                    .count(),
+                usize::from(!initially_has_process)
+            );
+        }
+    }
+
+    #[test]
+    fn initialize_attached_cell_adds_reference_and_stores_animation_age() {
+        let mut e = engine_with(&[
+            0x0042_ce10,
+            0x0043_9ef0,
+            0x0045_7990,
+            0x0064_4930,
+            0x0064_7920,
+            0x0040_3e20,
+            0x008d_6f30,
+            0x0054_71e0,
+            0x009a_d670,
+            0x0054_8230,
+            0x004b_6220,
+            0x0043_d4d0,
+            0x0040_8d60,
+        ]);
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x2000);
+        mapped(&mut e, 0x4000);
+        mapped(&mut e, 0x5000);
+        mapped(&mut e, 0x8000);
+        let mut slots = vec![0; 0x1f4 / 4 + 1];
+        slots[0x1c4 / 4] = 0x6200;
+        slots[0x1d0 / 4] = 0x6000;
+        slots[0x1f4 / 4] = 0x6100;
+        e.put_vtable(0x3000, &slots);
+        e.mem.set_u32(this.addr(), 0x3000);
+        e.mem.set_u32(0x2000, 0x3000);
+        e.mem.set_u32(this.addr() + 0x68, 0x9300);
+        e.mem.set_f32(0x4008, 0.0);
+        e.mem.set_f32(0x5000, 10.0);
+        e.mem.set_i32(0x8000, 0);
+        e.mem.set_u8(0x8100, 0);
+        e.set_global(0x011d_df38, 0x7000u32);
+        e.set_global(0x011d_ea3c, 0x2000u32);
+        e.register(0x0042_ce10, |_, _| true.into_ret());
+        e.register(0x0000_6000, |_, _| 0u32.into_ret());
+        e.register(0x0000_6100, |_, _| 0x4000u32.into_ret());
+        e.register(0x0000_6200, |_, _| Ret::default());
+        e.register(0x0043_9ef0, |_, a| a[1].into_ret());
+        e.register(0x0045_7990, |_, _| 3.0f32.into_ret());
+        e.register(0x0064_4930, |_, _| 2.0f32.into_ret());
+        e.register(0x0064_7920, |_, _| 0.0f32.into_ret());
+        e.register(0x0040_3e20, |_, _| 0x5000u32.into_ret());
+        e.register(0x008d_6f30, |_, _| 0x7000u32.into_ret());
+        e.register(0x0054_71e0, |_, _| 100.0f32.into_ret());
+        e.register(0x004b_6220, |_, a| {
+            assert_eq!(a, &[0, 0x0102_054c, 0x0103_275c]);
+            6.5f32.into_ret()
+        });
+        e.register(0x0043_d4d0, |_, _| 0x8000u32.into_ret());
+        e.register(0x0040_8d60, |_, _| 0x8100u32.into_ret());
+
+        explosion_initialize(&mut e, this);
+        assert_eq!(e.mem.f32(this.addr() + 0x90), 6.5);
+        assert_eq!(e.mem.u8(this.addr() + 0xd9), 1);
+        let log = e.call_log.unwrap();
+        assert!(log
+            .iter()
+            .any(|call| call.0 == 0x0054_8230 && call.1 == [0x7000, 0x1000, 0]));
+        assert!(!log.iter().any(|call| call.0 == 0x0096_d450));
+    }
+
+    #[test]
+    fn initialize_reloads_impact_object_and_radiation_inputs_after_callbacks() {
+        let mut e = engine_with(&[
+            0x0042_ce10,
+            0x0043_9ef0,
+            0x0045_7990,
+            0x0064_4930,
+            0x0064_7920,
+            0x0040_3e20,
+            0x008d_6f30,
+            0x0054_71e0,
+            0x009a_d670,
+            0x0057_5d70,
+            0x0043_0830,
+            0x0046_98a0,
+            0x0054_ca90,
+            0x0054_8230,
+            0x004b_6220,
+            0x00ad_8ce0,
+            0x004f_d3c0,
+            0x0091_85e0,
+            0x004f_b970,
+            0x0043_d4d0,
+            0x0040_8d60,
+        ]);
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x2000);
+        mapped(&mut e, 0x4000);
+        mapped(&mut e, 0x5000);
+        mapped(&mut e, 0x8000);
+        mapped(&mut e, 0xb000);
+        let mut slots = vec![0; 0x1f4 / 4 + 1];
+        slots[0x168 / 4] = 0x6300;
+        slots[0x1c4 / 4] = 0x6200;
+        slots[0x1d0 / 4] = 0x6000;
+        slots[0x1f4 / 4] = 0x6100;
+        e.put_vtable(0x3000, &slots);
+        e.mem.set_u32(this.addr(), 0x3000);
+        e.mem.set_u32(0x2000, 0x3000);
+        e.mem.set_u32(this.addr() + 0x68, 0x9300);
+        e.mem.set_f32(0x4008, 0.0);
+        e.mem.set_f32(0x5000, 1.0);
+        e.mem.set_i32(0x8000, 0);
+        e.mem.set_u8(0x8100, 0);
+        e.mem.set_f32(0xb0a0, 2.0);
+        e.mem.set_f32(0xb1a0, 2.0);
+        e.set_global(0x011d_df38, 0x7000u32);
+        e.set_global(0x011d_ea3c, 0x2000u32);
+        e.set_global(0x011c_3f2c, 0xd001u32);
+        e.set_global(0x0101_2060, 0.0f64);
+        e.register(0x0042_ce10, |_, _| false.into_ret());
+        e.register(0x0000_6000, |_, _| 0u32.into_ret());
+        e.register(0x0000_6100, |_, _| 0x4000u32.into_ret());
+        e.register(0x0000_6200, |_, _| Ret::default());
+        e.register(0x0000_6300, |_, _| 0u32.into_ret());
+        e.register(0x0043_9ef0, |_, a| a[1].into_ret());
+        e.register(0x0045_7990, |_, _| 3.0f32.into_ret());
+        e.register(0x0064_4930, |_, _| 2.0f32.into_ret());
+        e.register(0x0064_7920, |_, _| 0.5f32.into_ret());
+        e.register(0x0040_3e20, |_, _| 0x5000u32.into_ret());
+        e.register(0x008d_6f30, |_, _| 0x7000u32.into_ret());
+        e.register(0x0054_71e0, |_, _| 100.0f32.into_ret());
+        let base_calls = Rc::new(Cell::new(0u32));
+        let base_calls_for_double = Rc::clone(&base_calls);
+        e.register_double(0x0041_81e0, move |_, _| {
+            let count = base_calls_for_double.get();
+            base_calls_for_double.set(count + 1);
+            (if count == 0 { 0xb000u32 } else { 0xb100u32 }).into_ret()
+        });
+        let impact_object_calls = Rc::new(Cell::new(0u32));
+        let impact_object_calls_for_double = Rc::clone(&impact_object_calls);
+        e.register_double(0x004f_d380, move |e, a| {
+            let count = impact_object_calls_for_double.get();
+            impact_object_calls_for_double.set(count + 1);
+            if count == 0 {
+                assert_eq!(a, &[0xb000]);
+                0xc000u32.into_ret()
+            } else {
+                assert_eq!(a, &[0xb100]);
+                e.set_global(0x011c_3f2c, 0xd002u32);
+                0xd000u32.into_ret()
+            }
+        });
+        e.register(0x0057_5d70, |_, _| 0xa100u32.into_ret());
+        e.register(0x0043_0830, |_, _| 0xa300u32.into_ret());
+        e.register(0x0047_7950, |_, _| true.into_ret());
+        e.register_double(0x008d_01e0, |e, _| {
+            e.set_global(0x0101_2060, 100.0f64);
+            1.0f32.into_ret()
+        });
+        e.register(0x0043_d4d0, |_, _| 0x8000u32.into_ret());
+        e.register(0x0040_8d60, |_, _| 0x8100u32.into_ret());
+
+        explosion_initialize(&mut e, this);
+        assert_eq!(impact_object_calls.get(), 2);
+        let log = e.call_log.unwrap();
+        let probe = log.iter().position(|call| call.0 == 0x004f_d380).unwrap();
+        let observed: Vec<_> = log[probe..probe + 9].iter().map(|call| call.0).collect();
+        assert_eq!(
+            observed,
+            [
+                0x004f_d380,
+                0x0057_5d70,
+                0x008d_6f30,
+                0x0043_0830,
+                0x0000_6100,
+                0x0041_81e0,
+                0x004f_d380,
+                0x0046_98a0,
+                0x0041_81e0,
+            ]
+        );
+        assert!(log.iter().any(|call| call.0 == 0x0046_98a0
+            && call.1 == [0xd002, 0xd000, 0x4000, 0xa300, 0x7000, 0xa100, 0, 0, 0]));
+        assert!(!log.iter().any(|call| call.0 == 0x0042_2220));
+    }
+
+    #[test]
+    fn initialize_sound_water_debug_and_script_keep_snapshot_arguments() {
+        let mut e = engine_with(&[
+            0x0042_ce10,
+            0x0043_9ef0,
+            0x0045_7990,
+            0x0064_4930,
+            0x0064_7920,
+            0x0040_3e20,
+            0x0052_99a0,
+            0x0054_71e0,
+            0x009a_d670,
+            0x0041_81e0,
+            0x004f_d380,
+            0x0047_7950,
+            0x004f_b070,
+            0x0054_ca90,
+            0x0054_8230,
+            0x0045_0f90,
+            0x0054_97a0,
+            0x0047_6ab0,
+            0x004b_6220,
+            0x004f_d3c0,
+            0x0091_85e0,
+            0x0084_e3a0,
+            0x0093_3150,
+            0x0041_8900,
+            0x0048_3710,
+            0x008d_1960,
+            0x004f_b970,
+            0x0068_15c0,
+            0x004a_4240,
+            0x0068_9210,
+            0x0041_a250,
+            0x0045_3a70,
+            0x00ad_7550,
+            0x00ad_8b60,
+            0x00ad_8830,
+            0x0041_4430,
+            0x004b_29b0,
+            0x00a5_a040,
+            0x0044_0460,
+            0x0045_8e20,
+            0x0076_b660,
+        ]);
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x2000);
+        mapped(&mut e, 0x4000);
+        mapped(&mut e, 0x5000);
+        mapped(&mut e, 0x6000);
+        mapped(&mut e, 0x7000);
+        mapped(&mut e, 0x8000);
+        mapped(&mut e, 0xb000);
+        let mut explosion_slots = vec![0; 0x1f4 / 4 + 1];
+        explosion_slots[0x168 / 4] = 0x6300;
+        explosion_slots[0x1c4 / 4] = 0x6200;
+        explosion_slots[0x1d0 / 4] = 0x6000;
+        explosion_slots[0x1f4 / 4] = 0x6100;
+        e.put_vtable(0x3000, &explosion_slots);
+        e.mem.set_u32(this.addr(), 0x3000);
+        e.mem.set_u32(0x2000, 0x3000);
+        e.mem.set_u32(this.addr() + 0x68, 0x9300);
+        e.mem.set_f32(this.addr() + 0x94, 2.0);
+        e.mem.set_f32(0x4000, 10.0);
+        e.mem.set_f32(0x4004, 20.0);
+        e.mem.set_f32(0x4008, 0.0);
+        e.mem.set_f32(0x5000, 1.0);
+        e.mem.set_f32(0x5004, 3.0);
+        e.mem.set_f32(0x5008, 1.0);
+        e.mem.set_f32(0x500c, 1.0);
+        e.mem.set_i32(0x5500, 1);
+        e.mem.set_u8(0x5600, 1);
+        e.set_global(0x011d_df38, 0x7000u32);
+        e.set_global(0x011d_ea3c, 0x2000u32);
+        e.set_global(0x011d_ea10, 0xb000u32);
+        e.set_global(0x011c_9708, 0xb100u32);
+        e.set_global(0x0102_3934, 0.65f32);
+        e.set_global(0x0101_84f4, 2.5f32);
+        e.set_global(0x0101_7b78, 10.0f32);
+        e.register(0x0042_ce10, |_, _| false.into_ret());
+        e.register(0x0000_6000, |_, _| 0x6000u32.into_ret());
+        e.register(0x0000_6100, |_, _| 0x4000u32.into_ret());
+        e.register(0x0000_6200, |_, _| Ret::default());
+        e.register(0x0000_6300, |_, _| 0u32.into_ret());
+        let mut node_slots = vec![0; 0x10 / 4 + 1];
+        node_slots[0xc / 4] = 0x6400;
+        e.put_vtable(0xc000, &node_slots);
+        e.mem.set_u32(0x6000, 0xc000);
+        e.register(0x0000_6400, |_, _| 0x7100u32.into_ret());
+        let mut scene_slots = vec![0; 0x10 / 4 + 1];
+        scene_slots[0x10 / 4] = 0x6500;
+        e.put_vtable(0xd000, &scene_slots);
+        e.mem.set_u32(0x7100, 0xd000);
+        e.register(0x0000_6500, |_, _| 0x8000u32.into_ret());
+        let mut world_slots = vec![0; 0xdc / 4 + 1];
+        world_slots[0xdc / 4] = 0x6600;
+        e.put_vtable(0xe000, &world_slots);
+        e.mem.set_u32(0x7000, 0xe000);
+        e.register(0x0000_6600, |_, a| {
+            assert_eq!(a, &[0x7000, 0x6000, 1]);
+            Ret::default()
+        });
+        e.register(0x0043_9ef0, |_, a| a[1].into_ret());
+        e.register(0x0045_7990, |_, _| 3.0f32.into_ret());
+        e.register(0x0064_4930, |_, _| 2.0f32.into_ret());
+        e.register(0x0064_7920, |_, _| 4.0f32.into_ret());
+        e.register(0x0040_3e20, |_, a| {
+            match a[0] {
+                0x011d_0280 => 0x5004u32,
+                0x011d_0da4 => 0x5008,
+                0x011d_0e34 => 0x500c,
+                _ => 0x5000,
+            }
+            .into_ret()
+        });
+        e.register(0x008d_6f30, |e, a| {
+            if a[0] == e.global::<u32>(0x011d_ea3c) {
+                0xa000u32.into_ret()
+            } else {
+                0x9000u32.into_ret()
+            }
+        });
+        e.register(0x0054_71e0, |_, _| 100.0f32.into_ret());
+        e.register(0x0041_81e0, |_, _| 0xb000u32.into_ret());
+        e.register(0x004f_d380, |_, _| 0u32.into_ret());
+        e.register(0x0047_7950, |_, _| true.into_ret());
+        e.register(0x004f_b070, |_, _| 0u32.into_ret());
+        e.register(0x0054_97a0, |_, _| 0x7000u32.into_ret());
+        e.register(0x004b_6220, |_, _| 0.3f32.into_ret());
+        let handle_calls = Rc::new(Cell::new(0u32));
+        let handle_calls_for_double = Rc::clone(&handle_calls);
+        e.register_double(0x00ad_8ce0, move |_, a| {
+            if a[0] == 0x10ac {
+                let count = handle_calls_for_double.get();
+                handle_calls_for_double.set(count + 1);
+                (count != 0).into_ret()
+            } else {
+                (a[0] != 0x10b8).into_ret()
+            }
+        });
+        e.register(0x004f_d3c0, |_, _| 0x7300u32.into_ret());
+        e.register(0x0091_85e0, |_, _| 0u32.into_ret());
+        e.register(0x0084_e3a0, |_, _| 0x42u32.into_ret());
+        e.register(0x0093_3150, |_, _| 0xc100u32.into_ret());
+        e.register(0x004f_b970, |_, _| true.into_ret());
+        e.register(0x004a_4240, |_, _| 0.0f32.into_ret());
+        let matrix_address = Rc::new(Cell::new(0u32));
+        let matrix_for_set = Rc::clone(&matrix_address);
+        e.register_double(0x004a_0c90, move |e, a| {
+            matrix_for_set.set(a[0]);
+            for index in 0..9 {
+                e.mem.set_u32(a[0] + index * 4, index + 1);
+            }
+            Ret::default()
+        });
+        let matrix_for_particle = Rc::clone(&matrix_address);
+        e.register_double(0x0040_3df0, move |e, _| {
+            let matrix = matrix_for_particle.get();
+            for index in 0..9 {
+                e.mem.set_u32(matrix + index * 4, 0xdead_beef);
+            }
+            e.set_global(0x011d_ea3c, 0x2004u32);
+            0xc000u32.into_ret()
+        });
+        e.register(0x0068_9210, |_, a| {
+            assert_eq!(a.len(), 18);
+            assert_eq!(a[0..3], [0xa000, 1.0f32.to_bits(), 0xc000]);
+            assert_eq!(a[3..12], [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            assert_eq!(
+                a[12..15],
+                [10.0f32.to_bits(), 20.0f32.to_bits(), 100.0f32.to_bits()]
+            );
+            assert_eq!(a[15..18], [2.0f32.to_bits(), 7, 0]);
+            Ret::default()
+        });
+        e.register(0x0045_3a70, |_, _| 0xb000u32.into_ret());
+        e.register(0x00ad_7550, |_, _| 0xc000u32.into_ret());
+        e.register(0x004b_29b0, |_, _| 0xd000u32.into_ret());
+        e.register(0x0043_d4d0, |_, _| 0x5500u32.into_ret());
+        e.register(0x0040_8d60, |_, _| 0x5600u32.into_ret());
+        e.register(0x0076_b660, |e, a| {
+            assert_eq!(a[0], 0x011c_7b8c);
+            assert_eq!(e.mem.u32(a[1]), 0x1000);
+            Ret::default()
+        });
+
+        explosion_initialize(&mut e, this);
+        let log = e.call_log.unwrap();
+        assert!(log
+            .iter()
+            .any(|call| call.0 == 0x0045_0f90 && call.1 == [0x6000, 1]));
+        assert!(log
+            .iter()
+            .any(|call| call.0 == 0x008d_1960 && call.1 == [6.0f32.to_bits(), 0x4000]));
+        assert!(log.iter().any(|call| call.0 == 0x00ad_8b60));
+        assert!(log.iter().any(|call| call.0 == 0x0045_8e20));
+        assert!(log.iter().any(|call| call.0 == 0x0076_b660));
+    }
+
+    #[test]
+    fn initialize_queries_cell_scene_even_when_cell_becomes_null() {
+        let mut e = engine_with(&[
+            0x0042_ce10,
+            0x0043_9ef0,
+            0x0045_7990,
+            0x0064_4930,
+            0x0064_7920,
+            0x0040_3e20,
+            0x0054_71e0,
+            0x009a_d670,
+            0x0041_81e0,
+            0x004f_b070,
+            0x0045_0f90,
+            0x004b_6220,
+            0x0043_d4d0,
+            0x0040_8d60,
+        ]);
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x2000);
+        mapped(&mut e, 0x4000);
+        mapped(&mut e, 0x5000);
+        mapped(&mut e, 0x6000);
+        mapped(&mut e, 0x8000);
+        let mut explosion_slots = vec![0; 0x1f4 / 4 + 1];
+        explosion_slots[0x1c4 / 4] = 0x6200;
+        explosion_slots[0x1d0 / 4] = 0x6000;
+        explosion_slots[0x1f4 / 4] = 0x6100;
+        e.put_vtable(0x3000, &explosion_slots);
+        e.mem.set_u32(this.addr(), 0x3000);
+        e.mem.set_u32(0x2000, 0x3000);
+        e.mem.set_u32(this.addr() + 0x68, 0x9300);
+        e.mem.set_f32(0x4008, 0.0);
+        e.mem.set_f32(0x5000, 1.0);
+        e.mem.set_i32(0x8000, 0);
+        e.mem.set_u8(0x8100, 0);
+        e.set_global(0x011d_df38, 0x7000u32);
+        e.set_global(0x011d_ea3c, 0x2000u32);
+        e.register(0x0042_ce10, |_, _| true.into_ret());
+        e.register(0x0000_6000, |_, _| 0x6000u32.into_ret());
+        e.register(0x0000_6100, |_, _| 0x4000u32.into_ret());
+        e.register(0x0000_6200, |_, _| Ret::default());
+        let mut node_slots = vec![0; 0x10 / 4 + 1];
+        node_slots[0xc / 4] = 0x6400;
+        e.put_vtable(0xc000, &node_slots);
+        e.mem.set_u32(0x6000, 0xc000);
+        e.register(0x0000_6400, |_, _| 0u32.into_ret());
+        e.register(0x0043_9ef0, |_, a| a[1].into_ret());
+        e.register(0x0045_7990, |_, _| 3.0f32.into_ret());
+        e.register(0x0064_4930, |_, _| 2.0f32.into_ret());
+        e.register(0x0064_7920, |_, _| 0.0f32.into_ret());
+        e.register(0x0040_3e20, |_, _| 0x5000u32.into_ret());
+        let cells = Rc::new(Cell::new(0u32));
+        let cells_for_double = Rc::clone(&cells);
+        e.register_double(0x008d_6f30, move |_, _| {
+            let count = cells_for_double.get();
+            cells_for_double.set(count + 1);
+            (if count < 3 { 0x7000u32 } else { 0u32 }).into_ret()
+        });
+        e.register(0x0054_71e0, |_, _| 100.0f32.into_ret());
+        e.register(0x0041_81e0, |_, _| 0xb000u32.into_ret());
+        e.register(0x004f_b070, |_, _| 0u32.into_ret());
+        e.register(0x0054_97a0, |_, a| {
+            assert_eq!(a, &[0]);
+            0u32.into_ret()
+        });
+        e.register(0x0043_d4d0, |_, _| 0x8000u32.into_ret());
+        e.register(0x0040_8d60, |_, _| 0x8100u32.into_ret());
+
+        explosion_initialize(&mut e, this);
+        let log = e.call_log.unwrap();
+        assert!(log
+            .iter()
+            .any(|call| call.0 == 0x0054_97a0 && call.1 == [0]));
+        assert!(!log.iter().any(|call| call.0 == 0x0054_8230));
     }
 
     #[test]
