@@ -7,6 +7,37 @@ machinery runs.
 
 ## Resume here
 
+Latest, 05:19 local: HUD source `6c4df88` was collected as `0eb6b3c`
+through cycle03, passing 14,100 combined engine tests, doctest, strict lint
+and formatting. Fresh `/root/a03_round17` immediately continued and has
+drafted the remaining normal `00775a00` paths; review is correcting late
+HUD reloads and float storage boundaries. No cargo grant for that worker.
+`/root/a01_round15` owns the compiler for twenty movement/dialogue bodies:
+lint and formatting pass; one fixture correction is undergoing tests.
+After commit: cycle01 exactly once, immediately fresh worker, then root
+compiler for `codex-audit/check-inventory-locals.ps1`, followed by a04/a03.
+Root has five helpers and ten Rust regressions, still uncompiled; all ten
+native constructor/manager cases pass. Both #132 (`6513c26`) and #133
+(`f264324`) have passing core CI and pending viewer CI. Ship when both
+current-head checks pass. Build 40 remains current with no confirmed ETA.
+
+Latest: rolling #131 passed both CI checks and merged `7cda9bf` at 04:57
+local. `ship.sh 131` completed and created attached #133 at `f264324`,
+covering movement persistence and effect-item routines. Its CI is fresh.
+Effect collection is now `6cdf2b2` (source `7cc22ff`), with 14,095 combined
+engine tests plus doctest, strict lint and formatting passing. Fresh
+`/root/a04_round15` immediately started the remaining normal effect-item
+entries at `00404a80`; its 34-body draft is ready and compiler-held.
+
+a03 owns the compiler for its large HUD partial, followed by cycle03/fresh
+worker, a01's twenty-body dialogue/movement batch and cycle01, root's
+persistence checks, then a04. Root's script follow-on now contains five
+dependencies and nine prepared tests in `tesscript.rs` and
+`tesscriptrunmanager.rs`, plus `ENGINE_STATE.md`. Six native constructor
+vectors pass; independent source review found no mismatch. Rust checks
+are pending. Interpreter `005e1160` and action-list semantics remain open.
+PR #132 core passes, viewer CI is pending. Build 40 remains current.
+
 Latest, 04:49 local: persistence follow-on #132 is published and attached at
 `6513c26`, with three dependency helpers and four regressions. All 15,781
 workspace tests (13,928 engine), strict lint, formatting and release/debug

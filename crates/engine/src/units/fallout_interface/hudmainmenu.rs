@@ -46,6 +46,10 @@ fn current_hud(e: &Engine) -> u32 {
     e.mem.u32(0x011d_96c0)
 }
 
+fn current_player(e: &Engine) -> u32 {
+    e.mem.u32(0x011d_ea3c)
+}
+
 fn hud_field(e: &Engine, offset: u32) -> u32 {
     e.mem.u32(current_hud(e) + offset)
 }
@@ -962,6 +966,92 @@ fn hud_set_float(e: &mut Engine, hud_tile: u32, trait_id: u32, value: f32) {
 
 fn hud_set_text(e: &mut Engine, hud_tile: u32, text: u32) {
     e.call(0x00a0_1350, &args![hud_tile, 0xfc4_u32, text, 1_u32]);
+}
+
+fn set_info_target_string(e: &mut Engine) {
+    let target_tile = hud_field(e, 0xf4);
+    let text = e.call(0x00a0_11f0, &args![target_tile, 0x1004_u32]).u32();
+    let target_tile = hud_field(e, 0xf4);
+    e.call(0x00a0_1350, &args![target_tile, 0xfcc_u32, text, 1_u32]);
+}
+
+fn set_info_target_prompt(e: &mut Engine, mode: u32, string_trait: u32) {
+    let target_tile = hud_field(e, 0xf4);
+    hud_trait(e, target_tile, 0xff4, mode);
+    let target_tile = hud_field(e, 0xf4);
+    let text = e.call(0x00a0_11f0, &args![target_tile, string_trait]).u32();
+    let target_tile = hud_field(e, 0xf4);
+    e.call(0x00a0_1350, &args![target_tile, 0xfcc_u32, text, 1_u32]);
+}
+
+fn set_info_unsupported_form(e: &mut Engine) -> bool {
+    set_info_target_prompt(e, 1, 0x1004);
+    for offset in [
+        0xa8_u32, 0x9c, 0x7c, 0x80, 0x84, 0xac, 0xb0, 0xb4, 0xb8, 0xbc, 0xc0, 0xc4,
+    ] {
+        let target_tile = hud_field(e, offset);
+        hud_trait(e, target_tile, 0xfa3, 0);
+    }
+    true
+}
+
+fn set_info_player_action(e: &mut Engine, action: u32) {
+    let duration: f32 = quiet_f32(e.global(0x0101_7b78));
+    let player = current_player(e);
+    e.call(0x0096_3eb0, &args![player, action, duration, 0_u32]);
+    e.call(0x0097_81a0, &args![0x011e_0e80_u32]);
+}
+
+fn set_info_locked_owner_action(e: &mut Engine, reference: Ptr, lock: u32) {
+    if lock != 0 && e.call(0x0050_21a0, &args![lock]).bool() {
+        let owner = e.call(0x0056_7790, &args![reference]).u32();
+        if owner != 0
+            && (e.mem.u32(lock + 4) == 0 || {
+                let key = e.mem.u32(lock + 4);
+                let player = current_player(e);
+                e.call(0x0057_5610, &args![player, key]).i32() < 1
+            })
+        {
+            set_info_player_action(e, 0xb);
+        }
+    }
+}
+
+fn set_info_lock_text_alpha(e: &mut Engine, setting: u32) {
+    let text = e.call(0x0040_3df0, &args![setting, 1_u32]).u32();
+    let lock_tile = hud_field(e, 0xac);
+    hud_set_text(e, lock_tile, text);
+    set_info_lock_alpha(e);
+}
+
+fn set_info_lock_alpha(e: &mut Engine) {
+    set_info_tile_alpha(e, 0xac);
+}
+
+fn set_info_tile_alpha(e: &mut Engine, offset: u32) {
+    let opacity_setting = e.call(0x0040_3e20, &args![0x011d_9774_u32, 1_u32]).u32();
+    let opacity = quiet_f32(e.mem.f32(opacity_setting));
+    let alpha = (f64::from(opacity) * e.global::<f64>(0x0101_e568)) as f32;
+    let target_tile = hud_field(e, offset);
+    hud_set_float(e, target_tile, 0xfa9, alpha);
+}
+
+fn clear_info_target_tiles(e: &mut Engine) -> bool {
+    for offset in [0x9c_u32, 0xa8, 0xac, 0xb0, 0xb4, 0xb8, 0xbc, 0xc0, 0xc4] {
+        let target_tile = hud_field(e, offset);
+        hud_trait(e, target_tile, 0xfa3, 0);
+    }
+    if e.mem.u8(0x011d_96ba) == 0 {
+        let target_tile = hud_field(e, 0xf4);
+        hud_trait(e, target_tile, 0xff4, 1);
+    }
+    set_info_target_string(e);
+    e.mem.set_u8(0x011d_96bb, 0);
+    if e.call(0x0045_8030, &args![]).u32() == 2 {
+        let target_tile = hud_field(e, 0x120);
+        hud_trait(e, target_tile, 0xfa3, 1);
+    }
+    true
 }
 
 fn add_hud_fade(e: &mut Engine, hud_tile: u32) {
@@ -3603,6 +3693,555 @@ pub fn hud_main_menu_update_status_mode_ui(
     }
 }
 
+// Translated from 00775a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HUDMainMenu::SetInfoForRef` (Xbox PDB). The entry, unchanged reference,
+/// cleared reference, visibility prompt, and unsupported-form branches update
+/// the action tiles in the PC order.
+// The PC function installs an SEH frame at entry; exception unwinding is not translated.
+// Translation incomplete: 00775a00 - teleport-name and inventory construction after 00776fae/007773ee.
+pub fn hud_main_menu_set_info_for_ref(
+    e: &mut Engine,
+    mut reference: Ptr,
+    _unused_2: u32,
+    refresh: u8,
+) -> bool {
+    let menu = current_hud(e);
+    let player = current_player(e);
+    if menu == 0 || player == 0 {
+        return false;
+    }
+    if reference.addr() == player {
+        reference = Ptr::new(0);
+    }
+    if refresh == 0 && reference.addr() == e.mem.u32(menu + 0x1b8) {
+        if e.mem.u8(0x011d_96ba) != 0 && e.mem.u8(0x011d_96b9) != 0 {
+            set_info_target_string(e);
+            let target_tile = hud_field(e, 0xf4);
+            hud_trait(e, target_tile, 0xff4, 2);
+        } else {
+            let reset = if reference.is_null() {
+                true
+            } else if e.vcall(reference.addr(), 0x100, &args![]).bool() {
+                let player = current_player(e);
+                !e.call(0x008b_c700, &args![reference, player]).bool()
+            } else {
+                false
+            };
+            if reset {
+                if reference.is_null() {
+                    set_info_target_string(e);
+                    let target_tile = hud_field(e, 0xf4);
+                    hud_trait(e, target_tile, 0xff4, 1);
+                }
+                e.mem.set_u8(0x011d_96bb, 0);
+                if e.call(0x0045_8030, &args![]).u32() == 2 {
+                    let target_tile = hud_field(e, 0x120);
+                    hud_trait(e, target_tile, 0xfa3, 1);
+                }
+            }
+        }
+        return false;
+    }
+
+    if reference.is_null() {
+        let player = current_player(e);
+        e.call(0x0096_3e00, &args![player, 0xc_u32, 0_u32]);
+        let player = current_player(e);
+        e.call(0x0096_3e00, &args![player, 0xb_u32, 0_u32]);
+        let menu = current_hud(e);
+        e.mem.set_u32(menu + 0x1b8, 0);
+        return clear_info_target_tiles(e);
+    }
+
+    let actor = e.vcall(reference.addr(), 0x100, &args![]).bool();
+    let terminal_base = e.call(0x007a_f430, &args![reference]).u32();
+    let form = e.call(0x007a_f430, &args![reference]).u32();
+    let terminal = e.call(0x0040_1170, &args![form]).u32() == 0x17;
+    if reference.addr() == e.mem.u32(current_hud(e) + 0x1b8) {
+        let player = current_player(e);
+        e.call(0x0096_3e00, &args![player, 0xc_u32, 0_u32]);
+        let player = current_player(e);
+        e.call(0x0096_3e00, &args![player, 0xb_u32, 0_u32]);
+    } else if actor {
+        let player = current_player(e);
+        if e.call(0x0049_97b0, &args![player]).bool() {
+            if !e.call(0x0056_6950, &args![reference]).bool() {
+                set_info_player_action(e, 0xc);
+            }
+        } else {
+            let player = current_player(e);
+            e.call(0x0096_3e00, &args![player, 0xc_u32, 0_u32]);
+            let player = current_player(e);
+            e.call(0x0096_3e00, &args![player, 0xb_u32, 0_u32]);
+        }
+    } else {
+        let lock = e.call(0x0056_9160, &args![reference]).u32();
+        if terminal {
+            if !e.call(0x0050_1ae0, &args![terminal_base, reference]).bool() {
+                let owner = e.call(0x0056_7790, &args![reference]).u32();
+                if owner != 0 {
+                    set_info_player_action(e, 0xb);
+                }
+            }
+        } else {
+            let base = e.call(0x007a_f430, &args![reference]).u32();
+            let form_type = e.call(0x0040_1170, &args![base]).u32();
+            if form_type == 0x1b {
+                let owner = e.call(0x0056_7790, &args![reference]).u32();
+                if owner != 0 {
+                    if e.call(0x0057_5590, &args![reference, 0_u32, 1_u32]).i32() > 0
+                        && lock != 0
+                        && e.call(0x0050_21a0, &args![lock]).bool()
+                        && (e.mem.u32(lock + 4) == 0 || {
+                            let key = e.mem.u32(lock + 4);
+                            let player = current_player(e);
+                            e.call(0x0057_5610, &args![player, key]).i32() < 1
+                        })
+                    {
+                        set_info_player_action(e, 0xb);
+                    }
+                } else {
+                    set_info_locked_owner_action(e, reference, lock);
+                }
+            } else {
+                set_info_locked_owner_action(e, reference, lock);
+            }
+        }
+    }
+    if refresh == 0 {
+        let menu = current_hud(e);
+        e.mem.set_u32(menu + 0x1b8, reference.addr());
+    }
+    if e.call(0x0047_7ba0, &args![reference]).bool() && !actor {
+        return clear_info_target_tiles(e);
+    }
+    let target_type = e.call(0x0057_9280, &args![reference]).u32();
+    if target_type == 3 || target_type == 5 {
+        let marker_found = e.with_stack(0x20, |e, marker| {
+            e.mem.set_u32(marker.addr(), 0);
+            e.call(0x0050_9890, &args![marker.addr() + 4, 0xff_u32]);
+            let player = current_player(e);
+            let location = e
+                .vcall(
+                    player,
+                    0x1f4,
+                    &args![1_u32, 1_u32, marker.addr() + 4, marker, 1_u32],
+                )
+                .u32();
+            e.call(0x0056_86b0, &args![reference, location]).bool()
+        });
+        if !marker_found {
+            return false;
+        }
+    }
+
+    let player = current_player(e);
+    let perceived = if e.call(0x0096_7090, &args![player, reference]).u32() != 0 {
+        let player = current_player(e);
+        let perception = e.call(0x0096_7090, &args![player, reference]).u32();
+        e.mem.u8(perception + 4) != 0
+    } else {
+        false
+    };
+    if target_type == 0 && !perceived {
+        set_info_target_prompt(e, 1, 0x1004);
+    } else if !e.call(0x0057_9690, &args![reference]).bool()
+        || (actor && e.call(0x0056_6950, &args![reference]).bool())
+    {
+        if !perceived {
+            if !actor || !e.call(0x0049_3bb0, &args![reference]).bool() {
+                set_info_target_prompt(e, 1, 0x1005);
+            } else {
+                set_info_target_prompt(e, 1, 0x1004);
+            }
+        } else {
+            set_info_target_prompt(e, 2, 0x1004);
+        }
+    } else {
+        set_info_target_prompt(e, 2, 0x1005);
+    }
+
+    let form = e.call(0x007a_f430, &args![reference]).u32();
+    let form_type = e.call(0x0040_1170, &args![form]).u32();
+    let mut _display_mask = 0_u32;
+    let mut _alchemy_form = 0_u32;
+    let mut armor_form = 0_u32;
+    let mut weapon_form = 0_u32;
+    match form_type {
+        0x15 | 0x16 | 0x17 | 0x1b | 0x1c | 0x27 | 0x2a | 0x2b => {}
+        0x18 => {
+            _alchemy_form = e.call(0x007a_f430, &args![reference]).u32();
+            _display_mask |= 0xfc;
+        }
+        0x1e => {
+            set_info_target_prompt(e, 1, 0x1004);
+            let form = e.call(0x007a_f430, &args![reference]).u32();
+            if !e.call(0x0046_f070, &args![form]).bool() {
+                return true;
+            }
+            _display_mask |= 0xfc;
+        }
+        0x20 | 0x21 | 0x25 => return set_info_unsupported_form(e),
+        0x28 => {
+            armor_form = e.call(0x007a_f430, &args![reference]).u32();
+            if e.call(0x0047_bcf0, &args![armor_form]).bool() {
+                _display_mask |= 0xfc;
+            }
+        }
+        0x29 => {
+            weapon_form = e.call(0x007a_f430, &args![reference]).u32();
+            if e.call(0x004c_94d0, &args![weapon_form]).bool() {
+                _display_mask |= 0xfc;
+            }
+        }
+        0x33 => {
+            let nested = e.call(0x009d_9f00, &args![reference]).u32();
+            let mut inspect_direct_form = nested == 0;
+            if nested != 0 {
+                let nested = e.call(0x009d_9f00, &args![reference]).u32();
+                let form = e.call(0x0044_ddc0, &args![nested]).u32();
+                inspect_direct_form = e.call(0x0040_1170, &args![form]).u32() == 0x1f;
+            }
+            if inspect_direct_form {
+                if e.call(0x0040_1170, &args![reference]).u32() == 0x3d {
+                    return set_info_unsupported_form(e);
+                }
+                _display_mask |= 0xfc;
+            }
+        }
+        0x1f | 0x23 | 0x2f | 0x67 => _display_mask |= 0xfc,
+        _ => {
+            let target_tile = hud_field(e, 0xf4);
+            hud_trait(e, target_tile, 0xff4, 1);
+        }
+    }
+
+    let teleport = e.call(0x0056_8e50, &args![reference]).u32();
+    let lock = e.call(0x0056_9160, &args![reference]).u32();
+    let _lock_base = e.call(0x007a_f430, &args![reference]).u32();
+    let _second_base = e.call(0x007a_f430, &args![reference]).u32();
+    let can_ignore_lock = if form_type == 0x1c {
+        let player = current_player(e);
+        e.call(0x0051_8f00, &args![reference, player, 0_u32, 1_u32])
+            .bool()
+    } else if form_type == 0x1b {
+        if lock == 0 || !e.call(0x0050_21a0, &args![lock]).bool() {
+            true
+        } else if e.mem.u32(lock + 4) != 0 {
+            let key = e.mem.u32(lock + 4);
+            e.with_stack(4, |e, found| {
+                e.mem.set_u32(found.addr(), 0);
+                let player = current_player(e);
+                e.call(0x0089_1db0, &args![player, key, 0_u32, 1_u32, 0_u32, found])
+                    .bool()
+            })
+        } else {
+            false
+        }
+    } else {
+        true
+    };
+    let terminal_level = if terminal {
+        e.call(0x0050_11a0, &args![terminal_base, reference]).u32()
+    } else {
+        0
+    };
+    let player = current_player(e);
+    let first_access = e.call(0x0096_6c60, &args![player, reference]).u32();
+    let access = if first_access == 2 {
+        true
+    } else {
+        let player = current_player(e);
+        let second_access = e.call(0x0096_6c60, &args![player, reference]).u32();
+        if second_access == 3 {
+            true
+        } else {
+            let player = current_player(e);
+            e.call(0x0096_6c60, &args![player, reference]).u32() == 4
+        }
+    };
+    let hide_lock = (!terminal || !access)
+        && !e.call(0x0057_b460, &args![reference]).bool()
+        && (lock == 0 || !e.call(0x0050_21a0, &args![lock]).bool());
+    if hide_lock {
+        let lock_tile = hud_field(e, 0xac);
+        hud_trait(e, lock_tile, 0xfa9, 0);
+    } else {
+        let raw_level = if terminal {
+            terminal_level
+        } else {
+            let numeric = e.call(0x0056_91b0, &args![reference]).u32();
+            e.call(0x0043_0b40, &args![numeric]).u32()
+        };
+        let clamped = e.call(0x0064_7b70, &args![raw_level, 0_u32]).u32();
+        let level = e.call(0x004a_8f20, &args![clamped, 5_u32]).u32();
+        let has_key = if lock != 0 && e.mem.u32(lock + 4) != 0 {
+            let key = e.mem.u32(lock + 4);
+            e.with_stack(4, |e, found| {
+                e.mem.set_u32(found.addr(), 0);
+                let player = current_player(e);
+                e.call(0x0089_1db0, &args![player, key, 0_u32, 1_u32, 0_u32, found])
+                    .bool()
+            })
+        } else {
+            false
+        };
+        if lock != 0 && e.call(0x0043_0ae0, &args![lock]).bool() {
+            set_info_lock_text_alpha(e, 0x011d_2f28);
+        } else if e.call(0x0057_b460, &args![reference]).bool() {
+            set_info_lock_text_alpha(e, 0x011d_44d4);
+        } else {
+            let lock_form = form_type == 0x1b || form_type == 0x1c;
+            if (lock_form && (!can_ignore_lock || has_key)) || form_type == 0x17 {
+                if has_key {
+                    let key_text = e.call(0x0040_3df0, &args![0x011d_3be0_u32]).u32();
+                    let lock_text = e.call(0x0040_3df0, &args![0x011d_2454_u32]).u32();
+                    e.call(
+                        0x0040_6d00,
+                        &args![
+                            0x011d_9d50_u32,
+                            0x104_u32,
+                            0x0107_34ec_u32,
+                            lock_text,
+                            key_text
+                        ],
+                    );
+                } else if level == 5 {
+                    e.call(
+                        0x0040_6d30,
+                        &args![0x011d_9d50_u32, 0x104_u32, 0x0106_3e28_u32],
+                    );
+                    let setting = e.mem.u32(0x0118_4a98 + level * 4);
+                    let name = e.call(0x0040_3df0, &args![setting]).u32();
+                    e.call(0x0040_6d50, &args![0x011d_9d50_u32, 0x104_u32, name]);
+                    e.call(
+                        0x0040_6d50,
+                        &args![0x011d_9d50_u32, 0x104_u32, 0x0106_3e18_u32],
+                    );
+                } else {
+                    let setting = e.mem.u32(0x0118_4a98 + level * 4);
+                    let name = e.call(0x0040_3df0, &args![setting]).u32();
+                    let lock_text = e.call(0x0040_3df0, &args![0x011d_2454_u32]).u32();
+                    e.call(
+                        0x0040_6d00,
+                        &args![0x011d_9d50_u32, 0x104_u32, 0x0107_34ec_u32, lock_text, name],
+                    );
+                }
+                let lock_tile = hud_field(e, 0xac);
+                hud_set_text(e, lock_tile, 0x011d_9d50);
+                set_info_lock_alpha(e);
+            } else {
+                let lock_tile = hud_field(e, 0xac);
+                hud_trait(e, lock_tile, 0xfa9, 0);
+            }
+        }
+    }
+
+    let extra = e.call(0x005d_43c0, &args![reference]).u32();
+    let ash_pile = e.call(0x0041_e310, &args![extra]).u32();
+    let empty_ash_pile = ash_pile != 0
+        && e.call(0x0055_d310, &args![ash_pile]).u32() != 0
+        && e.call(0x0057_5590, &args![ash_pile, 0_u32, 0_u32]).i32() < 1;
+    let extra = e.call(0x005d_43c0, &args![reference]).u32();
+    let blocked = e.call(0x0041_df00, &args![extra]).u32() != 0;
+    let empty_container = !blocked
+        && ((e.call(0x0055_d310, &args![reference]).u32() != 0
+            && e.call(0x0057_5590, &args![reference, 0_u32, 0_u32]).i32() < 1)
+            || empty_ash_pile)
+        && (!actor || e.vcall(reference.addr(), 0x22c, &args![1_u32]).bool());
+    if empty_container {
+        set_info_tile_alpha(e, 0xb0);
+    } else {
+        let container_tile = hud_field(e, 0xb0);
+        hud_trait(e, container_tile, 0xfa9, 0);
+    }
+
+    let player = current_player(e);
+    let heading = e.vcall(player, 0x2bc, &args![0_u32]).f64();
+    let degrees_per_radian: f64 = e.global(0x0102_f248);
+    let _player_heading = quiet_f32((heading * degrees_per_radian) as f32);
+    let mut _target_heading = 0.0_f32;
+    if hud_field(e, 0x21c) != 0 {
+        let target = hud_field(e, 0x21c);
+        let location = e.vcall(target, 0x1f4, &args![]).u32();
+        let player = current_player(e);
+        let player_location = e.vcall(player, 0x1f4, &args![]).u32();
+        _target_heading =
+            quiet_f32(e.call(0x0077_2840, &args![player_location, location]).f64() as f32);
+    }
+    let highlighted_target = if hud_field(e, 0x21c) == 0 {
+        false
+    } else {
+        let target = hud_field(e, 0x21c);
+        !e.vcall(target, 0x22c, &args![0_u32]).bool()
+            && {
+                let target = hud_field(e, 0x21c);
+                !e.call(0x0047_7ba0, &args![target]).bool()
+            }
+            && e.mem.u8(0x011d_96c5) != 0
+            && hud_field(e, 0x21c) == reference.addr()
+    };
+    if e.vcall(reference.addr(), 0x224, &args![]).bool() {
+        let nested = e.call(0x009d_9f00, &args![reference]).u32();
+        if nested != 0 {
+            let nested = e.call(0x009d_9f00, &args![reference]).u32();
+            let form = e.call(0x0044_ddc0, &args![nested]).u32();
+            let name = e.call(0x0048_2720, &args![form]).u32();
+            e.call(0x0040_6d30, &args![0x011d_9c48_u32, 0x104_u32, name]);
+        } else {
+            let direct = e.call(0x0047_6c90, &args![reference]).u32();
+            if direct != 0 {
+                let mut form = e.call(0x0047_6c90, &args![reference]).u32();
+                if e.call(0x0052_5a90, &args![form, 0_u32]).u32() != 0 {
+                    let candidate = e.call(0x0052_5a90, &args![form, 0_u32]).u32();
+                    if e.call(0x004f_d400, &args![candidate]).u32() != 0 {
+                        let candidate = e.call(0x0052_5a90, &args![form, 0_u32]).u32();
+                        form = e.call(0x004f_d400, &args![candidate]).u32();
+                    }
+                }
+                let name = e.call(0x0048_2720, &args![form]).u32();
+                e.call(0x0040_6d30, &args![0x011d_9c48_u32, 0x104_u32, name]);
+            } else {
+                let name = e.call(0x0055_d520, &args![reference]).u32();
+                e.call(0x0040_6d30, &args![0x011d_9c48_u32, 0x104_u32, name]);
+            }
+        }
+    } else {
+        let name = e.call(0x0055_d520, &args![reference]).u32();
+        e.call(0x0040_6d30, &args![0x011d_9c48_u32, 0x104_u32, name]);
+    }
+    let player = current_player(e);
+    let actors_in_combat = e.call(0x0095_3c20, &args![player]).i32() > 0;
+    if e.mem.u8(0x011d_9c48) == 0 {
+        let name_tile = hud_field(e, 0xa8);
+        hud_set_text(e, name_tile, 0x0102_0770);
+    } else if teleport == 0 {
+        let actor_name_allowed = if !actor {
+            true
+        } else {
+            let out_of_combat = if reference.addr() != hud_field(e, 0x21c) {
+                let player = current_player(e);
+                !e.call(0x008b_c700, &args![reference, player]).bool()
+            } else {
+                false
+            };
+            out_of_combat
+                || !actors_in_combat
+                || e.vcall(reference.addr(), 0x22c, &args![0_u32]).bool()
+        };
+        if actor_name_allowed && !highlighted_target {
+            let extra = e.call(0x005d_43c0, &args![reference]).u32();
+            let count = e.call(0x0041_8770, &args![extra]).u32() as u16 as i16;
+            let mut displayed = true;
+            if count == 1 {
+                if actor {
+                    let name_tile = hud_field(e, 0xa8);
+                    hud_set_text(e, name_tile, 0x011d_9c48);
+                } else if (weapon_form == 0 || !e.call(0x004c_94d0, &args![weapon_form]).bool())
+                    && (armor_form == 0 || !e.call(0x0047_bcf0, &args![armor_form]).bool())
+                    && (armor_form != 0 || weapon_form != 0)
+                {
+                    displayed = false;
+                } else {
+                    let form = e.call(0x007a_f430, &args![reference]).u32();
+                    let form_type = e.call(0x0040_1170, &args![form]).u32();
+                    let stack_count = if form_type == 0x29 {
+                        let form = e.call(0x007a_f430, &args![reference]).u32();
+                        e.call(0x0040_1170, &args![form + 0x80]).i32()
+                    } else {
+                        0
+                    };
+                    if stack_count > 1 {
+                        let quantity = e.call(0x0077_8930, &args![reference]).u32();
+                        e.with_stack(0x104, |e, buffer| {
+                            e.call(
+                                0x0040_6d00,
+                                &args![
+                                    buffer,
+                                    0x104_u32,
+                                    0x0106_eb00_u32,
+                                    0x011d_9c48_u32,
+                                    quantity
+                                ],
+                            );
+                            let name_tile = hud_field(e, 0xa8);
+                            hud_set_text(e, name_tile, buffer.addr());
+                        });
+                    } else {
+                        let name_tile = hud_field(e, 0xa8);
+                        hud_set_text(e, name_tile, 0x011d_9c48);
+                    }
+                }
+            } else {
+                let extra = e.call(0x005d_43c0, &args![reference]).u32();
+                let count = e.call(0x0041_8770, &args![extra]).u32() as u16 as i16;
+                e.with_stack(0x104, |e, buffer| {
+                    e.call(
+                        0x0040_6d00,
+                        &args![
+                            buffer,
+                            0x104_u32,
+                            0x0106_eb00_u32,
+                            0x011d_9c48_u32,
+                            count as i32
+                        ],
+                    );
+                    let name_tile = hud_field(e, 0xa8);
+                    hud_set_text(e, name_tile, buffer.addr());
+                });
+            }
+            for offset in [0x7c_u32, 0x80, 0x84] {
+                let tile = hud_field(e, offset);
+                hud_trait(e, tile, 0xfa3, 0);
+            }
+            if displayed {
+                _display_mask |= 4;
+            }
+        }
+    } else {
+        panic!("Translation incomplete: 00775a00 teleport name at 00776fb8");
+    }
+
+    let inventory_target_type = e.call(0x0057_9280, &args![reference]).u32();
+    let mut marked_actor = false;
+    if actor {
+        let player = current_player(e);
+        let mut node = e.call(0x0059_5d10, &args![player]).u32();
+        while node != 0 && !e.call(0x0082_56d0, &args![node]).bool() {
+            let slot = e.call(0x0068_15c0, &args![node]).u32();
+            let entry = e.mem.u32(slot);
+            if e.mem.u32(entry) == reference.addr() && e.mem.u8(entry + 4) != 0 {
+                marked_actor = true;
+                break;
+            }
+            node = e.call(0x0072_6070, &args![node]).u32();
+        }
+    }
+    if !highlighted_target {
+        let actor_inventory_allowed = if inventory_target_type != 7 || !actor {
+            true
+        } else {
+            let out_of_combat = if !marked_actor && reference.addr() != hud_field(e, 0x21c) {
+                let player = current_player(e);
+                !e.call(0x008b_c700, &args![reference, player]).bool()
+            } else {
+                false
+            };
+            out_of_combat
+                || (!e.vcall(reference.addr(), 0x274, &args![0_u32]).bool()
+                    && !e.call(0x0089_4900, &args![reference]).bool()
+                    && !marked_actor)
+        };
+        if actor_inventory_allowed && !e.call(0x0047_7ba0, &args![reference]).bool() {
+            let _inventory = e.call(0x0052_7080, &args![reference, 0x53_u32]).u32();
+            panic!("Translation incomplete: 00775a00 inventory construction at 007773fe");
+        }
+    }
+
+    // open: 00776fb8-0077704d handles teleport names; 007773fe-0077886d builds inventory tiles.
+    panic!("Translation incomplete: 00775a00 reference details");
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3710,12 +4349,812 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0077_5670, hud_main_menu_hide_subtitle(Ptr<HUDMainMenu>)),
         entry!(0x0077_56e0, hud_main_menu_hide_message(Ptr<HUDMainMenu>)),
         entry!(0x0077_5920, fn_00775920(Ptr<HUDMainMenu>)),
+        entry!(0x0077_5a00, hud_main_menu_set_info_for_ref(Ptr, u32, u8) -> bool),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_info_for_ref_reuses_or_clears_target_tiles_in_pc_order() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x6000);
+        let menu = e.new_object::<HUDMainMenu>();
+        let player = 0x8000_u32;
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(0x011d_ea3c, player);
+        e.mem.set_u32(menu.addr() + 0xf4, 0x5000);
+        e.mem.set_u32(menu.addr() + 0x120, 0x5001);
+        for (index, offset) in [0x9c_u32, 0xa8, 0xac, 0xb0, 0xb4, 0xb8, 0xbc, 0xc0, 0xc4]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u32(menu.addr() + offset, 0x5100 + index as u32);
+        }
+        e.register_double(0x0096_3e00, |_, _| Ret::default());
+        e.register_double(0x0070_0320, |_, _| Ret::default());
+        e.register_double(0x00a0_11f0, |_, words| {
+            assert_eq!(words, [0x5000, 0x1004]);
+            Ret {
+                eax: 0x7788,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00a0_1350, |_, _| Ret::default());
+        e.register_double(0x0045_8030, |_, _| Ret {
+            eax: 2,
+            ..Ret::default()
+        });
+
+        e.call_log = Some(vec![]);
+        assert!(!hud_main_menu_set_info_for_ref(&mut e, Ptr::new(0), 0, 0,));
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(calls[0], (0x00a0_11f0, args![0x5000_u32, 0x1004_u32]));
+        assert_eq!(
+            calls[1],
+            (0x00a0_1350, args![0x5000_u32, 0xfcc_u32, 0x7788_u32, 1_u32])
+        );
+        assert_eq!(calls[2], (0x0070_0320, args![0x5000_u32, 0xff4_u32, 1_u32]));
+        assert_eq!(calls[4], (0x0070_0320, args![0x5001_u32, 0xfa3_u32, 1_u32]));
+
+        e.mem.set_u32(menu.addr() + 0x1b8, 0x1234);
+        e.mem.set_u8(0x011d_96bb, 1);
+        e.call_log = Some(vec![]);
+        assert!(hud_main_menu_set_info_for_ref(&mut e, Ptr::new(0), 99, 0,));
+        assert_eq!(e.mem.u32(menu.addr() + 0x1b8), 0);
+        assert_eq!(e.mem.u8(0x011d_96bb), 0);
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(calls[0], (0x0096_3e00, args![player, 0xc_u32, 0_u32]));
+        assert_eq!(calls[1], (0x0096_3e00, args![player, 0xb_u32, 0_u32]));
+        for (index, (_, words)) in calls[2..11].iter().enumerate() {
+            assert_eq!(words, &args![0x5100_u32 + index as u32, 0xfa3_u32, 0_u32]);
+        }
+        assert_eq!(
+            calls[11],
+            (0x0070_0320, args![0x5000_u32, 0xff4_u32, 1_u32])
+        );
+        assert_eq!(calls[12], (0x00a0_11f0, args![0x5000_u32, 0x1004_u32]));
+        assert_eq!(
+            calls[13],
+            (0x00a0_1350, args![0x5000_u32, 0xfcc_u32, 0x7788_u32, 1_u32])
+        );
+        assert_eq!(
+            calls[15],
+            (0x0070_0320, args![0x5001_u32, 0xfa3_u32, 1_u32])
+        );
+    }
+
+    #[test]
+    fn set_info_for_ref_records_terminal_action_before_hiding_non_actor_target() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x6000);
+        e.map(0x0101_7000, 0x1000);
+        e.mem.set_f32(0x0101_7b78, 10.0);
+        let menu = e.new_object::<HUDMainMenu>();
+        let reference = e.mem.alloc(0x40);
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(0x011d_ea3c, 0x9000);
+        e.mem.set_u32(menu.addr() + 0x1b8, 0x1234);
+        let mut slots = [0_u32; 0x41];
+        slots[0x100 / 4] = 0x0300_1100;
+        e.put_vtable(0x0300_1000, &slots);
+        e.mem.set_u32(reference, 0x0300_1000);
+        e.register_double(0x0300_1100, |_, _| Ret::default());
+        e.register_double(0x007a_f430, |_, _| Ret {
+            eax: 0xa000,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_1170, |_, _| Ret {
+            eax: 0x17,
+            ..Ret::default()
+        });
+        e.register_double(0x0056_9160, |_, _| Ret::default());
+        e.register_double(0x0050_1ae0, |_, _| Ret::default());
+        e.register_double(0x0056_7790, |_, _| Ret {
+            eax: 0xcafe,
+            ..Ret::default()
+        });
+        e.register_double(0x0096_3eb0, |_, _| Ret::default());
+        e.register_double(0x0097_81a0, |_, _| Ret::default());
+        e.register_double(0x0047_7ba0, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0070_0320, |_, _| Ret::default());
+        e.register_double(0x00a0_11f0, |_, _| Ret {
+            eax: 0x7788,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_1350, |_, _| Ret::default());
+        e.register_double(0x0045_8030, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(hud_main_menu_set_info_for_ref(
+            &mut e,
+            Ptr::new(reference),
+            0,
+            0,
+        ));
+        assert_eq!(e.mem.u32(menu.addr() + 0x1b8), reference);
+        let calls = e.call_log.take().unwrap();
+        let action = calls
+            .iter()
+            .position(|(address, _)| *address == 0x0096_3eb0)
+            .unwrap();
+        let clear = calls
+            .iter()
+            .position(|(address, _)| *address == 0x0070_0320)
+            .unwrap();
+        assert!(action < clear);
+        assert_eq!(calls[action].1, args![0x9000_u32, 0xb_u32, 10.0_f32, 0_u32]);
+        assert_eq!(calls[action + 1], (0x0097_81a0, args![0x011e_0e80_u32]));
+
+        e.mem.set_u32(menu.addr() + 0x1b8, 0);
+        e.mem.set_u32(0x011d_9d00, 0);
+        e.register_double(0x007a_f430, |e, _| {
+            let index = e.mem.u32(0x011d_9d00);
+            e.mem.set_u32(0x011d_9d00, index + 1);
+            Ret {
+                eax: 0xa000 + index * 0x1000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0047_7ba0, |_, _| Ret::default());
+        e.register_double(0x0057_9280, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0096_7090, |_, _| Ret::default());
+        e.register_double(0x0057_9690, |_, _| Ret::default());
+        e.register_double(0x0056_8e50, |_, _| Ret::default());
+        e.register_double(0x0050_11a0, move |_, words| {
+            assert_eq!(words, [0xa000, reference]);
+            Ret::default()
+        });
+        e.register_double(0x0096_6c60, |_, _| Ret::default());
+        e.register_double(0x0057_b460, |_, _| Ret::default());
+        e.register_double(0x005d_43c0, |_, _| Ret {
+            eax: 0xc000,
+            ..Ret::default()
+        });
+        e.register_double(0x0041_e310, |_, _| Ret::default());
+        e.register_double(0x0041_df00, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let unfinished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
+        }));
+        assert!(unfinished.is_err());
+        assert_eq!(e.mem.u32(0x011d_9d00), 5);
+        let calls = e.call_log.take().unwrap();
+        assert!(calls.iter().any(|(address, words)| {
+            *address == 0x0050_11a0 && words == &args![0xa000_u32, reference]
+        }));
+
+        e.map(0x0101_e000, 0x1000);
+        e.mem.set_f64(0x0101_e568, 2.0);
+        e.mem.set_f32(0x011d_9774, 0.5);
+        e.mem.set_u32(menu.addr() + 0xac, 0x6000);
+        e.mem.set_u32(menu.addr() + 0x1b8, 0);
+        e.mem.set_u32(0x011d_9d00, 0);
+        e.register_double(0x0096_6c60, |_, _| Ret {
+            eax: 2,
+            ..Ret::default()
+        });
+        e.register_double(0x0057_b460, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0064_7b70, |_, words| {
+            assert_eq!(words, [0, 0]);
+            Ret {
+                eax: 2,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x004a_8f20, |_, words| {
+            assert_eq!(words, [2, 5]);
+            Ret {
+                eax: 2,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_3df0, |_, words| {
+            assert_eq!(words, [0x011d_44d4, 1]);
+            Ret {
+                eax: 0xabcd,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_3e20, |_, words| {
+            assert_eq!(words, [0x011d_9774, 1]);
+            Ret {
+                eax: 0x011d_9774,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00a0_12d0, |_, words| {
+            assert_eq!(words, args![0x6000_u32, 0xfa9_u32, 1.0_f32, 1_u32]);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let unfinished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
+        }));
+        assert!(unfinished.is_err());
+        let calls = e.call_log.take().unwrap();
+        assert!(calls.iter().any(|(address, words)| {
+            *address == 0x0040_3df0 && words == &args![0x011d_44d4_u32, 1_u32]
+        }));
+
+        e.map(0x0118_4000, 0x1000);
+        e.mem.set_u32(0x0118_4aa0, 0x011d_1234);
+        e.mem.set_u32(menu.addr() + 0x1b8, 0);
+        e.mem.set_u32(0x011d_9d00, 0);
+        e.register_double(0x0057_b460, |_, _| Ret::default());
+        e.register_double(0x0040_3df0, |_, words| Ret {
+            eax: match words[0] {
+                0x011d_1234 => 0xaaaa,
+                0x011d_2454 => 0xbbbb,
+                other => panic!("unexpected setting {other:08x}"),
+            },
+            ..Ret::default()
+        });
+        e.register_double(0x0040_6d00, |_, words| {
+            assert_eq!(
+                words,
+                args![
+                    0x011d_9d50_u32,
+                    0x104_u32,
+                    0x0107_34ec_u32,
+                    0xbbbb_u32,
+                    0xaaaa_u32
+                ]
+            );
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let unfinished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
+        }));
+        assert!(unfinished.is_err());
+        let calls = e.call_log.take().unwrap();
+        assert!(calls.iter().any(|(address, words)| {
+            *address == 0x00a0_1350
+                && words == &args![0x6000_u32, 0xfc4_u32, 0x011d_9d50_u32, 1_u32]
+        }));
+    }
+
+    #[test]
+    fn set_info_for_ref_rejects_target_without_free_marker() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x6000);
+        let menu = e.new_object::<HUDMainMenu>();
+        let reference = e.mem.alloc(0x40);
+        let player = e.mem.alloc(0x40);
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(0x011d_ea3c, player);
+        let mut slots = [0_u32; 0x7e];
+        slots[0x100 / 4] = 0x0300_2100;
+        slots[0x1f4 / 4] = 0x0300_2200;
+        e.put_vtable(0x0300_2000, &slots);
+        e.mem.set_u32(reference, 0x0300_2000);
+        e.mem.set_u32(player, 0x0300_2000);
+        e.register_double(0x0300_2100, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0300_2200, |e, words| {
+            assert_eq!(words[3], words[4] + 4);
+            assert_eq!(words[3], e.mem.u32(0x011d_9d00));
+            assert_eq!(e.mem.u32(words[4]), 0);
+            assert_eq!(e.mem.u32(words[3]), 0xface);
+            Ret {
+                eax: 0xa000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x007a_f430, |_, _| Ret {
+            eax: 0xb000,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_1170, |_, _| Ret {
+            eax: 0x2a,
+            ..Ret::default()
+        });
+        e.register_double(0x0049_97b0, |_, _| Ret::default());
+        e.register_double(0x0096_3e00, |_, _| Ret::default());
+        e.register_double(0x0047_7ba0, |_, _| Ret::default());
+        e.register_double(0x0057_9280, |_, _| Ret {
+            eax: 3,
+            ..Ret::default()
+        });
+        e.register_double(0x0050_9890, |e, words| {
+            e.mem.set_u32(0x011d_9d00, words[0]);
+            e.mem.set_u32(words[0], 0xface);
+            Ret::default()
+        });
+        e.register_double(0x0056_86b0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(!hud_main_menu_set_info_for_ref(
+            &mut e,
+            Ptr::new(reference),
+            0,
+            0,
+        ));
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x007a_f430)
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0096_3e00)
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls.last().unwrap(),
+            &(0x0056_86b0, args![reference, 0xa000_u32])
+        );
+    }
+
+    #[test]
+    fn set_info_for_ref_reloads_hud_and_player_after_callbacks() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x6000);
+        let old_menu = e.new_object::<HUDMainMenu>();
+        let new_menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, old_menu.addr());
+        e.mem.set_u32(0x011d_ea3c, 0x9000);
+        e.mem.set_u32(old_menu.addr() + 0xf4, 0x1111);
+        e.mem.set_u32(new_menu.addr() + 0xf4, 0x2222);
+        e.mem.set_u8(0x011d_96ba, 1);
+        e.mem.set_u8(0x011d_96b9, 1);
+        let replacement = new_menu.addr();
+        e.register_double(0x00a0_11f0, move |e, words| {
+            assert_eq!(words, [0x1111, 0x1004]);
+            e.mem.set_u32(0x011d_96c0, replacement);
+            Ret {
+                eax: 0x7788,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00a0_1350, |_, words| {
+            assert_eq!(words, [0x2222, 0xfcc, 0x7788, 1]);
+            Ret::default()
+        });
+        e.register_double(0x0070_0320, |_, words| {
+            assert_eq!(words, [0x2222, 0xff4, 2]);
+            Ret::default()
+        });
+        assert!(!hud_main_menu_set_info_for_ref(&mut e, Ptr::new(0), 0, 0));
+
+        let reference = e.mem.alloc(0x40);
+        e.mem.set_u32(new_menu.addr() + 0x1b8, reference);
+        e.mem.set_u8(0x011d_96ba, 0);
+        let mut slots = [0_u32; 0x41];
+        slots[0x100 / 4] = 0x0300_3100;
+        e.put_vtable(0x0300_3000, &slots);
+        e.mem.set_u32(reference, 0x0300_3000);
+        e.register_double(0x0300_3100, |e, _| {
+            e.mem.set_u32(0x011d_ea3c, 0x9001);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x008b_c700, move |_, words| {
+            assert_eq!(words, [reference, 0x9001]);
+            Ret::default()
+        });
+        e.register_double(0x0045_8030, |_, _| Ret::default());
+        assert!(!hud_main_menu_set_info_for_ref(
+            &mut e,
+            Ptr::new(reference),
+            0,
+            0,
+        ));
+    }
+
+    #[test]
+    fn set_info_for_ref_hides_twelve_tiles_for_unsupported_form() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x6000);
+        let menu = e.new_object::<HUDMainMenu>();
+        let reference = e.mem.alloc(0x40);
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(0x011d_ea3c, 0x9000);
+        e.mem.set_u32(menu.addr() + 0xf4, 0x5000);
+        for (index, offset) in [
+            0xa8_u32, 0x9c, 0x7c, 0x80, 0x84, 0xac, 0xb0, 0xb4, 0xb8, 0xbc, 0xc0, 0xc4,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            e.mem.set_u32(menu.addr() + offset, 0x5100 + index as u32);
+        }
+        let mut slots = [0_u32; 0xb0];
+        slots[0x100 / 4] = 0x0300_4100;
+        slots[0x1f4 / 4] = 0x0300_41f4;
+        slots[0x224 / 4] = 0x0300_4224;
+        slots[0x22c / 4] = 0x0300_422c;
+        slots[0x274 / 4] = 0x0300_4274;
+        e.put_vtable(0x0300_4000, &slots);
+        e.mem.set_u32(reference, 0x0300_4000);
+        e.register_double(0x0300_4100, |_, _| Ret::default());
+        e.register_double(0x007a_f430, |_, _| Ret {
+            eax: 0xb000,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_1170, |_, _| Ret {
+            eax: 0x20,
+            ..Ret::default()
+        });
+        e.register_double(0x0056_9160, |_, _| Ret::default());
+        e.register_double(0x0047_7ba0, |_, _| Ret::default());
+        e.register_double(0x0057_9280, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0096_7090, |_, _| Ret::default());
+        e.register_double(0x0057_9690, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0070_0320, |_, _| Ret::default());
+        e.register_double(0x00a0_11f0, |_, words| {
+            assert_eq!(words.len(), 2);
+            Ret {
+                eax: 0x7788,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00a0_1350, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(hud_main_menu_set_info_for_ref(
+            &mut e,
+            Ptr::new(reference),
+            0,
+            0,
+        ));
+        let calls = e.call_log.take().unwrap();
+        let tiles: Vec<_> = calls
+            .iter()
+            .filter(|(address, words)| *address == 0x0070_0320 && words[1] == 0xfa3)
+            .map(|(_, words)| words.clone())
+            .collect();
+        assert_eq!(tiles.len(), 12);
+        for (index, words) in tiles.iter().enumerate() {
+            assert_eq!(words, &args![0x5100_u32 + index as u32, 0xfa3_u32, 0_u32]);
+        }
+
+        e.mem.set_u32(menu.addr() + 0x1b8, 0);
+        e.register_double(0x0040_1170, |_, _| Ret {
+            eax: 0x1e,
+            ..Ret::default()
+        });
+        e.register_double(0x0046_f070, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(hud_main_menu_set_info_for_ref(
+            &mut e,
+            Ptr::new(reference),
+            0,
+            0,
+        ));
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(calls.last().unwrap(), &(0x0046_f070, args![0xb000_u32]));
+        assert!(calls
+            .iter()
+            .all(|(address, words)| *address != 0x0070_0320 || words[1] != 0xfa3));
+
+        e.mem.set_u32(menu.addr() + 0x1b8, 0);
+        e.register_double(0x0040_1170, |_, _| Ret {
+            eax: 0x15,
+            ..Ret::default()
+        });
+        e.register_double(0x0056_8e50, |_, _| Ret::default());
+        e.register_double(0x0096_6c60, |_, _| Ret::default());
+        e.register_double(0x0057_b460, |_, _| Ret::default());
+        e.register_double(0x005d_43c0, |_, _| Ret {
+            eax: 0xc000,
+            ..Ret::default()
+        });
+        e.register_double(0x0041_e310, |_, _| Ret::default());
+        e.register_double(0x0041_df00, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let unfinished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
+        }));
+        assert!(unfinished.is_err());
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0096_6c60)
+                .count(),
+            3
+        );
+        assert!(calls.iter().any(|(address, words)| {
+            *address == 0x0070_0320 && words == &args![0x5105_u32, 0xfa9_u32, 0_u32]
+        }));
+        assert_eq!(calls.last().unwrap().0, 0x0070_0320);
+
+        e.map(0x0101_e000, 0x1000);
+        e.mem.set_f64(0x0101_e568, 2.0);
+        e.mem.set_f32(0x011d_9774, 0.5);
+        e.mem.set_u32(menu.addr() + 0x1b8, 0);
+        e.register_double(0x0041_df00, |_, _| Ret::default());
+        e.register_double(0x0055_d310, |_, _| Ret {
+            eax: 0x100,
+            ..Ret::default()
+        });
+        e.register_double(0x0057_5590, |_, _| Ret::default());
+        e.register_double(0x0040_3e20, |_, words| {
+            assert_eq!(words, [0x011d_9774, 1]);
+            Ret {
+                eax: 0x011d_9774,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00a0_12d0, |_, words| {
+            assert_eq!(words, args![0x5106_u32, 0xfa9_u32, 1.0_f32, 1_u32]);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let unfinished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
+        }));
+        assert!(unfinished.is_err());
+        let calls = e.call_log.take().unwrap();
+        assert!(calls
+            .iter()
+            .any(|(address, words)| { *address == 0x0055_d310 && words == &args![reference] }));
+        assert_eq!(calls.last().unwrap().0, 0x00a0_12d0);
+
+        e.map(0x9000, 0x1000);
+        e.map(0x0102_f000, 0x1000);
+        e.mem.set_f64(0x0102_f248, 57.295_776_367_187_5);
+        let mut player_slots = [0_u32; 0xb0];
+        player_slots[0x1f4 / 4] = 0x0300_51f4;
+        player_slots[0x2bc / 4] = 0x0300_52bc;
+        e.put_vtable(0x0300_5000, &player_slots);
+        e.mem.set_u32(0x9000, 0x0300_5000);
+        e.register_double(0x0300_52bc, |_, words| {
+            assert_eq!(words, [0x9000, 0]);
+            Ret {
+                st0: 1.0,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0300_4224, move |_, words| {
+            assert_eq!(words, [reference]);
+            Ret::default()
+        });
+        e.register_double(0x0055_d520, move |_, words| {
+            assert_eq!(words, [reference]);
+            Ret {
+                eax: 0xd000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_6d30, |_, words| {
+            assert_eq!(words, [0x011d_9c48, 0x104, 0xd000]);
+            Ret::default()
+        });
+        e.register_double(0x0095_3c20, |_, words| {
+            assert_eq!(words, [0x9000]);
+            Ret::default()
+        });
+        e.register_double(0x0052_7080, move |_, words| {
+            assert_eq!(words, [reference, 0x53]);
+            Ret::default()
+        });
+        e.mem.set_u32(menu.addr() + 0x1b8, 0);
+        e.call_log = Some(vec![]);
+        let unfinished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
+        }));
+        assert!(unfinished.is_err());
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .find(|(address, _)| *address == 0x0040_6d30)
+                .unwrap(),
+            &(0x0040_6d30, args![0x011d_9c48_u32, 0x104_u32, 0xd000_u32])
+        );
+        assert!(calls.iter().any(|(address, words)| {
+            *address == 0x00a0_1350
+                && words == &args![0x5100_u32, 0xfc4_u32, 0x0102_0770_u32, 1_u32]
+        }));
+
+        e.mem.set_u8(0x011d_9c48, b'A');
+        e.mem.set_u32(menu.addr() + 0x1b8, 0);
+        e.register_double(0x0041_8770, |_, words| {
+            assert_eq!(words, [0xc000]);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+        e.call_log = Some(vec![]);
+        let unfinished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
+        }));
+        assert!(unfinished.is_err());
+        let calls = e.call_log.take().unwrap();
+        assert!(calls.iter().any(|(address, words)| {
+            *address == 0x00a0_1350
+                && words == &args![0x5100_u32, 0xfc4_u32, 0x011d_9c48_u32, 1_u32]
+        }));
+        let hidden: Vec<_> = calls
+            .iter()
+            .filter(|(address, words)| *address == 0x0070_0320 && words[1] == 0xfa3)
+            .collect();
+        assert_eq!(
+            hidden[hidden.len() - 3..]
+                .iter()
+                .map(|(_, words)| words[0])
+                .collect::<Vec<_>>(),
+            [0x5102, 0x5103, 0x5104]
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0057_9280)
+                .count(),
+            2
+        );
+        assert!(calls.iter().any(|(address, words)| {
+            *address == 0x0052_7080 && words == &args![reference, 0x53_u32]
+        }));
+
+        e.mem.set_u32(menu.addr() + 0x1b8, 0);
+        e.mem.set_u32(menu.addr() + 0x21c, reference);
+        e.register_double(0x0300_41f4, move |_, words| {
+            assert_eq!(words, [reference]);
+            Ret {
+                eax: 0xe000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0300_51f4, |_, words| {
+            assert_eq!(words, [0x9000]);
+            Ret {
+                eax: 0xe100,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0300_422c, move |_, words| {
+            assert_eq!(words, [reference, 0]);
+            Ret::default()
+        });
+        e.register_double(0x0077_2840, |_, words| {
+            assert_eq!(words, [0xe100, 0xe000]);
+            Ret {
+                st0: 15.0,
+                ..Ret::default()
+            }
+        });
+        e.call_log = Some(vec![]);
+        let unfinished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
+        }));
+        assert!(unfinished.is_err());
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0077_2840)
+                .count(),
+            1
+        );
+
+        e.register_double(0x0300_4224, move |_, words| {
+            assert_eq!(words, [reference]);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x009d_9f00, move |_, words| {
+            assert_eq!(words, [reference]);
+            Ret {
+                eax: 0xb000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0044_ddc0, |_, words| {
+            assert_eq!(words, [0xb000]);
+            Ret {
+                eax: 0xc000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0048_2720, |_, words| {
+            assert_eq!(words, [0xc000]);
+            Ret {
+                eax: 0xd000,
+                ..Ret::default()
+            }
+        });
+        e.mem.set_u8(0x011d_9c48, 0);
+        e.mem.set_u32(menu.addr() + 0x21c, 0);
+        e.mem.set_u32(menu.addr() + 0x1b8, 0);
+        e.call_log = Some(vec![]);
+        let unfinished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
+        }));
+        assert!(unfinished.is_err());
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x009d_9f00)
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .find(|(address, _)| *address == 0x0040_6d30)
+                .unwrap(),
+            &(0x0040_6d30, args![0x011d_9c48_u32, 0x104_u32, 0xd000_u32])
+        );
+        assert!(calls.iter().any(|(address, words)| {
+            *address == 0x00a0_1350
+                && words == &args![0x5100_u32, 0xfc4_u32, 0x0102_0770_u32, 1_u32]
+        }));
+
+        e.mem.set_u32(menu.addr() + 0x1b8, 0);
+        e.mem.set_u32(menu.addr() + 0x21c, reference);
+        e.mem.set_u8(0x011d_96c5, 1);
+        e.register_double(0x0300_4100, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0049_97b0, |_, _| Ret::default());
+        e.register_double(0x0096_3e00, |_, _| Ret::default());
+        e.register_double(0x0057_9280, |_, _| Ret {
+            eax: 7,
+            ..Ret::default()
+        });
+        e.register_double(0x0041_df00, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0059_5d10, |_, words| {
+            assert_eq!(words, [0x9000]);
+            Ret::default()
+        });
+        e.register_double(0x0300_4274, |_, _| {
+            panic!("highlighted target must skip actor inventory gate")
+        });
+        e.register_double(0x0089_4900, |_, _| {
+            panic!("highlighted target must skip actor inventory gate")
+        });
+        e.call_log = Some(vec![]);
+        let unfinished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(reference), 0, 0)
+        }));
+        assert!(unfinished.is_err());
+        let calls = e.call_log.take().unwrap();
+        assert!(calls.iter().any(|(address, _)| *address == 0x0059_5d10));
+        assert!(!calls.iter().any(|(address, _)| {
+            *address == 0x0300_4274 || *address == 0x0089_4900 || *address == 0x008b_c700
+        }));
+    }
 
     #[test]
     fn ammo_regen_includes_mod_effect_only_when_requested() {

@@ -1,9 +1,8 @@
 //! `fallout/ai/mobileobject.cpp` (Xbox PDB source unit), subsystem `fallout/ai`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 //!
-//! The first 80 address-ordered entries end at 00933890. Normal paths for
-//! this batch are translated; compiler-only SEH cleanup is marked at each
-//! affected body. The next queue entry is 009339a0.
+//! Normal paths through 00935f00 are translated; compiler-only SEH cleanup
+//! is marked at each affected body. The next queue entry is 00935f60.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -212,6 +211,67 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             mobile_object_is_in_dialogue_with_player(Ptr<MobileObject>) -> bool
         ),
         entry!(0x00933890, fn_00933890(Ptr<MobileObject>, u8)),
+        entry!(0x009339a0, fn_009339a0(Ptr<MobileObject>, f32, Ptr, u8)),
+        entry!(0x00933d20, fn_00933d20(Ptr<MobileObject>)),
+        entry!(
+            0x00934250,
+            mobile_object_stop_current_dialogue(Ptr<MobileObject>)
+        ),
+        entry!(0x00934430, fn_00934430(Ptr<MobileObject>) -> Ptr),
+        entry!(0x00934450, fn_00934450(Ptr<MobileObject>, Ptr, u32, u32)),
+        entry!(
+            0x009344a0,
+            mobile_object_get_current_package(Ptr<MobileObject>) -> Ptr
+        ),
+        entry!(
+            0x009344d0,
+            fn_009344d0(
+                Ptr<MobileObject>,
+                Ptr,
+                Ptr,
+                u32,
+                u32,
+                i32,
+                Ptr,
+                Ptr,
+                Ptr,
+                u8,
+                u8,
+                u8,
+                u8,
+                u8,
+            ) -> f32
+        ),
+        entry!(0x00934f90, fn_00934f90(Ptr<MobileObject>, u32, Ptr) -> Ptr),
+        entry!(
+            0x00934fd0,
+            fn_00934fd0(
+                Ptr<MobileObject>,
+                Ptr<MobileObject>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u8,
+                u32,
+                u32,
+                u32,
+            ) -> bool
+        ),
+        entry!(0x00935480, fn_00935480(Ptr<MobileObject>, Ptr) -> bool),
+        entry!(
+            0x00935820,
+            fn_00935820(Ptr<MobileObject>, Ptr, f32, u8, u32) -> bool
+        ),
+        entry!(0x009358f0, fn_009358f0(Ptr<MobileObject>) -> Ptr),
+        entry!(0x00935920, fn_00935920(Ptr<MobileObject>, u32)),
+        entry!(0x00935a10, fn_00935a10(Ptr, u32, u32, f32) -> Ptr),
+        entry!(0x00935a40, fn_00935a40(Ptr<MobileObject>, u32) -> bool),
+        entry!(0x00935ae0, fn_00935ae0(Ptr<MobileObject>)),
+        entry!(0x00935cc0, fn_00935cc0(u32)),
+        entry!(0x00935d90, fn_00935d90(u32, u8)),
+        entry!(0x00935ef0, fn_00935ef0() -> u32),
+        entry!(0x00935f00, fn_00935f00(u32)),
     ]
 }
 
@@ -2564,6 +2624,1098 @@ pub fn fn_00933890(e: &mut Engine, this: Ptr<MobileObject>, active: u8) {
         let player = e.global::<u32>(0x011d_ea3c);
         let process = e.get(this, MobileObject::pCurrentProcess);
         e.vcall(process.addr(), 0x634, &args![player]);
+    }
+}
+
+// Translated from 009339a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Updates the mobile object's voice sound, process, cell and actor state.
+/// The saved acquired reference at process slot +0x22c is retained only when
+/// its form type is 0x1c. Compiler exception-only SEH cleanup is omitted.
+// Translation incomplete: 009339a0 - compiler SEH exception cleanup.
+pub fn fn_009339a0(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    seconds: f32,
+    save_buffer: Ptr,
+    skip_process_update: u8,
+) {
+    e.vcall(this.addr(), 0x1e4, &args![]);
+    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+    let acquired = e.vcall(process.addr(), 0x22c, &args![]).ptr::<u8>();
+    let acquired = if !acquired.is_null() && e.call(0x0041_ca90, &args![acquired]).u32() == 0x1c {
+        acquired
+    } else {
+        Ptr::NULL
+    };
+    let mut voice_started = false;
+    if !save_buffer.is_null()
+        && !e.call(0x008d_8520, &args![this]).ptr::<u8>().is_null()
+        && e.get(this, MobileObject::bSpeakingDone)
+    {
+        e.with_stack(12, |e, voice_handle| {
+            e.call(0x0041_a250, &args![voice_handle]);
+            voice_started = true;
+            e.set_global(0x011e_0548, this.addr());
+            e.set(this, MobileObject::bTalkingToPlayer, true);
+            let mut play_voice = true;
+            let form = e.call(0x007a_f430, &args![save_buffer]).ptr::<u8>();
+            if !form.is_null() {
+                let form = e.call(0x007a_f430, &args![save_buffer]).ptr::<u8>();
+                let sound_id = e.call(0x0084_e3a0, &args![form]).u32();
+                e.with_stack(12, |e, sound_handle| {
+                    e.call(0x0041_a250, &args![sound_handle]);
+                    if !e.call(0x005e_3fa0, &args![this]).ptr::<u8>().is_null() {
+                        e.call(0x005e_3fa0, &args![this]);
+                        e.with_stack(12, |e, instance| {
+                            let audio = e.call(0x0045_3a70, &args![]).ptr::<u8>();
+                            let created = e
+                                .call(0x00ad_73b0, &args![audio, instance, sound_id, 0x105u32])
+                                .ptr::<u8>();
+                            e.call(0x0041_8900, &args![sound_handle, created]);
+                            e.call(0x0048_3710, &args![instance]);
+                        });
+                        e.call(0x00ad_8830, &args![sound_handle, 0u32]);
+                    } else {
+                        e.with_stack(12, |e, created| {
+                            fn_00933150(e, this, created, sound_id, 0, 0x4000_0102, 1);
+                            e.call(0x0041_8900, &args![sound_handle, created]);
+                            e.call(0x0048_3710, &args![created]);
+                        });
+                    }
+                    let audio = e.call(0x00ad_9060, &args![]).ptr::<u8>();
+                    let actor_id = e.call(0x0084_e3a0, &args![this]).u32();
+                    let handle_id = e.call(0x0055_9450, &args![sound_handle]).u32();
+                    e.call(
+                        0x00ad_bfd0,
+                        &args![audio, handle_id, 0x0093_5cc0u32, actor_id],
+                    );
+                    play_voice = false;
+                    e.set(this, MobileObject::bSoundFileDone, false);
+                    e.set(this, MobileObject::bSpeakingDone, false);
+                    e.call(0x0048_3710, &args![sound_handle]);
+                });
+            }
+            if (play_voice as u8 & e.mem.u8(this.addr() + 0x7f)) != 0 {
+                let player = e.global::<u32>(0x011d_ea3c);
+                let worldspace = e.call(0x0044_1110, &args![save_buffer]).u32();
+                let reference = e.call(0x0096_11e0, &args![save_buffer]).u32();
+                let object = e.call(0x0068_15c0, &args![save_buffer]).u32();
+                let length = e.call(0x0040_48e0, &args![object]).u32();
+                let form_id = e.call(0x0084_e3a0, &args![save_buffer]).u32();
+                let loaded = e.call(0x0044_ddc0, &args![save_buffer]).u32();
+                let sound_data = e.call(0x0046_0140, &args![save_buffer]).u32();
+                let sound_id = e.call(0x0055_9450, &args![sound_data]).u32();
+                let volume = e
+                    .vcall(
+                        this.addr(),
+                        0x284,
+                        &args![
+                            sound_id,
+                            voice_handle,
+                            loaded,
+                            form_id,
+                            length,
+                            reference,
+                            worldspace,
+                            player,
+                            1u32,
+                            1u32,
+                            0u32,
+                            1u32,
+                            1u32,
+                        ],
+                    )
+                    .f64() as f32;
+                let audio = e.call(0x00ad_9060, &args![]).ptr::<u8>();
+                let actor_id = e.call(0x0084_e3a0, &args![this]).u32();
+                let handle_id = e.call(0x0055_9450, &args![voice_handle]).u32();
+                e.call(
+                    0x00ad_bfd0,
+                    &args![audio, handle_id, 0x0093_5d90u32, actor_id],
+                );
+                e.set(this, MobileObject::bVoiceFileDone, false);
+                let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                e.vcall(process.addr(), 0x318, &args![volume]);
+            }
+            e.call(0x0048_3710, &args![voice_handle]);
+        });
+    }
+    if skip_process_update == 0 {
+        e.vcall(this.addr(), 0x268, &args![quiet_f32(seconds)]);
+    }
+    e.vcall(this.addr(), 0x140, &args![]);
+    if skip_process_update == 0 {
+        e.vcall(this.addr(), 0x2f8, &args![quiet_f32(seconds)]);
+    }
+    if voice_started && !acquired.is_null() {
+        e.mem.set_u32(acquired.addr() + 0x94, this.addr());
+    }
+    let cell = e.call(0x008d_6f30, &args![this]).ptr::<u8>();
+    if !cell.is_null() {
+        e.call(0x0054_baf0, &args![cell]);
+    }
+    e.vcall(this.addr(), 0x178, &args![]);
+}
+
+// Translated from 00933d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finishes the conversation between the saved acquired actors when that
+/// reference is a form of type 0x1c. The body also releases their special
+/// idles, reschedules their processes and removes the conversation form.
+pub fn fn_00933d20(e: &mut Engine, this: Ptr<MobileObject>) {
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if process.is_null() {
+        return;
+    }
+    let save_load = e.global::<u32>(0x011d_e45c);
+    if e.call(0x0047_c850, &args![save_load]).bool() {
+        return;
+    }
+    e.vcall(process.addr(), 0x24c, &args![0u32]);
+    let acquired = e.vcall(process.addr(), 0x22c, &args![]).ptr::<u8>();
+    if !acquired.is_null() {
+        let acquired = e.vcall(process.addr(), 0x22c, &args![]).ptr::<u8>();
+        if e.call(0x0041_ca90, &args![acquired]).u32() == 0x1c {
+            let acquired = e.vcall(process.addr(), 0x22c, &args![]).ptr::<u8>();
+            let conversation = e
+                .call(
+                    0x00ec_43fb,
+                    &args![acquired, 0u32, 0x0118_46a0u32, 0x0119_9c3cu32, 0u32],
+                )
+                .ptr::<u8>();
+            if conversation.is_null() {
+                return;
+            }
+            if e.call(0x00ad_8ce0, &args![conversation.addr() + 0x80])
+                .bool()
+            {
+                e.call(0x009e_f530, &args![conversation]);
+            }
+            let starter = e.call(0x009e_e040, &args![conversation]).ptr::<u8>();
+            let target = e.call(0x008d_80e0, &args![conversation]).ptr::<u8>();
+            for actor in [starter, target] {
+                if !actor.is_null() {
+                    if e.vcall(actor.addr(), 0x100, &args![]).bool() {
+                        e.call(0x0090_6050, &args![0x011f_11e0u32, actor]);
+                    }
+                    let actor_process = e.call(0x008d_8520, &args![actor]).ptr::<u8>();
+                    e.vcall(actor_process.addr(), 0x650, &args![1u32]);
+                    e.mem.set_u8(actor.addr() + 0x80, 1);
+                }
+            }
+            if !starter.is_null() && !target.is_null() {
+                let starter_process = e.call(0x008d_8520, &args![starter]).ptr::<u8>();
+                e.vcall(starter_process.addr(), 0x624, &args![target]);
+                let target_process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+                e.vcall(target_process.addr(), 0x624, &args![starter]);
+                e.mem.set_f32(starter.addr() + 0x74, 1.0);
+                e.mem.set_f32(target.addr() + 0x74, 1.0);
+                let starter_process = e.call(0x008d_8520, &args![starter]).ptr::<u8>();
+                e.vcall(starter_process.addr(), 0x374, &args![0u32]);
+                let target_process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+                e.vcall(target_process.addr(), 0x374, &args![0u32]);
+            }
+            for actor in [starter, target] {
+                let idle = e.vcall(actor.addr(), 0x1e4, &args![]).ptr::<u8>();
+                if !idle.is_null() {
+                    e.call(0x0049_8910, &args![idle, 1u32, 0u32]);
+                }
+            }
+            for actor in [starter, target] {
+                if !actor.is_null() && !e.call(0x008d_8520, &args![actor]).ptr::<u8>().is_null() {
+                    let actor_process = e.call(0x008d_8520, &args![actor]).ptr::<u8>();
+                    e.vcall(actor_process.addr(), 0x2ec, &args![0u32]);
+                }
+            }
+            let starter_package = mobile_object_get_current_package(e, starter.cast()).addr();
+            let target_package = mobile_object_get_current_package(e, target.cast()).addr();
+            let _same_package = starter_package == target_package;
+            let starter_process = e.call(0x008d_8520, &args![starter]).ptr::<u8>();
+            e.vcall(starter_process.addr(), 0x714, &args![starter]);
+            if e.vcall(starter.addr(), 0x100, &args![]).bool() {
+                let starter_process = e.call(0x008d_8520, &args![starter]).ptr::<u8>();
+                if e.vcall(starter_process.addr(), 0x22c, &args![])
+                    .ptr::<u8>()
+                    .is_null()
+                {
+                    let handler = e.global::<u32>(0x011c_3f2c);
+                    if !e.call(0x0042_26e0, &args![handler]).bool() {
+                        let starter_process = e.call(0x008d_8520, &args![starter]).ptr::<u8>();
+                        e.vcall(starter_process.addr(), 0x24, &args![starter, 1u32]);
+                    }
+                }
+            }
+            if !target.is_null() && mobile_object_is_in_dialogue(e, target.cast()) {
+                let target_process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+                if !target_process.is_null() {
+                    let target_process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+                    e.vcall(target_process.addr(), 0x714, &args![target]);
+                    let handler = e.global::<u32>(0x011c_3f2c);
+                    if !e.call(0x0042_26e0, &args![handler]).bool()
+                        && e.vcall(target.addr(), 0x100, &args![]).bool()
+                    {
+                        let target_process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+                        e.vcall(target_process.addr(), 0x24, &args![target, 1u32]);
+                    }
+                }
+            }
+            let reference = e.call(0x0040_36b0, &args![conversation]).ptr::<u8>();
+            if !reference.is_null() {
+                for _ in 0..2 {
+                    let object = e.call(0x005e_3fa0, &args![reference]).ptr::<u8>();
+                    let base = e.call(0x005d_43c0, &args![object]).ptr::<u8>();
+                    e.call(0x0042_e130, &args![base]);
+                }
+                e.call(0x0096_d470, &args![0x011e_0e80u32, reference, 0u32]);
+                e.call(0x0096_e870, &args![0x011e_0e80u32, reference]);
+            }
+            let save_load = e.global::<u32>(0x011d_e45c);
+            if e.call(0x0047_c850, &args![save_load]).bool() {
+                e.call(0x0085_a2e0, &args![save_load, conversation]);
+            } else {
+                e.vcall(conversation.addr(), 0x10, &args![1u32]);
+            }
+            return;
+        }
+    }
+    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+    let other = e.vcall(process.addr(), 0x674, &args![4u32]).ptr::<u8>();
+    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+    e.vcall(process.addr(), 0x650, &args![1u32]);
+    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+    e.vcall(process.addr(), 0x624, &args![other]);
+    e.mem.set_f32(this.addr() + 0x74, 1.0);
+}
+
+// Translated from 00934250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::StopCurrentDialogue` (Xbox PDB): stops a valid voice handle,
+/// clears the say-to state and resets the current process. Compiler
+/// exception-only SEH cleanup is omitted.
+// Translation incomplete: 00934250 - compiler SEH exception cleanup.
+pub fn mobile_object_stop_current_dialogue(e: &mut Engine, this: Ptr<MobileObject>) {
+    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+    let mut valid = false;
+    if !process.is_null() {
+        e.with_stack(16, |e, handle| {
+            let copied = e
+                .vcall(process.addr(), 0x48c, &args![handle, 0u32])
+                .ptr::<u8>();
+            valid = e.call(0x00ad_8ce0, &args![copied]).bool();
+            e.call(0x0048_3710, &args![handle]);
+        });
+    }
+    if valid {
+        let topic = fn_00934430(e, this);
+        let script = e.call(0x0057_bd40, &args![this]).ptr::<u8>();
+        e.call(0x0057_ad20, &args![this, 0u32]);
+        let extras = e.call(0x005d_43c0, &args![this]).ptr::<u8>();
+        e.call(0x0042_edb0, &args![extras]);
+        if !topic.is_null() {
+            if !e.call(0x0057_9200, &args![topic]).bool() {
+                e.call(0x0061_f170, &args![topic, 1u32, this]);
+            }
+            let extras = e.call(0x005d_43c0, &args![this]).ptr::<u8>();
+            e.call(0x005a_c750, &args![script, extras, 0x40000u32]);
+            e.set(this, MobileObject::bDoNotRunSayToCallBack, true);
+            let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+            e.vcall(process.addr(), 0x88, &args![0u32]);
+        }
+        e.set(this, MobileObject::cSoundCallBackSet, 0xff);
+        e.vcall(process.addr(), 0x494, &args![0u32]);
+        e.vcall(process.addr(), 0x310, &args![0u32]);
+        let player = e.global::<u32>(0x011d_ea3c);
+        e.call(0x0095_3ce0, &args![player]);
+    }
+    e.set(this, MobileObject::bVoiceFileDone, true);
+    e.set(this, MobileObject::bSoundFileDone, true);
+    if !e.call(0x0057_4900, &args![this]).bool()
+        && !e.vcall(this.addr(), 0x1d0, &args![]).ptr::<u8>().is_null()
+    {
+        e.call(0x008a_5530, &args![this]);
+    }
+}
+
+// Translated from 00934430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads this reference's say-to topic info through its extra-data list.
+pub fn fn_00934430(e: &mut Engine, this: Ptr<MobileObject>) -> Ptr {
+    let extras = e.call(0x005d_43c0, &args![this]).ptr::<u8>();
+    e.call(0x0042_ed70, &args![extras]).ptr()
+}
+
+// Translated from 00934450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Passes the actor and a requested value to two current-process slots. The
+/// two final stack words are consumed by RET 0xC but never read.
+pub fn fn_00934450(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    requested: Ptr,
+    _unused_2: u32,
+    _unused_3: u32,
+) {
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    e.vcall(process.addr(), 0x230, &args![requested, this]);
+    e.vcall(process.addr(), 0x244, &args![]);
+}
+
+// Translated from 009344a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::GetCurrentPackage` (Xbox PDB): asks the current process for
+/// its package, or returns null when no process exists.
+pub fn mobile_object_get_current_package(e: &mut Engine, this: Ptr<MobileObject>) -> Ptr {
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if process.is_null() {
+        Ptr::NULL
+    } else {
+        e.vcall(process.addr(), 0x27c, &args![]).ptr()
+    }
+}
+
+// Translated from 009344d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Prepares and plays a dialogue sound, optionally loading lip animation,
+/// and returns its estimated duration. Compiler exception-only SEH cleanup
+/// is omitted; normal destruction of the local string and handles is kept.
+// Translation incomplete: 009344d0 - compiler SEH exception cleanup.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_009344d0(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    filename: Ptr,
+    output: Ptr,
+    first_process_value: u32,
+    second_process_value: u32,
+    duration_scale: i32,
+    first_target_value: Ptr,
+    second_target_value: Ptr,
+    target: Ptr,
+    update_process: u8,
+    voice_mode: u8,
+    exit_on_lip_file: u8,
+    use_lip_file: u8,
+    allow_first_target: u8,
+) -> f32 {
+    if !e.call(0x0057_4900, &args![this]).bool() {
+        return 0.0;
+    }
+    e.with_stack(8, |e, filename_string| {
+        e.call(0x0040_c0e0, &args![filename_string, filename]);
+        let result = if filename.is_null() {
+            let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+            e.vcall(process.addr(), 0x37c, &args![]);
+            e.vcall(this.addr(), 0x2d4, &args![first_process_value]);
+            e.vcall(this.addr(), 0x2dc, &args![second_process_value]);
+            0.0
+        } else {
+            e.with_stack(0x200, |e, path| {
+                let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                let mut lip = e.vcall(process.addr(), 0x37c, &args![]).ptr::<u8>();
+                e.vcall(this.addr(), 0x2d4, &args![first_process_value]);
+                e.vcall(this.addr(), 0x2dc, &args![second_process_value]);
+                e.call(0x0040_6d30, &args![path, 0x200u32, filename]);
+                mobile_object_stop_current_dialogue(e, this);
+                let player = e.global::<u32>(0x011d_ea3c);
+                let is_player = this.addr() == player;
+                let play_directly = is_player || voice_mode != 0;
+                let distance = e.call(0x0057_23b0, &args![this, player, 0u32, 0u32]).f64();
+                let distance_limit = e.call(0x0043_d4d0, &args![0x011c_d378u32]).u32();
+                let mut follow_object = Ptr::NULL;
+                let current_player = e.global::<u32>(0x011d_ea3c);
+                if distance < e.mem.i32(distance_limit) as f64
+                    && (!is_player || e.call(0x004e_af60, &args![current_player]).bool())
+                {
+                    follow_object = e.vcall(this.addr(), 0x1b8, &args![0u32]).ptr::<u8>();
+                }
+                if lip.is_null() {
+                    let mut continue_after_lip = true;
+                    let mut reset_idle = use_lip_file == 0;
+                    if use_lip_file != 0 {
+                        let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                        if e.vcall(process.addr(), 0x378, &args![]).bool() {
+                            reset_idle = true;
+                        } else if e.call(0x004d_5ad0, &args![filename_string]).bool() {
+                            if exit_on_lip_file != 0 {
+                                let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                                e.vcall(process.addr(), 0x370, &args![1u32]);
+                                let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                                e.vcall(process.addr(), 0x154, &args![1u32]);
+                                let name_id = e.call(0x0055_9450, &args![filename_string]).u32();
+                                e.call(0x0090_5f30, &args![0x011f_11e0u32, this, name_id]);
+                                continue_after_lip = false;
+                            } else {
+                                lip = e.call(0x004d_52d0, &args![filename_string]).ptr::<u8>();
+                                if lip.is_null() {
+                                    let setting = e.call(0x0040_3e20, &args![0x011d_32c4u32]).u32();
+                                    let value = e.mem.f32(setting);
+                                    e.mem.set_f32(0x011d_951c, quiet_f32(value));
+                                }
+                                let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                                e.vcall(process.addr(), 0x370, &args![0u32]);
+                            }
+                        }
+                    }
+                    if !continue_after_lip {
+                        return 0.0;
+                    }
+                    if reset_idle {
+                        let object = e.vcall(this.addr(), 0x1b8, &args![0u32]).ptr::<u8>();
+                        if !object.is_null() {
+                            e.vcall(object.addr(), 0x124, &args![0x0108_4d70u32]);
+                        }
+                        let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                        if e.vcall(process.addr(), 0x378, &args![]).bool() {
+                            let actor_id = e.call(0x0084_e3a0, &args![this]).u32();
+                            e.call(0x0093_5f00, &args![actor_id, 0u32]);
+                            let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                            e.vcall(process.addr(), 0x374, &args![0u32]);
+                        }
+                    }
+                }
+                let idle = e.vcall(this.addr(), 0x1e4, &args![]).ptr::<u8>();
+                if !idle.is_null() {
+                    if !first_target_value.is_null() || allow_first_target != 0 {
+                        let process = e.get(this, MobileObject::pCurrentProcess);
+                        let mode = 2 + u32::from(!first_target_value.is_null());
+                        e.vcall(
+                            process.addr(),
+                            0x44,
+                            &args![this, first_target_value, mode, 0u32, 1u32, 1u32],
+                        );
+                    }
+                    if !target.is_null() && target.addr() != this.addr() {
+                        let actor_eligible = e.vcall(target.addr(), 0xfc, &args![]).bool()
+                            || e.vcall(target.addr(), 0x100, &args![]).bool();
+                        if actor_eligible {
+                            let mut should_move = true;
+                            if e.vcall(target.addr(), 0x100, &args![]).bool() {
+                                let package = mobile_object_get_current_package(e, target.cast());
+                                if !package.is_null()
+                                    && e.call(0x005f_36f0, &args![package]).u32() != 0
+                                {
+                                    should_move = false;
+                                }
+                            }
+                            if !second_target_value.is_null() || should_move {
+                                let process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+                                let mode = 2 + u32::from(!second_target_value.is_null());
+                                e.vcall(
+                                    process.addr(),
+                                    0x44,
+                                    &args![target, second_target_value, mode, 0u32, 1u32, 1u32],
+                                );
+                            }
+                        }
+                    }
+                }
+                let mut lip_time = 0.0f32;
+                if !lip.is_null() {
+                    let frames = e.call(0x0055_9450, &args![lip]).u32();
+                    let divisor: f64 = e.global(0x0101_db88);
+                    lip_time = (frames as f64 / divisor) as f32;
+                    let interval: f32 = e.global(0x0101_df44);
+                    e.call(0x004d_5930, &args![lip, follow_object, quiet_f32(interval)]);
+                }
+                if update_process != 0 && !e.call(0x008d_8520, &args![this]).ptr::<u8>().is_null() {
+                    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                    e.vcall(process.addr(), 0x2ec, &args![first_process_value]);
+                }
+                let mut flags = 0x104u32;
+                let sound = e.call(0x005e_3fa0, &args![this]).ptr::<u8>();
+                if !sound.is_null() && !e.call(0x007a_f430, &args![sound]).ptr::<u8>().is_null() {
+                    e.call(0x007a_f430, &args![sound]);
+                }
+                flags |= if play_directly { 1 } else { 2 };
+                e.with_stack(12, |e, instance| {
+                    let audio = e.call(0x0045_3a70, &args![]).ptr::<u8>();
+                    let created = e
+                        .call(0x00ad_7480, &args![audio, instance, path, flags, 0u32])
+                        .ptr::<u8>();
+                    e.call(0x0041_8900, &args![output, created]);
+                    e.call(0x0048_3710, &args![instance]);
+                });
+                let audio = e.call(0x00ad_9060, &args![]).ptr::<u8>();
+                let mut callback_actor = this.cast();
+                if !target.is_null() && e.vcall(target.addr(), 0x100, &args![]).bool() {
+                    callback_actor = target;
+                }
+                let actor_id = e.call(0x0084_e3a0, &args![callback_actor]).u32();
+                let handle_id = e.call(0x0055_9450, &args![output]).u32();
+                e.call(
+                    0x00ad_c050,
+                    &args![audio, handle_id, 0x0093_5f00u32, actor_id],
+                );
+                if !play_directly {
+                    let position = e.vcall(this.addr(), 0x1f4, &args![]).ptr::<u8>();
+                    let x = e.mem.f32(position.addr());
+                    let y = e.mem.f32(position.addr() + 4);
+                    let z = e.mem.f32(position.addr() + 8);
+                    let min = e.call(0x0057_90d0, &args![]).f64() as f32;
+                    let max = e.call(0x0057_90b0, &args![]).f64() as f32;
+                    e.call(0x00ad_8be0, &args![output, max, min]);
+                    e.call(
+                        0x00ad_8b60,
+                        &args![output, quiet_f32(x), quiet_f32(y), quiet_f32(z)],
+                    );
+                    let object = e.vcall(this.addr(), 0x1d0, &args![]).ptr::<u8>();
+                    e.call(0x00ad_8f20, &args![output, object]);
+                } else {
+                    let setting = e.call(0x0040_3e20, &args![0x011e_060cu32]).u32();
+                    let factor: f64 = e.global(0x0101_7a40);
+                    let attenuation_float = e.mem.f32(setting) as f64 * factor;
+                    let attenuation = e.call(0x00ec_62c0, &args![attenuation_float]).u32();
+                    e.call(0x00ad_89b0, &args![output, attenuation]);
+                }
+                let duration = if !lip.is_null() {
+                    let first = e.call(0x004d_5a90, &args![lip]).f64();
+                    let second = e.call(0x008a_2d20, &args![]).f64();
+                    let thousand: f64 = e.global(0x0101_7b70);
+                    let delay = ((first + second) * thousand) as f32;
+                    let delay_ms = e.call(0x00ec_62c0, &args![delay as f64]).u32();
+                    e.call(0x00ad_8870, &args![output, delay_ms, 0u32]);
+                    let first = e.call(0x004d_5a90, &args![lip]).f64();
+                    let second = e.call(0x008a_2d20, &args![]).f64();
+                    let mut duration = (first + second) as f32;
+                    let zero: f64 = e.global(0x0101_2060);
+                    if (lip_time as f64) > zero {
+                        duration = (duration as f64 + lip_time as f64) as f32;
+                    } else if e.call(0x00ad_8b30, &args![output]).u32() != 0 {
+                        let milliseconds = e.call(0x00ad_8b30, &args![output]).i32();
+                        let divisor: f64 = e.global(0x0101_7b70);
+                        duration = (milliseconds as f64 / divisor + duration as f64) as f32;
+                    } else {
+                        let setting = e.call(0x0040_3e20, &args![0x011c_d0bcu32]).u32();
+                        duration = (e.mem.f32(setting) as f64 * duration_scale as f64
+                            + duration as f64) as f32;
+                    }
+                    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                    let truncated = e.call(0x00ec_62c0, &args![delay as f64]).u32();
+                    let clock = e.call(0x0082_5c00, &args![0x011f_6394u32]).u32();
+                    e.vcall(process.addr(), 0x74c, &args![clock.wrapping_add(truncated)]);
+                    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                    e.vcall(process.addr(), 0x744, &args![lip]);
+                    duration
+                } else {
+                    e.call(0x00ad_8870, &args![output, 1u32, 0u32]);
+                    let setting = e.call(0x0040_3e20, &args![0x011c_d0bcu32]).u32();
+                    (e.mem.f32(setting) as f64 * duration_scale as f64) as f32
+                };
+                if e.get(this, MobileObject::bTalkingToPlayer) {
+                    e.set(this, MobileObject::bSpeakingDone, false);
+                }
+                let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                e.with_stack(12, |e, copied| {
+                    e.call(0x0041_8900, &args![copied, output]);
+                    let first = e.mem.u32(copied.addr());
+                    let second = e.mem.u32(copied.addr() + 4);
+                    let third = e.mem.u32(copied.addr() + 8);
+                    e.vcall(process.addr(), 0x490, &args![0u32, first, second, third]);
+                });
+                if !lip.is_null() {
+                    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                    let current = e.vcall(process.addr(), 0x748, &args![]).ptr::<u8>();
+                    if current != lip {
+                        e.call(0x004d_5850, &args![lip, 1u32]);
+                    }
+                    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                    e.vcall(process.addr(), 0x380, &args![0u32]);
+                    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+                    e.vcall(process.addr(), 0x370, &args![0u32]);
+                }
+                duration
+            })
+        };
+        e.call(0x0040_37d0, &args![filename_string]);
+        result
+    })
+}
+
+// Translated from 00934f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes this object to the output pointer, then returns the form derived
+/// from its talking activator when the two successive lookups find one.
+/// The first stack word is consumed but not read.
+pub fn fn_00934f90(e: &mut Engine, this: Ptr<MobileObject>, _unused_1: u32, output: Ptr) -> Ptr {
+    e.mem.set_u32(output.addr(), this.addr());
+    let activator = e.get(this, MobileObject::pTalkingActivator);
+    let form = e.call(0x007a_f430, &args![activator]).ptr::<u8>();
+    if e.call(0x0051_6bf0, &args![form]).u32() != 0 {
+        e.call(0x0051_6bf0, &args![form]).ptr()
+    } else {
+        this.cast()
+    }
+}
+
+// Translated from 00934fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Starts a conversation package for two actors whose process type is zero,
+/// after checking the target's reference type and first dialogue item.
+/// Compiler exception-only SEH cleanup is omitted.
+// Translation incomplete: 00934fd0 - compiler SEH exception cleanup.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00934fd0(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    target: Ptr<MobileObject>,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    notify_mover: u8,
+    package_word: u32,
+    _unused_8: u32,
+    _unused_9: u32,
+) -> bool {
+    if mobile_object_get_current_process_type(e, this) != 0
+        || mobile_object_get_current_process_type(e, target) != 0
+    {
+        return false;
+    }
+    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+    let acquired = e.vcall(process.addr(), 0x22c, &args![]).ptr::<u8>();
+    if target.is_null() {
+        return false;
+    }
+    let first_type = e.vcall(target.addr(), 0x214, &args![]).u32();
+    if first_type != 0 {
+        let second_type = e.vcall(target.addr(), 0x214, &args![]).u32();
+        if second_type != 4 && e.vcall(target.addr(), 0x214, &args![]).u32() != 9 {
+            return false;
+        }
+    }
+    e.with_stack(4, |e, package_state| {
+        e.mem.set_u32(package_state.addr(), 0);
+        let mut speaker = this;
+        if e.call(0x0057_4900, &args![this]).bool() {
+            speaker = e
+                .vcall(this.addr(), 0x300, &args![target, package_state])
+                .ptr();
+        }
+        let player = e.global::<u32>(0x011d_ea3c);
+        let mut conversation: Ptr = Ptr::NULL;
+        if target.addr() != player {
+            let storage = e.call(0x0040_1000, &args![0xcu32]).ptr::<u8>();
+            if !storage.is_null() {
+                conversation = e
+                    .call(0x0083_b850, &args![storage, speaker, target, package_word])
+                    .ptr();
+            }
+        }
+        mobile_object_stop_current_dialogue(e, this);
+        let process = e.get(this, MobileObject::pCurrentProcess);
+        e.vcall(process.addr(), 0x214, &args![]);
+        let player = e.global::<u32>(0x011d_ea3c);
+        if target.addr() != player && !e.call(0x0083_b9a0, &args![conversation]).bool() {
+            return false;
+        }
+        let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+        e.vcall(process.addr(), 0x710, &args![this]);
+        let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+        e.vcall(process.addr(), 0x644, &args![1u32]);
+        let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+        e.vcall(process.addr(), 0x634, &args![target]);
+        let process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+        e.vcall(process.addr(), 0x644, &args![1u32]);
+        let process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+        e.vcall(process.addr(), 0x634, &args![this]);
+        let storage = e.call(0x0040_1000, &args![0xd0u32]).ptr::<u8>();
+        let package = if storage.is_null() {
+            Ptr::NULL
+        } else {
+            let state = e.mem.u32(package_state.addr());
+            e.call(
+                0x009e_dd80,
+                &args![storage, conversation, this, target, state, 1u32, 1u32],
+            )
+            .ptr::<u8>()
+        };
+        e.mem.set_u32(package.addr() + 0x8c, package_word);
+        if !acquired.is_null() {
+            e.call(0x0067_a1b0, &args![package, acquired]);
+        }
+        e.call(0x0067_0fc0, &args![package, 0x1cu32]);
+        e.call(0x0082_6b40, &args![package, 1u32]);
+        e.call(0x0082_6b90, &args![package, 1u32]);
+        let location_storage = e.call(0x0040_1000, &args![0xcu32]).ptr::<u8>();
+        let location = if location_storage.is_null() {
+            Ptr::NULL
+        } else {
+            e.call(0x0067_f030, &args![location_storage]).ptr::<u8>()
+        };
+        e.call(0x0067_f3c0, &args![location, target]);
+        e.call(0x0067_1d30, &args![package, location]);
+        if !location.is_null() {
+            e.call(0x0067_0b30, &args![location, 1u32]);
+        }
+        let target_storage = e.call(0x0040_1000, &args![0x10u32]).ptr::<u8>();
+        let package_target = if target_storage.is_null() {
+            Ptr::NULL
+        } else {
+            e.call(0x0067_ff70, &args![target_storage]).ptr::<u8>()
+        };
+        e.call(0x0067_2fc0, &args![package, package_target]);
+        if !package_target.is_null() {
+            e.call(0x007b_3fa0, &args![package_target, 1u32]);
+        }
+        e.call(0x0098_4f60, &args![package, 10u32]);
+        let first = e.call(0x0067_1d10, &args![package]).ptr::<u8>();
+        e.call(0x0068_00b0, &args![first, 0u32]);
+        let second = e.call(0x0067_1d10, &args![package]).ptr::<u8>();
+        e.call(0x0068_0110, &args![second, target]);
+        let delay = if e.vcall(this.addr(), 0x214, &args![]).u32() == 4 {
+            200u32
+        } else {
+            90u32
+        };
+        let third = e.call(0x0067_1d10, &args![package]).ptr::<u8>();
+        e.call(0x0040_3550, &args![third, delay]);
+        let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+        e.vcall(process.addr(), 0x28, &args![]);
+        e.vcall(this.addr(), 0x2f4, &args![package, 0u32, 1u32]);
+        if notify_mover != 0 {
+            let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+            e.vcall(process.addr(), 0x288, &args![this, 1u32]);
+        }
+        true
+    })
+}
+
+// Translated from 00935480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Replaces the current dialogue with a package derived from the supplied
+/// package's target, locations and settings. Compiler exception-only SEH
+/// cleanup is omitted.
+// Translation incomplete: 00935480 - compiler SEH exception cleanup.
+pub fn fn_00935480(e: &mut Engine, this: Ptr<MobileObject>, source: Ptr) -> bool {
+    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+    e.vcall(process.addr(), 0x22c, &args![]);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    let target = e.vcall(process.addr(), 0x128, &args![]).ptr::<u8>();
+    let player = e.global::<u32>(0x011d_ea3c);
+    let mut conversation: Ptr = Ptr::NULL;
+    if target.addr() != player {
+        let storage = e.call(0x0040_1000, &args![0xcu32]).ptr::<u8>();
+        if !storage.is_null() {
+            conversation = e
+                .call(0x0083_b850, &args![storage, this, target, 0u32])
+                .ptr();
+        }
+    }
+    mobile_object_stop_current_dialogue(e, this);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    e.vcall(process.addr(), 0x214, &args![]);
+    let player = e.global::<u32>(0x011d_ea3c);
+    if target.addr() != player && !e.call(0x0083_b9a0, &args![conversation]).bool() {
+        return false;
+    }
+    if !e.call(0x0067_a690, &args![source]).bool() {
+        let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+        e.vcall(process.addr(), 0x644, &args![1u32]);
+        let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+        e.vcall(process.addr(), 0x634, &args![target]);
+        let process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+        e.vcall(process.addr(), 0x644, &args![1u32]);
+        let process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+        e.vcall(process.addr(), 0x634, &args![this]);
+    }
+    let storage = e.call(0x0040_1000, &args![0xd0u32]).ptr::<u8>();
+    let package = if storage.is_null() {
+        Ptr::NULL
+    } else {
+        let flag = e.call(0x005f_36f0, &args![source]).u32() == 0;
+        e.call(
+            0x009e_dd80,
+            &args![
+                storage,
+                conversation,
+                this,
+                target,
+                0u32,
+                0u32,
+                u32::from(flag)
+            ],
+        )
+        .ptr::<u8>()
+    };
+    if !source.is_null() {
+        e.call(0x0067_a1b0, &args![package, source]);
+    }
+    e.call(0x0067_0fc0, &args![package, 0x1cu32]);
+    let first_flag = e.call(0x008b_1ff0, &args![source]).u8();
+    e.call(0x0082_6b40, &args![package, first_flag as u32]);
+    let second_flag = e.call(0x0067_efd0, &args![source]).u8();
+    e.call(0x0082_6b90, &args![package, second_flag as u32]);
+    let location = e.call(0x0055_b980, &args![source]).ptr::<u8>();
+    e.call(0x0067_1d30, &args![package, location]);
+    let second_location = e.call(0x0067_2dd0, &args![source]).ptr::<u8>();
+    e.call(0x0067_1e10, &args![package, second_location]);
+    let package_target = e.call(0x0067_1d10, &args![source]).ptr::<u8>();
+    e.call(0x0067_2fc0, &args![package, package_target]);
+    e.call(0x0098_4f60, &args![package, 10u32]);
+    let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+    e.vcall(process.addr(), 0x28, &args![]);
+    e.vcall(this.addr(), 0x2f4, &args![package, 0u32, 1u32]);
+    e.call(0x0057_bd60, &args![this, target]);
+    let current_process = e.get(this, MobileObject::pCurrentProcess);
+    e.vcall(current_process.addr(), 0x12c, &args![target]);
+    let current_process = e.get(this, MobileObject::pCurrentProcess);
+    e.call(0x0048_3710, &args![current_process]);
+    let current_process = e.get(this, MobileObject::pCurrentProcess);
+    e.call(0x0048_3710, &args![current_process]);
+    let player = e.global::<u32>(0x011d_ea3c);
+    if target.addr() == player || target.addr() == this.addr() {
+        if !e.vcall(target.addr(), 0x22c, &args![0u32]).bool() {
+            let process = e.call(0x008d_8520, &args![this]).ptr::<u8>();
+            e.vcall(process.addr(), 0x288, &args![this, 3u32]);
+        }
+    } else {
+        let target_process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+        e.vcall(target_process.addr(), 0x710, &args![target]);
+        let current_package = mobile_object_get_current_package(e, this);
+        e.vcall(target.addr(), 0x2f4, &args![current_package, 0u32, 1u32]);
+        let target_process = e.call(0x008d_8520, &args![target]).ptr::<u8>();
+        e.vcall(target_process.addr(), 0x12c, &args![target]);
+        e.call(0x0057_bd60, &args![target, this]);
+    }
+    true
+}
+
+// Translated from 00935820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Checks whether a target position is inside the radius of this object's
+/// position, flattening the vertical difference inside the native 30-unit
+/// below and 158-unit above band. The final stack word is unused.
+pub fn fn_00935820(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    target: Ptr,
+    radius: f32,
+    add_margin: u8,
+    _unused_4: u32,
+) -> bool {
+    let position = e.vcall(this.addr(), 0x1f4, &args![]).ptr::<u8>();
+    e.with_stack(12, |e, origin| {
+        for offset in [0u32, 4, 8] {
+            let word = e.mem.u32(position.addr() + offset);
+            e.mem.set_u32(origin.addr() + offset, word);
+        }
+        e.with_stack(12, |e, difference| {
+            e.call(0x0043_9ef0, &args![origin, difference, target]);
+            let elevation = e.mem.f32(origin.addr() + 8);
+            let band: f64 = e.global(0x0101_db88);
+            let below = (elevation as f64 - band) as f32;
+            let above_offset: f32 = e.global(0x0101_e704);
+            let above = (elevation as f64 + above_offset as f64 + band) as f32;
+            let target_z = e.mem.f32(target.addr() + 8);
+            if (below as f64) < target_z as f64 && (target_z as f64) < above as f64 {
+                e.mem.set_f32(difference.addr() + 8, 0.0);
+            }
+            let radius = if add_margin != 0 {
+                let margin: f32 = e.global(0x0101_e340);
+                (radius as f64 + margin as f64) as f32
+            } else {
+                quiet_f32(radius)
+            };
+            e.call(0x004b_5470, &args![difference, radius]).i32() <= 0
+        })
+    })
+}
+
+// Translated from 009358f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards to current-process slot +0x128 and preserves its EAX result.
+pub fn fn_009358f0(e: &mut Engine, this: Ptr<MobileObject>) -> Ptr {
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    e.vcall(process.addr(), 0x128, &args![]).ptr()
+}
+
+// Translated from 00935920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Creates a 12-byte extra record from the game's four globals, adds it to
+/// this reference or its base form, then sets the reference's flag 0x80000000.
+/// Compiler exception-only SEH cleanup is omitted.
+// Translation incomplete: 00935920 - compiler SEH exception cleanup.
+pub fn fn_00935920(e: &mut Engine, this: Ptr<MobileObject>, value: u32) {
+    let first = e.global::<u32>(0x011a_39c4).wrapping_shl(9);
+    let signed_byte = e.global::<u8>(0x011e_0360) as i8 as i32 as u32;
+    let third = e.global::<u32>(0x011e_035c).wrapping_shl(13);
+    let bits = first | signed_byte | third;
+    let storage = e.call(0x0040_1000, &args![0xcu32]).ptr::<u8>();
+    let extra = if storage.is_null() {
+        Ptr::NULL
+    } else {
+        let fraction = e.global::<f32>(0x011e_0358);
+        fn_00935a10(e, storage.cast(), value, bits, fraction)
+    };
+    let reference = if e.call(0x0057_4900, &args![this]).bool() {
+        e.call(0x005e_3fa0, &args![this]).ptr::<u8>()
+    } else {
+        this.cast()
+    };
+    let extras = e.call(0x005d_43c0, &args![reference]).ptr::<u8>();
+    e.call(0x0042_ef20, &args![extras, extra]);
+    e.vcall(reference.addr(), 0x48, &args![0x8000_0000u32]);
+}
+
+// Translated from 00935a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes three words into the newly allocated extra record. The third is a
+/// float stored through x87 and therefore quiets a signaling NaN.
+pub fn fn_00935a10(e: &mut Engine, this: Ptr, first: u32, second: u32, third: f32) -> Ptr {
+    e.mem.set_u32(this.addr(), first);
+    e.mem.set_u32(this.addr() + 4, second);
+    e.mem.set_f32(this.addr() + 8, quiet_f32(third));
+    this
+}
+
+// Translated from 00935a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Searches an extra-data linked list for a node whose first payload word
+/// equals the requested value.
+pub fn fn_00935a40(e: &mut Engine, this: Ptr<MobileObject>, wanted: u32) -> bool {
+    let reference = if e.call(0x0057_4900, &args![this]).bool() {
+        e.call(0x005e_3fa0, &args![this]).ptr::<u8>()
+    } else {
+        this.cast()
+    };
+    let extras = e.call(0x005d_43c0, &args![reference]).ptr::<u8>();
+    let record = e.call(0x0042_efe0, &args![extras]).ptr::<u8>();
+    if record.is_null() {
+        return false;
+    }
+    let mut node = e.mem.u32(record.addr() + 0xc);
+    while node != 0 {
+        let entry = e.call(0x0068_15c0, &args![node]).ptr::<u8>();
+        if e.mem.u32(entry.addr()) == 0 {
+            break;
+        }
+        let entry = e.call(0x0068_15c0, &args![node]).ptr::<u8>();
+        let payload = e.mem.u32(entry.addr());
+        if e.mem.u32(payload) == wanted {
+            return true;
+        }
+        node = e.call(0x0072_6070, &args![node]).u32();
+    }
+    false
+}
+
+// Translated from 00935ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the reference's extra-record list, unlinking and freeing records
+/// whose packed time and fractional value have expired.
+pub fn fn_00935ae0(e: &mut Engine, this: Ptr<MobileObject>) {
+    let reference = if e.call(0x0057_4900, &args![this]).bool() {
+        e.call(0x005e_3fa0, &args![this]).ptr::<u8>()
+    } else {
+        this.cast()
+    };
+    let extras = e.call(0x005d_43c0, &args![reference]).ptr::<u8>();
+    let record = e.call(0x0042_efe0, &args![extras]).ptr::<u8>();
+    if record.is_null() {
+        return;
+    }
+    let mut node = e.mem.u32(record.addr() + 0xc);
+    while node != 0 {
+        let entry = e.call(0x0068_15c0, &args![node]).ptr::<u8>();
+        if e.mem.u32(entry.addr()) == 0 {
+            break;
+        }
+        let entry = e.call(0x0068_15c0, &args![node]).ptr::<u8>();
+        let payload = e.mem.u32(entry.addr());
+        let setting = e.call(0x0040_3e20, &args![0x011d_0af0u32]).u32();
+        let fraction = ((e.mem.f32(payload + 8) as f64) + e.mem.f32(setting) as f64) as f32;
+        let packed = e.mem.u32(payload + 4);
+        let packed_first = (packed & 0x1ff) as i32;
+        let packed_second = ((packed & 0x1e00) >> 9) as i32;
+        let packed_third = ((packed & 0x07ff_e000) >> 13) as i32;
+        let first = e.global::<u32>(0x011a_39c4) as i32;
+        let second = e.global::<u8>(0x011e_0360) as i8 as i32;
+        let third = e.global::<u32>(0x011e_035c) as i32;
+        let current_fraction = quiet_f32(e.global::<f32>(0x011e_0358));
+        let older = second > packed_first || first > packed_second || third > packed_third;
+        let expired = if fraction > 23.0 {
+            let reduced = ((fraction as f64) - 23.0) as f32;
+            (reduced > current_fraction || reduced.is_nan()) && older
+        } else if older {
+            fraction >= current_fraction && !fraction.is_nan()
+        } else {
+            fraction > current_fraction || fraction.is_nan()
+        };
+        if expired {
+            e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), payload);
+                e.call(0x0090_5330, &args![node, slot]);
+            });
+            e.call(0x0040_1030, &args![payload]);
+            node = e.mem.u32(record.addr() + 0xc);
+        } else {
+            node = e.call(0x0072_6070, &args![node]).u32();
+        }
+    }
+}
+
+// Translated from 00935cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Marks the resolved mobile object and adjusts the active package's float
+/// at +0x90 when that package reports type 0x1c.
+pub fn fn_00935cc0(e: &mut Engine, value: u32) {
+    let actor = e.call(0x0048_39c0, &args![value]).ptr::<MobileObject>();
+    if actor.is_null() || !e.vcall(actor.addr(), 0xfc, &args![]).bool() {
+        return;
+    }
+    e.mem.set_u8(actor.addr() + 0x7f, 1);
+    if e.mem.u8(actor.addr() + 0x7d) != 0 {
+        e.mem.set_u8(actor.addr() + 0x7c, 1);
+    }
+    let package = mobile_object_get_current_package(e, actor);
+    if !package.is_null() && e.call(0x0041_ca90, &args![package]).u32() == 0x1c {
+        let value = if e.mem.u8(actor.addr() + 0x7f) != 0 {
+            e.global::<f32>(0x0101_7870)
+        } else {
+            e.global::<f32>(0x0101_7868)
+        };
+        e.mem.set_f32(package.addr() + 0x90, quiet_f32(value));
+    }
+}
+
+// Translated from 00935d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the shared actor, stops its active controller when the resolved
+/// reference qualifies, and restores the float setting unless suppressed.
+pub fn fn_00935d90(e: &mut Engine, value: u32, suppress_setting: u8) {
+    let actor = e.call(0x0048_39c0, &args![value]).ptr::<MobileObject>();
+    if !actor.is_null() && e.vcall(actor.addr(), 0xfc, &args![]).bool() {
+        let shared = e.global::<u32>(0x011e_0548);
+        if shared != 0 {
+            e.mem.set_u8(shared + 0x7d, 0);
+            let shared = e.global::<u32>(0x011e_0548);
+            e.mem.set_u8(shared + 0x7c, 1);
+            if e.call(0x0057_4900, &args![actor]).bool() {
+                let reference = e.call(0x005e_3fa0, &args![actor]).ptr::<u8>();
+                let object = e
+                    .vcall(reference.addr(), 0x1d0, &args![0x011f_36acu32])
+                    .u32();
+                let controller = e.call(0x00a5_c570, &args![object]).u32();
+                if controller != 0 {
+                    let current = fn_00935ef0(e);
+                    let acquired = e.call(0x0047_a520, &args![controller, current]).u32();
+                    if acquired != 0 {
+                        e.call(0x0049_bf10, &args![0.0f32, controller, acquired]);
+                        e.call(0x0047_b220, &args![controller, acquired, 0.0f32]);
+                    }
+                }
+                let process = e.call(0x008d_8520, &args![actor]).ptr::<u8>();
+                e.vcall(process.addr(), 0x744, &args![0u32]);
+                let process = e.call(0x008d_8520, &args![actor]).ptr::<u8>();
+                e.vcall(process.addr(), 0x74c, &args![0u32]);
+            }
+        }
+        if suppress_setting == 0 {
+            let setting = e.call(0x0040_3e20, &args![0x011d_32c4u32]).u32();
+            let value = e.mem.f32(setting);
+            e.mem.set_f32(0x011d_951c, quiet_f32(value));
+        }
+    }
+    e.mem.set_u32(0x011e_0548, 0);
+}
+
+// Translated from 00935ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the engine's pointer stored at the fixed global.
+pub fn fn_00935ef0(e: &mut Engine) -> u32 {
+    e.global::<u32>(0x011c_6268)
+}
+
+// Translated from 00935f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resolves a mobile object and invokes its three-mode callback when the
+/// actor-style virtual check succeeds.
+pub fn fn_00935f00(e: &mut Engine, value: u32) {
+    let actor = e.call(0x0048_39c0, &args![value]).ptr::<MobileObject>();
+    if !actor.is_null() && e.vcall(actor.addr(), 0xfc, &args![]).bool() {
+        e.call(0x004b_c4a0, &args![actor, 3u32]);
     }
 }
 
@@ -5148,5 +6300,1042 @@ mod tests {
             vec![0x7000, 0x7010, 0x7020, 0x7030, 0x7040, 0x7050]
         );
         assert_eq!(log.last().unwrap().1, vec![0x2000, 0x3000]);
+    }
+
+    #[test]
+    fn mobile_update_voice_gate_and_actor_order() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x1000);
+        e.map(0x4000, 0x1000);
+        e.map(0x011e_0000, 0x1000);
+        virtual_slot(&mut e, this.addr(), 0x5000, 0x1e4, 0x7000);
+        for (slot, address) in [
+            (0x268, 0x7010),
+            (0x140, 0x7020),
+            (0x2f8, 0x7030),
+            (0x178, 0x7040),
+        ] {
+            e.mem.set_u32(0x5000 + slot, address);
+            stub(&mut e, address, 0);
+        }
+        virtual_slot(&mut e, 0x3000, 0x6000, 0x22c, 0x7050);
+        stub(&mut e, 0x7050, 0x4000);
+        stub(&mut e, 0x008d_8520, 0x3000);
+        stub(&mut e, 0x0041_ca90, 0x1c);
+        stub(&mut e, 0x008d_6f30, 0);
+        stub(&mut e, 0x0041_a250, 0);
+        stub(&mut e, 0x0048_3710, 0);
+        stub(&mut e, 0x007a_f430, 0);
+
+        e.call_log = Some(vec![]);
+        fn_009339a0(&mut e, this, 0.25, Ptr::NULL, 0);
+        assert_eq!(
+            e.call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|call| call.0)
+                .collect::<Vec<_>>(),
+            vec![
+                0x7000,
+                0x008d_8520,
+                0x7050,
+                0x0041_ca90,
+                0x7010,
+                0x7020,
+                0x7030,
+                0x008d_6f30,
+                0x7040,
+            ]
+        );
+
+        e.set(this, MobileObject::bSpeakingDone, true);
+        e.set(this, MobileObject::bSoundFileDone, false);
+        e.call_log = Some(vec![]);
+        fn_009339a0(&mut e, this, 0.5, Ptr::new(0x4000), 1);
+        assert_eq!(e.mem.u32(0x4094), this.addr());
+        assert_eq!(e.global::<u32>(0x011e_0548), this.addr());
+        assert!(e.get(this, MobileObject::bTalkingToPlayer));
+        let addresses = e
+            .call_log
+            .unwrap()
+            .iter()
+            .map(|call| call.0)
+            .collect::<Vec<_>>();
+        assert!(addresses.contains(&0x007a_f430));
+        assert!(!addresses.contains(&0x7010));
+        assert!(!addresses.contains(&0x7030));
+        assert_eq!(
+            addresses
+                .iter()
+                .filter(|&&address| address == 0x0048_3710)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn voice_volume_call_uses_thirteen_words_and_raw_flag_bit() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x1000);
+        e.map(0x4000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.map(0x011e_0000, 0x1000);
+        e.mem.set_u32(0x011d_ea3c, 0x0abc);
+        virtual_slot(&mut e, this.addr(), 0x5000, 0x1e4, 0x7000);
+        for (slot, address) in [(0x140, 0x7010), (0x178, 0x7020), (0x284, 0x7030)] {
+            e.mem.set_u32(0x5000 + slot, address);
+            stub(&mut e, address, 0);
+        }
+        e.register_double(0x7030, |_, _| 3.5f64.into_ret());
+        virtual_slot(&mut e, 0x3000, 0x6000, 0x22c, 0x7040);
+        e.mem.set_u32(0x6000 + 0x318, 0x7050);
+        stub(&mut e, 0x7050, 0);
+        stub(&mut e, 0x008d_8520, 0x3000);
+        stub(&mut e, 0x008d_6f30, 0);
+        stub(&mut e, 0x0041_a250, 0);
+        stub(&mut e, 0x0048_3710, 0);
+        stub(&mut e, 0x007a_f430, 0);
+        for (address, result) in [
+            (0x0044_1110, 0x11),
+            (0x0096_11e0, 0x22),
+            (0x0068_15c0, 0x3300),
+            (0x0084_e3a0, 0x55),
+            (0x0044_ddc0, 0x66),
+            (0x0046_0140, 0x7700),
+            (0x00ad_9060, 0x9000),
+            (0x00ad_bfd0, 0),
+        ] {
+            stub(&mut e, address, result);
+        }
+        e.register_double(0x0040_48e0, |_, args| {
+            assert_eq!(args, &[0x3300]);
+            0x44u32.into_ret()
+        });
+        e.register_double(0x0055_9450, |_, args| {
+            if args[0] == 0x7700 {
+                0x88u32.into_ret()
+            } else {
+                0x99u32.into_ret()
+            }
+        });
+        e.set(this, MobileObject::bSpeakingDone, true);
+        e.mem.set_u8(this.addr() + 0x7f, 2);
+        e.call_log = Some(vec![]);
+        fn_009339a0(&mut e, this, 0.1, Ptr::new(0x4000), 1);
+        assert!(!e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|call| call.0 == 0x7030));
+
+        e.mem.set_u8(this.addr() + 0x7f, 1);
+        e.call_log = Some(vec![]);
+        fn_009339a0(&mut e, this, 0.1, Ptr::new(0x4000), 1);
+        let log = e.call_log.unwrap();
+        let handle = log.iter().find(|call| call.0 == 0x0041_a250).unwrap().1[0];
+        let volume_call = log.iter().find(|call| call.0 == 0x7030).unwrap();
+        assert_eq!(
+            volume_call.1,
+            vec![
+                this.addr(),
+                0x88,
+                handle,
+                0x66,
+                0x55,
+                0x44,
+                0x22,
+                0x11,
+                0x0abc,
+                1,
+                1,
+                0,
+                1,
+                1,
+            ]
+        );
+        assert_eq!(
+            log.iter().find(|call| call.0 == 0x7050).unwrap().1[1],
+            3.5f32.to_bits()
+        );
+    }
+
+    #[test]
+    fn conversation_cleanup_gate_and_fallback() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x3000));
+        e.mem.set_u32(0x011d_e45c, 0x9000);
+        virtual_slot(&mut e, 0x3000, 0x5000, 0x24c, 0x7000);
+        for (slot, address) in [
+            (0x22c, 0x7010),
+            (0x674, 0x7020),
+            (0x650, 0x7030),
+            (0x624, 0x7040),
+        ] {
+            e.mem.set_u32(0x5000 + slot, address);
+            stub(&mut e, address, if slot == 0x674 { 0x4000 } else { 0 });
+        }
+        stub(&mut e, 0x008d_8520, 0x3000);
+        stub(&mut e, 0x0047_c850, 1);
+        e.call_log = Some(vec![]);
+        fn_00933d20(&mut e, this);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        stub(&mut e, 0x0047_c850, 0);
+        e.call_log = Some(vec![]);
+        fn_00933d20(&mut e, this);
+        assert_eq!(e.mem.f32(this.addr() + 0x74), 1.0);
+        assert_eq!(
+            e.call_log
+                .unwrap()
+                .iter()
+                .map(|call| call.0)
+                .collect::<Vec<_>>(),
+            vec![
+                0x0047_c850,
+                0x7000,
+                0x7010,
+                0x008d_8520,
+                0x7020,
+                0x008d_8520,
+                0x7030,
+                0x008d_8520,
+                0x7040,
+            ]
+        );
+    }
+
+    #[test]
+    fn stop_dialogue_resets_voice_and_process() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_u32(0x011d_ea3c, 0x8000);
+        virtual_slot(&mut e, 0x3000, 0x5000, 0x48c, 0x7000);
+        e.register_double(0x7000, |_, args| args[1].into_ret());
+        for (slot, address) in [(0x88, 0x7010), (0x494, 0x7020), (0x310, 0x7030)] {
+            e.mem.set_u32(0x5000 + slot, address);
+            stub(&mut e, address, 0);
+        }
+        stub(&mut e, 0x008d_8520, 0x3000);
+        stub(&mut e, 0x00ad_8ce0, 1);
+        stub(&mut e, 0x0048_3710, 0);
+        stub(&mut e, 0x005d_43c0, 0x6000);
+        stub(&mut e, 0x0042_ed70, 0x7000);
+        stub(&mut e, 0x0057_bd40, 0x9000);
+        stub(&mut e, 0x0057_ad20, 0);
+        stub(&mut e, 0x0042_edb0, 0);
+        stub(&mut e, 0x0057_9200, 1);
+        stub(&mut e, 0x005a_c750, 0);
+        stub(&mut e, 0x0095_3ce0, 0);
+        stub(&mut e, 0x0057_4900, 1);
+        mobile_object_stop_current_dialogue(&mut e, this);
+        assert!(e.get(this, MobileObject::bDoNotRunSayToCallBack));
+        assert_eq!(e.get(this, MobileObject::cSoundCallBackSet), 0xff);
+        assert!(e.get(this, MobileObject::bVoiceFileDone));
+        assert!(e.get(this, MobileObject::bSoundFileDone));
+    }
+
+    #[test]
+    fn say_to_topic_helper_passes_extra_list() {
+        let mut e = Engine::new();
+        let this = Ptr::new(0x1000);
+        stub(&mut e, 0x005d_43c0, 0x2000);
+        e.register_double(0x0042_ed70, |_, args| {
+            assert_eq!(args, &[0x2000]);
+            0x3000u32.into_ret()
+        });
+        assert_eq!(fn_00934430(&mut e, this).addr(), 0x3000);
+    }
+
+    #[test]
+    fn process_request_consumes_three_stack_words() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x1000);
+        e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x3000));
+        virtual_slot(&mut e, 0x3000, 0x5000, 0x230, 0x7000);
+        e.mem.set_u32(0x5000 + 0x244, 0x7010);
+        stub(&mut e, 0x7010, 0);
+        e.register_double(0x7000, |_, args| {
+            assert_eq!(args, &[0x3000, 0x4000, 0x1000]);
+            0u32.into_ret()
+        });
+        fn_00934450(&mut e, this, Ptr::new(0x4000), 0xdead, 0xbeef);
+    }
+
+    #[test]
+    fn current_package_requires_process() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        assert!(mobile_object_get_current_package(&mut e, this).is_null());
+        e.map(0x3000, 0x1000);
+        e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x3000));
+        virtual_slot(&mut e, 0x3000, 0x5000, 0x27c, 0x7000);
+        stub(&mut e, 0x7000, 0x4000);
+        assert_eq!(
+            mobile_object_get_current_package(&mut e, this).addr(),
+            0x4000
+        );
+    }
+
+    #[test]
+    fn dialogue_audio_returns_zero_before_file_creation_when_no_name() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x1000);
+        virtual_slot(&mut e, this.addr(), 0x5000, 0x2d4, 0x7000);
+        e.mem.set_u32(0x5000 + 0x2dc, 0x7010);
+        stub(&mut e, 0x7010, 0);
+        virtual_slot(&mut e, 0x3000, 0x6000, 0x37c, 0x7020);
+        stub(&mut e, 0x0057_4900, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            fn_009344d0(
+                &mut e,
+                this,
+                Ptr::NULL,
+                Ptr::new(0x4000),
+                11,
+                22,
+                5,
+                Ptr::NULL,
+                Ptr::NULL,
+                Ptr::NULL,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+            0.0
+        );
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+
+        stub(&mut e, 0x0057_4900, 1);
+        stub(&mut e, 0x0040_c0e0, 0);
+        stub(&mut e, 0x0040_37d0, 0);
+        stub(&mut e, 0x008d_8520, 0x3000);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            fn_009344d0(
+                &mut e,
+                this,
+                Ptr::NULL,
+                Ptr::new(0x4000),
+                11,
+                22,
+                5,
+                Ptr::NULL,
+                Ptr::NULL,
+                Ptr::NULL,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+            0.0
+        );
+        assert_eq!(
+            e.call_log
+                .unwrap()
+                .iter()
+                .map(|call| call.0)
+                .collect::<Vec<_>>(),
+            vec![
+                0x0057_4900,
+                0x0040_c0e0,
+                0x008d_8520,
+                0x7020,
+                0x7000,
+                0x7010,
+                0x0040_37d0,
+            ]
+        );
+    }
+
+    #[test]
+    fn dialogue_audio_reloads_player_after_distance_callback() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x2000);
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_u32(0x011d_ea3c, this.addr());
+        e.mem.set_u32(0x4300, 100);
+        for (slot, address) in [(0x2d4, 0x7000), (0x2dc, 0x7010)] {
+            virtual_slot(&mut e, this.addr(), 0x5000, slot, address);
+            stub(&mut e, address, 0);
+        }
+        for (slot, address) in [
+            (0x37c, 0x7020),
+            (0x48c, 0x7030),
+            (0x378, 0x7040),
+            (0x370, 0x7050),
+            (0x154, 0x7060),
+        ] {
+            virtual_slot(&mut e, 0x3000, 0x6000, slot, address);
+            stub(&mut e, address, 0);
+        }
+        stub(&mut e, 0x0057_4900, 1);
+        stub(&mut e, 0x008d_8520, 0x3000);
+        stub(&mut e, 0x0040_c0e0, 0);
+        stub(&mut e, 0x0040_37d0, 0);
+        stub(&mut e, 0x0040_6d30, 0);
+        stub(&mut e, 0x00ad_8ce0, 0);
+        stub(&mut e, 0x0048_3710, 0);
+        e.register_double(0x0057_23b0, |_, _| 0.0f64.into_ret());
+        e.register_double(0x0043_d4d0, |e, _| {
+            e.mem.set_u32(0x011d_ea3c, 0x4500);
+            0x4300u32.into_ret()
+        });
+        e.register_double(0x004e_af60, |_, args| {
+            assert_eq!(args, &[0x4500]);
+            0u32.into_ret()
+        });
+        stub(&mut e, 0x004d_5ad0, 1);
+        stub(&mut e, 0x0055_9450, 0x24);
+        stub(&mut e, 0x0090_5f30, 0);
+        assert_eq!(
+            fn_009344d0(
+                &mut e,
+                this,
+                Ptr::new(0x4000),
+                Ptr::new(0x4100),
+                11,
+                22,
+                5,
+                Ptr::NULL,
+                Ptr::NULL,
+                Ptr::NULL,
+                0,
+                0,
+                1,
+                1,
+                0,
+            ),
+            0.0
+        );
+    }
+
+    #[test]
+    fn dialogue_audio_passes_zero_before_copied_handle_to_process() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x2000);
+        e.map(0x8000, 0x1000);
+        e.map(0x0101_7000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_u32(0x011d_ea3c, this.addr());
+        e.mem.set_u32(0x4300, 100);
+        e.mem.set_f32(0x4400, 0.5);
+        e.mem.set_f64(0x0101_7a40, 1.0);
+        for (slot, address) in [
+            (0x2d4, 0x7000),
+            (0x2dc, 0x7010),
+            (0x1b8, 0x7020),
+            (0x1e4, 0x7030),
+        ] {
+            virtual_slot(&mut e, this.addr(), 0x5000, slot, address);
+            stub(&mut e, address, 0);
+        }
+        for (slot, address) in [
+            (0x37c, 0x7040),
+            (0x48c, 0x7050),
+            (0x378, 0x7060),
+            (0x490, 0x7070),
+        ] {
+            virtual_slot(&mut e, 0x3000, 0x6000, slot, address);
+            stub(&mut e, address, 0);
+        }
+        e.register_double(0x7070, |_, args| {
+            assert_eq!(args, &[0x3000, 0, 0x1111, 0x2222, 0x3333]);
+            0u32.into_ret()
+        });
+        for (address, result) in [
+            (0x0057_4900, 1),
+            (0x008d_8520, 0x3000),
+            (0x0040_c0e0, 0),
+            (0x0040_37d0, 0),
+            (0x0040_6d30, 0),
+            (0x00ad_8ce0, 0),
+            (0x0048_3710, 0),
+            (0x0043_d4d0, 0x4300),
+            (0x005e_3fa0, 0),
+            (0x0045_3a70, 0x8000),
+            (0x00ad_7480, 0x8100),
+            (0x00ad_9060, 0x8000),
+            (0x0084_e3a0, 0x77),
+            (0x0055_9450, 0x66),
+            (0x00ad_c050, 0),
+            (0x0040_3e20, 0x4400),
+            (0x00ec_62c0, 10),
+            (0x00ad_89b0, 0),
+            (0x00ad_8870, 0),
+        ] {
+            stub(&mut e, address, result);
+        }
+        e.register_double(0x0057_23b0, |_, _| 200.0f64.into_ret());
+        e.mem.set_u32(0x8100, 0x1111);
+        e.mem.set_u32(0x8104, 0x2222);
+        e.mem.set_u32(0x8108, 0x3333);
+        e.register_double(0x0041_8900, |e, args| {
+            let bytes = e.mem.bytes(args[1], 12);
+            e.mem.write(args[0], &bytes);
+            args[0].into_ret()
+        });
+        assert_eq!(
+            fn_009344d0(
+                &mut e,
+                this,
+                Ptr::new(0x4000),
+                Ptr::new(0x4100),
+                11,
+                22,
+                5,
+                Ptr::NULL,
+                Ptr::NULL,
+                Ptr::NULL,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+            2.5
+        );
+    }
+
+    #[test]
+    fn talking_activator_form_lookup_repeats_on_success() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.set(this, MobileObject::pTalkingActivator, Ptr::new(0x3000));
+        e.register_double(0x007a_f430, |_, args| {
+            assert_eq!(args, &[0x3000]);
+            0x4000u32.into_ret()
+        });
+        stub(&mut e, 0x0051_6bf0, 0);
+        assert_eq!(
+            fn_00934f90(&mut e, this, 0xdead_beef, Ptr::new(0x1800)).addr(),
+            this.addr()
+        );
+        assert_eq!(e.mem.u32(0x1800), this.addr());
+        stub(&mut e, 0x0051_6bf0, 0x5000);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            fn_00934f90(&mut e, this, 0, Ptr::new(0x1800)).addr(),
+            0x5000
+        );
+        assert_eq!(
+            e.call_log
+                .unwrap()
+                .iter()
+                .filter(|call| call.0 == 0x0051_6bf0)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn conversation_package_requires_accepted_target_type() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x3000);
+        let target: Ptr<MobileObject> = Ptr::new(0x3000);
+        e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x4000));
+        e.set(target, MobileObject::pCurrentProcess, Ptr::new(0x5000));
+        stub(&mut e, 0x0045_cd60, 0);
+        stub(&mut e, 0x008d_8520, 0x4000);
+        virtual_slot(&mut e, 0x4000, 0x6000, 0x22c, 0x7000);
+        virtual_slot(&mut e, target.addr(), 0x8000, 0x214, 0x7010);
+        stub(&mut e, 0x7010, 13);
+        e.call_log = Some(vec![]);
+        assert!(!fn_00934fd0(&mut e, this, target, 0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(
+            e.call_log
+                .unwrap()
+                .iter()
+                .filter(|call| call.0 == 0x7010)
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn conversation_package_reloads_player_after_stop_callback() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x3000);
+        e.map(0x011d_e000, 0x1000);
+        let target: Ptr<MobileObject> = Ptr::new(0x3000);
+        e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x4000));
+        e.set(target, MobileObject::pCurrentProcess, Ptr::new(0x5000));
+        e.mem.set_u32(0x011d_ea3c, target.addr());
+        stub(&mut e, 0x0045_cd60, 0);
+        stub(&mut e, 0x008d_8520, 0x4000);
+        stub(&mut e, 0x0057_4900, 1);
+        virtual_slot(&mut e, this.addr(), 0x6000, 0x300, 0x7000);
+        stub(&mut e, 0x7000, this.addr());
+        virtual_slot(&mut e, target.addr(), 0x8000, 0x214, 0x7010);
+        stub(&mut e, 0x7010, 4);
+        virtual_slot(&mut e, 0x4000, 0x9000, 0x22c, 0x7020);
+        e.mem.set_u32(0x9000 + 0x48c, 0x7030);
+        e.mem.set_u32(0x9000 + 0x214, 0x7040);
+        stub(&mut e, 0x7020, 0);
+        stub(&mut e, 0x7030, 0);
+        stub(&mut e, 0x7040, 0);
+        stub(&mut e, 0x0048_3710, 0);
+        e.register_double(0x00ad_8ce0, |e, _| {
+            e.mem.set_u32(0x011d_ea3c, 0x8000);
+            0u32.into_ret()
+        });
+        e.register_double(0x0083_b9a0, |_, args| {
+            assert_eq!(args, &[0]);
+            0u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(!fn_00934fd0(&mut e, this, target, 0, 0, 0, 0, 0, 0, 0, 0));
+        assert!(e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|call| call.0 == 0x0083_b9a0));
+    }
+
+    #[test]
+    fn source_package_stops_before_replacement_without_first_item() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x3000);
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_u32(0x011d_ea3c, 0x6000);
+        e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x4000));
+        virtual_slot(&mut e, 0x4000, 0x7000, 0x22c, 0x8000);
+        for (slot, address) in [(0x128, 0x8010), (0x214, 0x8020), (0x48c, 0x8030)] {
+            e.mem.set_u32(0x7000 + slot, address);
+            stub(&mut e, address, if slot == 0x128 { 0x3000 } else { 0 });
+        }
+        stub(&mut e, 0x008d_8520, 0x4000);
+        stub(&mut e, 0x0040_1000, 0x9000);
+        stub(&mut e, 0x0083_b850, 0xa000);
+        stub(&mut e, 0x0083_b9a0, 0);
+        stub(&mut e, 0x0057_4900, 1);
+        stub(&mut e, 0x00ad_8ce0, 0);
+        stub(&mut e, 0x0048_3710, 0);
+        e.call_log = Some(vec![]);
+        assert!(!fn_00935480(&mut e, this, Ptr::new(0xb000)));
+        let calls = e.call_log.unwrap();
+        assert!(calls.iter().any(|call| call.0 == 0x0083_b9a0));
+        assert!(!calls.iter().any(|call| call.0 == 0x0067_a690));
+    }
+
+    #[test]
+    fn source_package_reloads_process_and_player_after_stop_callback() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x3000);
+        e.map(0x011d_e000, 0x1000);
+        let target: Ptr<MobileObject> = Ptr::new(0x3000);
+        e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x4000));
+        e.mem.set_u32(0x011d_ea3c, target.addr());
+        stub(&mut e, 0x008d_8520, 0x4000);
+        stub(&mut e, 0x0057_4900, 1);
+        virtual_slot(&mut e, 0x4000, 0x6000, 0x22c, 0x7000);
+        e.mem.set_u32(0x6000 + 0x128, 0x7010);
+        e.mem.set_u32(0x6000 + 0x48c, 0x7020);
+        stub(&mut e, 0x7000, 0);
+        stub(&mut e, 0x7010, target.addr());
+        stub(&mut e, 0x7020, 0);
+        virtual_slot(&mut e, 0x4500, 0x8000, 0x214, 0x7030);
+        e.register_double(0x7030, |_, args| {
+            assert_eq!(args, &[0x4500]);
+            0u32.into_ret()
+        });
+        stub(&mut e, 0x0048_3710, 0);
+        e.register_double(0x00ad_8ce0, move |e, _| {
+            e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x4500));
+            e.mem.set_u32(0x011d_ea3c, 0x9000);
+            0u32.into_ret()
+        });
+        e.register_double(0x0083_b9a0, |_, args| {
+            assert_eq!(args, &[0]);
+            0u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(!fn_00935480(&mut e, this, Ptr::new(0xa000)));
+        let log = e.call_log.as_ref().unwrap();
+        assert!(log.iter().any(|call| call.0 == 0x7030));
+        assert!(log.iter().any(|call| call.0 == 0x0083_b9a0));
+    }
+
+    #[test]
+    fn source_package_tests_full_flag_and_reloads_cleanup_and_target_processes() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x3000);
+        e.map(0x011d_e000, 0x1000);
+        let target: Ptr<MobileObject> = Ptr::new(0x3000);
+        e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x4000));
+        e.set(target, MobileObject::pCurrentProcess, Ptr::new(0x4900));
+        e.mem.set_u32(0x011d_ea3c, target.addr());
+        virtual_slot(&mut e, this.addr(), 0x8000, 0x2f4, 0xd000);
+        virtual_slot(&mut e, target.addr(), 0x9000, 0x2f4, 0xd010);
+        stub(&mut e, 0xd000, 0);
+        stub(&mut e, 0xd010, 0);
+        for process in [0x4000, 0x4500, 0x4600, 0x4700, 0x4800, 0x4a00] {
+            e.mem.set_u32(process, 0xa000);
+        }
+        e.map(0xa000, 0x1000);
+        for (slot, address, result) in [
+            (0x22c, 0xd020, 0),
+            (0x128, 0xd030, target.addr()),
+            (0x48c, 0xd040, 0),
+            (0x214, 0xd090, 0),
+            (0x28, 0xd050, 0),
+            (0x27c, 0xd060, 0x5000),
+            (0x710, 0xd070, 0),
+            (0x12c, 0xd080, 0),
+        ] {
+            e.mem.set_u32(0xa000 + slot, address);
+            stub(&mut e, address, result);
+        }
+        e.register_double(0xd070, |_, args| {
+            assert_eq!(args, &[0x4800, 0x3000]);
+            0u32.into_ret()
+        });
+        e.register_double(0xd080, move |e, args| {
+            assert_eq!(args[1], target.addr());
+            if args[0] == 0x4500 {
+                e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x4600));
+            } else {
+                assert_eq!(args[0], 0x4a00);
+            }
+            0u32.into_ret()
+        });
+        let mut target_gets = 0;
+        e.register_double(0x008d_8520, move |_, args| {
+            if args[0] == this.addr() {
+                0x4000u32.into_ret()
+            } else {
+                assert_eq!(args, &[target.addr()]);
+                target_gets += 1;
+                (if target_gets == 1 {
+                    0x4800u32
+                } else {
+                    0x4a00u32
+                })
+                .into_ret()
+            }
+        });
+        stub(&mut e, 0x0057_4900, 1);
+        stub(&mut e, 0x00ad_8ce0, 0);
+        e.register_double(0x0048_3710, move |e, args| {
+            if args[0] == 0x4600 {
+                e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x4700));
+            } else if args[0] == 0x4700 {
+                e.mem.set_u32(0x011d_ea3c, 0xb000);
+            }
+            0u32.into_ret()
+        });
+        stub(&mut e, 0x0067_a690, 1);
+        stub(&mut e, 0x0040_1000, 0x5000);
+        stub(&mut e, 0x005f_36f0, 0x100);
+        e.register_double(0x009e_dd80, |_, args| {
+            assert_eq!(args, &[0x5000, 0, 0x1000, 0x3000, 0, 0, 0]);
+            0x5000u32.into_ret()
+        });
+        for address in [
+            0x0067_a1b0,
+            0x0067_0fc0,
+            0x008b_1ff0,
+            0x0082_6b40,
+            0x0067_efd0,
+            0x0082_6b90,
+            0x0055_b980,
+            0x0067_1d30,
+            0x0067_2dd0,
+            0x0067_1e10,
+            0x0067_1d10,
+            0x0067_2fc0,
+            0x0098_4f60,
+        ] {
+            stub(&mut e, address, 0);
+        }
+        e.register_double(0x0057_bd60, move |e, args| {
+            if args == [this.addr(), target.addr()] {
+                e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x4500));
+            } else {
+                assert_eq!(args, &[target.addr(), this.addr()]);
+            }
+            0u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert!(fn_00935480(&mut e, this, Ptr::new(0xb000)));
+        let log = e.call_log.unwrap();
+        let cleanup: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == 0x0048_3710 && [0x4600, 0x4700].contains(&call.1[0]))
+            .map(|call| call.1[0])
+            .collect();
+        assert_eq!(cleanup, [0x4600, 0x4700]);
+        assert_eq!(
+            log.iter()
+                .filter(|call| call.0 == 0x008d_8520 && call.1[0] == target.addr())
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn distance_probe_flattens_vertical_band_and_adds_margin() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x2000);
+        e.map(0x0101_d000, 0x2000);
+        e.mem.set_f64(0x0101_db88, 30.0);
+        e.mem.set_f32(0x0101_e704, 128.0);
+        e.mem.set_f32(0x0101_e340, 32.0);
+        e.mem.set_f32(0x3008, 100.0);
+        e.mem.set_f32(0x4008, 80.0);
+        virtual_slot(&mut e, this.addr(), 0x5000, 0x1f4, 0x7000);
+        stub(&mut e, 0x7000, 0x3000);
+        e.register_double(0x0043_9ef0, |e, args| {
+            assert_eq!(args[2], 0x4000);
+            e.mem.set_f32(args[1] + 8, 5.0);
+            args[1].into_ret()
+        });
+        e.register_double(0x004b_5470, |e, args| {
+            assert_eq!(args[1], 42.0f32.to_bits());
+            let expected = if e.mem.f32(0x4008) < 200.0 { 0.0 } else { 5.0 };
+            assert_eq!(e.mem.f32(args[0] + 8), expected);
+            0u32.into_ret()
+        });
+        assert!(fn_00935820(&mut e, this, Ptr::new(0x4000), 10.0, 1, 0));
+        e.mem.set_f32(0x4008, 300.0);
+        assert!(fn_00935820(&mut e, this, Ptr::new(0x4000), 10.0, 1, 0));
+        e.register_double(0x004b_5470, |_, args| {
+            assert_eq!(args[1], 0x7fc0_0001);
+            0u32.into_ret()
+        });
+        assert!(fn_00935820(
+            &mut e,
+            this,
+            Ptr::new(0x4000),
+            f32::from_bits(0x7f80_0001),
+            0,
+            0,
+        ));
+    }
+
+    #[test]
+    fn current_process_target_wrapper_preserves_eax() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x1000);
+        e.set(this, MobileObject::pCurrentProcess, Ptr::new(0x3000));
+        virtual_slot(&mut e, 0x3000, 0x5000, 0x128, 0x7000);
+        stub(&mut e, 0x7000, 0x4000);
+        assert_eq!(fn_009358f0(&mut e, this).addr(), 0x4000);
+    }
+
+    #[test]
+    fn extra_record_constructor_preserves_words_and_quiets_nan() {
+        let mut e = Engine::new();
+        e.map(0x3000, 0x1000);
+        let pointer: Ptr = Ptr::new(0x3000);
+        assert_eq!(
+            fn_00935a10(&mut e, pointer, 0x1234, 0x5678, f32::from_bits(0x7f80_0001)),
+            pointer
+        );
+        assert_eq!(e.mem.u32(0x3000), 0x1234);
+        assert_eq!(e.mem.u32(0x3004), 0x5678);
+        assert_eq!(e.mem.u32(0x3008), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn extra_record_uses_signed_global_byte_and_sets_flag() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x1000);
+        e.map(0x011a_3000, 0x1000);
+        e.map(0x011e_0000, 0x1000);
+        e.mem.set_u32(0x011a_39c4, 1);
+        e.mem.set_u32(0x011e_035c, 2);
+        e.mem.set_u8(0x011e_0360, 0xff);
+        e.mem.set_f32(0x011e_0358, 0.75);
+        stub(&mut e, 0x0040_1000, 0x3000);
+        stub(&mut e, 0x0057_4900, 0);
+        stub(&mut e, 0x005d_43c0, 0x4000);
+        e.register_double(0x0042_ef20, |_, args| {
+            assert_eq!(args, &[0x4000, 0x3000]);
+            0u32.into_ret()
+        });
+        virtual_slot(&mut e, this.addr(), 0x5000, 0x48, 0x7000);
+        e.register_double(0x7000, |_, args| {
+            assert_eq!(args, &[0x1000, 0x8000_0000]);
+            0u32.into_ret()
+        });
+        fn_00935920(&mut e, this, 0x1234);
+        assert_eq!(e.mem.u32(0x3000), 0x1234);
+        assert_eq!(e.mem.u32(0x3004), 0xffff_ffff);
+        assert_eq!(e.mem.f32(0x3008), 0.75);
+    }
+
+    #[test]
+    fn extra_list_search_checks_payload_and_ends_at_null_next() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x3000);
+        e.mem.set_u32(0x300c, 0x4000);
+        e.mem.set_u32(0x5000, 0x5100);
+        e.mem.set_u32(0x5100, 0x42);
+        stub(&mut e, 0x0057_4900, 0);
+        stub(&mut e, 0x005d_43c0, 0x3200);
+        stub(&mut e, 0x0042_efe0, 0x3000);
+        stub(&mut e, 0x0068_15c0, 0x5000);
+        stub(&mut e, 0x0072_6070, 0);
+        assert!(fn_00935a40(&mut e, this, 0x42));
+        assert!(!fn_00935a40(&mut e, this, 0x43));
+    }
+
+    #[test]
+    fn extra_record_expiry_removes_and_frees_only_expired_payloads() {
+        for (fraction, expect_remove) in [(0.8f32, true), (0.1f32, false)] {
+            let mut e = Engine::new();
+            let this = mapped(&mut e);
+            e.map(0x3000, 0x3000);
+            e.map(0x011a_3000, 0x1000);
+            e.map(0x011e_0000, 0x1000);
+            e.mem.set_u32(0x300c, 0x4000);
+            e.mem.set_u32(0x5000, 0x5100);
+            e.mem.set_u32(0x5104, 1 | (1 << 9) | (1 << 13));
+            e.mem.set_f32(0x5108, fraction);
+            e.mem.set_f32(0x5200, 0.2);
+            e.mem.set_u32(0x011a_39c4, 1);
+            e.mem.set_u8(0x011e_0360, 1);
+            e.mem.set_u32(0x011e_035c, 1);
+            e.mem.set_f32(0x011e_0358, 0.5);
+            stub(&mut e, 0x0057_4900, 0);
+            stub(&mut e, 0x005d_43c0, 0x3200);
+            stub(&mut e, 0x0042_efe0, 0x3000);
+            stub(&mut e, 0x0068_15c0, 0x5000);
+            e.register_double(0x0040_3e20, |_, args| {
+                assert_eq!(args, &[0x011d_0af0]);
+                0x5200u32.into_ret()
+            });
+            e.register_double(0x0090_5330, |e, args| {
+                assert_eq!(args[0], 0x4000);
+                assert_eq!(e.mem.u32(args[1]), 0x5100);
+                e.mem.set_u32(0x300c, 0);
+                0u32.into_ret()
+            });
+            e.register_double(0x0040_1030, |_, args| {
+                assert_eq!(args, &[0x5100]);
+                0u32.into_ret()
+            });
+            stub(&mut e, 0x0072_6070, 0);
+            e.call_log = Some(vec![]);
+            fn_00935ae0(&mut e, this);
+            let log = e.call_log.unwrap();
+            assert_eq!(log.iter().any(|call| call.0 == 0x0090_5330), expect_remove);
+            assert_eq!(log.iter().any(|call| call.0 == 0x0040_1030), expect_remove);
+        }
+    }
+
+    #[test]
+    fn resolved_actor_updates_package_from_live_flag_after_callback() {
+        for (clear_flag, expected) in [(false, 0.3f32), (true, 20.0f32)] {
+            let mut e = Engine::new();
+            e.map(0x3000, 0x3000);
+            e.map(0x0101_7000, 0x1000);
+            e.mem.set_f32(0x0101_7870, 0.3);
+            e.mem.set_f32(0x0101_7868, 20.0);
+            let actor: Ptr<MobileObject> = Ptr::new(0x3000);
+            e.set(actor, MobileObject::pCurrentProcess, Ptr::new(0x4000));
+            e.mem.set_u8(0x307d, 1);
+            stub(&mut e, 0x0048_39c0, 0x3000);
+            virtual_slot(&mut e, 0x3000, 0x7000, 0xfc, 0x9000);
+            stub(&mut e, 0x9000, 1);
+            virtual_slot(&mut e, 0x4000, 0x8000, 0x27c, 0x9010);
+            e.register_double(0x9010, move |e, _| {
+                if clear_flag {
+                    e.mem.set_u8(0x307f, 0);
+                }
+                0x5000u32.into_ret()
+            });
+            stub(&mut e, 0x0041_ca90, 0x1c);
+            fn_00935cc0(&mut e, 0x1234);
+            assert_eq!(e.mem.u8(0x307c), 1);
+            assert_eq!(e.mem.f32(0x5090), expected);
+        }
+    }
+
+    #[test]
+    fn shared_actor_clear_restores_setting_and_clears_global() {
+        let mut e = Engine::new();
+        e.map(0x3000, 0x1000);
+        e.map(0x5000, 0x1000);
+        e.map(0x011d_9000, 0x1000);
+        e.map(0x011e_0000, 0x1000);
+        e.mem.set_u32(0x011e_0548, 0x3000);
+        e.mem.set_u32(0x5000, 0x7f80_0001);
+        stub(&mut e, 0x0048_39c0, 0x3000);
+        virtual_slot(&mut e, 0x3000, 0x6000, 0xfc, 0x7000);
+        stub(&mut e, 0x7000, 1);
+        stub(&mut e, 0x0057_4900, 0);
+        e.register_double(0x0040_3e20, |_, args| {
+            assert_eq!(args, &[0x011d_32c4]);
+            0x5000u32.into_ret()
+        });
+        fn_00935d90(&mut e, 0x1234, 0);
+        assert_eq!(e.mem.u8(0x307d), 0);
+        assert_eq!(e.mem.u8(0x307c), 1);
+        assert_eq!(e.mem.u32(0x011d_951c), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(0x011e_0548), 0);
+    }
+
+    #[test]
+    fn shared_controller_pointer_reads_fixed_global() {
+        let mut e = Engine::new();
+        e.map(0x011c_6000, 0x1000);
+        e.mem.set_u32(0x011c_6268, 0x1234_5678);
+        assert_eq!(fn_00935ef0(&mut e), 0x1234_5678);
+    }
+
+    #[test]
+    fn resolved_actor_invokes_three_mode_only_after_virtual_check() {
+        let mut e = Engine::new();
+        e.map(0x3000, 0x1000);
+        stub(&mut e, 0x0048_39c0, 0x3000);
+        virtual_slot(&mut e, 0x3000, 0x5000, 0xfc, 0x7000);
+        stub(&mut e, 0x7000, 0);
+        e.register_double(0x004b_c4a0, |_, args| {
+            assert_eq!(args, &[0x3000, 3]);
+            0u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        fn_00935f00(&mut e, 0x1234);
+        assert!(!e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|call| call.0 == 0x004b_c4a0));
+        stub(&mut e, 0x7000, 1);
+        fn_00935f00(&mut e, 0x1234);
+        assert!(e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|call| call.0 == 0x004b_c4a0));
     }
 }

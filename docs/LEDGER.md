@@ -30,14 +30,14 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 11044 | 16.7% |
-| traced | 4331 | 6.5% |
-| platform | 3417 | 5.2% |
+| translated | 11067 | 16.7% |
+| traced | 4320 | 6.5% |
+| platform | 3416 | 5.2% |
 | library | 21913 | 33.1% |
-| open | 25554 | 38.6% |
+| open | 25543 | 38.6% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **77** engine functions
+Translation totals count markers, not complete behavior. **84** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -76,10 +76,11 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `006ec4b0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1377` |
 | `006ec660` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1422` |
 | `006ec870` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1492` |
-| `007738c0` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:2293` |
-| `00774b00` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:2419` |
-| `00774fd0` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:2550` |
-| `00775380` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:2709` |
+| `007738c0` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:2383` |
+| `00774b00` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:2509` |
+| `00774fd0` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:2640` |
+| `00775380` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:2799` |
+| `00775a00` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:3701, crates/engine/src/units/fallout_interface/hudmainmenu.rs:4202, crates/engine/src/units/fallout_interface/hudmainmenu.rs:4237, crates/engine/src/units/fallout_interface/hudmainmenu.rs:4242` |
 | `00846b60` | `crates/engine/src/units/fallout_misc/run_00846b60.rs:16` |
 | `008643b0` | `crates/engine/src/units/fallout_misc/bgsloadformbuffer.rs:20` |
 | `008659c0` | `crates/engine/src/units/fallout_misc/bgssaveformbuffer.rs:17` |
@@ -95,13 +96,19 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `008ca070` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1562` |
 | `008ca350` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1571` |
 | `008ca480` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1782` |
-| `0092ec40` | `crates/engine/src/units/fallout_ai/mobileobject.rs:259` |
-| `009319c0` | `crates/engine/src/units/fallout_ai/mobileobject.rs:1584` |
-| `009320e0` | `crates/engine/src/units/fallout_ai/mobileobject.rs:1817` |
-| `00932b70` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2094` |
-| `00933010` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2254` |
-| `00933150` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2289` |
-| `00933270` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2325` |
+| `0092ec40` | `crates/engine/src/units/fallout_ai/mobileobject.rs:319` |
+| `009319c0` | `crates/engine/src/units/fallout_ai/mobileobject.rs:1644` |
+| `009320e0` | `crates/engine/src/units/fallout_ai/mobileobject.rs:1877` |
+| `00932b70` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2154` |
+| `00933010` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2314` |
+| `00933150` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2349` |
+| `00933270` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2385` |
+| `009339a0` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2634` |
+| `00934250` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2893` |
+| `009344d0` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2975` |
+| `00934fd0` | `crates/engine/src/units/fallout_ai/mobileobject.rs:3247` |
+| `00935480` | `crates/engine/src/units/fallout_ai/mobileobject.rs:3380` |
+| `00935920` | `crates/engine/src/units/fallout_ai/mobileobject.rs:3526` |
 | `009abf30` | `crates/engine/src/units/fallout_ai/explosion.rs:1256` |
 | `009ac200` | `crates/engine/src/units/fallout_ai/explosion.rs:1646` |
 | `009ac5a0` | `crates/engine/src/units/fallout_ai/explosion.rs:189` |
@@ -120,9 +127,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `009b2cb0` | `crates/engine/src/units/fallout_ai/explosion.rs:2565` |
 | `009b2d30` | `crates/engine/src/units/fallout_ai/explosion.rs:2579` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14966 (36.9%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14977 (37.0%) are translated or traced.
 
-Rust cites 16038 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 16056 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -155,9 +162,9 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 65 | 0 | 21269 | 0 | - |
 | fallout shared | 10470 | 2065 | 3149 | 6380 | 956 | 0 | 0 | 3134 | 70.1% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
-| fallout/ai | 4849 | 1475 | 1888 | 2314 | 572 | 0 | 0 | 1963 | 59.5% |
-| fallout/interface | 2645 | 991 | 1247 | 630 | 724 | 0 | 0 | 1291 | 51.2% |
-| (unplaced) | 2353 | 470 | 0 | 39 | 408 | 1 | 0 | 1905 | 19.0% |
+| fallout/ai | 4849 | 1475 | 1888 | 2334 | 562 | 0 | 0 | 1953 | 59.7% |
+| fallout/interface | 2645 | 991 | 1247 | 631 | 723 | 0 | 0 | 1291 | 51.2% |
+| (unplaced) | 2353 | 470 | 0 | 40 | 408 | 1 | 0 | 1904 | 19.0% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 711 | 173 | 0 | 0 | 904 | 49.4% |
 | NiMain | 1619 | 261 | 1134 | 3 | 76 | 0 | 0 | 1540 | 4.9% |
 | BSHavok | 1615 | 316 | 1134 | 59 | 134 | 0 | 0 | 1422 | 12.0% |
@@ -165,7 +172,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | NiAnimation | 1279 | 171 | 903 | 0 | 32 | 0 | 0 | 1247 | 2.5% |
 | fallout/misc | 1045 | 171 | 353 | 460 | 122 | 0 | 0 | 463 | 55.7% |
 | BSMain | 991 | 192 | 478 | 43 | 68 | 0 | 0 | 880 | 11.2% |
-| NiXenonRenderer | 965 | 172 | 298 | 0 | 5 | 960 | 0 | 0 | - |
+| NiXenonRenderer | 965 | 172 | 298 | 1 | 5 | 959 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 112 | 620 | 0 | 0 | - |
 | fallout/magic | 705 | 162 | 378 | 7 | 69 | 0 | 0 | 629 | 10.8% |
 | LIBCMT | 682 | 124 | 503 | 0 | 23 | 31 | 628 | 0 | - |
@@ -213,7 +220,7 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 101 | 30 | 3 | 0 | 9 |
 | 2 | 1575 | 583 | 1121 | 331 | 24 | 4 | 95 |
-| 3 | 4973 | 1303 | 3549 | 941 | 154 | 26 | 303 |
+| 3 | 4973 | 1303 | 3560 | 939 | 148 | 26 | 300 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
