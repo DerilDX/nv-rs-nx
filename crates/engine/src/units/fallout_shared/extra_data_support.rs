@@ -21,6 +21,13 @@ pub fn construct(e: &mut Engine, this: Ptr<BSExtraData>, kind: u8) -> Ptr<BSExtr
     this
 }
 
+// Translated from 0040ecb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSExtraData` (Xbox PDB) base destructor only restores the base vtable.
+/// It does not release memory or change the type, link or subclass payload.
+pub fn destruct(e: &mut Engine, this: Ptr<BSExtraData>) {
+    e.mem.set_u32(this.addr(), BASE_VTABLE);
+}
+
 // Translated from 004f1540 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Reads `BSExtraData::cEtype` (Xbox PDB). Only AL is a return value.
 pub fn kind(e: &mut Engine, this: Ptr<BSExtraData>) -> u8 {
@@ -46,6 +53,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             construct(Ptr<BSExtraData>, u8) -> Ptr<BSExtraData>
         ),
         entry!(0x004f1540, kind(Ptr<BSExtraData>) -> u8),
+        entry!(0x0040ecb0, destruct(Ptr<BSExtraData>)),
         entry!(0x00403550, set_next(Ptr<BSExtraData>, Ptr<BSExtraData>)),
         entry!(0x0040fc90, current_thread_id() -> u32),
     ]
@@ -59,6 +67,17 @@ mod tests {
     // 19406942e48724d797300c4ea6be9ac69a32f670b8c35db09279a2258422739f,
     // AMD Ryzen AI 9 HX 370, FCW 027F / MXCSR 1F80. Guard/padding bytes
     // are generated sentinels, not bytes copied from the executable.
+    #[test]
+    fn destructor_native_vector_changes_only_the_vtable() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(16);
+        e.mem.write(object, &[0xaa; 16]);
+        e.call(0x0040ecb0, &[object]);
+        let mut expected = [0xaa; 16];
+        expected[..4].copy_from_slice(&BASE_VTABLE.to_le_bytes());
+        assert_eq!(e.mem.bytes(object, 16), expected);
+    }
+
     #[test]
     fn constructor_native_vectors_preserve_padding_and_truncate_type_word() {
         let mut e = Engine::new();

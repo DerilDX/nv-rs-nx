@@ -49,6 +49,20 @@ impl ExtraList {
         self.len(engine) == 0
     }
 
+    /// Reads the signed item count (`00418770`), defaulting to 1 when
+    /// there is no `ExtraCount` (Xbox PDB). This differs from `len`, which
+    /// counts extra-data nodes rather than items in a stack.
+    pub fn item_count(self, engine: &mut Engine) -> i16 {
+        engine.call(0x0041_8770, &[self.0.addr()]).u16() as i16
+    }
+
+    /// Runs `ExtraDataList::SetCount` (Xbox PDB, `00419ad0`). Counts 0 and
+    /// 1 remove and destroy an existing count node; a subsequent read is 1.
+    /// Other signed values create or update the native 16-bit payload.
+    pub fn set_item_count(self, engine: &mut Engine, count: i16) {
+        engine.call(0x0041_9ad0, &[self.0.addr(), count as u16 as u32]);
+    }
+
     /// Tests the native 21-byte presence bitmap (`0040fe80`).
     pub fn has(self, engine: &mut Engine, kind: u8) -> bool {
         engine
@@ -126,6 +140,49 @@ mod tests {
 
     fn next(engine: &Engine, node: Ptr<BSExtraData>) -> Ptr<BSExtraData> {
         Ptr::new(engine.mem.u32(node.addr() + 8))
+    }
+
+    #[test]
+    fn real_count_lifecycle_preserves_signed_payload_and_other_nodes() {
+        let mut engine = engine();
+        // PC ExtraCount vtable +0: scalar deleting destructor 0041b680.
+        // Generated fixture contains only the slot this lifecycle needs.
+        engine.map(0x0101_5000, 0x1000);
+        engine.mem.set_u32(0x0101_58d8, 0x0041_b680);
+        let list = ExtraList::new(&mut engine);
+        assert_eq!(list.item_count(&mut engine), 1);
+        for default in [0, 1] {
+            list.set_item_count(&mut engine, default);
+            assert!(list.is_empty(&mut engine));
+            assert_eq!(list.item_count(&mut engine), 1);
+        }
+        let other = node(&mut engine, 0x43);
+        list.add(&mut engine, other);
+        for count in [2, 5, -2, i16::MIN, i16::MAX] {
+            let before = list.get(&mut engine, 0x24);
+            list.set_item_count(&mut engine, count);
+            assert_eq!(list.item_count(&mut engine), count);
+            assert_eq!(list.len(&mut engine), 2);
+            if let Some(before) = before {
+                assert_eq!(list.get(&mut engine, 0x24), Some(before));
+            }
+        }
+        for default in [0, 1] {
+            list.set_item_count(&mut engine, 7);
+            assert!(list.has(&mut engine, 0x24));
+            let removed = list.get(&mut engine, 0x24).unwrap();
+            assert_eq!(engine.mem.block_size(removed.addr()), Some(16));
+            list.set_item_count(&mut engine, default);
+            assert_eq!(engine.mem.block_size(removed.addr()), None);
+            assert_eq!(list.item_count(&mut engine), 1);
+            assert!(!list.has(&mut engine, 0x24));
+            assert!(list.get(&mut engine, 0x24).is_none());
+            assert_eq!(list.len(&mut engine), 1);
+            assert_eq!(list.get(&mut engine, 0x43), Some(other));
+            assert!(next(&engine, other).is_null());
+        }
+        assert_eq!(engine.mem.u32(0x011c_3920), 0);
+        assert_eq!(engine.mem.u32(0x011c_3924), 0);
     }
 
     #[test]

@@ -118,6 +118,15 @@ gaps), with 13,438 combined engine tests passing before the PR 7 rebase.
 The list adapter passed its initial full checks and is rebased for another
 combined check. Next action: verify and publish play build 40.
 
+Phase 2 count dependency, 2026-10-10: list adapter #115 is merged.
+The missing base destructor now matches a generated native sentinel case.
+Count creation, signed updates and removal pass through the real registry.
+A read-only Doc Mitchell save probe checked 14 count payloads across 3,319
+extra lists, with its source hash unchanged. Local core checks and release
+validation pass, including the unchanged count source in the health
+follow-on. This is count-only adaptation, not a save round trip. Next
+action: merge after CI; details in [ENGINE_STATE.md](ENGINE_STATE.md).
+
 2026-10-10, first Phase 2 list boundary: an explicit engine-owned list
 handle delegates to translated PC functions, with four missing helpers
 closed. Generated integration tests and an installed-executable probe
