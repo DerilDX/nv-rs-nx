@@ -33,6 +33,30 @@ reading do not establish them.
 
 ## Active work: M1
 
+Init3D collected as `407caf3`: 13,824 combined engine tests, strict lint
+and formatting pass; SEH cleanup remains explicit. Fresh a04 immediately
+starts the next explosion routine while a01 validates MobileObject.
+Root's inventory form-ID/map follow-on is prepared with seven native
+vectors and static review, but has not compiled. Next action: collect
+MobileObject and the animation loader, then validate the inventory probe.
+
+Save-buffer #125 is open at `7c58130`: all 15,641 core tests, strict lint,
+formatting and release/debug builds pass. The real-registry count/health
+writer produces a payload that the FOS decoder reads back correctly; a
+full save round trip and viewer integration remain open. a04 Init3D now
+validates; a01 and the reviewed animation loader wait for the compiler.
+Build 40 remains current. Next action: collect these batches and trace
+per-stack state ownership before adding a world consumer.
+
+Reference #122 and rolling #123 passed both checks and merged as `6bea9a1`
+and `8b5eebe`. Loaded-area bounds are published in rolling #124 with fresh
+CI. Animation collection `6dbf98f` passes 13,820 combined engine tests,
+strict lint and formatting; 37 functions are complete, two retain SEH
+partials and `005f3a20` remains open. A fresh worker started that routine.
+Root now validates the buffered count/health writer and payload-decoder
+probe. Build 40 remains the play version. Next action: finish that bounded
+probe while the other slots continue, then collect the prepared Init3D batch.
+
 Loaded-area bounds collected as `86886d9`: 29 complete functions and three
 explicit exception-cleanup partials; 13,790 combined engine tests, strict
 lint and formatting pass. A fresh MobileObject worker started immediately.

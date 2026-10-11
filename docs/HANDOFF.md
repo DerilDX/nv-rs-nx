@@ -13,22 +13,39 @@ then immediately start a fresh agent on its new task. Never reset or cycle
 a slot with unfinished work. Ship rolling PRs once both current-head checks
 pass. The saved 98% usage stop/handoff rule still applies.
 
-Rolling #121 passed both checks and merged as `eda98da`. The lead branch
-`claude/engine-crate` is rebased onto it. Rolling PR #123 is open at
-`f963f09`: multibound `feac2df` and Explosion Initialize `e4de812` pass
-13,756 combined engine tests, lint and formatting. Three multibound SEH
-partials and Initialize's SEH partial remain explicit. Inspect the attached
-rolling PR; retain later local commits behind its head. Loaded-area
-collection `86886d9` is held locally behind #123 and passes 13,790 combined
-engine tests, strict lint and formatting.
+Save-buffer PR #125 is open/attached at `7c58130`, based on merged #123.
+Its 18 dependencies pass 15,641 core tests (13,788 engine), strict workspace
+lint, formatting, release and debug builds. The real-registry probe writes
+count 5 / health 42.5 and the FOS payload decoder reads exactly both back.
+It uses the executable's flag table, a generated mode receiver and partial
+allocator startup; no game-function doubles, FOS file or full round trip.
+Private evidence is in `phase0/codex-audit/save-buffer-probe-result.txt`.
+Root session `37952` finished. Init3D source `d4fabeb` collected as
+`407caf3`: 107 focused / 13,760 source / 13,824 combined engine tests,
+49 hygiene tests, strict lint and formatting pass. Cycle04 session
+`77634` completed and fresh `/root/a04_round12` immediately started
+`009ae6e0`. a01 now owns the compiler; then cycle01, a03/cycle03, root.
+Start fresh workers after each cycle.
+
+Reference #122 and rolling #123 passed both checks and merged as `6bea9a1`
+and `8b5eebe`. Rolling #124 is open/attached at `9c519be`, containing loaded
+area bounds (`e61c6a9`, formerly `86886d9`): 13,790 combined engine tests,
+strict lint and formatting passed before rebasing. Fresh core/viewer CI
+gates this head. Later animation collection `6dbf98f` stays local behind it
+and passes 13,820 combined engine tests, strict lint and formatting.
 Merged rolling PRs: #109 `b995218`, #112 `d854fbe`, #114 `89e1a0b`,
-#116 `c23f744`, #119 `951c0c7`, #120 `3a92d0a`, #121 `eda98da`.
+#116 `c23f744`, #119 `951c0c7`, #120 `3a92d0a`, #121 `eda98da`,
+#123 `8b5eebe`.
 Leave unrelated contributor PRs alone.
 
 Slot state:
 
 - a01 `/root/a01_mobileobject`, `agent-01`: fresh b0155 worker owns
-  `fallout_ai/mobileobject.rs`, researching/editing with compiler held.
+  `fallout_ai/mobileobject.rs`, 34 functions/tests prepared with compiler held.
+  Six larger bodies remain open: `0092ec40`, `0092ed60`, `0092f260`,
+  `009308f0`, `00930c70`, `00931710`. Reviews corrected getter results,
+  callback field reloads, a spurious vcall argument and x87 quieting;
+  eligible cleanup and controller show/hide tests were added.
   LoadedAreaBound source `44c5bda` was collected as `86886d9`: 29 complete,
   three SEH partials, 34 focused / 13,758 source engine / 49 hygiene tests,
   strict lint and formatting pass. Reviewed argument arity, callback
@@ -39,7 +56,7 @@ Slot state:
   tests, lint and formatting; the source also passed 49 hygiene tests.
   Exactly three NavMesh SEH partials remain: `006987d0`, `00699b60`,
   `006bd040`. Reviewed partial-only advancement retains them in the ledger.
-- a04 `/root/a04_round11`, `agent-04`: fresh worker after cycle04 collected
+- a04 `/root/a04_round12`, `agent-04`: fresh worker after cycle04 collected
   `d781c3b`. `009ae280` and `009b2940` normal paths remain SEH-partial;
   98 focused and 13,722 combined engine tests, lint and formatting pass.
   The source commit also passed 49 hygiene tests. Five larger paths remain
@@ -48,22 +65,29 @@ Slot state:
   tests, 13,727 source engine tests, strict lint/fmt and 49 hygiene pass.
   Argument order, callback reloads, impact-object naming and x87 stores
   were reviewed against the PC instructions. It remains SEH partial.
-  The fresh worker prepared `009ad670` with four tests; the other three bodies remain
-  untouched. Later-address evidence is in
+  `009ad670` is now collected as `407caf3` with four tests; its fresh
+  worker starts `009ae6e0` with the compiler held. `009b00a0` and
+  `009b1810` remain untouched. Later-address evidence is in
   private `agents/scratch/a04/round9-009b1810-handoff.md`. Research/editing
   only until the compiler grant. Root PC review caught action-record
   offsets and CString argument arity; both are corrected, and x87 stores
   now have signaling-NaN coverage. The draft adds a fifteenth SEH partial.
-  Worker is also reviewing root save-buffer code read-only while held.
-- a03 `/root/a03_animgroup`, `agent-03`: fresh b0041 worker owns
-  `fallout_shared/tesanimgroup.rs` (40 functions), validating with the
-  exclusive compiler after cycle01 released it.
+  Prior worker reviewed root save-buffer code read-only with no further issue.
+- a03 `/root/a03_loadanimgroup`, `agent-03`: fresh b0041 worker owns
+  `fallout_shared/tesanimgroup.rs`, continuing the full `005f3a20` normal
+  path with compiler held. Five new bodies and 14 tests are prepared;
+  static checks pass (15 new tests, 28 total in the file). Peer review corrected note-getter callback reloads,
+  empty-note log arity, sound error scanning and tail diagnostic reloads.
+  The file has 41 complete bodies and three SEH partials including the
+  loader; runtime checks remain queued. Its predecessor committed `f85e4d8` and cycle03
+  collected `6dbf98f`: focused 13 / full 13,764 / hygiene 49 pass, strict
+  lint/fmt pass. Seven queue entries remain, including two SEH partials.
   37 complete bodies and two SEH partials are registered. `005f3a20` remains
   unregistered/open; its full normal path is unfinished, with private
   `scratch/a03/005f3a20-handoff.md` for the next cycle. Reviews corrected
   array callback reloads, table stride, an erroneous constructor cleanup
   call, x87 stores and filename-parser callback ordering. Thirteen native
-  leaf vectors passed; Rust tests are still uncompiled.
+  leaf vectors passed; every registered address has test coverage.
   cycle03 collected all 30 multibound entries as `20c6123`; source
   `0947e87` passed 27 focused / 13,744 engine / 49 hygiene tests, strict
   lint and formatting. Combined lead tests pass 13,751. Seven generated
@@ -82,14 +106,21 @@ Lead Phase 2 work:
   payload probe checks 20 health and 14 count values across 3,319 lists /
   3,365 forms with the source unchanged. This is not a save round trip.
 - Managed checkout `%USERPROFILE%/.codex/worktrees/phase2-extra-data/wt-phase0`
-  now uses follow-on branch `codex/phase2-extra-save-buffer`.
-  PR #122 (`codex/phase2-reference-state`) is open and attached, rebased
-  onto #121 as `8e11001`, with fresh CI. Its ten form helpers,
+  now uses follow-on branch `codex/phase2-inventory-payload`, based on #125.
+  The checked save-buffer branch remains pushed separately at `7c58130`.
+  Inventory follow-on has 15 new helpers and 14 tests prepared but
+  uncompiled: form-ID encoding, bidirectional maps, constructors and
+  callback allocation/release. Root owns its twelve unit files; no other
+  agent may edit them. `git status` lists the exact files. Seven native
+  generated vectors pass (created-ID decoding and key equality), and
+  independent static review found no concrete mismatch. No world changes.
+  PR #122 (`codex/phase2-reference-state`) merged as `6bea9a1` after both
+  checks passed on head `8e11001`. Its ten form helpers,
   nine allocator/counter helpers, form callback-reload corrections and the
   new Reference adapter pass 15,587 core tests (13,734 engine), workspace
   clippy with warnings denied, formatting, release and debug builds.
   Native spot checks: five header, two zero-capacity array and three
-  allocator-header vectors. Core/viewer CI now gates merging #122.
+  allocator-header vectors. The follow-on is now based on merged #123.
 - The allocator test failure was a fixture expectation: `Mem::alloc` rounds
   to eight bytes. The fixed test verifies requests of 4/13 separately from
   backing blocks of 8/16. Twenty allocator-focused tests pass.
@@ -104,22 +135,25 @@ Lead Phase 2 work:
   concrete adapter issues. World consumers, payload conversion and FOS
   writing remain open. Next research traces buffered extra-data saving
   (`00426a30`) and the currently scaffolded save-buffer constructors.
-- The follow-on has nine uncommitted files: form_support, bgsloadformbuffer,
+- The follow-on is committed in #125: form_support, bgsloadformbuffer,
   bgssaveloadinitialdata, bgssavegamebuffer, bgssaveformbuffer,
   bgsloadgamesubbuffer, run_008660b0, run_008661e0 and run_00ec7ce3. Eighteen
-  constructor/getter/writer dependencies and generated tests are prepared but
-  uncompiled; six guarded constructor vectors passed the native executable.
-  Byte writing, growth, insertion and variable-size value paths are drafted;
-  CRT checked movement at `00ec7ce3` is also drafted with three native
+  constructor/getter/writer dependencies and generated tests pass validation
+  in completed root session `37952`; six guarded constructor vectors passed the native executable.
+  Byte writing, growth, insertion and variable-size value paths are checked;
+  CRT checked movement at `00ec7ce3` is checked with three native
   generated cases passing. Its error handler/TLS callees remain untraced;
   error-path tests use doubles. Private evidence uses the
   `codex-audit/save-boundary-*` and `save-buffer-headers-native*` files.
+  `ENGINE_STATE.md` and the ledger are committed. Private `save-buffer-probe.rs` uses real
+  executable tables, a generated mode receiver and the translated writer,
+  then checks the bytes through the FOS payload decoder; it passes.
 
 ONE heavy engine compiler across all worktrees, `-j2`, existing debug cache,
-`CARGO_PROFILE_DEV_DEBUG=0`. a01 owns the compiler now; root validation
-session 87210 and cycle04 session 14042 completed successfully. Then
-cycle01, a03, cycle03, root save-buffer checks when prepared. Disk is about
-3 GB free. Automatic approval review previously blocked
+`CARGO_PROFILE_DEV_DEBUG=0`. a01 MobileObject owns the compiler; root
+save-buffer session `37952` and cycle04 `77634` completed. Next: cycle01,
+then a03/cycle03 and root inventory follow-on. Disk is about 2.6 GB free.
+Automatic approval review previously blocked
 idle p3 target deletion; nothing was deleted. Do not bypass that denial.
 Private task.sh warns rather than deleting caches and retains scratch.
 Private ship.sh now safely recreates an absent merged branch with an empty

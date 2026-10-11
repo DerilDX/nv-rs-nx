@@ -1,15 +1,16 @@
 //! `fallout/ai/combat/explosion.cpp` (Xbox PDB source unit), subsystem `fallout/ai`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 
-// Continuation audit (2026-10-11, round 10): normal paths of 009ae280,
-// 009b2940 and 009acd60 have regression coverage; all remain partial for
-// compiler SEH cleanup. 009acd60 also calls the still-open 009ad670.
-// Fourteen functions retain explicit SEH partial markers; resume
-// at 009ad670. Four entries remain unimplemented or skipped.
+// Continuation audit (2026-10-11, round 11): normal paths of 009ae280,
+// 009b2940, 009acd60 and 009ad670 have regression coverage; all remain
+// partial for compiler SEH cleanup.
+// Fifteen functions retain explicit SEH partial markers; resume
+// at 009ae6e0. Three entries remain unimplemented or skipped.
 // 009acd60 has a normal-path translation; it remains partial for compiler SEH
-//   cleanup and depends on the still-open 009ad670 Init3D translation.
-// 009ad670 skipped: Init3D's per-iteration 0xe0 Havok cinfo/temporary layout
-//   and nested shape/action cleanup are not verified against PC field offsets.
+//   cleanup and calls the now-translated 009ad670 Init3D path.
+// 009ad670 has its normal Init3D path translated, with a per-iteration 0xe0
+//   Havok cinfo and stack-backed clone/transform temporaries. Compiler SEH
+//   cleanup remains partial.
 // 009ae6e0 skipped: large effect/damage flow; exception-state reconstruction,
 //   its 0x938-byte frame, aligned collector/UI temporaries and callback state
 //   are not fully established against the PC stack slots.
@@ -130,6 +131,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009acce0, fn_009acce0(Ptr) -> Ptr),
         entry!(0x009acd00, explosion_attach_distant(Ptr)),
         entry!(0x009acd60, explosion_initialize(Ptr)),
+        entry!(0x009ad670, explosion_init_3d(Ptr)),
         entry!(0x009ad5a0, fn_009ad5a0(Ptr) -> f32),
         entry!(0x009ad5f0, fn_009ad5f0(Ptr) -> bool),
         entry!(0x009ad610, fn_009ad610(Ptr) -> Ptr),
@@ -506,8 +508,8 @@ pub fn explosion_initialize(e: &mut Engine, this: Ptr) {
         }
 
         fn_009b2940(e, this);
-        // Init3D is the next open queue entry; the call retains its native
-        // address until that function's normal path has been translated.
+        // Keep this through the registry so Initialize's existing regression
+        // doubles can still isolate its 3D initialization branch.
         e.call(0x009a_d670, &args![this]);
         let distant = fn_009ad5f0(e, this);
         if distant {
@@ -731,6 +733,281 @@ pub fn explosion_initialize(e: &mut Engine, this: Ptr) {
             e.call(0x0076_b660, &args![0x011c_7b8cu32, value]);
         }
     });
+}
+
+// Translated from 009ad670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Explosion::Init3D` (Xbox PDB): sets the loaded scene node and its scale,
+/// builds debug blast-radius nodes and liquid actions when enabled, refreshes
+/// the cell's Havok world, and starts the node's animation. The clone loop
+/// rereads the debug setting each iteration, as the PC code does.
+// open: compiler SEH cleanup for allocated shapes, actions, rigid-body cinfo,
+// and cloning state on exceptions is not represented by the engine runtime.
+// Translation incomplete: 009ad670 - compiler SEH cleanup for stack temporaries
+pub fn explosion_init_3d(e: &mut Engine, this: Ptr) {
+    e.vcall(this.addr(), 0x1c8, &args![0u32]);
+    let node = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+
+    let mut scale = 1.0f32;
+    if fn_009ad5f0(e, this) {
+        let scene = e.vcall(node, 0xc, &args![]).u32();
+        let fade = if scene == 0 {
+            0
+        } else {
+            e.vcall(scene, 0x10, &args![]).u32()
+        };
+        if fade != 0 {
+            let range = quiet_f32(e.global::<f32>(0x0101_6970));
+            e.call(0x00b4_dfd0, &args![fade, range, range]);
+        }
+    }
+
+    let debug_count = e.call(0x0043_d4d0, &args![0x011d_0fe4u32]).u32();
+    if e.mem.i32(debug_count) == 0 {
+        let radius_node = e.call(0x004a_ae30, &args![node, 0x0108_f1a8u32]).u32();
+        if radius_node != 0 {
+            let radius = e.call(0x0064_4930, &args![this]).f64();
+            let world_radius = e.call(0x0043_c490, &args![radius_node]).u32();
+            let world_radius = e.call(0x0045_7990, &args![world_radius]).f64();
+            scale = quiet_f32((radius / world_radius) as f32);
+        } else {
+            let base = e.call(0x0041_81e0, &args![this]).u32();
+            let display = if e.call(0x0047_4cb0, &args![base]).u32() == 0 {
+                let base = e.call(0x0041_81e0, &args![this]).u32();
+                e.call(0x0040_8da0, &args![base + 0x30]).u32()
+            } else {
+                let base = e.call(0x0041_81e0, &args![this]).u32();
+                e.vcall(base, 0x130, &args![]).u32()
+            };
+            let base = e.call(0x0041_81e0, &args![this]).u32();
+            let id = e.call(0x0084_e3a0, &args![base]).u32();
+            e.call(0x005b_5e40, &args![0x0108_f16cu32, id, display]);
+        }
+    }
+    e.call(0x0044_0490, &args![node, quiet_f32(scale)]);
+    let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+    e.call(0x0044_0460, &args![node, position]);
+
+    e.with_stack(0x240, |e, frame| {
+        let frame = frame.addr();
+        let rotation = frame + 0x1d0;
+        let angles = e.call(0x0043_0830, &args![this]).u32();
+        let xyz = [
+            quiet_f32(f32::from_bits(e.mem.u32(angles))).to_bits(),
+            quiet_f32(f32::from_bits(e.mem.u32(angles + 4))).to_bits(),
+            quiet_f32(f32::from_bits(e.mem.u32(angles + 8))).to_bits(),
+        ];
+        e.call(0x0068_15c0, &args![rotation]);
+        e.call(0x00a5_9780, &args![rotation, xyz[2], xyz[1], xyz[0]]);
+        e.call(0x0043_fa80, &args![node, rotation]);
+
+        let debug_count = e.call(0x0043_d4d0, &args![0x011d_0fe4u32]).u32();
+        if e.mem.i32(debug_count) > 1 {
+            let large_scale = quiet_f32(e.global::<f32>(0x011a_5810));
+            let base = e.call(0x0041_81e0, &args![this]).u32();
+            e.call(0x006d_3b00, &args![base, large_scale]);
+            let lifetime = quiet_f32(e.global::<f32>(0x011a_580c));
+            e.mem.set_f32(this.addr() + 0x8c, lifetime);
+
+            let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+            for word in 0..3 {
+                let component = e.mem.u32(position + word * 4);
+                e.mem.set_u32(frame + 0x1c4 + word * 4, component);
+            }
+            let name = e.call(0x0044_8a80, &args![]).u32();
+            let extra = e.call(0x00a5_bdd0, &args![node, name]).u32();
+            if extra != 0 {
+                e.call(0x0051_9230, &args![extra, 0x10u32, 1u32]);
+            }
+
+            let mut index = 0i32;
+            loop {
+                let debug_count = e.call(0x0043_d4d0, &args![0x011d_0fe4u32]).u32();
+                if index >= e.mem.i32(debug_count) {
+                    break;
+                }
+                let cloning = frame + 0x19c;
+                e.call(0x004a_d050, &args![cloning, 1.0f32]);
+                let raw = e.call(0x00aa_13e0, &args![0xacu32]).u32();
+                let collision = if raw == 0 {
+                    0
+                } else {
+                    e.call(0x00a5_ecb0, &args![raw, 0u32]).u32()
+                };
+
+                let random_coordinate = |e: &mut Engine| {
+                    let source = e.call(0x0047_6c00, &args![]).u32();
+                    let random = e.call(0x004d_fec0, &args![source]).f64();
+                    random * e.global::<f64>(0x0102_0758)
+                };
+                let x = quiet_f32((random_coordinate(e) + e.global::<f64>(0x0102_f070)) as f32);
+                let y = quiet_f32(random_coordinate(e) as f32);
+                let z = quiet_f32(random_coordinate(e) as f32);
+                e.call(0x004b_c1f0, &args![collision, z, y, x]);
+
+                let raw = e.call(0x00aa_13e0, &args![0x14u32]).u32();
+                let collision_object = if raw == 0 {
+                    0
+                } else {
+                    e.call(0x0056_d580, &args![raw, collision]).u32()
+                };
+                let raw = e.call(0x00aa_13e0, &args![0x14u32]).u32();
+                let shape = if raw == 0 {
+                    0
+                } else {
+                    let radius = quiet_f32(e.global::<f32>(0x0102_918c));
+                    e.call(0x0056_e950, &args![raw, radius, 1u32]).u32()
+                };
+
+                let cinfo = frame + 0x80;
+                e.call(0x00c8_f510, &args![cinfo]);
+                let damping = quiet_f32(e.global::<f32>(0x0101_712c));
+                e.call(0x0050_7610, &args![cinfo, damping]);
+                e.call(0x006e_4340, &args![cinfo, 0.0f32]);
+                e.call(0x0056_d360, &args![cinfo, 1u32]);
+                e.call(0x0050_76c0, &args![cinfo, 1.0f32]);
+                let seed = e.call(0x005d_be10, &args![]).u32();
+                let string = e
+                    .call(0x0062_2290, &args![cinfo - 4, 4u32, seed, 0u32])
+                    .u32();
+                let string_value = e.call(0x0055_9450, &args![string]).u32();
+                e.call(0x0056_f0f0, &args![cinfo, string_value]);
+                e.call(0x0056_f110, &args![cinfo, shape]);
+
+                let raw = e.call(0x00aa_13e0, &args![0x1cu32]).u32();
+                let body = if raw == 0 {
+                    0
+                } else {
+                    e.call(0x0056_d380, &args![raw, cinfo]).u32()
+                };
+                e.call(0x00c6_b980, &args![collision_object, body]);
+                e.vcall(node, 0xdc, &args![collision, 1u32]);
+
+                let raw = e.call(0x00aa_13e0, &args![0xb8u32]).u32();
+                let value_node = if raw == 0 {
+                    0
+                } else {
+                    e.call(0x00c4_3660, &args![raw]).u32()
+                };
+                e.call(0x0054_68d0, &args![value_node, 0xeu32]);
+                e.vcall(collision, 0xdc, &args![value_node, 1u32]);
+
+                let action_data = frame + 0x44;
+                fn_009ae0f0(e, Ptr::new(action_data));
+                let target = e.call(0x004a_e750, &args![body]).u32();
+                e.mem.set_u32(action_data + 4, target);
+                for (offset, address) in [
+                    (0x08, 0x011a_5808),
+                    (0x0c, 0x011a_5804),
+                    (0x10, 0x011a_5800),
+                    (0x14, 0x011a_57fc),
+                ] {
+                    let value = e.global::<f32>(address);
+                    e.mem.set_f32(action_data + offset, quiet_f32(value));
+                }
+                let raw = e.call(0x00aa_13e0, &args![0x40u32]).u32();
+                let action = if raw == 0 {
+                    0
+                } else {
+                    bhk_liquid_action_ctor(e, Ptr::new(raw), Ptr::new(action_data)).addr()
+                };
+                e.call(0x00c8_ef80, &args![body, action]);
+                e.call(0x0056_d730, &args![cinfo]);
+                e.call(0x004a_d270, &args![cloning]);
+                index = index.wrapping_add(1);
+            }
+            refresh_explosion_havok(e, this, node, frame + 0x28);
+        }
+
+        refresh_explosion_havok(e, this, node, frame + 0x18);
+        let scene = e.vcall(node, 0xc, &args![]).u32();
+        if scene != 0 {
+            let scene = e.vcall(node, 0xc, &args![]).u32();
+            if e.call(0x0057_84b0, &args![scene]).bool() {
+                let scene = e.vcall(node, 0xc, &args![]).u32();
+                e.call(0x0057_8060, &args![scene]);
+            }
+        }
+
+        let cell = e.call(0x008d_6f30, &args![this]).u32();
+        if cell != 0 {
+            let cell = e.call(0x008d_6f30, &args![this]).u32();
+            let world = e.call(0x0045_43c0, &args![cell]).u32();
+            if world != 0 {
+                let cell = e.call(0x008d_6f30, &args![this]).u32();
+                let world = e.call(0x0045_43c0, &args![cell]).u32();
+                if e.call(0x004b_ae00, &args![world]).bool() {
+                    let cell = e.call(0x008d_6f30, &args![this]).u32();
+                    let world = e.call(0x0045_43c0, &args![cell]).u32();
+                    e.vcall(world, 0xd8, &args![node, 1u32]);
+                    e.call(0x004b_6f90, &args![node]);
+                }
+            }
+        }
+
+        let mut controller = e.call(0x0043_b230, &args![node]).u32();
+        if controller == 0 {
+            let scene = e.vcall(node, 0xc, &args![]).u32();
+            if scene != 0 && e.call(0x0045_bc00, &args![scene, 0u32]).u32() != 0 {
+                let scene = e.call(0x0043_b4a0, &args![scene, 0u32]).u32();
+                controller = e.call(0x0043_b230, &args![scene]).u32();
+            }
+        }
+        let mut manager = 0;
+        while controller != 0 {
+            if e.call(0x0043_b300, &args![0x011f_36acu32, controller])
+                .bool()
+            {
+                manager = controller;
+                break;
+            }
+            controller = e.call(0x004a_8a90, &args![controller]).u32();
+        }
+        if manager != 0 {
+            let sequence_name = e.call(0x005c_1490, &args![]).u32();
+            let sequence = e.call(0x0047_a520, &args![manager, sequence_name]).u32();
+            if sequence != 0 {
+                e.call(0x0048_fef0, &args![manager, 0.0f32]);
+                e.call(
+                    0x0047_aab0,
+                    &args![manager, sequence, 0u32, 0u32, 1.0f32, 0.0f32, 0u32],
+                );
+                e.call(0x0047_aa40, &args![manager, 1u32]);
+                e.call(0x0049_54c0, &args![sequence]);
+                let duration = e.call(0x0050_7e10, &args![this]).f64();
+                let sequence_end = e.call(0x0050_8100, &args![sequence]).f64();
+                if duration < sequence_end {
+                    let sequence_end = e.call(0x0050_8100, &args![sequence]).f64();
+                    e.call(0x0081_0550, &args![this, quiet_f32(sequence_end as f32)]);
+                }
+                return;
+            }
+        }
+        e.call(0x00a6_d2d0, &args![node]);
+    });
+}
+
+/// Repeats the game's cell/world callback sequence. Both sites construct a
+/// zero point and pass it to the node helper between the world calls.
+fn refresh_explosion_havok(e: &mut Engine, this: Ptr, node: u32, point: u32) {
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    if cell == 0 {
+        return;
+    }
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    if e.call(0x0045_43c0, &args![cell]).u32() == 0 {
+        return;
+    }
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    e.call(0x0045_43c0, &args![cell]);
+    e.call(0x00c6_9f50, &args![node, 1u32, 1u32]);
+    e.call(0x0043_d410, &args![point, 0.0f32, 0u32, 0u32]);
+    e.call(0x00a5_9c60, &args![node, point]);
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    let world = e.call(0x0045_43c0, &args![cell]).u32();
+    e.vcall(world, 0xd0, &args![node, 1u32, 1u32, 0u32, 1u32]);
 }
 
 // Translated from 009ad5a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2454,6 +2731,368 @@ mod tests {
     fn mapped(e: &mut Engine, address: u32) -> Ptr {
         e.map(address & !0xfff, 0x1000);
         Ptr::new(address)
+    }
+
+    #[test]
+    fn init_3d_stops_after_setting_a_missing_node() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x3000);
+        let mut slots = vec![0; 0x1d0 / 4 + 1];
+        slots[0x1c8 / 4] = 0x7000;
+        slots[0x1d0 / 4] = 0x7004;
+        e.put_vtable(0x3000, &slots);
+        e.mem.set_u32(this.addr(), 0x3000);
+        e.register(0x7000, |_, a| {
+            assert_eq!(a, &[0x1000, 0]);
+            Ret::default()
+        });
+        e.register(0x7004, |_, _| 0u32.into_ret());
+
+        explosion_init_3d(&mut e, this);
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().map(|call| call.0).collect::<Vec<_>>(),
+            [0x7000, 0x7004]
+        );
+    }
+
+    #[test]
+    fn init_3d_sets_node_transform_and_starts_animation_without_debug_clones() {
+        let mut e = engine_with(&[
+            0x008d_6f30,
+            0x0043_d4d0,
+            0x0044_0490,
+            0x0044_0460,
+            0x0043_0830,
+            0x0068_15c0,
+            0x00a5_9780,
+            0x0043_fa80,
+            0x0043_b230,
+            0x00a6_d2d0,
+        ]);
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x2000);
+        mapped(&mut e, 0x3000);
+        mapped(&mut e, 0x5000);
+        mapped(&mut e, 0x6000);
+        e.mem.set_i32(0x6000, 1);
+        e.mem.set_u32(0x5000, 1.0f32.to_bits());
+        e.mem.set_u32(0x5004, 2.0f32.to_bits());
+        e.mem.set_u32(0x5008, 3.0f32.to_bits());
+        let mut explosion_slots = vec![0; 0x1f4 / 4 + 1];
+        explosion_slots[0x1c8 / 4] = 0x7000;
+        explosion_slots[0x1d0 / 4] = 0x7004;
+        explosion_slots[0x1f4 / 4] = 0x7008;
+        e.put_vtable(0x3000, &explosion_slots);
+        e.mem.set_u32(this.addr(), 0x3000);
+        let mut node_slots = vec![0; 0x0c / 4 + 1];
+        node_slots[0x0c / 4] = 0x7010;
+        e.put_vtable(0x3100, &node_slots);
+        e.mem.set_u32(0x2000, 0x3100);
+        e.register(0x7000, |_, _| Ret::default());
+        e.register(0x7004, |_, _| 0x2000u32.into_ret());
+        e.register(0x7008, |_, _| 0x5000u32.into_ret());
+        e.register(0x7010, |_, _| 0u32.into_ret());
+        e.register(0x008d_6f30, |_, _| 0u32.into_ret());
+        e.register(0x0043_d4d0, |_, _| 0x6000u32.into_ret());
+        e.register(0x0043_0830, |_, _| 0x5000u32.into_ret());
+
+        explosion_init_3d(&mut e, this);
+        let log = e.call_log.unwrap();
+        let addresses: Vec<_> = log.iter().map(|call| call.0).collect();
+        assert_eq!(addresses[0], 0x7000);
+        assert_eq!(addresses[1], 0x7004);
+        assert!(addresses.contains(&0x0044_0490));
+        assert!(addresses.contains(&0x0044_0460));
+        assert_eq!(addresses.last(), Some(&0x00a6_d2d0));
+        let rotate = log.iter().find(|call| call.0 == 0x00a5_9780).unwrap();
+        assert_eq!(
+            rotate.1[1..],
+            [3.0f32.to_bits(), 2.0f32.to_bits(), 1.0f32.to_bits()]
+        );
+        assert!(!addresses.contains(&0x00aa_13e0));
+    }
+
+    #[test]
+    fn init_3d_scales_the_named_radius_node_and_extends_distant_fade_range() {
+        let mut e = engine_with(&[
+            0x008d_6f30,
+            0x0043_d4d0,
+            0x00b4_dfd0,
+            0x004a_ae30,
+            0x0064_4930,
+            0x0043_c490,
+            0x0045_7990,
+            0x0044_0490,
+            0x0044_0460,
+            0x0043_0830,
+            0x0068_15c0,
+            0x00a5_9780,
+            0x0043_fa80,
+            0x0057_84b0,
+            0x0043_b230,
+            0x00a6_d2d0,
+        ]);
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x2000);
+        mapped(&mut e, 0x3000);
+        mapped(&mut e, 0x4000);
+        mapped(&mut e, 0x5000);
+        mapped(&mut e, 0x6000);
+        e.map(0x0101_6000, 0x1000);
+        e.set_global(0x0101_6970, 0x7f80_0001u32);
+        e.mem.set_i32(0x6000, 0);
+        e.mem.set_u32(0x5000, 0x7f80_0001);
+        let mut explosion_slots = vec![0; 0x1f4 / 4 + 1];
+        explosion_slots[0x1c8 / 4] = 0x7000;
+        explosion_slots[0x1d0 / 4] = 0x7004;
+        explosion_slots[0x1f4 / 4] = 0x7008;
+        e.put_vtable(0x3000, &explosion_slots);
+        e.mem.set_u32(this.addr(), 0x3000);
+        let mut node_slots = vec![0; 0x0c / 4 + 1];
+        node_slots[0x0c / 4] = 0x7010;
+        e.put_vtable(0x3100, &node_slots);
+        e.mem.set_u32(0x2000, 0x3100);
+        let mut scene_slots = vec![0; 0x10 / 4 + 1];
+        scene_slots[0x10 / 4] = 0x7014;
+        e.put_vtable(0x3200, &scene_slots);
+        e.mem.set_u32(0x4000, 0x3200);
+        e.register(0x7000, |_, _| Ret::default());
+        e.register(0x7004, |_, _| 0x2000u32.into_ret());
+        e.register(0x7008, |_, _| 0x5000u32.into_ret());
+        e.register(0x7010, |_, _| 0x4000u32.into_ret());
+        e.register(0x7014, |_, _| 0x4500u32.into_ret());
+        e.register(0x008d_6f30, |_, _| 0u32.into_ret());
+        e.register(0x0043_d4d0, |_, _| 0x6000u32.into_ret());
+        e.register(0x004a_ae30, |_, _| 0x4300u32.into_ret());
+        e.register(0x0064_4930, |_, _| 10.0f64.into_ret());
+        e.register(0x0043_c490, |_, _| 0x4400u32.into_ret());
+        e.register(0x0045_7990, |_, _| 2.0f64.into_ret());
+        e.register(0x0043_0830, |_, _| 0x5000u32.into_ret());
+
+        explosion_init_3d(&mut e, this);
+        let log = e.call_log.unwrap();
+        let fade = log.iter().find(|call| call.0 == 0x00b4_dfd0).unwrap();
+        assert_eq!(fade.1, [0x4500, 0x7fc0_0001, 0x7fc0_0001]);
+        let scaled = log.iter().find(|call| call.0 == 0x0044_0490).unwrap();
+        assert_eq!(scaled.1, [0x2000, 5.0f32.to_bits()]);
+        let rotate = log.iter().find(|call| call.0 == 0x00a5_9780).unwrap();
+        assert_eq!(rotate.1[3], 0x7fc0_0001);
+        assert_eq!(log.iter().filter(|call| call.0 == 0x004a_ae30).count(), 1);
+    }
+
+    #[test]
+    fn init_3d_debug_loop_builds_and_releases_each_rigid_body_cinfo() {
+        let mut e = engine_with(&[
+            0x008d_6f30,
+            0x0043_d4d0,
+            0x0044_0490,
+            0x0044_0460,
+            0x0043_0830,
+            0x0068_15c0,
+            0x00a5_9780,
+            0x0043_fa80,
+            0x0041_81e0,
+            0x006d_3b00,
+            0x0044_8a80,
+            0x00a5_bdd0,
+            0x004a_d050,
+            0x0047_6c00,
+            0x004d_fec0,
+            0x004b_c1f0,
+            0x00c8_f510,
+            0x0050_7610,
+            0x006e_4340,
+            0x0056_d360,
+            0x0050_76c0,
+            0x005d_be10,
+            0x0062_2290,
+            0x0055_9450,
+            0x0056_f0f0,
+            0x0056_f110,
+            0x00c6_b980,
+            0x0054_68d0,
+            0x0053_7bb0,
+            0x004a_e750,
+            0x004b_50c0,
+            0x00cb_d520,
+            0x00c8_ef80,
+            0x0056_d730,
+            0x004a_d270,
+            0x0043_b230,
+            0x00a6_d2d0,
+        ]);
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x2000);
+        mapped(&mut e, 0x3000);
+        mapped(&mut e, 0x4000);
+        mapped(&mut e, 0x5000);
+        mapped(&mut e, 0x6000);
+        e.map(0x8000, 0x10_000);
+        for page in [
+            0x0101_1000,
+            0x0101_e000,
+            0x0102_0000,
+            0x0102_9000,
+            0x0102_f000,
+            0x0103_0000,
+            0x011a_5000,
+            0x011f_4000,
+            0x0126_8000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.mem.set_i32(0x6000, 2);
+        e.mem.set_u32(0x5000, 1.0f32.to_bits());
+        e.mem.set_u32(0x5004, 2.0f32.to_bits());
+        e.mem.set_u32(0x5008, 3.0f32.to_bits());
+        e.set_global(0x0102_0758, 10.0f64);
+        e.set_global(0x0102_f070, 32.0f64);
+        e.set_global(0x0102_918c, 8.0f32);
+        e.set_global(0x011a_5808, 11.0f32);
+        e.set_global(0x011a_5804, 12.0f32);
+        e.set_global(0x011a_5800, 13.0f32);
+        e.set_global(0x011a_57fc, 14.0f32);
+        let mut explosion_slots = vec![0; 0x1f4 / 4 + 1];
+        explosion_slots[0x1c8 / 4] = 0x7000;
+        explosion_slots[0x1d0 / 4] = 0x7004;
+        explosion_slots[0x1f4 / 4] = 0x7008;
+        e.put_vtable(0x3000, &explosion_slots);
+        e.mem.set_u32(this.addr(), 0x3000);
+        let mut node_slots = vec![0; 0xdc / 4 + 1];
+        node_slots[0x0c / 4] = 0x7010;
+        node_slots[0xdc / 4] = 0x7014;
+        e.put_vtable(0x4000, &node_slots);
+        e.mem.set_u32(0x2000, 0x4000);
+        e.put_vtable(0x4200, &node_slots);
+        e.register(0x7000, |_, _| Ret::default());
+        e.register(0x7004, |_, _| 0x2000u32.into_ret());
+        e.register(0x7008, |_, _| 0x5000u32.into_ret());
+        e.register(0x7010, |_, _| 0u32.into_ret());
+        e.register(0x7014, |_, _| Ret::default());
+        e.register(0x008d_6f30, |_, _| 0u32.into_ret());
+        e.register(0x0043_d4d0, |_, _| 0x6000u32.into_ret());
+        e.register(0x0043_0830, |_, _| 0x5000u32.into_ret());
+        e.register(0x0041_81e0, |_, _| 0x5000u32.into_ret());
+        e.register(0x004d_fec0, |_, _| 0.5f64.into_ret());
+        e.register(0x0047_6c00, |_, _| 0x5000u32.into_ret());
+        e.register(0x00a5_ecb0, |e, a| {
+            let collision = a[0] + 0x100;
+            e.mem.set_u32(collision, 0x4200);
+            collision.into_ret()
+        });
+        for constructor in [0x0056_d580, 0x0056_e950, 0x00c4_3660] {
+            e.register(constructor, |_, a| (a[0] + 0x100).into_ret());
+        }
+        e.register(0x00c8_f510, |e, a| {
+            // The PC reserves one 0xe0-byte bhkRigidBodyCinfo at EBP-0x1c0.
+            for offset in 0..0xe0 {
+                e.mem.set_u8(a[0] + offset, 0xa5);
+            }
+            a[0].into_ret()
+        });
+        e.register(0x0056_d380, |e, a| {
+            assert_eq!(e.mem.u8(a[1] + 0xdf), 0xa5);
+            (a[0] + 0x100).into_ret()
+        });
+        e.register(0x005d_be10, |_, a| {
+            assert!(a.is_empty());
+            0x5600u32.into_ret()
+        });
+        e.register(0x0062_2290, |_, a| {
+            assert_eq!(a.len(), 4);
+            assert_eq!(&a[1..], &[4, 0x5600, 0]);
+            a[0].into_ret()
+        });
+        e.register(0x0055_9450, |_, _| 0u32.into_ret());
+        e.register(0x004a_e750, |_, _| 0x5000u32.into_ret());
+        e.register(0x00cb_d520, |e, a| {
+            let info = a[1];
+            assert_eq!(e.mem.u32(info + 4), 0x5000);
+            assert_eq!(e.mem.f32(info + 8), 11.0);
+            assert_eq!(e.mem.f32(info + 0x0c), 12.0);
+            assert_eq!(e.mem.f32(info + 0x10), 13.0);
+            assert_eq!(e.mem.f32(info + 0x14), 14.0);
+            Ret::default()
+        });
+        let allocations = Rc::new(Cell::new(0u32));
+        let allocation_counter = allocations.clone();
+        e.register_double(0x00aa_13e0, move |_, _| {
+            let index = allocation_counter.get();
+            allocation_counter.set(index + 1);
+            (0x8000 + index * 0x200).into_ret()
+        });
+
+        explosion_init_3d(&mut e, this);
+        assert_eq!(allocations.get(), 12);
+        let log = e.call_log.unwrap();
+        let count = |address| log.iter().filter(|call| call.0 == address).count();
+        assert_eq!(count(0x00c8_f510), 2);
+        assert_eq!(count(0x00c8_ef80), 2);
+        assert_eq!(count(0x0056_d730), 2);
+        assert_eq!(count(0x004a_d270), 2);
+        assert_eq!(count(0x00a6_d2d0), 1);
+        let cinfo = log.iter().find(|call| call.0 == 0x00c8_f510).unwrap().1[0];
+        let cloning = log.iter().find(|call| call.0 == 0x004a_d050).unwrap().1[0];
+        assert_eq!(cinfo + 0xe0 + 0x3c, cloning);
+        assert_eq!(
+            log.iter().find(|call| call.0 == 0x0062_2290).unwrap().1[0],
+            cinfo - 4
+        );
+        for address in [
+            0x0050_7610,
+            0x006e_4340,
+            0x0056_d360,
+            0x0050_76c0,
+            0x0056_f0f0,
+            0x0056_f110,
+            0x0056_d730,
+        ] {
+            assert!(log
+                .iter()
+                .filter(|call| call.0 == address)
+                .all(|call| call.1[0] == cinfo));
+        }
+        assert_eq!(
+            log.iter().find(|call| call.0 == 0x0056_d380).unwrap().1[1],
+            cinfo
+        );
+        assert_eq!(
+            log.iter().find(|call| call.0 == 0x00cb_d520).unwrap().1[1],
+            cinfo - 0x3c
+        );
+        for window in log.windows(2) {
+            if window[0].0 == 0x0056_d730 {
+                assert_eq!(window[0].1, [cinfo]);
+                assert_eq!(window[1].0, 0x004a_d270);
+            }
+        }
+        for iteration in 0..2 {
+            let raw = 0x8000 + iteration * 0xc00;
+            let calls = |address| {
+                log.iter()
+                    .filter(|call| call.0 == address)
+                    .nth(iteration as usize)
+                    .unwrap()
+            };
+            assert_eq!(calls(0x00a5_ecb0).1, [raw, 0]);
+            assert_eq!(calls(0x004b_c1f0).1[0], raw + 0x100);
+            assert_eq!(calls(0x0056_d580).1, [raw + 0x200, raw + 0x100]);
+            assert_eq!(calls(0x0056_e950).1[0], raw + 0x400);
+            assert_eq!(calls(0x0056_f110).1[1], raw + 0x500);
+            assert_eq!(calls(0x0056_d380).1, [raw + 0x600, cinfo]);
+            assert_eq!(calls(0x00c6_b980).1, [raw + 0x300, raw + 0x700]);
+            assert_eq!(calls(0x00c4_3660).1, [raw + 0x800]);
+            assert_eq!(calls(0x0054_68d0).1, [raw + 0x900, 0xe]);
+            assert_eq!(calls(0x00c8_ef80).1[0], raw + 0x700);
+        }
+        let location = log.iter().find(|call| call.0 == 0x004b_c1f0).unwrap();
+        assert_eq!(
+            location.1[1..],
+            [5.0f32.to_bits(), 5.0f32.to_bits(), 37.0f32.to_bits()]
+        );
     }
 
     #[test]
