@@ -9,92 +9,89 @@ in [FOS_SAVES.md](FOS_SAVES.md); overall priority stays in
 
 ## Script-extra follow-on
 
-The script-extra follow-on is implemented and locally validated: `ScriptLocals`
-constructor `005a8b80`, `ScriptRunner` constructor `005e0c60`, its busy
-predicate `005e2850`, and `ScriptRunManager` instance/action-list dispatch
-`005e24d0` / `005e2730` (class names from Xbox PDB). PC disassembly checks
-the 0x14, 0xa4 and eight-byte layouts. Six guarded native constructor cases
-pass, including untouched padding. Four further native cases confirm the
-busy predicate and cached-runner/null-script manager result, including its
-twelve-byte stack cleanup. Ten Rust regressions pass; the focused script
-selection passes 1,320 tests and the full workspace passes 15,876 tests
-including doctests (14,023 engine unit tests). Strict lint, formatting and
-release/debug builds pass on Windows. These are core checks; viewer CI
-remains a separate merge gate. The
-compiler exception cleanup on the two manager entries remains partial.
+The current normal-registry debug and release probes load one original script-bearing
+inventory item and write its payload back byte-for-byte. Both real BEGIN
+event handlers run once; the reconstructed script, locals and reference
+action entry match the assertions, with no parser/evaluator error callbacks.
+The fixture uses the original change-form version and complete save-ID
+mappings. Its script header and 234 compiled bytes come from SCPT `00169538`
+in today's installed `FalloutNV.esm`. The save's historical winning script
+version and plugin overrides have not been established. This is an
+installed-base-script fixture, not a reconstruction of that historical
+plugin environment.
 
-This does not establish script-extra preservation. The broader private inventory
-fixture still lacks script forms and their complete save-ID mappings.
-The first script found in the user's original payloads has 234 compiled
-bytes and four references in its installed master record; an empty generated
-script would not represent it. The eight-save metadata scan finds 93 unique
-inventory script IDs, including IDs requiring DLC/mod load-order resolution.
-Next action: supply the real script record and continue through the
-interpreter's action-list loading path. Six generated native cases already
-confirm parser `005e13a0` sign-extends opcode/length words, clears the
-reference for ordinary opcodes, preserves it for skipped reference prefixes,
-and consumes 24 bytes of stack arguments.
+A second normal-registry probe passes in debug and release on an original 34-byte item from a
+save whose ten official plugins are all installed. It resolves the script
+using the saved plugin order: SCPT `00166652`, with 93 compiled bytes and
+three declared variables. Loading creates the three locals with their exact
+record IDs, default value bits and flags, calls both real `OnAdd` and
+`GameMode` BEGIN handlers once, and reconstructs the expected action entry.
+Writing the item reproduces its original payload byte-for-byte. Its saved
+variable list is empty, so this verifies initialization from actual SLSD
+records, not restoration of nonzero saved values. Current installed files
+supply the records; historical file contents have not been verified.
 
-The next bounded batch is implemented and locally validated: action-list
-entry `005e1160`, parser `005e13a0`, the BEGIN/action-list paths of evaluator
-`005e1550`, and expression constructors `00593490`, `00594b60`, `00594c60`.
-`CExpression` (Xbox PDB) is 0x710 bytes, confirmed
-against the PC constructor and caller. Nine generated native cases confirm
-the returned pointer, zero stack cleanup, exact initialized words and all
-untouched bytes for three fill patterns. The same executable identity and
-floating-point settings used above apply. Independent PC review found no
-discrepancy in the six helpers. Eighteen new Rust regressions pass; focused
-checks pass 23 runner/manager tests and three expression tests. All 16,011
-workspace tests including doctests (14,158 engine unit tests), strict lint,
-formatting, release and debug builds pass on Windows. Four further native
-entry cases confirm null/disabled refusal, empty-script completion, exact
-runner mutations and twelve-byte stack cleanup. Eleven native evaluator
-cases confirm non-BEGIN action-mode skips and two BEGIN parse-only cases
-with unchanged buffers and 36-byte stack cleanup. There are thirty native
-cases in this batch; these bounded cases do not exercise real event handlers.
+Generated form/reference receivers, partial allocator startup and unresolved
+references used only inside skipped bodies remain explicit. There are no
+game-function doubles or game-file writes. These successes cover two selected
+original items, not the 168,641 entries scanned from eight saves. Three
+containing records that fail complete decoding are excluded, as are entries
+with unresolved item IDs. Ordinary script-body execution, whole-FOS round
+trips and world/viewer integration remain open.
 
-The action-list entry preserves busy-script refusal, parser failure clearing
-the freshly retrieved script size, evaluator failure ending only the pass,
-skip counts and clearing busy before expression cleanup. Compiler SEH
-exception cleanup remains explicitly partial. The evaluator calls the PC
-event-table handler, preserves its eight argument words, and adds the block
-span when its result is zero or action-list mode is active. Its non-BEGIN
+The current dependency batch implements three PC helpers:
+
+| Address | Behavior | Native evidence |
+| --- | --- | --- |
+| `008d0360` | Return true in AL, without reading the receiver | Six guarded cases, including null/unmapped receivers |
+| `0047c850` | Return false in AL, without reading the receiver | Six guarded cases, including null/unmapped receivers |
+| `008a81c0` | Read the version byte at receiver +0x1c into AL | Six guarded cases, including high-bit byte values |
+
+All eighteen native cases pass with zero stack cleanup and unchanged
+surrounding bytes. The reference vtable and load-buffer call chain confirm
+the first two folded predicates; neither mapped unit supplies a reliable
+Xbox name for all their shared callers. `BGSLoadFormBuffer::GetVersion`
+(Xbox PDB) names the third helper. Independent PC/vtable/caller review agrees.
+Four Rust regressions cover these bodies and the real load-buffer virtual
+call chain. Final focused tests and all 16,238 workspace tests, including
+doctests, pass, along with strict workspace lint, formatting and release/debug
+builds. Both original-item probes pass against the final release registry;
+the earlier debug runs passed as well. The release probes preserve each
+selected original payload byte-for-byte and run both expected BEGIN handlers.
+
+Earlier merged batches established the dependencies below. Each passed
+Windows core workspace tests, strict lint, formatting and release/debug
+builds before publication; both core and viewer CI gated merging.
+
+| Batch | Implemented paths | Regression/native evidence |
+| --- | --- | --- |
+| [#135](https://github.com/slaterain/nv-rs/pull/135) | `ScriptLocals` constructor `005a8b80`, `ScriptRunner` constructor `005e0c60`, busy predicate `005e2850`, `ScriptRunManager` instance/action-list dispatch `005e24d0` / `005e2730` (class names from Xbox PDB) | Ten new Rust regressions; ten native cases; 15,876 workspace tests including doctests |
+| [#138](https://github.com/slaterain/nv-rs/pull/138) | Action-list entry `005e1160`, parser `005e13a0`, BEGIN/action-list evaluator paths `005e1550`, expression constructors `00593490`, `00594b60`, `00594c60` | Eighteen new regressions; thirty native cases; 16,011 workspace tests including doctests |
+| [#140](https://github.com/slaterain/nv-rs/pull/140) | Form-flag predicate `004013e0` and embedded-header accessor `00500940` | Two new regressions; forty-one native cases; 16,062 workspace tests including doctests |
+
+PC instructions confirm constructor sizes 0x14, 0xa4 and eight bytes for
+the locals, runner and manager. `CExpression` (Xbox PDB) is 0x710 bytes,
+confirmed against its PC constructor/caller. The parser sign-extends opcode
+and length words, preserves references for skipped reference prefixes and
+consumes 24 stack bytes. Action-list entry preserves busy refusal, fresh
+script-size clearing after parser failure, pass termination after evaluator
+failure and cleanup order. The evaluator calls the executable's event-table
+handler with all eight argument words and preserves its block-skip rules.
+Compiler SEH exception cleanup remains partial where marked. Non-BEGIN
 ordinary execution/parse modes remain explicitly open and fail loudly.
-A generated two-event fixture connects the real parser, evaluator and
-expression constructors with doubled external event handlers. Real Script
-forms/save-ID mapping and their handler dependency chain remain necessary
-before the broader preservation probe can establish success.
 
-The private normal-registry probe now uses the installed SCPT `00169538`
-header and all 234 compiled bytes, generated eligible Script/reference
-receivers and zero-variable locals. It stops immediately at untranslated
-flag predicate `004013e0`; it has not reached the event handlers. Its first
-reference is resolved to the generated player receiver; three references
-used only by skipped bodies remain unresolved. Next action: translate that
-PC predicate and continue the probe. Neither script-extra preservation nor
-a whole-save round trip has passed.
-
-The next follow-on implements flag predicate `004013e0` and embedded-header
-accessor `00500940`. PC disassembly and forty-one generated native cases
-confirm mask 8 at receiver +8 (AL result, no writes) and receiver +0x18
-without a memory read (including null and address wrap). Two new registry
-regressions and all 16,062 workspace tests pass (14,209 engine unit tests),
-as do strict lint, formatting and release/debug builds. Independent PC
-review found no discrepancy. No Xbox name is asserted for these folded
-accessors; the bool ABI observes AL only.
-
-With the merged effect-item TLS guards, the private normal-registry script
-probe now passes. It processes the installed script's exact 234 compiled
-bytes, reaches both real BEGIN event handlers and builds the expected
-reference action entry, without game-function doubles. Receivers and
-allocator startup remain generated/partial; three references belonging
-only to skipped bodies remain unresolved. This does not run those bodies.
-
-The original script-item probe now runs with exact saved ID mappings. It
-stops at untranslated `008d0360`, the owner reference's virtual predicate,
-before the saved script extra is loaded. The item rewrite assertion has
-not run. Next action: translate that PC dependency and rerun the original
-item load/write probe. Whole-save and world/viewer integration remain open.
+The metadata scan found 93 unique inventory script IDs, including DLC/mod
+indices. A follow-on scan counts every collected instance: 12,479 script
+extras, three with nonempty saved variables. All three belong to saves with
+missing mod files. Their script `00171475` saves variable IDs 3, 4 and 5,
+while the installed base record declares only ID 2; substituting that base
+record would not reconstruct the saved script. One official-only save has
+all ten listed plugins available, and its records resolve using those exact
+saved plugin indices. Historical file contents are still not independently
+verified. Next action: finish the current checks and run both optimized
+probes before expanding the original-item coverage.
+Native executable identity and private evidence location are recorded below;
+no raw game data or decompiler exports are committed.
 
 ## List boundary
 

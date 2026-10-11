@@ -88,6 +88,13 @@ pub fn get_actor(e: &mut Engine, this: Ptr<BGSLoadFormBuffer>) -> Ptr {
     }
 }
 
+// Translated from 008a81c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadFormBuffer::GetVersion` (Xbox PDB): reads the packed header's
+/// version byte. The shared PC body returns AL and has no stack arguments.
+pub fn get_version(e: &mut Engine, this: Ptr<BGSLoadFormBuffer>) -> u8 {
+    e.mem.u8(this.addr().wrapping_add(0x1c))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -101,12 +108,27 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008645f0, allows_lookup(Ptr<BGSLoadFormBuffer>) -> u8),
         entry!(0x00864610, get_reference(Ptr<BGSLoadFormBuffer>) -> Ptr),
         entry!(0x00864660, get_actor(Ptr<BGSLoadFormBuffer>) -> Ptr),
+        entry!(0x008a81c0, get_version(Ptr<BGSLoadFormBuffer>) -> u8),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_getter_returns_the_header_byte_without_mutation() {
+        let mut e = Engine::new();
+        let guard = e.mem.alloc(0x38);
+        let this = Ptr::<BGSLoadFormBuffer>::new(guard + 4);
+        for version in [0u8, 1, 3, 0x7f, 0x80, 0xff] {
+            e.mem.write(guard, &[0xa5; 0x38]);
+            e.mem.set_u8(this.addr() + 0x1c, version);
+            let before = e.mem.bytes(guard, 0x38);
+            assert_eq!(e.call(0x008a81c0, &args![this]).u8(), version);
+            assert_eq!(e.mem.bytes(guard, 0x38), before);
+        }
+    }
 
     #[test]
     fn constructor_clears_fields_but_preserves_packed_header_padding() {
