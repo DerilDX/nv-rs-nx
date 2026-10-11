@@ -147,9 +147,27 @@ pub fn finish_variable_value(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>, value
     });
 }
 
+// Translated from 00865df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveGameBuffer::SaveFormID_ov2` (Xbox PDB): writes a three-byte
+/// numeric index for a form (zero for null). The second stack word is
+/// consumed but unused by the PC body.
+pub fn save_form_id(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>, form: Ptr, _unused: u32) {
+    let id = if form.is_null() {
+        0
+    } else {
+        e.call(0x0084e3a0, &args![form]).u32()
+    };
+    e.with_stack(4, |e, index| {
+        e.call(0x0084eaf0, &args![index]);
+        e.call(0x00853570, &args![index, id]);
+        e.call(0x00865570, &args![this, index, 3u32, 0u8]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00865df0, save_form_id(Ptr<BGSSaveGameBuffer>, Ptr, u32)),
         entry!(0x00866140, insert_space(Ptr<BGSSaveGameBuffer>, u32, u32)),
         entry!(
             0x00865ff0,
@@ -199,6 +217,43 @@ mod tests {
             a[0].into_ret()
         });
         (e, this, bytes, mode)
+    }
+
+    #[test]
+    fn save_form_id_reads_form_once_and_writes_three_encoded_bytes_for_null_too() {
+        let (mut e, this, bytes, _) = fixture();
+        let form = e.mem.alloc(16);
+        e.mem.set_u32(form + 12, 0x12345678);
+        e.register_double(0x00853570, move |e, a| {
+            assert_eq!(a.len(), 2);
+            assert_eq!(e.mem.bytes(a[0], 3), [0, 0, 0]);
+            if a[1] == 0x12345678 {
+                e.mem.set_u32(form + 12, 0xaabbccdd);
+                e.mem.write(a[0], &[0x31, 0x42, 0x53]);
+            } else {
+                assert_eq!(a[1], 0);
+                e.mem.write(a[0], &[0, 0, 7]);
+            }
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00865df0, &args![this, form, u32::MAX]);
+        e.call(0x00865df0, &args![this, 0u32, 0x1234u32]);
+        assert_eq!(
+            e.mem.bytes(bytes, 8),
+            [0x31, 0x42, 0x53, b'|', 0, 0, 7, b'|']
+        );
+        assert_eq!(e.get(this, BGSSaveGameBuffer::iBufferPosition), 8);
+        assert_eq!(e.get(this, BGSSaveGameBuffer::iDebugOverhead), 2);
+        let reads: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x0084e3a0)
+            .map(|(_, arguments)| arguments.clone())
+            .collect();
+        assert_eq!(reads, [vec![form]]);
     }
 
     #[test]

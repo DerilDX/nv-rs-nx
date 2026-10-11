@@ -232,3 +232,47 @@ integration is established.
 
 Next action: publish the bounded writer batch,
 then trace per-stack state ownership before adding a world consumer.
+
+## Inventory payload dependency chain, 2026-10-11
+
+`ItemChange` (Xbox PDB) is a 0x0c-byte object: the extra-list chain at +0,
+signed item-count delta at +4, and item form at +8. Its PC buffered writer
+`004bed60` writes the form ID, signed delta, number of non-null stacks and
+each stack's extra list separately. These counts must not be collapsed:
+the entry delta is against its base record, whereas an `ExtraCount` is the
+signed 16-bit count in one stack. The current world importer merges item
+counts and overwrites per-item weapon condition as it visits the stacks;
+this follow-on does not change that importer.
+
+Seventeen dependencies are implemented for this writer: form-ID encoding,
+the forward/reverse save-ID maps, map construction and virtual allocation,
+lookup/insertion/release, and the list-node constructor needed to retain
+multiple stacks, and the shared word-at-four getter. `BGSSaveLoadFormIDMap`
+(Xbox PDB) has maps at +0/+0x10 and
+the next index at +0x20, size 0x24, checked against the PC constructors.
+Constructor `00846b60` still records omitted compiler exception cleanup.
+
+Ten generated cases match the native executable: three created-form-ID
+decodes with unchanged surrounding bytes, four key-equality AL results,
+and three word-at-four results with unchanged surrounding bytes.
+The native cases use the same executable hash and CPU configuration cited
+above. Static peer review of all seventeen bodies found no concrete mismatch;
+the list-node constructor's review also checked the aliased-source regression
+against its PC load-before-store order and one-word stack argument.
+Generated tests cover callback changes, collisions, index reuse and the
+real registry's encode/decode chain. The first 16-helper batch passed all
+15,690 core tests (13,837 engine), strict workspace lint, formatting and
+release/debug builds. The installed-executable probe then reached the
+untranslated `00726070` getter while advancing to the second stack. After
+adding that dependency, the real-registry probe passes: its 41-byte payload
+decodes to entry delta -2, count 2 / health 42.5 in one stack, and count 7 /
+health 17.5 in the other. The save-ID map resolves the encoded item back to
+its original generated form ID, with no unread payload bytes. Generated form
+header, manager/mode receivers and partial allocator startup are explicit;
+no game-function doubles or game-file writes are used. Final checks with all
+seventeen dependencies pass: 15,691 core tests (13,838 engine), strict
+workspace lint, formatting, and release/debug builds.
+No FOS file, world consumer or full save round trip is implemented.
+
+Next action: validate native buffer loading before connecting the state
+boundary to the world.

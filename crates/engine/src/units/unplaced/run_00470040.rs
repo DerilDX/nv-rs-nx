@@ -50,9 +50,20 @@ pub fn fn_00470470(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr(), 0);
 }
 
+// Translated from 00470440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the pointed-to item into a new list node and clears its link.
+/// The source is read before either store, including when it aliases a field.
+pub fn construct_node(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    let item = e.mem.u32(source.addr());
+    e.mem.set_u32(this.addr(), item);
+    e.mem.set_u32(this.addr().wrapping_add(4), 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00470440, construct_node(Ptr, Ptr) -> Ptr),
         entry!(0x004702f0, fn_004702f0(Ptr, u32) -> Ptr),
         entry!(0x00470470, fn_00470470(Ptr)),
     ]
@@ -61,6 +72,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn constructor_copies_before_clearing_an_aliased_source_and_keeps_guards() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(16);
+        e.mem.write(object, &[0xaa; 16]);
+        e.mem.set_u32(object + 8, 0x12345678);
+        assert_eq!(
+            e.call(0x00470440, &args![object + 4, object + 8]).u32(),
+            object + 4
+        );
+        assert_eq!(e.mem.u32(object), 0xaaaaaaaa);
+        assert_eq!(e.mem.u32(object + 4), 0x12345678);
+        assert_eq!(e.mem.u32(object + 8), 0);
+        assert_eq!(e.mem.u32(object + 12), 0xaaaaaaaa);
+    }
 
     fn doubles(e: &mut Engine) {
         e.register(CONTAINER_DESTRUCT, |_, _| Ret::default());
