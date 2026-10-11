@@ -1036,6 +1036,464 @@ fn set_info_tile_alpha(e: &mut Engine, offset: u32) {
     hud_set_float(e, target_tile, 0xfa9, alpha);
 }
 
+fn set_info_action_setting(e: &mut Engine, setting: u32) {
+    let text = e.call(0x0040_3df0, &args![setting]).u32();
+    let tile = hud_field(e, 0x9c);
+    hud_set_text(e, tile, text);
+}
+
+/// PC 00776fb8–0077704d: destination shown next to a teleporting door.
+fn set_info_teleport_name(e: &mut Engine, teleport: u32) {
+    e.with_stack(8, |e, destination| {
+        e.call(0x0040_37b0, &args![destination]);
+        e.call(0x0043_a2e0, &args![teleport, destination]);
+        let destination_name = e.call(0x0055_9450, &args![destination]).u32();
+        let separator = e.call(0x0040_3df0, &args![0x011d_3738_u32]).u32();
+        e.with_stack(0x104, |e, buffer| {
+            e.call(
+                0x0040_6d00,
+                &args![
+                    buffer,
+                    0x104_u32,
+                    0x0107_34e0_u32,
+                    0x011d_9c48_u32,
+                    separator,
+                    destination_name
+                ],
+            );
+            let name_tile = hud_field(e, 0xa8);
+            hud_set_text(e, name_tile, buffer.addr());
+        });
+        e.call(0x0040_37d0, &args![destination]);
+    });
+}
+
+/// The action text and button glyph portion of `SetInfoForRef`, PC
+/// 007773fe–00777c90. The string's lifetime ends before item details begin.
+#[allow(clippy::too_many_arguments)] // Keep PC 007773fe live locals explicit at this branch boundary.
+fn set_info_inventory_action(
+    e: &mut Engine,
+    reference: Ptr,
+    inventory: u32,
+    target_type: u32,
+    form_type: u32,
+    actor: bool,
+    lock: u32,
+    can_ignore_lock: bool,
+    display_mask: &mut u32,
+) {
+    e.with_stack(8, |e, action| {
+        e.call(0x0040_c0e0, &args![action, 0x0101_1584_u32]);
+        if inventory != 0 {
+            e.call(0x0050_1c10, &args![action, inventory + 0x18]);
+        }
+        if e.call(0x0040_48e0, &args![action]).u32() == 0 {
+            let base = e.call(0x007a_f430, &args![reference]).u32();
+            let cast = e
+                .call(
+                    0x00ec_43fb,
+                    &args![base, 0_u32, 0x0118_3108_u32, 0x0118_6584_u32, 0_u32],
+                )
+                .u32();
+            if cast != 0 {
+                e.with_stack(8, |e, name| {
+                    let converted = e.call(0x0051_10e0, &args![cast, name]).u32();
+                    e.call(0x0050_1c10, &args![action, converted]);
+                    e.call(0x0040_37d0, &args![name]);
+                });
+            }
+        }
+        if e.call(0x0040_48e0, &args![action]).u32() != 0 {
+            let text = e.call(0x0055_9450, &args![action]).u32();
+            let tile = hud_field(e, 0x9c);
+            hud_set_text(e, tile, text);
+            let name_tile = hud_field(e, 0xa8);
+            hud_set_text(e, name_tile, 0x0101_1584);
+            *display_mask |= 2;
+        } else if target_type == 1 && e.call(0x0057_9690, &args![reference]).bool() {
+            let setting = if actor && e.call(0x0056_6950, &args![reference]).bool() {
+                0x011d_517c
+            } else if form_type == 0x2a {
+                0x011d_3708
+            } else if form_type == 0x2b {
+                let process = e.call(0x0041_81e0, &args![reference]).u32();
+                if e.vcall(process + 0x30, 0x18, &args![]).bool() {
+                    0x011d_3708
+                } else {
+                    0x011d_4f48
+                }
+            } else {
+                0x011d_4f48
+            };
+            set_info_action_setting(e, setting);
+            *display_mask |= 2;
+        } else {
+            let first_base = e.call(0x007a_f430, &args![reference]).u32();
+            let special = first_base == e.mem.u32(0x011c_a27c)
+                || {
+                    let second_base = e.call(0x007a_f430, &args![reference]).u32();
+                    second_base == e.mem.u32(0x011c_a280)
+                }
+                || (target_type == 2 && (form_type == 0x2a || form_type == 0x2b));
+            if special {
+                set_info_action_setting(e, 0x011d_38dc);
+                *display_mask |= 2;
+            } else if target_type == 8
+                && form_type == 0x1c
+                && !e.call(0x0057_b460, &args![reference]).bool()
+            {
+                let first_state = e.call(0x0047_b250, &args![reference]).u32();
+                let open = first_state == 1 || e.call(0x0047_b250, &args![reference]).u32() == 2;
+                let setting = if lock != 0
+                    && e.call(0x0050_21a0, &args![lock]).bool()
+                    && {
+                        let player = current_player(e);
+                        !e.call(0x0057_85e0, &args![reference, player, 1_u32]).bool()
+                    }
+                    && !can_ignore_lock
+                {
+                    0x011d_45a0
+                } else if open {
+                    0x011d_22b0
+                } else {
+                    e.mem
+                        .u32(0x011d_5160_u32.wrapping_add(target_type.wrapping_mul(4)))
+                };
+                set_info_action_setting(e, setting);
+                *display_mask |= 2;
+            } else if target_type == 4 && form_type == 0x2b {
+                *display_mask &= !3;
+            } else if target_type == 6 {
+                let setting = e.mem.u32(0x011d_5164);
+                set_info_action_setting(e, setting);
+                *display_mask |= 2;
+            } else if target_type != 0
+                && (target_type as i32) < 0x14
+                && !e.call(0x0057_b460, &args![reference]).bool()
+            {
+                let essential = target_type == 1
+                    && actor
+                    && {
+                        let player = current_player(e);
+                        e.call(0x0049_97b0, &args![player]).bool()
+                    }
+                    && e.call(0x0087_f3d0, &args![reference]).bool();
+                if !essential {
+                    let setting = e
+                        .mem
+                        .u32(0x011d_5160_u32.wrapping_add(target_type.wrapping_mul(4)));
+                    set_info_action_setting(e, setting);
+                    *display_mask |= 2;
+                }
+            } else if e.vcall(reference.addr(), 0x224, &args![]).bool() {
+                let process = e.call(0x0041_81e0, &args![reference]).u32();
+                if e.call(0x0045_cd80, &args![process]).f64() != e.global::<f64>(0x0101_2060) {
+                    let setting = if e.call(0x0044_4d00, &args![reference, 0x200_u32]).bool() {
+                        e.mem.u32(0x011d_5164)
+                    } else {
+                        0x011d_3588
+                    };
+                    set_info_action_setting(e, setting);
+                    *display_mask |= 2;
+                    let target_tile = hud_field(e, 0xf4);
+                    hud_trait(e, target_tile, 0xff4, 1);
+                    let target_tile = hud_field(e, 0xf4);
+                    let text = e.call(0x00a0_11f0, &args![target_tile, 0x1005_u32]).u32();
+                    let target_tile = hud_field(e, 0xf4);
+                    e.call(0x00a0_1350, &args![target_tile, 0xfcc_u32, text, 1_u32]);
+                }
+            }
+        }
+
+        let opacity_setting = e.call(0x0040_3e20, &args![0x011d_9774_u32]).u32();
+        let opacity = quiet_f32(e.mem.f32(opacity_setting));
+        let alpha = (f64::from(opacity) * e.global::<f64>(0x0101_e568)) as f32;
+        let alpha_trait = e.call(0x00a0_1860, &args![0x0107_27cc_u32]).u32();
+        let action_tile = hud_field(e, 0x9c);
+        hud_set_float(e, action_tile, alpha_trait, alpha);
+
+        let controls = e.call(0x004b_71d0, &args![]).bool();
+        let input = e.mem.u32(0x011d_ea0c);
+        let binding = e
+            .call(
+                0x0087_7720,
+                &args![input, 5_u32, if controls { 3_u32 } else { 0_u32 }],
+            )
+            .u32();
+        let key = e.call(0x0070_3be0, &args![binding]).u32() as u8;
+        if controls {
+            let glyph = match key {
+                8 => Some(0x11),
+                9 => Some(0x12),
+                10 => Some(9),
+                11 => Some(10),
+                12 => Some(11),
+                13 => Some(12),
+                14 => Some(0x10),
+                15 => Some(15),
+                16 => Some(13),
+                17 => Some(14),
+                _ => None,
+            };
+            if let Some(glyph) = glyph {
+                let trait_id = e.call(0x00a0_1860, &args![0x0107_34d0_u32]).u32();
+                let action_tile = hud_field(e, 0x9c);
+                hud_trait(e, action_tile, trait_id, glyph);
+            }
+        } else if key < 0xee && e.mem.u32(0x011d_52f0 + u32::from(key) * 4) != 0 {
+            let setting = e.mem.u32(0x011d_52f0 + u32::from(key) * 4);
+            let text = e.call(0x0040_3df0, &args![setting]).u32();
+            e.with_stack(0x20, |e, buffer| {
+                e.call(0x0040_6d30, &args![buffer, 0x20_u32, text]);
+                e.call(0x0040_6d50, &args![buffer, 0x20_u32, 0x0103_d078_u32]);
+                let trait_id = e.call(0x00a0_1860, &args![0x0107_1358_u32]).u32();
+                let action_tile = hud_field(e, 0x9c);
+                e.call(0x00a0_1350, &args![action_tile, trait_id, buffer, 1_u32]);
+            });
+        } else {
+            let trait_id = e.call(0x00a0_1860, &args![0x0107_1358_u32]).u32();
+            let action_tile = hud_field(e, 0x9c);
+            e.call(
+                0x00a0_1350,
+                &args![action_tile, trait_id, 0x0101_1584_u32, 1_u32],
+            );
+        }
+        e.call(0x0040_37d0, &args![action]);
+    });
+}
+
+/// PC 00777c95–0077886d: construct a temporary ItemChange, fill the item
+/// summary, then position and reveal the HUD tiles. Compiler SEH is omitted.
+fn set_info_item_details(
+    e: &mut Engine,
+    reference: Ptr,
+    actor: bool,
+    marked_actor: bool,
+    display_mask: u32,
+) -> bool {
+    let is_dropped_item = e.vcall(reference.addr(), 0x224, &args![]).bool();
+    let dropped = if is_dropped_item { reference.addr() } else { 0 };
+    let has_nested = dropped != 0 && e.call(0x009d_9f00, &args![dropped]).u32() != 0;
+    let dropped_form = if dropped != 0 {
+        e.call(0x0047_6c90, &args![dropped]).u32()
+    } else {
+        0
+    };
+    let item_form_override =
+        if dropped_form != 0 && e.call(0x004c_0bf0, &args![dropped_form]).bool() {
+            dropped_form
+        } else {
+            0
+        };
+
+    e.with_stack(0xc, |e, item| {
+        if has_nested {
+            let nested = e.call(0x009d_9f00, &args![dropped]).u32();
+            e.call(0x004b_c650, &args![item, nested]);
+        } else {
+            let form = if item_form_override != 0 {
+                item_form_override
+            } else {
+                e.call(0x007a_f430, &args![reference]).u32()
+            };
+            e.with_stack(0xc, |e, temporary| {
+                let constructed = e.call(0x004b_c550, &args![temporary, form, 0_u32]).u32();
+                e.call(0x004b_c650, &args![item, constructed]);
+                e.call(0x004b_c5f0, &args![temporary]);
+            });
+        }
+        if e.mem.u32(item.addr()) == 0 {
+            let storage = e.call(0x0040_1000, &args![8_u32]).u32();
+            let list = if storage != 0 {
+                e.call(0x0096_a2d0, &args![storage]).u32()
+            } else {
+                0
+            };
+            e.mem.set_u32(item.addr(), list);
+        }
+        let extra = e.call(0x005d_43c0, &args![reference]).u32();
+        e.with_stack(4, |e, extra_slot| {
+            e.mem.set_u32(extra_slot.addr(), extra);
+            let list = e.mem.u32(item.addr());
+            e.call(0x005a_e3d0, &args![list, extra_slot]);
+        });
+
+        let first_form = e.call(0x007a_f430, &args![reference]).u32();
+        let first_type = e.call(0x0040_1170, &args![first_form]).u32();
+        let water = if first_type == 0x15 || first_type == 0x23 {
+            let form = e.call(0x007a_f430, &args![reference]).u32();
+            e.vcall(form, 0x140, &args![]).u32()
+        } else {
+            0
+        };
+        let mut mask = display_mask;
+        if water != 0 {
+            let radiation = e.call(0x0077_8950, &args![water]).u32();
+            let health = e.call(0x0077_8970, &args![water]).u32();
+            e.call(0x0077_8a90, &args![health, 0x23_u32, 0x24_u32]);
+            e.call(0x0077_8990, &args![radiation, 0x25_u32, 0x26_u32]);
+            mask |= 0xfc;
+        } else {
+            let value = quiet_f32(e.call(0x004b_d400, &args![item]).f64() as f32);
+            let zero: f64 = e.global(0x0101_2060);
+            if f64::from(value).partial_cmp(&zero) != Some(core::cmp::Ordering::Greater) {
+                e.call(0x0040_6d30, &args![0x011d_9c40_u32, 8_u32, 0x0104_7008_u32]);
+            } else {
+                let one: f64 = e.global(0x0101_2070);
+                let format = if f64::from(value) < one {
+                    0x0102_0768
+                } else {
+                    0x0106_ecc8
+                };
+                e.call(
+                    0x0040_6d00,
+                    &args![0x011d_9c40_u32, 8_u32, format, f64::from(value)],
+                );
+            }
+
+            let form = e.call(0x0044_ddc0, &args![item]).u32();
+            let form_type = e.call(0x0040_1170, &args![form]).u32();
+            let mut weight = if form_type == 0x28 {
+                let form = e.call(0x0044_ddc0, &args![item]).u32();
+                let mod_active = e.call(0x004b_da70, &args![item, 4_u32]).bool();
+                quiet_f32(e.call(0x004b_e380, &args![form, mod_active]).f64() as f32)
+            } else {
+                let player = current_player(e);
+                let uses_weight = e.call(0x004d_1360, &args![player]).bool();
+                let form = e.call(0x0044_ddc0, &args![item]).u32();
+                quiet_f32(e.call(0x0048_ebc0, &args![form, uses_weight]).f64() as f32)
+            };
+            if form_type == 0x28 && f64::from(weight) >= e.global::<f64>(0x0102_0758) {
+                e.with_stack(4, |e, factor| {
+                    e.mem.set_f32(factor.addr(), 1.0);
+                    let player = current_player(e);
+                    e.call(0x005e_58f0, &args![0x49_u32, player, factor]);
+                    weight = quiet_f32(weight * e.mem.f32(factor.addr()));
+                });
+            }
+            let zero: f64 = e.global(0x0101_2060);
+            if f64::from(weight).partial_cmp(&zero) != Some(core::cmp::Ordering::Greater) {
+                e.call(0x0040_6d30, &args![0x011d_9c38_u32, 8_u32, 0x0104_7008_u32]);
+            } else {
+                e.call(
+                    0x0040_6d00,
+                    &args![0x011d_9c38_u32, 8_u32, 0x0102_0768_u32, f64::from(weight)],
+                );
+            }
+            let weight_tile = hud_field(e, 0xb4);
+            hud_set_text(e, weight_tile, 0x011d_9c38);
+            let weight_label = e.call(0x0040_3df0, &args![0x011d_2aa8_u32]).u32();
+            let weight_label_tile = hud_field(e, 0xb8);
+            hud_set_text(e, weight_label_tile, weight_label);
+            let value_tile = hud_field(e, 0xbc);
+            hud_set_text(e, value_tile, 0x011d_9c40);
+            let value_label = e.call(0x0040_3df0, &args![0x011d_26a0_u32]).u32();
+            let value_label_tile = hud_field(e, 0xc0);
+            hud_set_text(e, value_label_tile, value_label);
+        }
+
+        if e.mem.u32(0x011d_9c34) & 1 == 0 {
+            let flags = e.mem.u32(0x011d_9c34);
+            e.mem.set_u32(0x011d_9c34, flags | 1);
+            let parent = hud_field(e, 0x138);
+            let button_text = e.call(0x00a0_8b20, &args![parent, 0x0107_34c4_u32]).u32();
+            e.mem.set_u32(0x011d_9c30, button_text);
+        }
+        let usable = e.call(0x0057_9690, &args![reference]).bool();
+        let hidden = (!usable || (actor && e.call(0x0056_6950, &args![reference]).bool()))
+            && (!actor || {
+                let player = current_player(e);
+                !e.call(0x008b_c700, &args![reference, player]).bool() && !marked_actor
+            });
+        let mode = if hidden { 1 } else { 2 };
+        for offset in (0x9c_u32..=0xc4).step_by(4) {
+            let target = hud_field(e, offset);
+            hud_trait(e, target, 0xff4, mode);
+        }
+        let button_text = e.mem.u32(0x011d_9c30);
+        e.call(0x00a0_7530, &args![button_text, 8_u32]);
+
+        let name_tile = hud_field(e, 0xa8);
+        let name_y = hud_float(e, name_tile, 0x100c);
+        let name_tile = hud_field(e, 0xa8);
+        let font_size = hud_float(e, name_tile, 0xfba);
+        let name_tile = hud_field(e, 0xa8);
+        let font_raw = e.call(0x00a0_11b0, &args![name_tile, 0xfb9_u32]).f64();
+        let font = x87_to_int(e, font_raw);
+        let name_tile = hud_field(e, 0xa8);
+        let text = e.call(0x00a0_11f0, &args![name_tile, 0xfc4_u32]).u32();
+        let measured_height = e.with_stack(12, |e, dimensions| {
+            let manager = e.call(0x005b_d5b0, &args![]).u32();
+            e.call(
+                0x00a1_b020,
+                &args![manager, dimensions, text, font, font_size, 0_u32],
+            );
+            e.mem.f32(dimensions.addr() + 4)
+        });
+        let action_tile = hud_field(e, 0x9c);
+        let action_y = hud_float(e, action_tile, 0x1004);
+        let shift = quiet_f32(
+            (f64::from(action_y) - (f64::from(measured_height) - f64::from(name_y))) as f32,
+        );
+        let shift_trait = e.call(0x00a0_1860, &args![0x0106_f8f4_u32]).u32();
+        let action_tile = hud_field(e, 0x9c);
+        hud_set_float(e, action_tile, shift_trait, shift);
+        let action_tile = hud_field(e, 0x9c);
+        let action_height = e.call(0x00a0_11b0, &args![action_tile, 0xfb0_u32]).f64();
+        let name_tile = hud_field(e, 0xa8);
+        hud_set_float(
+            e,
+            name_tile,
+            0xfa2,
+            quiet_f32((action_height + f64::from(shift)) as f32),
+        );
+        let parent_tile = hud_field(e, 0x138);
+        let parent_y = e.call(0x00a0_11b0, &args![parent_tile, 0xfa2_u32]).f64();
+        let background_tile = hud_field(e, 0x13c);
+        let background_height = e
+            .call(0x00a0_11b0, &args![background_tile, 0xfb0_u32])
+            .f64();
+        let background_y =
+            (parent_y + f64::from(shift) - background_height - e.global::<f64>(0x0101_e2c0)) as f32;
+        let background_tile = hud_field(e, 0x13c);
+        hud_set_float(e, background_tile, 0xfa2, quiet_f32(background_y));
+
+        let action_tile = hud_field(e, 0x9c);
+        hud_trait(e, action_tile, 0xfa3, mask & 2);
+        let name_tile = hud_field(e, 0xa8);
+        hud_trait(e, name_tile, 0xfa3, u32::from(mask & 4 != 0));
+        if mask & 6 != 0 {
+            for offset in [0x7c_u32, 0x80, 0x84] {
+                let tile = hud_field(e, offset);
+                hud_trait(e, tile, 0xfa3, 0);
+            }
+        }
+        let lock_tile = hud_field(e, 0xac);
+        hud_trait(e, lock_tile, 0xfa3, u32::from(mask & 4 != 0));
+        let value = if mask & 4 == 0 {
+            0
+        } else {
+            let lock_tile = hud_field(e, 0xac);
+            let lock_alpha = e.call(0x00a0_11b0, &args![lock_tile, 0xfa9_u32]).f64();
+            u32::from(lock_alpha == e.global::<f64>(0x0101_2060))
+        };
+        let container_tile = hud_field(e, 0xb0);
+        hud_trait(e, container_tile, 0xfa3, value);
+        for (offset, bit) in [
+            (0xb4_u32, 8_u32),
+            (0xb8, 0x10),
+            (0xbc, 0x20),
+            (0xc0, 0x40),
+            (0xc4, 0x80),
+        ] {
+            let tile = hud_field(e, offset);
+            hud_trait(e, tile, 0xfa3, u32::from(mask & bit != 0));
+        }
+        e.call(0x004b_c5f0, &args![item]);
+    });
+    true
+}
+
 fn clear_info_target_tiles(e: &mut Engine) -> bool {
     for offset in [0x9c_u32, 0xa8, 0xac, 0xb0, 0xb4, 0xb8, 0xbc, 0xc0, 0xc4] {
         let target_tile = hud_field(e, offset);
@@ -3694,11 +4152,10 @@ pub fn hud_main_menu_update_status_mode_ui(
 }
 
 // Translated from 00775a00 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `HUDMainMenu::SetInfoForRef` (Xbox PDB). The entry, unchanged reference,
-/// cleared reference, visibility prompt, and unsupported-form branches update
-/// the action tiles in the PC order.
+/// `HUDMainMenu::SetInfoForRef` (Xbox PDB): updates target name, lock/action
+/// prompts, item details, button hints, and their tile visibility in PC order.
 // The PC function installs an SEH frame at entry; exception unwinding is not translated.
-// Translation incomplete: 00775a00 - teleport-name and inventory construction after 00776fae/007773ee.
+// Translation incomplete: 00775a00 - compiler-generated SEH unwinding is omitted.
 pub fn hud_main_menu_set_info_for_ref(
     e: &mut Engine,
     mut reference: Ptr,
@@ -3863,7 +4320,7 @@ pub fn hud_main_menu_set_info_for_ref(
 
     let form = e.call(0x007a_f430, &args![reference]).u32();
     let form_type = e.call(0x0040_1170, &args![form]).u32();
-    let mut _display_mask = 0_u32;
+    let mut display_mask = 0_u32;
     let mut _alchemy_form = 0_u32;
     let mut armor_form = 0_u32;
     let mut weapon_form = 0_u32;
@@ -3871,7 +4328,7 @@ pub fn hud_main_menu_set_info_for_ref(
         0x15 | 0x16 | 0x17 | 0x1b | 0x1c | 0x27 | 0x2a | 0x2b => {}
         0x18 => {
             _alchemy_form = e.call(0x007a_f430, &args![reference]).u32();
-            _display_mask |= 0xfc;
+            display_mask |= 0xfc;
         }
         0x1e => {
             set_info_target_prompt(e, 1, 0x1004);
@@ -3879,19 +4336,19 @@ pub fn hud_main_menu_set_info_for_ref(
             if !e.call(0x0046_f070, &args![form]).bool() {
                 return true;
             }
-            _display_mask |= 0xfc;
+            display_mask |= 0xfc;
         }
         0x20 | 0x21 | 0x25 => return set_info_unsupported_form(e),
         0x28 => {
             armor_form = e.call(0x007a_f430, &args![reference]).u32();
             if e.call(0x0047_bcf0, &args![armor_form]).bool() {
-                _display_mask |= 0xfc;
+                display_mask |= 0xfc;
             }
         }
         0x29 => {
             weapon_form = e.call(0x007a_f430, &args![reference]).u32();
             if e.call(0x004c_94d0, &args![weapon_form]).bool() {
-                _display_mask |= 0xfc;
+                display_mask |= 0xfc;
             }
         }
         0x33 => {
@@ -3906,10 +4363,10 @@ pub fn hud_main_menu_set_info_for_ref(
                 if e.call(0x0040_1170, &args![reference]).u32() == 0x3d {
                     return set_info_unsupported_form(e);
                 }
-                _display_mask |= 0xfc;
+                display_mask |= 0xfc;
             }
         }
-        0x1f | 0x23 | 0x2f | 0x67 => _display_mask |= 0xfc,
+        0x1f | 0x23 | 0x2f | 0x67 => display_mask |= 0xfc,
         _ => {
             let target_tile = hud_field(e, 0xf4);
             hud_trait(e, target_tile, 0xff4, 1);
@@ -4195,11 +4652,15 @@ pub fn hud_main_menu_set_info_for_ref(
                 hud_trait(e, tile, 0xfa3, 0);
             }
             if displayed {
-                _display_mask |= 4;
+                display_mask |= 4;
             }
         }
     } else {
-        panic!("Translation incomplete: 00775a00 teleport name at 00776fb8");
+        // DoorTeleportData::GetTeleportCellMapName writes an 8-byte string
+        // temporary. The PC body formats the door name, localized separator,
+        // and destination into the fixed 0x104-byte stack buffer.
+        set_info_teleport_name(e, teleport);
+        display_mask |= 4;
     }
 
     let inventory_target_type = e.call(0x0057_9280, &args![reference]).u32();
@@ -4233,13 +4694,21 @@ pub fn hud_main_menu_set_info_for_ref(
                     && !marked_actor)
         };
         if actor_inventory_allowed && !e.call(0x0047_7ba0, &args![reference]).bool() {
-            let _inventory = e.call(0x0052_7080, &args![reference, 0x53_u32]).u32();
-            panic!("Translation incomplete: 00775a00 inventory construction at 007773fe");
+            let inventory = e.call(0x0052_7080, &args![reference, 0x53_u32]).u32();
+            set_info_inventory_action(
+                e,
+                reference,
+                inventory,
+                inventory_target_type,
+                form_type,
+                actor,
+                lock,
+                can_ignore_lock,
+                &mut display_mask,
+            );
         }
     }
-
-    // open: 00776fb8-0077704d handles teleport names; 007773fe-0077886d builds inventory tiles.
-    panic!("Translation incomplete: 00775a00 reference details");
+    set_info_item_details(e, reference, actor, marked_actor, display_mask)
 }
 
 /// This unit's translated functions, by exe address.
@@ -4356,6 +4825,398 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_info_teleport_name_formats_destination_before_destroying_string() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x6000);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(menu.addr() + 0xa8, 0x5000);
+        e.register_double(0x0040_37b0, |_, _| Ret::default());
+        e.register_double(0x0043_a2e0, |_, words| {
+            assert_eq!(words[0], 0x7000);
+            Ret::default()
+        });
+        e.register_double(0x0055_9450, |_, _| Ret {
+            eax: 0x7100,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_3df0, |_, words| {
+            assert_eq!(words, [0x011d_3738]);
+            Ret {
+                eax: 0x7200,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_6d00, |_, words| {
+            assert_eq!(
+                words[1..],
+                [0x104, 0x0107_34e0, 0x011d_9c48, 0x7200, 0x7100]
+            );
+            Ret::default()
+        });
+        e.register_double(0x00a0_1350, |_, words| {
+            assert_eq!(words[0..2], [0x5000, 0xfc4]);
+            assert_eq!(words[3], 1);
+            Ret::default()
+        });
+        e.register_double(0x0040_37d0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        set_info_teleport_name(&mut e, 0x7000);
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .map(|(address, _)| *address)
+                .collect::<Vec<_>>(),
+            [
+                0x0040_37b0,
+                0x0043_a2e0,
+                0x0055_9450,
+                0x0040_3df0,
+                0x0040_6d00,
+                0x00a0_1350,
+                0x0040_37d0
+            ]
+        );
+    }
+
+    #[test]
+    fn set_info_inventory_action_clears_mask_and_reloads_player_after_lock_callback() {
+        let mut e = Engine::new();
+        e.map(0x011c_a000, 0x1000);
+        e.map(0x011d_2000, 0xd000);
+        e.map(0x0101_e000, 0x1000);
+        e.mem.set_f64(0x0101_e568, 255.0);
+        e.mem.set_f32(0x011d_9774, 0.5);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(menu.addr() + 0x9c, 0x5000);
+        e.register_double(0x0040_c0e0, |_, _| Ret::default());
+        e.register_double(0x0040_48e0, |_, _| Ret::default());
+        e.register_double(0x007a_f430, |_, _| Ret {
+            eax: 0x7000,
+            ..Ret::default()
+        });
+        e.register_double(0x00ec_43fb, |_, _| Ret::default());
+        e.register_double(0x0040_3e20, |_, words| {
+            assert_eq!(words, [0x011d_9774]);
+            Ret {
+                eax: 0x011d_9774,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00a0_1860, |_, _| Ret {
+            eax: 0xfa9,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_12d0, |_, _| Ret::default());
+        e.register_double(0x004b_71d0, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0087_7720, |_, words| {
+            assert_eq!(words[1..], [5, 3]);
+            Ret::default()
+        });
+        e.register_double(0x0070_3be0, |_, _| Ret {
+            eax: 9,
+            ..Ret::default()
+        });
+        e.register_double(0x0070_0320, |_, words| {
+            assert_eq!(words, [0x5000, 0xfa9, 0x12]);
+            Ret::default()
+        });
+        e.register_double(0x0040_37d0, |_, _| Ret::default());
+        let mut mask = 3;
+        set_info_inventory_action(
+            &mut e,
+            Ptr::new(0x6000),
+            0,
+            4,
+            0x2b,
+            false,
+            0,
+            true,
+            &mut mask,
+        );
+        assert_eq!(mask, 0);
+
+        e.mem.set_u32(0x011d_ea3c, 0x9000);
+        e.register_double(0x0057_b460, |_, _| Ret::default());
+        e.register_double(0x0047_b250, |_, _| Ret::default());
+        e.register_double(0x0050_21a0, |e, words| {
+            assert_eq!(words, [0x7000]);
+            e.mem.set_u32(0x011d_ea3c, 0x9004);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0057_85e0, |_, words| {
+            assert_eq!(words, [0x6000, 0x9004, 1]);
+            Ret::default()
+        });
+        e.register_double(0x0040_3df0, |_, words| {
+            assert_eq!(words, [0x011d_45a0]);
+            Ret {
+                eax: 0x7400,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00a0_1350, |_, words| {
+            assert_eq!(words, [0x5000, 0xfc4, 0x7400, 1]);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        set_info_inventory_action(
+            &mut e,
+            Ptr::new(0x6000),
+            0,
+            8,
+            0x1c,
+            false,
+            0x7000,
+            false,
+            &mut mask,
+        );
+        assert_eq!(mask, 2);
+        let calls = e.call_log.take().unwrap();
+        let locked = calls
+            .iter()
+            .position(|(address, _)| *address == 0x0050_21a0)
+            .unwrap();
+        let owner = calls
+            .iter()
+            .position(|(address, _)| *address == 0x0057_85e0)
+            .unwrap();
+        assert!(locked < owner);
+
+        // 00777846 uses signed JGE, so a negative target type still indexes
+        // the preceding table word through 32-bit wrapping arithmetic.
+        e.mem.set_u32(0x011d_515c, 0x011d_38dc);
+        e.register_double(0x0040_3df0, |_, words| {
+            assert_eq!(words, [0x011d_38dc]);
+            Ret {
+                eax: 0x7400,
+                ..Ret::default()
+            }
+        });
+        mask = 0;
+        set_info_inventory_action(
+            &mut e,
+            Ptr::new(0x6000),
+            0,
+            u32::MAX,
+            0x15,
+            false,
+            0,
+            true,
+            &mut mask,
+        );
+        assert_eq!(mask, 2);
+    }
+
+    #[test]
+    fn set_info_item_details_cover_water_and_unordered_numeric_values() {
+        let mut e = Engine::new();
+        e.map(0x011d_2000, 0xd000);
+        e.map(0x0101_2000, 0x1000);
+        e.map(0x0101_e000, 0x1000);
+        e.mem.set_f64(0x0101_2060, 0.0);
+        e.mem.set_f64(0x0101_e2c0, 50.0);
+        e.mem.set_u32(0x011d_9c34, 1);
+        e.mem.set_u32(0x011d_9c30, 0x5300);
+        let menu = e.new_object::<HUDMainMenu>();
+        let next_menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        for offset in (0x9c_u32..=0xc4).step_by(4).chain([0x138, 0x13c]) {
+            e.mem.set_u32(menu.addr() + offset, 0x5000 + offset);
+            e.mem.set_u32(next_menu.addr() + offset, 0x6000 + offset);
+        }
+        let reference = e.mem.alloc(0x20);
+        let form = e.mem.alloc(0x20);
+        let mut reference_slots = [0_u32; 0x8a];
+        reference_slots[0x224 / 4] = 0x0300_1224;
+        e.put_vtable(0x0300_1000, &reference_slots);
+        e.mem.set_u32(reference, 0x0300_1000);
+        let mut form_slots = [0_u32; 0x51];
+        form_slots[0x140 / 4] = 0x0300_2140;
+        e.put_vtable(0x0300_2000, &form_slots);
+        e.mem.set_u32(form, 0x0300_2000);
+        e.register_double(0x0300_1224, |_, _| Ret::default());
+        e.register_double(0x007a_f430, move |_, _| Ret {
+            eax: form,
+            ..Ret::default()
+        });
+        e.register_double(0x004b_c550, |_, _| Ret {
+            eax: 0x8abc,
+            ..Ret::default()
+        });
+        e.register_double(0x004b_c650, |e, words| {
+            assert_eq!(words[1], 0x8abc);
+            e.mem.set_u32(words[0], 0x8000);
+            Ret::default()
+        });
+        e.register_double(0x004b_c5f0, |_, _| Ret::default());
+        e.register_double(0x005d_43c0, |_, _| Ret {
+            eax: 0x8100,
+            ..Ret::default()
+        });
+        e.register_double(0x005a_e3d0, |_, _| Ret::default());
+        e.register_double(0x0040_1170, |_, _| Ret {
+            eax: 0x15,
+            ..Ret::default()
+        });
+        e.register_double(0x0300_2140, |_, _| Ret {
+            eax: 0x8200,
+            ..Ret::default()
+        });
+        e.register_double(0x0077_8950, |_, _| Ret {
+            eax: 7,
+            ..Ret::default()
+        });
+        e.register_double(0x0077_8970, |_, _| Ret {
+            eax: 9,
+            ..Ret::default()
+        });
+        e.register_double(0x0077_8a90, |_, words| {
+            assert_eq!(words, [9, 0x23, 0x24]);
+            Ret::default()
+        });
+        e.register_double(0x0077_8990, |_, words| {
+            assert_eq!(words, [7, 0x25, 0x26]);
+            Ret::default()
+        });
+        e.register_double(0x0057_9690, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0070_0320, |_, _| Ret::default());
+        e.register_double(0x00a0_7530, |_, words| {
+            assert_eq!(words, [0x5300, 8]);
+            Ret::default()
+        });
+        e.register_double(0x00a0_11b0, move |e, words| {
+            if words[1] == 0x100c {
+                assert_eq!(words[0], 0x5000 + 0xa8);
+                e.mem.set_u32(0x011d_96c0, next_menu.addr());
+            } else if words[1] == 0xfba || words[1] == 0xfb9 {
+                assert_eq!(words[0], 0x6000 + 0xa8);
+            }
+            Ret {
+                st0: 20.0,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00ec_62c0, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_11f0, |_, words| {
+            assert_eq!(words, [0x6000 + 0xa8, 0xfc4]);
+            Ret {
+                eax: 0x8300,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x005b_d5b0, |_, _| Ret {
+            eax: 0x8400,
+            ..Ret::default()
+        });
+        e.register_double(0x00a1_b020, |e, words| {
+            e.mem.set_f32(words[1] + 4, 5.0);
+            Ret::default()
+        });
+        e.register_double(0x00a0_1860, |_, _| Ret {
+            eax: 0xf00,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_12d0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(set_info_item_details(
+            &mut e,
+            Ptr::new(reference),
+            false,
+            false,
+            4
+        ));
+        let calls = e.call_log.take().unwrap();
+        let health = calls
+            .iter()
+            .position(|(address, _)| *address == 0x0077_8a90)
+            .unwrap();
+        let radiation = calls
+            .iter()
+            .position(|(address, _)| *address == 0x0077_8990)
+            .unwrap();
+        assert!(health < radiation);
+        assert!(calls.iter().any(|(address, words)| *address == 0x0070_0320
+            && words == &args![0x6000_u32 + 0xc4_u32, 0xfa3_u32, 1_u32]));
+        assert_eq!(calls.last().unwrap().0, 0x004b_c5f0);
+        let temporary = calls
+            .iter()
+            .find(|(address, _)| *address == 0x004b_c550)
+            .unwrap()
+            .1[0];
+        let first_destructor = calls
+            .iter()
+            .find(|(address, _)| *address == 0x004b_c5f0)
+            .unwrap();
+        assert_eq!(first_destructor.1.as_slice(), args![temporary].as_slice());
+
+        // FCOMP followed by TEST AH,0x41 selects the zero-format for NaN as
+        // well as for nonpositive values; both item value and weight do this.
+        e.register_double(0x0040_1170, |_, _| Ret {
+            eax: 0x29,
+            ..Ret::default()
+        });
+        e.register_double(0x004b_d400, |_, _| Ret {
+            st0: f64::NAN,
+            ..Ret::default()
+        });
+        e.register_double(0x0044_ddc0, move |_, _| Ret {
+            eax: form,
+            ..Ret::default()
+        });
+        e.register_double(0x004d_1360, |_, _| Ret::default());
+        e.register_double(0x0048_ebc0, |_, _| Ret {
+            st0: f64::NAN,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_6d30, |_, words| {
+            assert!(words[0] == 0x011d_9c40 || words[0] == 0x011d_9c38);
+            assert_eq!(words[1..], [8, 0x0104_7008]);
+            Ret::default()
+        });
+        e.register_double(0x0040_3df0, |_, _| Ret {
+            eax: 0x8500,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_1350, |_, _| Ret::default());
+        e.register_double(0x00a0_11b0, |_, _| Ret {
+            st0: 20.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(set_info_item_details(
+            &mut e,
+            Ptr::new(reference),
+            false,
+            false,
+            4
+        ));
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0040_6d30)
+                .count(),
+            2
+        );
+        assert!(!calls.iter().any(|(address, _)| *address == 0x0040_6d00));
+    }
 
     #[test]
     fn set_info_for_ref_reuses_or_clears_target_tiles_in_pc_order() {

@@ -23,6 +23,25 @@ layout! {
     }
 }
 
+layout! {
+    /// `SettingCollectionMap<Setting>` (Xbox PDB), PC offsets checked at
+    /// 00404d13, 00404d3c and 00404e47.
+    pub struct SettingCollectionMap: 0x120 {
+        0x108 pHandle: Ptr,
+        0x10c settings: Inline<SettingStringMap>,
+    }
+}
+
+layout! {
+    /// `BSTCaseInsensitiveStringMap<Setting *>` (Xbox PDB), PC offsets
+    /// checked at 0040528b-004052d9.
+    pub struct SettingStringMap: 0x14 {
+        0x04 m_uiHashSize: u32,
+        0x08 m_ppkHashTable: Ptr,
+        0x10 m_bCopy: bool,
+    }
+}
+
 const INVALID_COST: u32 = 0x0101_2054; // float -1.0 in the exe
 
 fn quiet_f32(value: f32) -> f32 {
@@ -559,6 +578,413 @@ pub fn fn_00404a70(e: &mut Engine) -> Ptr {
     e.global(0x011c_8048)
 }
 
+// Translated from 00404a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lazily allocate and construct the global game settings collection.
+// Translation incomplete: 00404a80 - compiler SEH unwinding is not modeled.
+pub fn fn_00404a80(e: &mut Engine) {
+    if e.global::<u32>(0x011c_8048) == 0 {
+        let storage = e.call(0x0040_1000, &args![0x120u32]).ptr::<()>();
+        let collection = if storage.is_null() {
+            Ptr::NULL
+        } else {
+            fn_00404b10(e, storage)
+        };
+        e.set_global(0x011c_8048, collection);
+    }
+}
+
+// Translated from 00404b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Construct a `GameSettingCollection` (Xbox PDB) and install its vtable.
+pub fn fn_00404b10(e: &mut Engine, this: Ptr) -> Ptr {
+    let map_size: u32 = e.global(0x0118_9c40);
+    fn_00404b90(e, this, map_size);
+    e.mem.set_u32(this.addr(), 0x0101_212c);
+    this
+}
+
+// Translated from 00404b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor for `GameSettingCollection` (Xbox PDB).
+pub fn fn_00404b40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00404b70(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 00404b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroy the `GameSettingCollection` (Xbox PDB) base.
+pub fn fn_00404b70(e: &mut Engine, this: Ptr) {
+    fn_00404c00(e, this);
+}
+
+// Translated from 00404b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Construct the setting collection and its embedded string map.
+// Translation incomplete: 00404b90 - compiler SEH unwinding is not modeled.
+pub fn fn_00404b90(e: &mut Engine, this: Ptr, map_size: u32) -> Ptr {
+    fn_00404d00(e, this);
+    e.mem.set_u32(this.addr(), 0x0101_215c);
+    fn_00404d50(e, this.byte_add(0x10c), map_size, false);
+    this
+}
+
+// Translated from 00404c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroy the embedded string map and then the setting collection base.
+// Translation incomplete: 00404c00 - compiler SEH unwinding is not modeled.
+pub fn fn_00404c00(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_215c);
+    e.call(0x0043_8af0, &args![this.byte_add(0x10c)]);
+    fn_00404da0(e, this.byte_add(0x10c));
+    fn_00404c80(e, this);
+}
+
+// Translated from 00404c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Restore the `SettingCollection<Setting>` (Xbox PDB) vtable and close it.
+pub fn fn_00404c80(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_2188);
+    e.call(0x008d_0360, &args![this]);
+}
+
+// Translated from 00404ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor for `SettingCollectionMap<Setting>` (Xbox PDB).
+pub fn fn_00404ca0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00404c00(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 00404cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor for `SettingCollection<Setting>` (Xbox PDB).
+pub fn setting_collection_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00404c80(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 00404d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initialize the `SettingCollection<Setting>` (Xbox PDB) base fields.
+pub fn fn_00404d00(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0x0101_2188);
+    e.mem.set_u32(this.addr() + 0x108, 0);
+    e.mem.set_u8(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 00404d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the collection's file handle is non-null.
+pub fn fn_00404d30(e: &mut Engine, this: Ptr<SettingCollectionMap>) -> bool {
+    !e.get(this, SettingCollectionMap::pHandle).is_null()
+}
+
+// Translated from 00404d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Construct the embedded case-insensitive setting string map.
+pub fn fn_00404d50(e: &mut Engine, this: Ptr, hash_size: u32, copy: bool) -> Ptr {
+    e.call(0x0040_5570, &args![this, hash_size, copy]);
+    e.mem.set_u32(this.addr(), 0x0101_21b4);
+    this
+}
+
+// Translated from 00404d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forward the destination, capacity and source to the CRT copy routine.
+pub fn fn_00404d80(e: &mut Engine, destination: Ptr, capacity: u32, source: Ptr) -> Ptr {
+    e.call(0x00ec_65a6, &args![destination, capacity, source]);
+    destination
+}
+
+// Translated from 00404da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Restore the case-insensitive map vtable and destroy its base.
+pub fn fn_00404da0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_21b4);
+    fn_00405230(e, this);
+}
+
+// Translated from 00404dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forward two strings to the CRT case-insensitive comparison.
+pub fn fn_00404dc0(e: &mut Engine, left: Ptr, right: Ptr) -> i32 {
+    e.call(0x00ec_68e4, &args![left, right]).i32()
+}
+
+// Translated from 00404de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SettingCollectionMap<Setting>::Add` (Xbox PDB): add a setting by its key,
+/// warning when the map already contains that key.
+// Translation incomplete: 00404de0 - compiler SEH unwinding is not modeled.
+pub fn setting_collection_map_add(e: &mut Engine, this: Ptr, setting: Ptr) {
+    e.with_stack(8, |e, guard| {
+        fn_00404eb0(e, guard, 9, true, Ptr::new(0x0101_2220), 0x21b);
+        if !setting.is_null() {
+            let key = e.call(0x0044_ddc0, &args![setting]).ptr::<()>();
+            if !key.is_null() {
+                let key = e.call(0x0044_ddc0, &args![setting]).ptr::<()>();
+                let duplicate = e
+                    .call(
+                        0x0085_3130,
+                        &args![this.byte_add(0x10c), key, guard.byte_add(4)],
+                    )
+                    .bool();
+                if duplicate {
+                    let key = e.call(0x0044_ddc0, &args![setting]).ptr::<()>();
+                    e.call(0x00c3_35a0, &args![0x0101_21d0u32, key]);
+                } else {
+                    let key = e.call(0x0044_ddc0, &args![setting]).ptr::<()>();
+                    e.call(0x0047_0200, &args![this.byte_add(0x10c), key, setting]);
+                }
+            }
+        }
+        fn_00404ee0(e, guard);
+    });
+}
+
+// Translated from 00404eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Construct a temporary TLS setting guard; only `new_value` is read.
+pub fn fn_00404eb0(
+    e: &mut Engine,
+    this: Ptr,
+    new_value: u32,
+    mode: bool,
+    source: Ptr,
+    line: u32,
+) -> Ptr {
+    fn_00404f00(e, this, new_value, mode, source, line);
+    this
+}
+
+// Translated from 00404ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Restore the TLS setting guard's saved value.
+pub fn fn_00404ee0(e: &mut Engine, this: Ptr) {
+    fn_00404f70(e, this);
+}
+
+// Translated from 00404f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Save the prior TLS setting guard value, then set a new one.
+pub fn fn_00404f00(
+    e: &mut Engine,
+    this: Ptr,
+    new_value: u32,
+    _unused_mode: bool,
+    _unused_source: Ptr,
+    _unused_line: u32,
+) {
+    let previous = fn_00404f50(e);
+    e.mem.set_u32(this.addr(), previous);
+    fn_00404f30(e, new_value);
+}
+
+// Translated from 00404f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Set the thread-local setting guard at offset +0x2b4.
+pub fn fn_00404f30(e: &mut Engine, value: u32) {
+    let tls = e.tls();
+    e.mem.set_u32(tls + 0x2b4, value);
+}
+
+// Translated from 00404f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Get the thread-local setting guard at offset +0x2b4.
+pub fn fn_00404f50(e: &mut Engine) -> u32 {
+    let tls = e.tls();
+    e.mem.u32(tls + 0x2b4)
+}
+
+// Translated from 00404f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Restore a saved thread-local setting guard value.
+pub fn fn_00404f70(e: &mut Engine, this: Ptr) {
+    let previous = e.mem.u32(this.addr());
+    fn_00404f30(e, previous);
+}
+
+// Translated from 00404f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SettingCollectionMap<Setting>::Remove` (Xbox PDB): remove a non-null
+/// setting with a non-null key from the embedded map.
+pub fn setting_collection_map_remove(e: &mut Engine, this: Ptr, setting: Ptr) {
+    if !setting.is_null() && !e.call(0x0044_ddc0, &args![setting]).ptr::<()>().is_null() {
+        let key = e.call(0x0044_ddc0, &args![setting]).ptr::<()>();
+        e.call(0x0040_5430, &args![this.byte_add(0x10c), key]);
+    }
+}
+
+// Translated from 00404fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SettingCollectionMap<Setting>::GetViewerStrings` (Xbox PDB): visit each
+/// non-null setting and count the ones sent to its viewer-string method.
+// Translation incomplete: 00404fd0 - compiler SEH unwinding is not modeled.
+pub fn setting_collection_map_get_viewer_strings(e: &mut Engine, this: Ptr, output: Ptr) -> u32 {
+    e.with_stack(4, |e, guard| {
+        fn_00404eb0(e, guard, 9, true, Ptr::new(0x0101_2220), 0x239);
+        let count = e.with_stack(12, |e, work| {
+            let map = this.byte_add(0x10c);
+            let first = e.call(0x004b_9ba0, &args![map]).u32();
+            e.mem.set_u32(work.addr(), first);
+            let mut count = 0u32;
+            while e.mem.u32(work.addr()) != 0 {
+                e.call(
+                    0x006b_7f20,
+                    &args![map, work, work.byte_add(4), work.byte_add(8)],
+                );
+                let setting = e.mem.u32(work.addr() + 8);
+                if setting != 0 {
+                    e.call(0x00c3_3280, &args![setting, output]);
+                    count = count.wrapping_add(1);
+                }
+            }
+            count
+        });
+        fn_00404ee0(e, guard);
+        count
+    })
+}
+
+// Translated from 004050a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SettingCollectionMap<Setting>::WriteSettings` (Xbox PDB): write every
+/// non-null setting while preserving the accumulated success byte.
+pub fn setting_collection_map_write_settings(
+    e: &mut Engine,
+    this: Ptr<SettingCollectionMap>,
+) -> bool {
+    let mut success = fn_00404d30(e, this) as u8;
+    if success != 0 {
+        e.with_stack(12, |e, work| {
+            let map = this.byte_add(0x10c);
+            let first = e.call(0x004b_9ba0, &args![map]).u32();
+            e.mem.set_u32(work.addr(), first);
+            while e.mem.u32(work.addr()) != 0 {
+                e.call(
+                    0x006b_7f20,
+                    &args![map, work, work.byte_add(4), work.byte_add(8)],
+                );
+                let setting = e.mem.u32(work.addr() + 8);
+                if setting != 0 {
+                    let result = e.vcall(this.addr(), 0x10, &args![setting]).u8();
+                    success &= result;
+                }
+            }
+        });
+    }
+    success != 0
+}
+
+// Translated from 00405120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SettingCollectionMap<Setting>::ReadSettings` (Xbox PDB): read every
+/// non-null setting while preserving the accumulated success byte.
+// Translation incomplete: 00405120 - compiler SEH unwinding is not modeled.
+pub fn setting_collection_map_read_settings(
+    e: &mut Engine,
+    this: Ptr<SettingCollectionMap>,
+) -> bool {
+    e.with_stack(4, |e, guard| {
+        fn_00404eb0(e, guard, 9, true, Ptr::new(0x0101_2220), 0x278);
+        let mut success = fn_00404d30(e, this) as u8;
+        if success != 0 {
+            e.with_stack(12, |e, work| {
+                let map = this.byte_add(0x10c);
+                let first = e.call(0x004b_9ba0, &args![map]).u32();
+                e.mem.set_u32(work.addr(), first);
+                while e.mem.u32(work.addr()) != 0 {
+                    e.call(
+                        0x006b_7f20,
+                        &args![map, work, work.byte_add(4), work.byte_add(8)],
+                    );
+                    let setting = e.mem.u32(work.addr() + 8);
+                    if setting != 0 {
+                        let result = e.vcall(this.addr(), 0x14, &args![setting]).u8();
+                        success &= result;
+                    }
+                }
+            });
+        }
+        fn_00404ee0(e, guard);
+        success != 0
+    })
+}
+
+// Translated from 00405200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor for `BSTCaseInsensitiveStringMap<Setting *>`
+/// (Xbox PDB).
+pub fn fn_00405200(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00404da0(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 00405230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroy the string-template map base.
+pub fn fn_00405230(e: &mut Engine, this: Ptr) {
+    fn_00405250(e, this);
+}
+
+// Translated from 00405250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Free map entry values from each bucket when the map owns copied entries.
+// Translation incomplete: 00405250 - compiler SEH unwinding is not modeled.
+pub fn fn_00405250(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_2238);
+    if e.mem.u8(this.addr() + 0x10) != 0 {
+        let mut bucket = 0u32;
+        while bucket < e.mem.u32(this.addr() + 4) {
+            let table = e.mem.u32(this.addr() + 8);
+            let mut entry = e.mem.u32(table.wrapping_add(bucket.wrapping_mul(4)));
+            while entry != 0 {
+                let next = e.mem.u32(entry);
+                let value = e.mem.u32(entry + 4);
+                e.call(0x00aa_10f0, &args![value]);
+                entry = next;
+            }
+            bucket = bucket.wrapping_add(1);
+        }
+    }
+    fn_00405310(e, this);
+}
+
+// Translated from 00405310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroy the `NiTMap<char const *,Setting *>` (Xbox PDB) base.
+// Translation incomplete: 00405310 - compiler SEH unwinding is not modeled.
+pub fn fn_00405310(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_2258);
+    e.call(0x0043_8af0, &args![this]);
+    fn_00405370(e, this);
+}
+
+// Translated from 00405370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroy the base map and free its hash table.
+pub fn fn_00405370(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_2278);
+    e.call(0x0043_8af0, &args![this]);
+    let table = e.mem.u32(this.addr() + 8);
+    e.call(0x00aa_10f0, &args![table]);
+}
+
+// Translated from 004053a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor for the `NiTMapBase` (Xbox PDB) specialization.
+pub fn fn_004053a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00405370(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 004053d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor for the `NiTMap` (Xbox PDB) specialization.
+pub fn fn_004053d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00405310(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 00405400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor for the `NiTStringTemplateMap` (Xbox PDB)
+/// specialization.
+pub fn fn_00405400(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00405250(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -623,6 +1049,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004049d0, setting_t_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00404a00, fn_00404a00(Ptr)),
         entry!(0x00404a70, fn_00404a70() -> Ptr),
+        entry!(0x00404a80, fn_00404a80()),
+        entry!(0x00404b10, fn_00404b10(Ptr) -> Ptr),
+        entry!(0x00404b40, fn_00404b40(Ptr, u32) -> Ptr),
+        entry!(0x00404b70, fn_00404b70(Ptr)),
+        entry!(0x00404b90, fn_00404b90(Ptr, u32) -> Ptr),
+        entry!(0x00404c00, fn_00404c00(Ptr)),
+        entry!(0x00404c80, fn_00404c80(Ptr)),
+        entry!(0x00404ca0, fn_00404ca0(Ptr, u32) -> Ptr),
+        entry!(0x00404cd0, setting_collection_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x00404d00, fn_00404d00(Ptr) -> Ptr),
+        entry!(0x00404d30, fn_00404d30(Ptr<SettingCollectionMap>) -> bool),
+        entry!(0x00404d50, fn_00404d50(Ptr, u32, bool) -> Ptr),
+        entry!(0x00404d80, fn_00404d80(Ptr, u32, Ptr) -> Ptr),
+        entry!(0x00404da0, fn_00404da0(Ptr)),
+        entry!(0x00404dc0, fn_00404dc0(Ptr, Ptr) -> i32),
+        entry!(0x00404de0, setting_collection_map_add(Ptr, Ptr)),
+        entry!(0x00404eb0, fn_00404eb0(Ptr, u32, bool, Ptr, u32) -> Ptr),
+        entry!(0x00404ee0, fn_00404ee0(Ptr)),
+        entry!(0x00404f00, fn_00404f00(Ptr, u32, bool, Ptr, u32)),
+        entry!(0x00404f30, fn_00404f30(u32)),
+        entry!(0x00404f50, fn_00404f50() -> u32),
+        entry!(0x00404f70, fn_00404f70(Ptr)),
+        entry!(0x00404f90, setting_collection_map_remove(Ptr, Ptr)),
+        entry!(0x00404fd0, setting_collection_map_get_viewer_strings(Ptr, Ptr) -> u32),
+        entry!(
+            0x004050a0,
+            setting_collection_map_write_settings(Ptr<SettingCollectionMap>) -> bool
+        ),
+        entry!(
+            0x00405120,
+            setting_collection_map_read_settings(Ptr<SettingCollectionMap>) -> bool
+        ),
+        entry!(0x00405200, fn_00405200(Ptr, u32) -> Ptr),
+        entry!(0x00405230, fn_00405230(Ptr)),
+        entry!(0x00405250, fn_00405250(Ptr)),
+        entry!(0x00405310, fn_00405310(Ptr)),
+        entry!(0x00405370, fn_00405370(Ptr)),
+        entry!(0x004053a0, fn_004053a0(Ptr, u32) -> Ptr),
+        entry!(0x004053d0, fn_004053d0(Ptr, u32) -> Ptr),
+        entry!(0x00405400, fn_00405400(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -1328,5 +1794,535 @@ mod tests {
         e.call_log = Some(vec![]);
         assert_eq!(fn_00404a70(&mut e).addr(), collection);
         assert_eq!(e.call_log.unwrap(), vec![(0x0040_4a80, vec![])]);
+    }
+
+    fn setting_fixture() -> (Engine, Ptr<SettingCollectionMap>) {
+        let mut e = Engine::new();
+        let collection = e.new_object::<SettingCollectionMap>();
+        (e, collection)
+    }
+
+    #[test]
+    fn at_00404a80_initializes_once_and_handles_failed_allocation() {
+        let (mut e, collection) = setting_fixture();
+        e.map(0x011c_8048, 4);
+        e.map(0x0118_9c40, 4);
+        e.set_global(0x0118_9c40, 13u32);
+        e.register(0x0040_5570, |_, _| Ret::default());
+        e.register_double(0x0040_1000, move |_, a| {
+            assert_eq!(a, [0x120]);
+            word(collection.addr())
+        });
+        fn_00404a80(&mut e);
+        assert_eq!(e.global::<u32>(0x011c_8048), collection.addr());
+        assert_eq!(e.mem.u32(collection.addr()), 0x0101_212c);
+        e.call_log = Some(vec![]);
+        fn_00404a80(&mut e);
+        assert!(e.call_log.take().unwrap().is_empty());
+        e.set_global(0x011c_8048, 0u32);
+        e.register(0x0040_1000, |_, _| word(0));
+        fn_00404a80(&mut e);
+        assert_eq!(e.global::<u32>(0x011c_8048), 0);
+    }
+
+    #[test]
+    fn at_00404b10_reads_current_map_size_and_installs_vtable() {
+        let (mut e, collection) = setting_fixture();
+        e.map(0x0118_9c40, 4);
+        e.set_global(0x0118_9c40, 29u32);
+        e.register(0x0040_5570, |_, a| {
+            assert_eq!(a[1..], [29, 0]);
+            Ret::default()
+        });
+        assert_eq!(fn_00404b10(&mut e, collection.cast()), collection.cast());
+        assert_eq!(e.mem.u32(collection.addr()), 0x0101_212c);
+    }
+
+    fn destruction_doubles(e: &mut Engine) {
+        e.register(0x0043_8af0, |_, _| Ret::default());
+        e.register(0x008d_0360, |_, _| Ret::default());
+        e.register(0x00aa_10f0, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+    }
+
+    #[test]
+    fn at_00404b40_deletes_game_collection_only_with_low_flag_bit() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        let this = collection.cast();
+        assert_eq!(fn_00404b40(&mut e, this, 2), this);
+        e.call_log = Some(vec![]);
+        fn_00404b40(&mut e, this, 1);
+        assert_eq!(
+            e.call_log.take().unwrap().last(),
+            Some(&(0x0040_1030, vec![this.addr()]))
+        );
+    }
+
+    #[test]
+    fn at_00404b70_forwards_to_collection_destructor() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        fn_00404b70(&mut e, collection.cast());
+        assert_eq!(e.mem.u32(collection.addr()), 0x0101_2188);
+    }
+
+    #[test]
+    fn at_00404b90_constructs_map_at_pc_offset() {
+        let (mut e, collection) = setting_fixture();
+        e.register(0x0040_5570, |_, a| {
+            assert_eq!(a[1..], [7, 0]);
+            Ret::default()
+        });
+        assert_eq!(
+            fn_00404b90(&mut e, collection.cast(), 7).addr(),
+            collection.addr()
+        );
+        assert_eq!(e.mem.u32(collection.addr()), 0x0101_215c);
+        assert_eq!(e.mem.u32(collection.addr() + 0x10c), 0x0101_21b4);
+    }
+
+    #[test]
+    fn at_00404c00_destroys_embedded_map_before_base() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        e.call_log = Some(vec![]);
+        fn_00404c00(&mut e, collection.cast());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[0], (0x0043_8af0, vec![collection.addr() + 0x10c]));
+        assert_eq!(log.last(), Some(&(0x008d_0360, vec![collection.addr()])));
+    }
+
+    #[test]
+    fn at_00404c80_restores_base_vtable_before_close() {
+        let (mut e, collection) = setting_fixture();
+        e.register(0x008d_0360, |e, a| {
+            assert_eq!(e.mem.u32(a[0]), 0x0101_2188);
+            Ret::default()
+        });
+        fn_00404c80(&mut e, collection.cast());
+    }
+
+    #[test]
+    fn at_00404ca0_deletes_map_collection_only_with_low_flag_bit() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        let this = collection.cast();
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_00404ca0(&mut e, this, 1), this);
+        assert_eq!(
+            e.call_log.take().unwrap().last(),
+            Some(&(0x0040_1030, vec![this.addr()]))
+        );
+    }
+
+    #[test]
+    fn at_00404cd0_deletes_base_collection_only_with_low_flag_bit() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        let this = collection.cast();
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            setting_collection_scalar_deleting_destructor(&mut e, this, 0),
+            this
+        );
+        assert_eq!(
+            e.call_log.take().unwrap(),
+            vec![(0x008d_0360, vec![this.addr()])]
+        );
+    }
+
+    #[test]
+    fn at_00404d00_initializes_only_base_fields() {
+        let (mut e, collection) = setting_fixture();
+        let this = collection.cast();
+        e.mem.set_u32(this.addr() + 0x108, 17);
+        e.mem.set_u32(this.addr() + 4, 0xdead_beef);
+        assert_eq!(fn_00404d00(&mut e, this), this);
+        assert_eq!(e.mem.u32(this.addr() + 0x108), 0);
+        assert_eq!(e.mem.u32(this.addr() + 4), 0xdead_be00);
+    }
+
+    #[test]
+    fn at_00404d30_tests_handle_word() {
+        let (mut e, collection) = setting_fixture();
+        assert!(!fn_00404d30(&mut e, collection));
+        e.set(collection, SettingCollectionMap::pHandle, Ptr::new(1));
+        assert!(fn_00404d30(&mut e, collection));
+    }
+
+    #[test]
+    fn at_00404d50_forwards_both_constructor_arguments() {
+        let (mut e, collection) = setting_fixture();
+        e.register(0x0040_5570, |_, a| {
+            assert_eq!(a[1..], [37, 1]);
+            Ret::default()
+        });
+        let map = collection.byte_add(0x10c);
+        assert_eq!(fn_00404d50(&mut e, map, 37, true), map);
+        assert_eq!(e.mem.u32(map.addr()), 0x0101_21b4);
+    }
+
+    #[test]
+    fn at_00404d80_forwards_three_crt_words() {
+        let (mut e, collection) = setting_fixture();
+        let dst = collection.cast();
+        e.register(0x00ec_65a6, |_, a| {
+            assert_eq!(a[1..], [20, 0x1234]);
+            Ret::default()
+        });
+        assert_eq!(fn_00404d80(&mut e, dst, 20, Ptr::new(0x1234)), dst);
+    }
+
+    #[test]
+    fn at_00404da0_destroys_string_map_base() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        let map = collection.byte_add(0x10c);
+        fn_00404da0(&mut e, map);
+        assert_eq!(e.mem.u32(map.addr()), 0x0101_2278);
+    }
+
+    #[test]
+    fn at_00404dc0_returns_crt_comparison_result() {
+        let (mut e, _, _) = setup();
+        e.register(0x00ec_68e4, |_, a| {
+            assert_eq!(a, [0x1111, 0x2222]);
+            word((-3i32) as u32)
+        });
+        assert_eq!(fn_00404dc0(&mut e, Ptr::new(0x1111), Ptr::new(0x2222)), -3);
+    }
+
+    #[test]
+    fn at_00404de0_adds_new_key_and_warns_on_duplicate() {
+        let (mut e, collection) = setting_fixture();
+        let setting = Ptr::new(e.mem.alloc(12));
+        let key = e.mem.alloc(8);
+        e.mem.set_u32(setting.addr() + 8, key);
+        e.register(0x0044_ddc0, |e, a| word(e.mem.u32(a[0] + 8)));
+        e.register(0x0085_3130, |_, _| word(0));
+        e.register(0x0047_0200, |_, _| word(1));
+        e.register(0x00c3_35a0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        setting_collection_map_add(&mut e, collection.cast(), setting);
+        assert!(e.call_log.take().unwrap().contains(&(
+            0x0047_0200,
+            vec![collection.addr() + 0x10c, key, setting.addr()]
+        )));
+        e.register(0x0085_3130, |_, _| word(1));
+        e.call_log = Some(vec![]);
+        setting_collection_map_add(&mut e, collection.cast(), setting);
+        assert!(e
+            .call_log
+            .take()
+            .unwrap()
+            .contains(&(0x00c3_35a0, vec![0x0101_21d0, key])));
+    }
+
+    #[test]
+    fn at_00404eb0_constructs_guard_with_only_first_argument_used() {
+        let (mut e, _, _) = setup();
+        fn_00404f30(&mut e, 31);
+        let guard = Ptr::new(e.mem.alloc(4));
+        assert_eq!(
+            fn_00404eb0(&mut e, guard, 9, true, Ptr::new(0x1234), 44),
+            guard
+        );
+        assert_eq!(e.mem.u32(guard.addr()), 31);
+        assert_eq!(fn_00404f50(&mut e), 9);
+    }
+
+    #[test]
+    fn at_00404ee0_restores_saved_guard() {
+        let (mut e, _, _) = setup();
+        let guard = Ptr::new(e.mem.alloc(4));
+        e.mem.set_u32(guard.addr(), 47);
+        fn_00404ee0(&mut e, guard);
+        assert_eq!(fn_00404f50(&mut e), 47);
+    }
+
+    #[test]
+    fn at_00404f00_saves_tls_value_and_replaces_it() {
+        let (mut e, _, _) = setup();
+        let guard = Ptr::new(e.mem.alloc(4));
+        fn_00404f30(&mut e, 5);
+        fn_00404f00(&mut e, guard, 11, false, Ptr::NULL, 0);
+        assert_eq!(e.mem.u32(guard.addr()), 5);
+        assert_eq!(fn_00404f50(&mut e), 11);
+    }
+
+    #[test]
+    fn at_00404f30_writes_tls_at_pc_offset() {
+        let (mut e, _, _) = setup();
+        fn_00404f30(&mut e, 0x8765_4321);
+        let tls = e.tls();
+        assert_eq!(e.mem.u32(tls + 0x2b4), 0x8765_4321);
+    }
+
+    #[test]
+    fn at_00404f50_reads_tls_at_pc_offset() {
+        let (mut e, _, _) = setup();
+        let tls = e.tls();
+        e.mem.set_u32(tls + 0x2b4, 0xabcd_ef01);
+        assert_eq!(fn_00404f50(&mut e), 0xabcd_ef01);
+    }
+
+    #[test]
+    fn at_00404f70_restores_from_guard_word() {
+        let (mut e, _, _) = setup();
+        let guard = Ptr::new(e.mem.alloc(4));
+        e.mem.set_u32(guard.addr(), 55);
+        fn_00404f70(&mut e, guard);
+        assert_eq!(fn_00404f50(&mut e), 55);
+    }
+
+    #[test]
+    fn at_00404f90_removes_only_present_key() {
+        let (mut e, collection) = setting_fixture();
+        let setting = Ptr::new(e.mem.alloc(12));
+        e.register(0x0044_ddc0, |e, a| word(e.mem.u32(a[0] + 8)));
+        e.register(0x0040_5430, |_, _| word(1));
+        e.call_log = Some(vec![]);
+        setting_collection_map_remove(&mut e, collection.cast(), Ptr::NULL);
+        setting_collection_map_remove(&mut e, collection.cast(), setting);
+        assert!(e
+            .call_log
+            .take()
+            .unwrap()
+            .iter()
+            .all(|(addr, _)| *addr != 0x0040_5430));
+        e.mem.set_u32(setting.addr() + 8, 0x5678);
+        e.call_log = Some(vec![]);
+        setting_collection_map_remove(&mut e, collection.cast(), setting);
+        assert!(e
+            .call_log
+            .take()
+            .unwrap()
+            .contains(&(0x0040_5430, vec![collection.addr() + 0x10c, 0x5678])));
+    }
+
+    fn one_map_entry(e: &mut Engine, setting: u32) {
+        e.register(0x004b_9ba0, |_, _| word(1));
+        e.register_double(0x006b_7f20, move |e, a| {
+            e.mem.set_u32(a[1], 0);
+            e.mem.set_u32(a[3], setting);
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn at_00404fd0_counts_only_non_null_settings() {
+        let (mut e, collection) = setting_fixture();
+        one_map_entry(&mut e, 0x3333);
+        e.register(0x00c3_3280, |_, a| {
+            assert_eq!(a, [0x3333, 0x4444]);
+            Ret::default()
+        });
+        let count =
+            setting_collection_map_get_viewer_strings(&mut e, collection.cast(), Ptr::new(0x4444));
+        assert_eq!(count, 1);
+        one_map_entry(&mut e, 0);
+        assert_eq!(
+            setting_collection_map_get_viewer_strings(&mut e, collection.cast(), Ptr::new(0x4444),),
+            0
+        );
+    }
+
+    fn write_read_fixture(slot: u32) -> (Engine, Ptr<SettingCollectionMap>) {
+        let (mut e, collection) = setting_fixture();
+        e.set(collection, SettingCollectionMap::pHandle, Ptr::new(1));
+        one_map_entry(&mut e, 0x3333);
+        let mut slots = [0u32; 6];
+        slots[(slot / 4) as usize] = 0x00ab_cdef;
+        e.put_vtable(0x0101_2400, &slots);
+        e.mem.set_u32(collection.addr(), 0x0101_2400);
+        e.register(0x00ab_cdef, |_, a| {
+            assert_eq!(a[1], 0x3333);
+            word(0)
+        });
+        (e, collection)
+    }
+
+    #[test]
+    fn at_004050a0_accumulates_virtual_write_result() {
+        let (mut e, collection) = write_read_fixture(0x10);
+        assert!(!setting_collection_map_write_settings(&mut e, collection));
+        let mut visited = 0u32;
+        e.register_double(0x006b_7f20, move |e, a| {
+            visited += 1;
+            e.mem.set_u32(a[1], if visited == 1 { 2 } else { 0 });
+            e.mem
+                .set_u32(a[3], if visited == 1 { 0x3333 } else { 0x4444 });
+            Ret::default()
+        });
+        e.register(0x00ab_cdef, |_, a| word((a[1] == 0x4444) as u32));
+        e.call_log = Some(vec![]);
+        assert!(!setting_collection_map_write_settings(&mut e, collection));
+        assert_eq!(
+            e.call_log
+                .take()
+                .unwrap()
+                .iter()
+                .filter(|(addr, _)| *addr == 0x00ab_cdef)
+                .count(),
+            2
+        );
+        e.set(collection, SettingCollectionMap::pHandle, Ptr::NULL);
+        e.call_log = Some(vec![]);
+        assert!(!setting_collection_map_write_settings(&mut e, collection));
+        assert!(e.call_log.take().unwrap().is_empty());
+    }
+
+    #[test]
+    fn at_00405120_accumulates_virtual_read_result_and_restores_guard() {
+        let (mut e, collection) = write_read_fixture(0x14);
+        fn_00404f30(&mut e, 41);
+        assert!(!setting_collection_map_read_settings(&mut e, collection));
+        assert_eq!(fn_00404f50(&mut e), 41);
+        let mut visited = 0u32;
+        e.register_double(0x006b_7f20, move |e, a| {
+            visited += 1;
+            e.mem.set_u32(a[1], if visited == 1 { 2 } else { 0 });
+            e.mem
+                .set_u32(a[3], if visited == 1 { 0x3333 } else { 0x4444 });
+            Ret::default()
+        });
+        e.register(0x00ab_cdef, |_, a| word((a[1] == 0x4444) as u32));
+        e.call_log = Some(vec![]);
+        assert!(!setting_collection_map_read_settings(&mut e, collection));
+        assert_eq!(
+            e.call_log
+                .take()
+                .unwrap()
+                .iter()
+                .filter(|(addr, _)| *addr == 0x00ab_cdef)
+                .count(),
+            2
+        );
+        assert_eq!(fn_00404f50(&mut e), 41);
+    }
+
+    #[test]
+    fn at_00405200_deletes_string_map_only_with_low_flag_bit() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        let map = collection.byte_add(0x10c);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_00405200(&mut e, map, 1), map);
+        assert_eq!(
+            e.call_log.take().unwrap().last(),
+            Some(&(0x0040_1030, vec![map.addr()]))
+        );
+    }
+
+    #[test]
+    fn at_00405230_forwards_to_template_map_destructor() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        let map = collection.byte_add(0x10c);
+        fn_00405230(&mut e, map);
+        assert_eq!(e.mem.u32(map.addr()), 0x0101_2278);
+    }
+
+    #[test]
+    fn at_00405250_frees_copied_entry_values_in_bucket_order() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        let map = collection.byte_add(0x10c);
+        let table = e.mem.alloc(8);
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(table, first);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 4, 0x1111);
+        e.mem.set_u32(second + 4, 0x2222);
+        e.mem.set_u32(map.addr() + 4, 2);
+        e.mem.set_u32(map.addr() + 8, table);
+        e.mem.set_u8(map.addr() + 0x10, 1);
+        e.call_log = Some(vec![]);
+        fn_00405250(&mut e, map);
+        let values: Vec<u32> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(addr, _)| *addr == 0x00aa_10f0)
+            .map(|(_, args)| args[0])
+            .collect();
+        assert_eq!(values, vec![0x1111, 0x2222, table]);
+    }
+
+    #[test]
+    fn at_00405310_calls_base_cleanup_before_hash_table_cleanup() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        let map = collection.byte_add(0x10c);
+        e.call_log = Some(vec![]);
+        fn_00405310(&mut e, map);
+        assert_eq!(
+            e.call_log.take().unwrap(),
+            vec![
+                (0x0043_8af0, vec![map.addr()]),
+                (0x0043_8af0, vec![map.addr()]),
+                (0x00aa_10f0, vec![0]),
+            ]
+        );
+    }
+
+    #[test]
+    fn at_00405370_reads_hash_table_after_callback() {
+        let (mut e, collection) = setting_fixture();
+        let map = collection.byte_add(0x10c);
+        e.register(0x0043_8af0, |e, a| {
+            e.mem.set_u32(a[0] + 8, 0x9999);
+            Ret::default()
+        });
+        e.register(0x00aa_10f0, |_, a| {
+            assert_eq!(a, [0x9999]);
+            Ret::default()
+        });
+        fn_00405370(&mut e, map);
+        assert_eq!(e.mem.u32(map.addr()), 0x0101_2278);
+    }
+
+    #[test]
+    fn at_004053a0_deletes_map_base_only_with_low_flag_bit() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        let map = collection.byte_add(0x10c);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_004053a0(&mut e, map, 2), map);
+        assert!(!e
+            .call_log
+            .take()
+            .unwrap()
+            .iter()
+            .any(|(addr, args)| *addr == 0x0040_1030 && args == &[map.addr()]));
+    }
+
+    #[test]
+    fn at_004053d0_deletes_ni_map_only_with_low_flag_bit() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        let map = collection.byte_add(0x10c);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_004053d0(&mut e, map, 1), map);
+        assert_eq!(
+            e.call_log.take().unwrap().last(),
+            Some(&(0x0040_1030, vec![map.addr()]))
+        );
+    }
+
+    #[test]
+    fn at_00405400_deletes_template_map_only_with_low_flag_bit() {
+        let (mut e, collection) = setting_fixture();
+        destruction_doubles(&mut e);
+        let map = collection.byte_add(0x10c);
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_00405400(&mut e, map, 1), map);
+        assert_eq!(
+            e.call_log.take().unwrap().last(),
+            Some(&(0x0040_1030, vec![map.addr()]))
+        );
     }
 }

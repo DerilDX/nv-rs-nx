@@ -7,6 +7,49 @@ machinery runs.
 
 ## Resume here
 
+### Active again, 2026-10-11 after the usage reset
+
+This section supersedes the historical stopped state below. User requested
+continuous work and manually removed the idle p3 build caches; free space
+was 25,230,925,824 bytes afterward. Automatic review had rejected our
+deletion attempt with only "blocked by policy"; no bypass was attempted.
+
+- #135 merged `7907420` and #134 merged `89bbde4`, each after both CI checks.
+  Rolling #136 is attached at `6a1e073` and still awaits both checks. Ship
+  it with `ship.sh 136` when green; preserve later collection/docs commits.
+- cycle04 session 86301 completed: source `5c914204` collected as `ddeecbd`,
+  all normal effect-item bodies through `00405400`. Ten verified SEH-only
+  partials were retained with reviewed partial-only advancement. Fresh
+  `/root/a04_round16` immediately started b0626, owning only
+  `bsmain/iomanager.rs`; next forty entries `00456520` through `00c3fe80`.
+- HUD source `ecf56da` passed 64 focused, 14,103 engine and 49 hygiene tests,
+  strict lint and formatting. cycle03 session 41605 completed, collection
+  `8aaf167`, with 14,177 combined engine tests and strict checks passing.
+  Fresh `/root/a03_round18` immediately started its next forty HUD entries
+  from `00778930`, compiler held. `/root/a01_round16` now owns the compiler
+  for nine movement bodies. Its seventeen SEH-only partials are verified;
+  three missing historical markers were restored after PC checks. After
+  its clean passing commit, cycle01 once with reviewed partial advancement,
+  start a fresh worker immediately, then grant root, followed by a04.
+- Root branch `codex/phase2-script-action-parser` in the existing managed
+  checkout starts from merged #134/#135. Only `expression.rs` and
+  `tesscriptrunmanager.rs` and topic `ENGINE_STATE.md` are edited: six helpers
+  and eighteen new regressions. Thirty native cases pass (six parser, nine
+  constructors, four entry and eleven evaluator), with raw evidence private
+  under `codex-audit`. Rust checks have NOT run. CExpression is 0x710 bytes,
+  not a pointer wrapper. EvaluateLine `005e1550` now drafts BEGIN and action-list
+  paths; non-BEGIN ordinary execution/parse stays explicit partial and panics.
+  Review of that sixth helper is pending. Actual Script form/save-ID and
+  event-handler integration remain dependencies; no whole-save claim.
+- a04 I/O management now has forty drafted bodies and fifty tests, with
+  twelve SEH-only partials. Source-only checks pass; no cargo yet. Review
+  corrected callback argument words, live queue/array/count reloads, signed
+  construction loops and the incompatible Xbox layout. A suspect Xbox
+  name for `005a8040` was removed in favor of a neutral PC accessor.
+- Build 40 is current, with no confirmed next-play-build date. These leaf
+  translations alone do not justify a play publication. Continue cycling
+  until stopped; retain the user's 98% usage handoff rule.
+
 ### Stopped at the requested 98% usage limit, 2026-10-11 05:40 local
 
 Translation is stopped for handoff. All three agents were interrupted;
