@@ -17,8 +17,12 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
 - #135 merged `7907420` and #134 merged `89bbde4`, each after both CI checks.
   #136 also merged `95ab97a` after both checks. #137 merged `935701e`, and
   root #138 merged `1614889`, each after both current-head checks passed.
-  Rolling #139 is attached at `f8f2f32`, with fresh core/viewer checks
-  running. Ship it when both pass.
+  #139 merged `575378a` after both checks. Collection was active, so the
+  remote merge happened first; private `finish-ship139.sh` then completed
+  rebase/ledger/push and opened attached rolling #141 at `7a6cc48`. This
+  continuation is DONE; never rerun ship139. Ship #141 when both checks pass.
+  #140 merged `4166432` after both current-head checks passed; its head was
+  `192b46e`. #141 core passes and viewer remains pending.
 - cycle04 session 86301 completed: source `5c914204` collected as `ddeecbd`,
   all normal effect-item bodies through `00405400`. Ten verified SEH-only
   partials were retained with reviewed partial-only advancement. Fresh
@@ -45,9 +49,17 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   remaining twenty-two audio bodies from `00ad7e90`. Root's two-helper
   checks completed: all 16,062 workspace tests (14,209 engine unit tests),
   strict lint, formatting and release/debug builds pass. I/O now owns the
-  sole compiler (82 focused tests passed), followed by HUD, audio, then
-  root's new predicate follow-on. All three slot sources are
-  ready: I/O twenty-four bodies, HUD forty through `0077f5c0`, and audio
+  sole compiler checks all passed: 82 focused, 14,271 engine, strict lint,
+  formatting, 49 hygiene checks and release build. Source `49b2fe1` collected
+  through cycle04 session 29733 with 14,311 combined tests; collection is
+  `1fc794c` after shipping rebase. Fresh `/root/a04_round18` immediately began
+  BGSAutoWater b0046 (source-only). HUD source `9d9427b` passed 114 focused,
+  14,227 engine, strict lint, formatting, 49 hygiene checks and release.
+  cycle03 session 6725 is DONE: collection `faae60d` passes 14,379 combined
+  engine tests. Fresh `/root/a03_round19` immediately began the remaining
+  normal bodies from `0077f5e0`, compiler held. Audio now owns the sole
+  compiler, followed by cycle01 and root's predicate follow-on. HUD's batch
+  has forty normal bodies through `0077f5c0`, and audio
   twenty-two through `00ad87d0`. Audio also has seventeen passing native
   timer/empty-call cases. Review fixed HUD callback capture timing and a
   full-EAX predicate; I/O has additional pointer/flag reload regressions.
@@ -70,10 +82,27 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   ran but stopped at `008d0360`; the rewrite assertion has not run.
   Root now owns `fallout_ai/baseprocess.rs` and
   `fallout_shared/tesactorbasedata.rs` on
-  `codex/phase2-reference-predicate`, based on #140. It drafts that true
+  `codex/phase2-reference-predicate`, rebased on merged #140 at `4166432`.
+  Its source checkpoint is `3c3bedb`, with Rust checks still pending. It drafts that true
   predicate and the following false predicate `0047c850`, confirmed from
   the real reference vtable and load-buffer call chain. Twelve native cases
-  pass; these new Rust checks have not run. No whole-save claim.
+  pass; independent PC/vtable/test-wiring review found no mismatch. Three
+  new Rust regressions have not run. Private
+  `check-reference-probe.ps1` builds debug and reruns the item probe first;
+  `check-reference-predicates.ps1` supplies the later full check chain.
+  No whole-save claim.
+- Water has 34 of 37 normal bodies drafted; `0049c930`, `0049db60` and
+  `0049e410` are still being translated. The initial water agent is
+  interrupted; `/root/a04_water_complete` owns and audits its uncommitted
+  source, including a still-incomplete early-exit draft for `0049db60`.
+  Do not collect or reset this slot before the full normal paths and checks
+  finish. The replacement also restores the external predicate call in
+  `0049c860`, which the first agent incorrectly inlined while editing its
+  description. Fifteen native comparator/plane
+  cases pass. Review corrected array callback reloads, the membership
+  argument, fourth-corner Y selection and NaN classification. The apparent
+  constructor-size and uninitialized-pair conflicts were decompiler
+  artifacts resolved against PC instructions; no guessed substitute remains.
 - a04's collected I/O management batch has forty bodies and fifty tests,
   with twelve SEH-only partials. All checks passed. Review
   corrected callback argument words, live queue/array/count reloads, signed

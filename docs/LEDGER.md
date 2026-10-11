@@ -30,14 +30,14 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 11225 | 16.9% |
-| traced | 4301 | 6.5% |
+| translated | 11264 | 17.0% |
+| traced | 4282 | 6.5% |
 | platform | 3416 | 5.2% |
 | library | 21912 | 33.1% |
-| open | 25405 | 38.3% |
+| open | 25385 | 38.3% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **127** engine functions
+Translation totals count markers, not complete behavior. **136** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -93,6 +93,15 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00774fd0` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:3098` |
 | `00775380` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:3257` |
 | `00775a00` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:4158` |
+| `00778c20` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:4872` |
+| `00779070` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:4998` |
+| `0077a650` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:5600` |
+| `0077b430` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:5992` |
+| `0077c4e0` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:6660` |
+| `0077da60` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:6923` |
+| `0077eaf0` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:7282` |
+| `0077ee50` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:7360` |
+| `0077f0d0` | `crates/engine/src/units/fallout_interface/hudmainmenu.rs:7440` |
 | `00846b60` | `crates/engine/src/units/fallout_misc/run_00846b60.rs:16` |
 | `008643b0` | `crates/engine/src/units/fallout_misc/bgsloadformbuffer.rs:20` |
 | `008659c0` | `crates/engine/src/units/fallout_misc/bgssaveformbuffer.rs:17` |
@@ -170,9 +179,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00c41330` | `crates/engine/src/units/bsmain/iomanager.rs:1430` |
 | `00c41ac0` | `crates/engine/src/units/bsmain/iomanager.rs:1489` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 15115 (37.3%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 15135 (37.3%) are translated or traced.
 
-Rust cites 16201 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 16221 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -203,11 +212,11 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 66 | 0 | 21268 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6390 | 954 | 0 | 0 | 3126 | 70.1% |
+| fallout shared | 10470 | 2065 | 3149 | 6391 | 953 | 0 | 0 | 3126 | 70.1% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
 | fallout/ai | 4849 | 1475 | 1888 | 2343 | 558 | 0 | 0 | 1948 | 59.8% |
-| fallout/interface | 2645 | 991 | 1247 | 631 | 723 | 0 | 0 | 1291 | 51.2% |
-| (unplaced) | 2353 | 470 | 0 | 41 | 407 | 1 | 0 | 1904 | 19.0% |
+| fallout/interface | 2645 | 991 | 1247 | 668 | 706 | 0 | 0 | 1271 | 51.9% |
+| (unplaced) | 2353 | 470 | 0 | 42 | 406 | 1 | 0 | 1904 | 19.0% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 711 | 173 | 0 | 0 | 904 | 49.4% |
 | NiMain | 1619 | 261 | 1134 | 3 | 76 | 0 | 0 | 1540 | 4.9% |
 | BSHavok | 1615 | 316 | 1134 | 59 | 134 | 0 | 0 | 1422 | 12.0% |
@@ -263,7 +272,7 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 101 | 30 | 3 | 0 | 9 |
 | 2 | 1575 | 583 | 1137 | 318 | 24 | 4 | 92 |
-| 3 | 4973 | 1303 | 3626 | 875 | 148 | 26 | 298 |
+| 3 | 4973 | 1303 | 3633 | 870 | 148 | 26 | 296 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
