@@ -30,8 +30,8 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10454 | 15.8% |
-| traced | 4503 | 6.8% |
+| translated | 10458 | 15.8% |
+| traced | 4499 | 6.8% |
 | platform | 3417 | 5.2% |
 | library | 21915 | 33.1% |
 | open | 25970 | 39.2% |
@@ -70,7 +70,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 65 | 0 | 21269 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6303 | 993 | 0 | 0 | 3174 | 69.7% |
+| fallout shared | 10470 | 2065 | 3149 | 6305 | 991 | 0 | 0 | 3174 | 69.7% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
 | fallout/ai | 4849 | 1475 | 1888 | 2155 | 619 | 0 | 0 | 2075 | 57.2% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 741 | 0 | 0 | 1321 | 50.1% |
@@ -92,14 +92,14 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout shared/facegen | 433 | 63 | 91 | 0 | 55 | 0 | 0 | 378 | 12.7% |
 | BSMenu | 361 | 136 | 221 | 165 | 39 | 0 | 0 | 157 | 56.5% |
 | BSAudio | 304 | 75 | 141 | 0 | 31 | 0 | 0 | 273 | 10.2% |
-| fallout shared/magic | 296 | 43 | 83 | 5 | 71 | 0 | 0 | 220 | 25.7% |
+| fallout shared/magic | 296 | 43 | 83 | 6 | 70 | 0 | 0 | 220 | 25.7% |
 | BSSystem | 275 | 54 | 36 | 1 | 37 | 237 | 0 | 0 | - |
 | NiCollision | 215 | 104 | 115 | 0 | 4 | 0 | 0 | 211 | 1.9% |
 | fallout shared/distant terrain system | 204 | 37 | 62 | 0 | 26 | 0 | 0 | 178 | 12.7% |
 | BSCore | 197 | 22 | 45 | 1 | 14 | 2 | 0 | 180 | 7.6% |
 | fallout/audio | 190 | 55 | 49 | 13 | 41 | 0 | 0 | 136 | 28.4% |
 | fallout shared/sky | 164 | 59 | 51 | 66 | 23 | 0 | 0 | 75 | 54.3% |
-| fallout shared/region system | 159 | 26 | 74 | 0 | 20 | 0 | 0 | 139 | 12.6% |
+| fallout shared/region system | 159 | 26 | 74 | 1 | 19 | 0 | 0 | 139 | 12.6% |
 | fallout shared/tempeffects | 149 | 48 | 58 | 0 | 22 | 0 | 0 | 127 | 14.8% |
 | fallout shared/speedtree | 115 | 33 | 57 | 1 | 19 | 0 | 0 | 95 | 17.4% |
 | NiSystem | 92 | 7 | 39 | 1 | 4 | 0 | 0 | 87 | 5.4% |
@@ -129,8 +129,8 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 99 | 32 | 3 | 0 | 9 |
-| 2 | 1575 | 583 | 1047 | 399 | 24 | 4 | 101 |
-| 3 | 4973 | 1303 | 3353 | 1102 | 154 | 26 | 338 |
+| 2 | 1575 | 583 | 1048 | 398 | 24 | 4 | 101 |
+| 3 | 4973 | 1303 | 3373 | 1082 | 154 | 26 | 338 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 

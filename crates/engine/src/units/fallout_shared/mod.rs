@@ -73,6 +73,7 @@ pub mod doorlock;
 pub mod experiencepoints;
 pub mod expression;
 pub mod exteriorcellloader;
+pub mod extra_data_support;
 pub mod extradatacell;
 pub mod extradatalist;
 pub mod extradatalist_p2;
@@ -569,6 +570,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(experiencepoints::funcs());
     out.extend(expression::funcs());
     out.extend(exteriorcellloader::funcs());
+    out.extend(extra_data_support::funcs());
     out.extend(extradatacell::funcs());
     out.extend(extradatalist::funcs());
     out.extend(extradatalist_p2::funcs());

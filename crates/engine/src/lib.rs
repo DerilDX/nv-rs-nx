@@ -20,6 +20,7 @@
 pub mod abi;
 mod engine;
 pub mod exe;
+pub mod extra_data;
 pub mod mem;
 pub mod ptr;
 pub mod types;

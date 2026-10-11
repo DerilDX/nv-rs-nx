@@ -89,6 +89,16 @@ gaps), with 13,438 combined engine tests passing before the PR 7 rebase.
 The list adapter passed its initial full checks and is rebased for another
 combined check. Next action: verify and publish play build 40.
 
+2026-10-10, first Phase 2 list boundary: an explicit engine-owned list
+handle delegates to translated PC functions, with four missing helpers
+closed. Generated integration tests and an installed-executable probe
+pass construction, insertion, cached lookup and detach. Local core checks
+passed 15,154 tests, lint, formatting and release build after rebasing
+onto merged PR #113. No world consumer
+or save round trip is established. Evidence, ownership and the next count
+destructor dependency: [ENGINE_STATE.md](ENGINE_STATE.md). Next action:
+merge after CI, then close that dependency for a count adapter.
+
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
