@@ -186,7 +186,49 @@ while preserving health. An independent source review found no concrete
 issues in the adapter; it did not independently run the private probe.
 No world/viewer integration or save round trip is established.
 
-Next action: exercise count and health through the translated buffered
-save path (`00426a30`). Its `BGSSaveGameBuffer` / `BGSSaveFormBuffer`
-(Xbox PDB) dependencies are still scaffolds; begin with their PC
-constructors and buffer-writing methods before exposing save operations.
+Reference PR #122 passed both core and viewer CI after rebasing onto #121,
+and merged as `6bea9a1` on 2026-10-11. No play build was published for this
+boundary because the viewer does not consume it yet.
+
+## Buffered extra-data writing, 2026-10-11
+
+The follow-on translates 18 constructor, accessor and writer dependencies
+of the existing `00426a30` extra-data writer. `BGSSaveGameBuffer` (Xbox PDB)
+has PC buffer/capacity/position/overhead fields at +4/+8/+0xc/+0x10.
+`BGSSaveFormBuffer` (Xbox PDB) adds its nine-byte packed header at +0x14 and
+form pointer at +0x20; construction clears nine header bytes and preserves
+the three alignment bytes before the pointer. Six generated native
+constructor vectors confirm the stores, vtables, return pointer and
+surrounding guards. Exception cleanup
+in `008659c0` remains explicitly partial.
+
+Positioned writing (`00865ce0`) grows by 0x10000, appends the native '|'
+separator unless suppressed, and updates the position and debug overhead.
+It uses unsigned capacity comparisons; insertion (`00866140`) uses signed
+comparisons and retains its original end across callbacks. Tests exercise
+field/global changes across callbacks and wrapping arithmetic. Variable
+counts (`00865f20`/`00865ff0`) patch a placeholder using one, two or four
+tagged bytes. The checked move (`00ec7ce3`) uses the existing CRT memmove
+boundary; three native cases pass for zero length/null pointers and overlap
+in both directions. Error paths retain native TLS/error-handler calls;
+these callees are unresolved and their unit tests use doubles.
+
+The PC change-flag table at `01183dc0` and `01183dc4` uses mask `0x400` for
+count and health, not the generic mask used by older synthetic writer
+fixtures. A new generated regression prepares both payloads through the
+real registry and exercises the buffered writer with matching and filtered
+change flags. The installed-executable probe passes with a generated
+save-mode receiver and the previously tested allocator startup fragment.
+It writes count 5 and health 42.5 through the real registry and native
+change-flag table, then decodes the resulting 14 bytes as exactly those
+two extras with no unread bytes. No game-function doubles or game-file
+writes are used. This checks a payload, not a complete FOS file.
+
+On the merged #123 base, all 15,641 core tests pass (13,788 engine),
+including the generated writer regression. Workspace clippy with warnings
+denied, formatting, release and debug build checks pass.
+No FOS file writing, full save-manager startup, save round trip or viewer
+integration is established.
+
+Next action: publish the bounded writer batch,
+then trace per-stack state ownership before adding a world consumer.

@@ -117,8 +117,17 @@ pub fn decrement_counter(e: &mut Engine, target: Ptr<i32>) -> i32 {
     e.call(0x00fd_f1c4, &args![target]).i32()
 }
 
+// Translated from 0044dee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Folded constructor: clears one word and returns the receiver. Used by
+/// the save-form header at its unaligned +3 field; no original class asserted.
+pub fn construct_zero_word(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0);
+    this
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0044dee0, construct_zero_word(Ptr) -> Ptr),
         entry!(0x00402d30, construct_base_component(Ptr) -> Ptr),
         entry!(0x004f15a0, set_form_type(Ptr<TESForm>, u8) -> Ptr<TESForm>),
         entry!(0x00486ab0, construct_editor_id_map(Ptr, u32, u8) -> Ptr),
