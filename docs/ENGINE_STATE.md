@@ -23,8 +23,7 @@ release/debug builds pass on Windows. These are core checks; viewer CI
 remains a separate merge gate. The
 compiler exception cleanup on the two manager entries remains partial.
 
-This does not establish script-extra preservation. The actual interpreter
-entry `005e1160` remains untranslated, and the broader private inventory
+This does not establish script-extra preservation. The broader private inventory
 fixture still lacks script forms and their complete save-ID mappings.
 The first script found in the user's original payloads has 234 compiled
 bytes and four references in its installed master record; an empty generated
@@ -34,7 +33,46 @@ Next action: supply the real script record and continue through the
 interpreter's action-list loading path. Six generated native cases already
 confirm parser `005e13a0` sign-extends opcode/length words, clears the
 reference for ordinary opcodes, preserves it for skipped reference prefixes,
-and consumes 24 bytes of stack arguments; that parser remains untranslated.
+and consumes 24 bytes of stack arguments.
+
+The next bounded batch is implemented and locally validated: action-list
+entry `005e1160`, parser `005e13a0`, the BEGIN/action-list paths of evaluator
+`005e1550`, and expression constructors `00593490`, `00594b60`, `00594c60`.
+`CExpression` (Xbox PDB) is 0x710 bytes, confirmed
+against the PC constructor and caller. Nine generated native cases confirm
+the returned pointer, zero stack cleanup, exact initialized words and all
+untouched bytes for three fill patterns. The same executable identity and
+floating-point settings used above apply. Independent PC review found no
+discrepancy in the six helpers. Eighteen new Rust regressions pass; focused
+checks pass 23 runner/manager tests and three expression tests. All 16,011
+workspace tests including doctests (14,158 engine unit tests), strict lint,
+formatting, release and debug builds pass on Windows. Four further native
+entry cases confirm null/disabled refusal, empty-script completion, exact
+runner mutations and twelve-byte stack cleanup. Eleven native evaluator
+cases confirm non-BEGIN action-mode skips and two BEGIN parse-only cases
+with unchanged buffers and 36-byte stack cleanup. There are thirty native
+cases in this batch; these bounded cases do not exercise real event handlers.
+
+The action-list entry preserves busy-script refusal, parser failure clearing
+the freshly retrieved script size, evaluator failure ending only the pass,
+skip counts and clearing busy before expression cleanup. Compiler SEH
+exception cleanup remains explicitly partial. The evaluator calls the PC
+event-table handler, preserves its eight argument words, and adds the block
+span when its result is zero or action-list mode is active. Its non-BEGIN
+ordinary execution/parse modes remain explicitly open and fail loudly.
+A generated two-event fixture connects the real parser, evaluator and
+expression constructors with doubled external event handlers. Real Script
+forms/save-ID mapping and their handler dependency chain remain necessary
+before the broader preservation probe can establish success.
+
+The private normal-registry probe now uses the installed SCPT `00169538`
+header and all 234 compiled bytes, generated eligible Script/reference
+receivers and zero-variable locals. It stops immediately at untranslated
+flag predicate `004013e0`; it has not reached the event handlers. Its first
+reference is resolved to the generated player receiver; three references
+used only by skipped bodies remain unresolved. Next action: translate that
+PC predicate and continue the probe. Neither script-extra preservation nor
+a whole-save round trip has passed.
 
 ## List boundary
 
