@@ -849,7 +849,7 @@ fn create_scene(e: &mut Engine, menu: u32) {
 // Translated from 0076bfe0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HUDMainMenu::Create` (Xbox PDB): loads the XML menu, resolves its tiles,
 /// lays out HUD elements, and builds the compass scene.
-// Translation incomplete: the compiler's SEH unwind paths are omitted.
+// Translation incomplete: 0076bfe0 - the compiler's SEH unwind paths are omitted.
 pub fn hud_main_menu_create(e: &mut Engine) -> Ptr {
     if e.call(0x004b_7210, &args![]).u32() == 0 {
         return Ptr::NULL;
@@ -1647,7 +1647,12 @@ pub fn fn_0076be30(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         (0x198, 0x0077_f9a0),
         (0x18c, 0x0046_ffb0),
     ] {
-        e.call(callee, &args![this.addr() + offset]);
+        let field = Ptr::new(this.addr() + offset);
+        if callee == 0x0077_f9a0 {
+            fn_0077f9a0(e, field);
+        } else {
+            e.call(callee, &args![field]);
+        }
     }
     e.call(0x00a1_c520, &args![this]);
 }
@@ -2098,7 +2103,7 @@ fn do_idle_quests(e: &mut Engine, this: Ptr<HUDMainMenu>) {
     }
     if e.mem.u8(this.addr() + 0x254) != 0 {
         e.call(0x0077_f500, &args![this]);
-        e.call(0x0077_f5e0, &args![this]);
+        hud_main_menu_kill_quest_objectives(e, this);
         e.mem.set_u8(this.addr() + 0x254, 0);
         return;
     }
@@ -2186,7 +2191,7 @@ fn do_idle_messages(e: &mut Engine, this: Ptr<HUDMainMenu>) {
 // Translated from 00770430 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HUDMainMenu::DoIdle` (Xbox PDB): advances the visible HUD, target,
 /// reminder and message state on the game's timed UI cadence.
-// Translation incomplete: the compiler's SEH unwind frame is omitted.
+// Translation incomplete: 00770430 - the compiler's SEH unwind frame is omitted.
 pub fn hud_main_menu_do_idle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
     let player = e.mem.u32(0x011d_ea3c);
     if player == 0 || e.call(0x008d_6f30, &args![player]).u32() == 0 {
@@ -2201,7 +2206,7 @@ pub fn hud_main_menu_do_idle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
     e.call(0x0077_da60, &args![this]);
     fn_007721c0(e, this);
     e.call(0x0077_e750, &args![this]);
-    e.call(0x0077_f700, &args![this]);
+    fn_0077f700(e, this);
     if e.mem.u32(0x011d_97c8) & 1 == 0 {
         let flags = e.mem.u32(0x011d_97c8);
         e.mem.set_u32(0x011d_97c8, flags | 1);
@@ -3970,10 +3975,10 @@ pub fn fn_007721c0(e: &mut Engine, this: Ptr<HUDMainMenu>) {
             hud_set_text(e, ammo_label, 0x011d_98d8);
             let shifted = e.mem.u8(0x011d_96b8) != 0;
             if attachment == 0 && shifted {
-                e.call(0x0077_f890, &args![this, 0x32_i32]);
+                fn_0077f890(e, this, 0x32);
                 e.mem.set_u8(0x011d_96b8, 0);
             } else if attachment != 0 && !shifted {
-                e.call(0x0077_f890, &args![this, -0x32_i32]);
+                fn_0077f890(e, this, -0x32);
                 e.mem.set_u8(0x011d_96b8, 1);
             }
         }
@@ -4035,7 +4040,7 @@ pub fn fn_007721c0(e: &mut Engine, this: Ptr<HUDMainMenu>) {
         }
         e.mem.set_u32(0x011d_98d4, weapon);
         if e.mem.u8(0x011d_96b8) != 0 {
-            e.call(0x0077_f890, &args![this, 0x32_i32]);
+            fn_0077f890(e, this, 0x32);
         }
         e.mem.set_u8(0x011d_96b8, 0);
     }
@@ -5780,7 +5785,7 @@ fn quest_popup_text(
 ) {
     let head = quest_queue_head(e);
     if e.mem.u32(head + 4) == 1 {
-        e.call(0x0077_f5e0, &args![this]);
+        hud_main_menu_kill_quest_objectives(e, this);
     }
     e.with_stack(0x104, |e, title| {
         let head = quest_queue_head(e);
@@ -7633,6 +7638,148 @@ pub fn fn_0077f5c0(e: &mut Engine, _unused_this: Ptr) {
     e.call(0x0047_0470, &args![0x011d_970c_u32]);
 }
 
+// Translated from 0077f5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HUDMainMenu::KillQuestObjectives` (Xbox PDB): clears completion traits on
+/// active objective tiles and drains queued objective records unless the HUD
+/// is in menu mode 5.
+pub fn hud_main_menu_kill_quest_objectives(e: &mut Engine, _unused_this: Ptr<HUDMainMenu>) {
+    let hud = current_hud(e);
+    let list = e.mem.u32(hud + 0x5c).wrapping_add(4);
+    let mut cursor = e.call(0x0072_6070, &args![list]).u32();
+    while cursor != 0 {
+        let slot = e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), cursor);
+            let hud = current_hud(e);
+            let list = e.mem.u32(hud + 0x5c).wrapping_add(4);
+            let element = e.call(0x0068_3520, &args![list, slot]).u32();
+            cursor = e.mem.u32(slot.addr());
+            element
+        });
+        let tile = e.mem.u32(slot);
+        if tile != 0 {
+            hud_trait(e, tile, 0xfa3, 0);
+            hud_set_float(e, tile, 0xfa9, 0.0);
+            let trait_id = e.call(0x00a0_1860, &args![0x0107_3724_u32]).u32();
+            hud_set_float(e, tile, trait_id, 0.0);
+            let trait_id = e.call(0x00a0_1860, &args![0x0107_3718_u32]).u32();
+            hud_set_float(e, tile, trait_id, 0.0);
+        }
+    }
+
+    let hud = current_hud(e);
+    if e.mem.i32(hud + 0x1c4) != 5 {
+        let mut queue = hud + 0x258;
+        while queue != 0 && !e.call(0x0082_56d0, &args![queue]).bool() {
+            let record_slot = e.call(0x0068_15c0, &args![queue]).u32();
+            let record = e.mem.u32(record_slot);
+            e.call(0x0040_1030, &args![record]);
+            queue = e.call(0x0072_6070, &args![queue]).u32();
+        }
+        let hud = current_hud(e);
+        e.call(0x0047_0470, &args![hud + 0x258]);
+    }
+}
+
+// Translated from 0077f700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Applies one frame of HUD shake using a random angle's sine and cosine,
+/// lazily caching the base positions of two traits. The SEH unwind frame is
+/// omitted.
+// Translation incomplete: 0077f700 - SEH unwind handling is omitted.
+pub fn fn_0077f700(e: &mut Engine, this: Ptr<HUDMainMenu>) {
+    if e.mem.u32(0x011d_9e9c) & 1 == 0 {
+        let flags = e.mem.u32(0x011d_9e9c) | 1;
+        e.mem.set_u32(0x011d_9e9c, flags);
+        let tile = e.mem.u32(this.addr() + 4);
+        let base = e.call(0x00a0_11b0, &args![tile, 0xfa1_u32]).f32();
+        e.mem.set_f32(0x011d_9e98, base);
+    }
+    if e.mem.u32(0x011d_9e9c) & 2 == 0 {
+        let flags = e.mem.u32(0x011d_9e9c) | 2;
+        e.mem.set_u32(0x011d_9e9c, flags);
+        let tile = e.mem.u32(this.addr() + 4);
+        let base = e.call(0x00a0_11b0, &args![tile, 0xfa2_u32]).f32();
+        e.mem.set_f32(0x011d_9e94, base);
+    }
+
+    let mut x = 0.0_f32;
+    let mut y = 0.0_f32;
+    let shake = e.mem.f32(this.addr() + 0x274);
+    let zero: f64 = e.global(0x0101_2060);
+    if f64::from(shake) > zero {
+        e.mem.set_u8(0x011d_9e91, 1);
+        let (random_x, random_y) = e.with_stack(8, |e, output| {
+            let angle = e.call(0x004a_4240, &args![]).f32();
+            e.call(
+                0x0041_69a0,
+                &args![angle, output.addr(), output.addr().wrapping_add(4)],
+            );
+            (
+                e.mem.f32(output.addr()),
+                e.mem.f32(output.addr().wrapping_add(4)),
+            )
+        });
+        x = random_x;
+        y = random_y;
+        let shake = e.mem.f32(this.addr() + 0x274);
+        x = (f64::from(x) * f64::from(shake)) as f32;
+        let shake = e.mem.f32(this.addr() + 0x274);
+        y = (f64::from(y) * f64::from(shake)) as f32;
+    }
+
+    if e.mem.u8(0x011d_9e91) != 0 {
+        let tile = e.mem.u32(this.addr() + 4);
+        let value = (f64::from(e.mem.f32(0x011d_9e98)) + f64::from(x)) as f32;
+        hud_set_float(e, tile, 0xfa1, value);
+        let tile = e.mem.u32(this.addr() + 4);
+        let value = (f64::from(e.mem.f32(0x011d_9e94)) + f64::from(y)) as f32;
+        hud_set_float(e, tile, 0xfa2, value);
+    }
+    let shake = e.mem.f32(this.addr() + 0x274);
+    let zero: f64 = e.global(0x0101_2060);
+    if f64::from(shake) == zero {
+        e.mem.set_u8(0x011d_9e91, 0);
+    }
+    e.mem.set_f32(this.addr() + 0x274, 0.0);
+}
+
+// Translated from 0077f890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds the integer offset to the X trait of HUD tiles at +0x50, +0x54,
+/// +0x4c and +0x180.
+pub fn fn_0077f890(e: &mut Engine, this: Ptr<HUDMainMenu>, offset: i32) {
+    for tile_offset in [0x50_u32, 0x54, 0x4c, 0x180] {
+        let source = e.mem.u32(current_hud(e) + tile_offset);
+        let old = e.call(0x00a0_11b0, &args![source, 0xfa1_u32]).f32();
+        let value = (f64::from(old) + f64::from(offset)) as f32;
+        let target = e.mem.u32(this.addr() + tile_offset);
+        hud_set_float(e, target, 0xfa1, value);
+    }
+}
+
+// Translated from 0077f970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the helper's vtable and forwards the two zero constructor arguments.
+pub fn fn_0077f970(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0x0107_38cc);
+    e.call(0x006b_3eb0, &args![this, 0_u32, 0_u32]);
+    this
+}
+
+// Translated from 0077f9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the array helper's vtable and clears its entries in mode 1.
+pub fn fn_0077f9a0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0107_38cc);
+    e.call(0x0084_54f0, &args![this, 1_u32]);
+}
+
+// Translated from 0077f9d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the array helper destructor and frees the object when flag bit zero is set.
+pub fn fn_0077f9d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0077f9a0(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
 // Translated from 0077f9c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Squares the input integer using the PC's wrapping 32-bit multiply.
 pub fn fn_0077f9c0(_e: &mut Engine, value: i32) -> i32 {
@@ -7814,6 +7961,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0077_f490, fn_0077f490(u8)),
         entry!(0x0077_f500, hud_main_menu_kill_quest_name(Ptr<HUDMainMenu>)),
         entry!(0x0077_f5c0, fn_0077f5c0(Ptr)),
+        entry!(
+            0x0077_f5e0,
+            hud_main_menu_kill_quest_objectives(Ptr<HUDMainMenu>)
+        ),
+        entry!(0x0077_f700, fn_0077f700(Ptr<HUDMainMenu>)),
+        entry!(0x0077_f890, fn_0077f890(Ptr<HUDMainMenu>, i32)),
+        entry!(0x0077_f970, fn_0077f970(Ptr) -> Ptr),
+        entry!(0x0077_f9a0, fn_0077f9a0(Ptr)),
+        entry!(0x0077_f9d0, fn_0077f9d0(Ptr, u32) -> Ptr),
         entry!(0x0077_f9c0, fn_0077f9c0(i32) -> i32),
     ]
 }
@@ -9640,7 +9796,7 @@ mod tests {
             0x0046_ffb0,
             0x0070_1520,
             0x0048_3710,
-            0x0077_f9a0,
+            0x0084_54f0,
             0x00a1_c520,
         ] {
             e.register_double(address, |_, _| Ret::default());
@@ -10756,6 +10912,8 @@ mod tests {
         let mut e = Engine::new();
         e.map(0x011d_9000, 0x1000);
         e.map(0x011d_e000, 0x1000);
+        e.map(0x0101_2000, 0x1000);
+        e.mem.set_f64(0x0101_2060, 0.0);
         let menu = e.new_object::<HUDMainMenu>();
         e.mem.set_u32(0x011d_ea3c, 0x5050);
         e.mem.set_u32(menu.addr() + 0x40, 0x4040);
@@ -10775,7 +10933,7 @@ mod tests {
         e.register_double(0x0077_da60, |_, _| Ret::default());
         e.register_double(0x008d_8520, |_, _| Ret::default());
         e.register_double(0x0077_e750, |_, _| Ret::default());
-        e.register_double(0x0077_f700, |_, _| Ret::default());
+        e.register_double(0x00a0_11b0, |_, _| Ret::default());
         e.register_double(0x0082_5c00, |_, _| Ret {
             eax: 100,
             ..Ret::default()
@@ -14152,5 +14310,282 @@ mod tests {
         });
         hud_main_menu_show_quest_objective(&mut e, Ptr::new(0x1234), 9, 4);
         assert_eq!(e.mem.u32(0x011d_96ac), 77);
+    }
+
+    #[test]
+    fn kill_quest_objectives_clears_active_tile_traits() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x1000);
+        e.map(0x5000, 0x1000);
+        e.map(0x6000, 4);
+        let hud = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, hud.addr());
+        e.mem.set_u32(hud.addr() + 0x5c, 0x5000);
+        e.mem.set_i32(hud.addr() + 0x1c4, 0);
+        e.mem.set_u32(0x6000, 0x7000);
+        e.register_double(0x0072_6070, move |_, words| {
+            if words[0] == 0x5004 {
+                Ret {
+                    eax: 1,
+                    ..Ret::default()
+                }
+            } else {
+                assert_eq!(words, &[hud.addr() + 0x258]);
+                Ret::default()
+            }
+        });
+        e.register_double(0x0068_3520, |e, words| {
+            assert_eq!(words[0], 0x5004);
+            e.mem.set_u32(words[1], 0);
+            Ret {
+                eax: 0x6000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0070_0320, |_, words| {
+            assert_eq!(words, &[0x7000, 0xfa3, 0]);
+            Ret::default()
+        });
+        e.register_double(0x00a0_12d0, |_, words| {
+            assert_eq!(words[0], 0x7000);
+            assert_eq!(words[2..], [0.0_f32.to_bits(), 1]);
+            Ret::default()
+        });
+        e.register_double(0x00a0_1860, |_, words| {
+            let trait_id = match words[0] {
+                0x0107_3724 => 0x123,
+                0x0107_3718 => 0x124,
+                address => panic!("unexpected text trait {address:#x}"),
+            };
+            Ret {
+                eax: trait_id,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0082_56d0, move |_, words| {
+            assert_eq!(words, &[hud.addr() + 0x258]);
+            Ret::default()
+        });
+        e.register_double(0x0068_15c0, move |_, words| {
+            assert_eq!(words, &[hud.addr() + 0x258]);
+            Ret {
+                eax: 0x6000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_1030, |_, words| {
+            assert_eq!(words, &[0x7000]);
+            Ret::default()
+        });
+        e.register_double(0x0047_0470, move |_, words| {
+            assert_eq!(words, &[hud.addr() + 0x258]);
+            Ret::default()
+        });
+
+        hud_main_menu_kill_quest_objectives(&mut e, hud);
+        assert_eq!(e.mem.u32(0x011d_96c0), hud.addr());
+    }
+
+    #[test]
+    fn shake_uses_cached_origin_and_resets_the_one_frame_amount() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x1000);
+        e.map(0x0101_2000, 0x1000);
+        e.mem.set_f64(0x0101_2060, 0.0);
+        let hud = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(hud.addr() + 4, 0x5000);
+        e.mem.set_f32(hud.addr() + 0x274, 0.5);
+        e.mem.set_u32(0x011d_9e9c, 3);
+        e.mem.set_u8(0x011d_9e91, 0);
+        e.mem.set_f32(0x011d_9e98, 100.0);
+        e.mem.set_f32(0x011d_9e94, 200.0);
+        let writes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = writes.clone();
+        e.register_double(0x004a_4240, |_, words| {
+            assert!(words.is_empty());
+            Ret {
+                st0: 6.0,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0041_69a0, |e, words| {
+            assert_eq!(words[0], 6.0_f32.to_bits());
+            assert_eq!(words.len(), 3);
+            assert_ne!(words[1], words[2]);
+            e.mem.set_f32(words[1], 2.0);
+            e.mem.set_f32(words[2], -4.0);
+            e.mem.set_f64(0x0101_2060, 0.5);
+            Ret::default()
+        });
+        e.register_double(0x00a0_12d0, move |_, words| {
+            captured.borrow_mut().push(words.to_vec());
+            Ret::default()
+        });
+
+        fn_0077f700(&mut e, hud);
+        assert_eq!(
+            &*writes.borrow(),
+            &[
+                vec![0x5000, 0xfa1, 101.0_f32.to_bits(), 1],
+                vec![0x5000, 0xfa2, 198.0_f32.to_bits(), 1]
+            ]
+        );
+        assert_eq!(e.mem.f32(hud.addr() + 0x274), 0.0);
+        assert_eq!(e.mem.u8(0x011d_9e91), 0);
+
+        writes.borrow_mut().clear();
+        fn_0077f700(&mut e, hud);
+        assert!(writes.borrow().is_empty());
+        assert_eq!(e.mem.u8(0x011d_9e91), 0);
+    }
+
+    #[test]
+    fn shake_reloads_lazy_flags_root_tile_and_final_amount_after_callbacks() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x1000);
+        e.map(0x0101_2000, 0x1000);
+        e.mem.set_f64(0x0101_2060, 0.0);
+        let hud = e.new_object::<HUDMainMenu>();
+        let first_root = 0x5100;
+        let second_root = 0x5200;
+        e.mem.set_u32(hud.addr() + 4, first_root);
+        e.mem.set_u32(0x011d_9e9c, 0);
+        e.mem.set_u8(0x011d_9e91, 1);
+        e.mem.set_f32(hud.addr() + 0x274, 0.0);
+        let traits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let observed_traits = traits.clone();
+        e.register_double(0x00a0_11b0, move |e, words| {
+            observed_traits.borrow_mut().push(words.to_vec());
+            match words {
+                [tile, 0xfa1] if *tile == first_root => {
+                    e.mem.set_u32(0x011d_9e9c, 0);
+                    e.mem.set_u32(hud.addr() + 4, second_root);
+                    Ret {
+                        st0: 10.0,
+                        ..Ret::default()
+                    }
+                }
+                [tile, 0xfa2] if *tile == second_root => Ret {
+                    st0: 20.0,
+                    ..Ret::default()
+                },
+                args => panic!("unexpected shake trait getter args: {args:?}"),
+            }
+        });
+        let writes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let observed_writes = writes.clone();
+        e.register_double(0x00a0_12d0, move |e, words| {
+            let mut captured = observed_writes.borrow_mut();
+            captured.push(words.to_vec());
+            if captured.len() == 1 {
+                e.mem.set_f32(hud.addr() + 0x274, 1.0);
+            }
+            Ret::default()
+        });
+
+        fn_0077f700(&mut e, hud);
+
+        assert_eq!(
+            &*traits.borrow(),
+            &[vec![first_root, 0xfa1], vec![second_root, 0xfa2]]
+        );
+        assert_eq!(
+            &*writes.borrow(),
+            &[
+                vec![second_root, 0xfa1, 10.0_f32.to_bits(), 1],
+                vec![second_root, 0xfa2, 20.0_f32.to_bits(), 1],
+            ]
+        );
+        assert_eq!(e.mem.u8(0x011d_9e91), 1);
+        assert_eq!(e.mem.f32(hud.addr() + 0x274), 0.0);
+        assert_eq!(e.mem.u32(0x011d_9e9c), 2);
+    }
+
+    #[test]
+    fn shift_ammo_tiles_reads_current_hud_and_sets_each_target() {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x1000);
+        let hud = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, hud.addr());
+        let offsets = [0x50_u32, 0x54, 0x4c, 0x180];
+        for (index, offset) in offsets.into_iter().enumerate() {
+            e.mem.set_u32(hud.addr() + offset, 0x5000 + index as u32);
+        }
+        e.register_double(0x00a0_11b0, |_, words| {
+            assert_eq!(words[1], 0xfa1);
+            Ret {
+                st0: (words[0] - 0x5000 + 1) as f64 * 10.0,
+                ..Ret::default()
+            }
+        });
+        let writes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = writes.clone();
+        e.register_double(0x00a0_12d0, move |_, words| {
+            captured.borrow_mut().push(words.to_vec());
+            Ret::default()
+        });
+
+        fn_0077f890(&mut e, hud, -50);
+        assert_eq!(
+            &*writes.borrow(),
+            &[
+                vec![0x5000, 0xfa1, (-40.0_f32).to_bits(), 1],
+                vec![0x5001, 0xfa1, (-30.0_f32).to_bits(), 1],
+                vec![0x5002, 0xfa1, (-20.0_f32).to_bits(), 1],
+                vec![0x5003, 0xfa1, (-10.0_f32).to_bits(), 1],
+            ]
+        );
+    }
+
+    #[test]
+    fn helper_constructor_sets_vtable_and_forwards_zero_arguments() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(4);
+        e.register_double(0x006b_3eb0, move |_, words| {
+            assert_eq!(words, &[object, 0, 0]);
+            Ret::default()
+        });
+        let result = fn_0077f970(&mut e, Ptr::new(object));
+        assert_eq!(result.addr(), object);
+        assert_eq!(e.mem.u32(object), 0x0107_38cc);
+    }
+
+    #[test]
+    fn helper_mode_destructor_sets_vtable_and_forwards_mode_one() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(4);
+        e.register_double(0x0084_54f0, move |_, words| {
+            assert_eq!(words, &[object, 1]);
+            Ret::default()
+        });
+        fn_0077f9a0(&mut e, Ptr::new(object));
+        assert_eq!(e.mem.u32(object), 0x0107_38cc);
+    }
+
+    #[test]
+    fn helper_scalar_destructor_clears_before_conditional_free() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(4);
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let clear_calls = calls.clone();
+        e.register_double(0x0084_54f0, move |_, words| {
+            clear_calls.borrow_mut().push((0x0084_54f0, words.to_vec()));
+            Ret::default()
+        });
+        let free_calls = calls.clone();
+        e.register_double(0x0040_1030, move |_, words| {
+            free_calls.borrow_mut().push((0x0040_1030, words.to_vec()));
+            Ret::default()
+        });
+
+        assert_eq!(fn_0077f9d0(&mut e, Ptr::new(object), 2).addr(), object);
+        assert_eq!(&*calls.borrow(), &[(0x0084_54f0, vec![object, 1])]);
+        calls.borrow_mut().clear();
+
+        assert_eq!(fn_0077f9d0(&mut e, Ptr::new(object), 3).addr(), object);
+        assert_eq!(
+            &*calls.borrow(),
+            &[(0x0084_54f0, vec![object, 1]), (0x0040_1030, vec![object]),]
+        );
     }
 }

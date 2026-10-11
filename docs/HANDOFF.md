@@ -7,6 +7,69 @@ machinery runs.
 
 ## Resume here
 
+### Current state, 2026-10-11 16:10 EDT
+
+This section supersedes the historical notes below.
+
+- #143 merged `a24bc31` after both current-head CI checks. Its shipping
+  session 78829 is DONE; never rerun ship143.
+- #144 merged `4116868` after both current-head CI checks passed.
+  Rolling #145 remains open and attached, now rebased onto that merge with
+  its ledger regenerated. Both fresh current-head checks must pass before
+  shipping; checks for the prior `df1a5e4` head do not validate this rebase.
+- HUD source `aabfc8b` passed 121 focused and 14,386 engine tests, the
+  doctest, strict lint, formatting, 49 hygiene checks and release build.
+  cycle03 session 72751 is DONE: collection `34ee119` passes 14,410
+  combined engine tests, the doctest, strict lint and formatting. Seventeen
+  reviewed compiler-only partials remain explicit (two legacy comments
+  needed their missing addresses). All ordinary HUD bodies are translated.
+  Fresh `/root/a03_round20` started immediately on b0223, owning only
+  `fallout_misc/bgssaveloadchangesmap.rs` and `bgssaveloadfile.rs`.
+  It is compiler-held and must not reset the slot.
+- `/root/a04_water_complete` owns `fallout_shared/bgsautowater.rs`:
+  thirty-seven normal bodies, five SEH-only partials, forty-four drafted
+  tests and fifteen passing native comparisons. It is validating now;
+  initial pointer type-annotation errors were corrected, tests still await
+  results. `/root/a01_round19` now has the other compiler lane for its
+  forty TaskQueueInterface bodies and forty-two tests. Four are complete;
+  thirty-six retain reviewed compiler-only partials. Its forty-two focused
+  and 14,445 engine tests pass; strict lint and release checks continue.
+  After collection its
+  fresh worker must continue ordinary bodies at `0087b650`.
+- Root PR #144 merged from `94e709c`, branch
+  `codex/phase2-reference-predicate`. Three helpers and four regressions
+  pass 16,238 workspace tests, strict lint, formatting and release/debug
+  builds. Eighteen native cases pass. Both final release probes load a
+  selected original scripted inventory item and write it byte-identically,
+  with both expected BEGIN handlers. One uses an official save's exact
+  ten-plugin order and actual three-variable defaults. Its saved variable
+  list is empty. Historical plugin contents, ordinary script execution,
+  whole-save preservation and world/viewer integration remain unverified.
+  Both current-head CI checks passed before merging.
+- Root follow-on source checkpoints `8ebef74` and `e705c1d` on
+  `codex/phase2-script-local-values` owns `fallout_shared/tesscript.rs`,
+  `fallout_misc/bgsloadgamebuffer.rs`, `bgssavegamebuffer.rs` and topic
+  `ENGINE_STATE.md`. It fixes
+  raw flag copying, signaling-NaN stores and live list-item lookup, and adds
+  two saved-form reader helpers and the numeric-form writer. SaveGame
+  reloads the reference ID and effect flag/pointer after helper calls.
+  Thirteen regressions are drafted but unrun; 102 native cases pass.
+  Independent PC/source review passes, including the corrected test fixtures.
+  It is rebased onto #144; run the prepared full check pipeline and
+  final normal-registry release probes (nine LoadGame and eighteen SaveGame
+  vectors) when a lane is free. An additional eighteen native three-leg
+  SaveGame/LoadGame/SaveGame chains pass, carrying actual results forward;
+  their prepared Rust release probe remains unrun. Its baseline stops at
+  the now-added writer `00865db0`.
+- Fresh a03's b0223 batch now has forty normal bodies and forty-three
+  drafted tests. Thirty-three native cases and independent PC review pass.
+  Eight compiler-only partials remain explicit. Cargo checks are queued.
+- Limit full Cargo pipelines to two: water and taskqueue now own them.
+  Root and fresh a03 are source-only. No deletion attempts after automatic
+  review rejected cleanup and the user removed idle caches manually.
+- Build 40 remains current, without a confirmed next-play date or new
+  visible feature. Continue cycling and shipping until stopped. Preserve
+  the user's 98% weekly stop/handoff rule (70% around 16:02 EDT).
 ### Active again, 2026-10-11 after the usage reset
 
 This section supersedes the historical stopped state below. User requested
