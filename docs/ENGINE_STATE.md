@@ -310,3 +310,55 @@ file round trip or a world/viewer consumer.
 
 Next action: translate the form-map allocation dependency and rerun the
 full ItemChange load/write probe before connecting world state.
+
+## Form-map allocation and buffer setter follow-on, 2026-10-11
+
+Two dependencies are implemented in `fallout_shared/form_map_support.rs`:
+`0043a010` removes and clears a twelve-byte entry under the native lock;
+`0043a080` refills the free list and chains its allocated blocks. The map's
+renderer template name (Xbox PDB) is not used to infer behavior. PC review
+confirms overflow saturation, post-allocation count reloads, the unsigned
+do/while bound and store order. Three regressions pass, including actual
+pool exhaustion/refill, lock callbacks and saturated allocation size.
+
+The broader inventory probe also reaches shared setter `007037c0`, now
+implemented in its mapped `bgsmenupacker.rs` unit. The PC body only stores
+one word at receiver +0x24; inventory loading uses it as the form-buffer
+setter. The Xbox PDB unit/name does not establish its behavior for all the
+shared callers. Independent PC review and three generated native cases
+confirm the store, unchanged neighboring bytes and four-byte callee stack
+cleanup, using the executable hash and CPU configuration above. One
+generated registry regression covers the setter.
+
+A private probe first checked the two draft bodies separately, then passed
+again through the final engine build's normal registry. It exercises full
+`ItemChange::LoadGame_ov2`, real form-map lookup and installed RTTI: the
+form pointer, signed delta and both count/health stacks are reconstructed,
+and writing the loaded item reproduces the exact 41-byte payload. This
+uses generated form/map/mode receivers and partial allocator startup,
+without game-function doubles.
+There is still no complete FOS round trip or world/viewer consumer.
+
+A second private probe reads eight existing saves without modifying
+them. It extracts inventory entries only after the existing decoder reads
+their whole containing reference/actor record successfully. Of the entries
+containing only count/health extras, all 10,201 load and rewrite with
+byte-identical item payloads, including eighteen entries with multiple
+stacks. Three reference/actor records that fail full decoding are explicitly
+excluded. Original form-ID indices are retained; generated bound-object
+headers supply the form/RTTI boundary. This remains a payload check, using
+the separately compiled map draft, not a full FOS or playable-world round
+trip. It also passes through the final build's normal registry. Save hashes
+and probe output remain private.
+
+Expanding the private probe beyond count/health reaches missing constructor
+`005a8b80` while loading script extras. The probe's generated forms and ID
+maps must also be extended before claiming coverage of referenced scripts.
+The wider set has not passed.
+
+On merged #130, all 15,781 workspace tests pass (13,928 engine), as do strict
+workspace lint, formatting and release/debug builds. Both final registry
+probes pass. These results do not establish a playable inventory consumer.
+
+Next action: publish this bounded batch, then supply the script-form boundary
+and translate the script-local constructor needed by the broader probe.
