@@ -276,3 +276,37 @@ No FOS file, world consumer or full save round trip is implemented.
 
 Next action: validate native buffer loading before connecting the state
 boundary to the world.
+
+## Native inventory buffer reader, 2026-10-11
+
+Eleven reader dependencies are implemented in `bgsloadgamebuffer.rs` and
+`bgsloadformbuffer.rs`: buffer construction/attachment, raw reads, variable
+counts, form-ID decoding, and form/reference/actor access. The PC raw reader
+does not add a bounds check: it skips only when the size field is zero and
+reloads its buffer and cursor after callbacks. Tag three leaves the cursor
+unchanged; the other tags decode one, two or four bytes and consume a
+separator. The derived constructor retains its three header-padding bytes;
+its compiler exception cleanup remains explicitly partial.
+
+Peer review against PC disassembly found no mismatch. Ten generated native
+cases pass on the same executable/CPU configuration above: two guarded
+constructors, four flag-predicate AL results, and four variable-count tags
+with cursor checks. Eight focused regressions and all 15,771 workspace
+tests (13,918 engine) pass on merged #128, as do strict workspace lint,
+formatting, release and debug builds.
+
+The installed-executable probe writes and loads two independent stacks:
+count 2 / health 42.5 and count 7 / health 17.5, with signed entry delta -2.
+The translated buffered reader consumes all 41 bytes. This uses real
+registered translations, generated receivers and partial allocator startup,
+without game-function doubles or game-file writes.
+
+The fuller ItemChange load/write probe stops before loading: inserting its
+generated form into the real form map reaches untranslated allocator
+`0043a010`. Its byte-identical rewrite assertion has not run. Static review
+of `004bee00` confirms the existing normal loader path; compiler exception
+cleanup remains omitted there. Neither probe establishes a complete FOS
+file round trip or a world/viewer consumer.
+
+Next action: translate the form-map allocation dependency and rerun the
+full ItemChange load/write probe before connecting world state.
