@@ -7,6 +7,14 @@ machinery runs.
 
 ## Resume here
 
+User resumed after the usage reset. Continuous slot cycling is active.
+Rolling #119 passed both checks and merged as `951c0c7`. The lead branch
+is rebased onto it; pathfinding collection is now `3052c07` (13,717 tests
+passed) and is being published in the next rolling PR. Build 40 remains
+the published play copy. a03 resumed b0060 research without a reset;
+`/root/a04_resume` owns the preserved Explosion continuation. a01's
+prepared work remains intact and awaits its compiler window.
+
 Codex takeover, 2026-10-10: rolling PRs #109, #112, #114 and #116 passed
 both CI checks and were squash-merged as `b995218`, `d854fbe`, `89e1a0b`
 and `c23f744`. The lead branch is `claude/engine-crate`. Its later batches
@@ -18,7 +26,7 @@ included. Fresh CI gates this combined head. The old remote branch was absent
 after #116 merged; an empty-ref lease safely recreated it.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
-The lead branch is rebased onto current main `a0ee61d` (health PR #118).
+The lead branch is rebased onto current main `951c0c7` (rolling PR #119).
 Only ledger/milestone conflicts needed resolution. Local validation
 passed 15,108 core tests, 182 viewer release tests, formatting, lint and
 release builds. Doc Mitchell, Back in the Saddle and Ghost Town Gunfight
@@ -46,13 +54,30 @@ engine tests, lint and formatting pass. Two normal-path geometry translations
 exception-cleanup partials and callback regressions. All 13,698 combined
 engine tests, lint and formatting pass. This follow-on is included in
 rebased PR #119. `00699b60` remains unregistered: its edge/list ownership and
-repair paths are unresolved; the fresh worker owns that investigation.
-a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round4`.
+repair paths were unresolved. The fresh worker has now prepared its full
+normal path as an explicit SEH partial, plus two regressions, but has not
+compiled or committed it. It also corrects `0069ad40`: PC `0069ad56`
+stores immediate vtable address `0106b184`; merged #116 mistakenly loaded
+the first word there. A regression distinguishes the address from its
+contents. Formatting, diff and name scans pass. Validation remains open.
+a03 b0331 pathmanager.cpp completed under `/root/a03_round4`.
 Collection `7321030` adds 29 complete and six partial functions plus all
 reviewed corrections to earlier argument-slot ownership, output ordering,
 callback reloads and completion pointers. The combined 13,680 engine
 tests, lint and formatting pass. Forty entries remain: 15 explicit
 exception-cleanup partials and 25 untouched, starting `006ec5b0`.
+The 25 bodies are now prepared (23 complete and two SEH partials), with
+lead corrections for guard ownership, overflow, callback reloads, pending
+stack arguments and lock/barrier ordering. Focused tests pass 81/81 and
+full engine tests pass 13,697. Lint-only saturating arithmetic rewrites
+passed final validation. Collection `ded5afd` passes 13,717 combined
+engine tests, lint and formatting. The queue confirmed all 17 remaining
+entries are explicit exception-cleanup partials; cycle03 advanced using
+`ADVANCE_PARTIAL_ONLY=1`, retaining those entries in the ledger.
+Fresh `/root/a03_round5` read b0060 (`multiboundmarkerdata.cpp`, 30
+non-done entries: ten open, twenty traced) before the usage stop. Its
+worktree is clean; private `scratch/a03/b0060-helper-audit.txt` holds
+GET-only PC research for 23 functions. No translation or validation yet.
 a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round6`.
 Its latest 21-function continuation was collected as `00532d6`; 13,633
 combined engine tests, lint and formatting pass. Native sort permutations
@@ -65,6 +90,14 @@ batch was held until corrected; merged #116 excludes it. Collection
 `a2fe87a` now passes all checks: six new complete functions, three new
 partials and eight older partials explicitly marked. The fresh task has
 18 entries: eleven exception-cleanup partials and seven untranslated.
+Its current worktree holds uncompiled/uncommitted normal paths for
+`009ae280` and `009b2940`, both marked SEH partial. Lead review corrected
+wrong negative stack offsets, pending stack arguments, receiver pointers,
+null guards, signed count comparisons, flag-byte preservation and AL
+return. Regressions cover the collector path and null shape allocation;
+formatting/diff checks pass, but compilation and tests remain required.
+Five other normal paths remain untranslated. Crucially, `ffffff6c` is
+EBP-94: the temporary string is outside cinfo at EBP-80, not overlapping.
 a06's next b0360 and a05's next b0158 (12 entries starting `008ca620`)
 are prepared and waiting for capacity. Never collect/reset an active slot.
 a05's collected batch has 28 complete / 12 partial functions; gaps remain
@@ -98,21 +131,33 @@ Health checks passed: 74 focused tests, all 15,315 core tests, lint, formatting
 and release build. The real-save probe passes all 20 health and 14 count
 payloads with the source hash unchanged; count source is unchanged in
 this validated follow-on. No root process is active. The managed checkout
-is now `codex/phase2-reference-state`, commit `9469f51`, based on #115.
+is now `codex/phase2-reference-state`, rebased onto `a0ee61d`, with
+checkpoint `6a1be1b` (explicitly WIP), preceded by `9ce361f` and `cc0d473`.
 Ten form-construction helpers and two callback-reload fixes pass 124
 focused tests, all 13,466 engine tests, lint, formatting and debug build.
 Five native header and two zero-capacity array vectors pass. The actual
 reference probe now reaches `00aa1070` and stops at the uninitialized
 allocator. Nine allocator and counter-import helpers and their tests are
-prepared but uncompiled in `nisystem/allocator_support.rs`, its module
+committed as an unvalidated local checkpoint in `nisystem/allocator_support.rs`, its module
 registration, `nisystem/bsniallocator.rs`, `bscore/memorymanager.rs`
 and `fallout_shared/form_support.rs`.
 Three native allocator-header vectors pass. No public reference adapter
 exists yet; next validate and continue the real startup dependency chain.
+Final in-flight check: `CARGO_PROFILE_DEV_DEBUG=0 cargo test -j 2 -p engine
+allocator_` compiled successfully, with 18 tests passing and one failing.
+`allocator_support::tests::initialization_uses_real_constructors_and_global_holder`
+expects `block_size(holder) == Some(4)` at line 102, but gets `Some(8)`.
+Investigate actual platform allocation sizing before changing the assertion.
+No repair or further checks were started after the usage stop. Full engine/
+workspace tests, clippy, debug/release builds and the updated private
+`reference-bootstrap-allocator.rs` probe remain pending. Session 30566 is
+closed; no compiler is active. Root worktree is clean at `6a1be1b`.
 
 Simultaneous engine compilers exhausted host memory; ONE heavy engine
-compile may run at a time. a03 has the current validation window;
-root is next. Other workers wait,
+compile may run at a time. Root started allocator-focused validation
+at the usage boundary (session 30566, now closed; outcome recorded above).
+Resume a04 then a01 validation after completing the lead's dependency
+checks. Other workers wait,
 continuing research/review. The lead grants each next window explicitly.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead

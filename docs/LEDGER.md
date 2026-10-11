@@ -30,14 +30,14 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10683 | 16.1% |
-| traced | 4469 | 6.7% |
+| translated | 10708 | 16.2% |
+| traced | 4465 | 6.7% |
 | platform | 3417 | 5.2% |
 | library | 21915 | 33.1% |
-| open | 25775 | 38.9% |
+| open | 25754 | 38.9% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **40** engine functions
+Translation totals count markers, not complete behavior. **42** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -59,6 +59,8 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `006ec000` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1262` |
 | `006ec130` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1294` |
 | `006ec4b0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1377` |
+| `006ec660` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1422` |
+| `006ec870` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1492` |
 | `008c9330` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1407` |
 | `008c9430` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1423` |
 | `008c94e0` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1438` |
@@ -83,9 +85,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `009b2cb0` | `crates/engine/src/units/fallout_ai/explosion.rs:1834` |
 | `009b2d30` | `crates/engine/src/units/fallout_ai/explosion.rs:1848` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14745 (36.4%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14766 (36.4%) are translated or traced.
 
-Rust cites 15798 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 15819 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -121,7 +123,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout/ai | 4849 | 1475 | 1888 | 2230 | 613 | 0 | 0 | 2006 | 58.6% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 741 | 0 | 0 | 1321 | 50.1% |
 | (unplaced) | 2353 | 470 | 0 | 30 | 412 | 1 | 0 | 1910 | 18.8% |
-| fallout shared/pathfinding | 1788 | 365 | 452 | 681 | 179 | 0 | 0 | 928 | 48.1% |
+| fallout shared/pathfinding | 1788 | 365 | 452 | 706 | 175 | 0 | 0 | 907 | 49.3% |
 | NiMain | 1619 | 261 | 1134 | 3 | 76 | 0 | 0 | 1540 | 4.9% |
 | BSHavok | 1615 | 316 | 1134 | 59 | 134 | 0 | 0 | 1422 | 12.0% |
 | BSShader | 1549 | 608 | 350 | 0 | 142 | 1407 | 0 | 0 | - |
@@ -176,7 +178,7 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 100 | 31 | 3 | 0 | 9 |
 | 2 | 1575 | 583 | 1053 | 394 | 24 | 4 | 100 |
-| 3 | 4973 | 1303 | 3393 | 1074 | 154 | 26 | 326 |
+| 3 | 4973 | 1303 | 3394 | 1074 | 154 | 26 | 325 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
