@@ -15,8 +15,8 @@ was 25,230,925,824 bytes afterward. Automatic review had rejected our
 deletion attempt with only "blocked by policy"; no bypass was attempted.
 
 - #135 merged `7907420` and #134 merged `89bbde4`, each after both CI checks.
-  Rolling #136 is attached at `6a1e073` and still awaits both checks. Ship
-  it with `ship.sh 136` when green; preserve later collection/docs commits.
+  #136 also merged `95ab97a` after both checks. Rolling #137 is attached at
+  `64cde5f`, with fresh core/viewer checks running. Ship it when both pass.
 - cycle04 session 86301 completed: source `5c914204` collected as `ddeecbd`,
   all normal effect-item bodies through `00405400`. Ten verified SEH-only
   partials were retained with reviewed partial-only advancement. Fresh
@@ -26,23 +26,38 @@ deletion attempt with only "blocked by policy"; no bypass was attempted.
   strict lint and formatting. cycle03 session 41605 completed, collection
   `8aaf167`, with 14,177 combined engine tests and strict checks passing.
   Fresh `/root/a03_round18` immediately started its next forty HUD entries
-  from `00778930`, compiler held. `/root/a01_round16` now owns the compiler
-  for nine movement bodies. Its seventeen SEH-only partials are verified;
-  three missing historical markers were restored after PC checks. After
-  its clean passing commit, cycle01 once with reviewed partial advancement,
-  start a fresh worker immediately, then grant root, followed by a04.
-- Root branch `codex/phase2-script-action-parser` in the existing managed
-  checkout starts from merged #134/#135. Only `expression.rs` and
-  `tesscriptrunmanager.rs` and topic `ENGINE_STATE.md` are edited: six helpers
+  from `00778930`, compiler held; it is extending the compass marker paths.
+  Movement source `598c064` passed 145 focused and 14,138 engine tests,
+  strict lint, formatting and 49 hygiene checks. cycle01 completed with
+  14,189 combined engine tests; collected commit is now `4cc1b3f` after
+  shipping. Its seventeen verified SEH-only partials remain explicit.
+  Fresh `/root/a01_round17` immediately started BSAudio task b0694.
+  I/O collection is complete: source `a802ff8` became `75bd3b5`, with
+  14,239 combined engine tests and strict checks passing. Fresh
+  `/root/a04_round17` immediately continued b0626 from `00c3ffb0`.
+  a03 now owns an intermediate focused compiler pass for 24 entries,
+  then yields to audio while it finishes the rest of its forty-entry task.
+  Root's next two-helper follow-on is source-only.
+- Root #138 is attached/published at `e7cf965` on
+  `codex/phase2-script-action-parser`: `expression.rs`,
+  `tesscriptrunmanager.rs` and topic `ENGINE_STATE.md` contain six helpers
   and eighteen new regressions. Thirty native cases pass (six parser, nine
   constructors, four entry and eleven evaluator), with raw evidence private
-  under `codex-audit`. Rust checks have NOT run. CExpression is 0x710 bytes,
+  under `codex-audit`. All 16,011 workspace tests, strict lint, formatting
+  and release/debug builds pass. CExpression is 0x710 bytes,
   not a pointer wrapper. EvaluateLine `005e1550` now drafts BEGIN and action-list
   paths; non-BEGIN ordinary execution/parse stays explicit partial and panics.
-  Review of that sixth helper is pending. Actual Script form/save-ID and
-  event-handler integration remain dependencies; no whole-save claim.
-- a04 I/O management now has forty drafted bodies and fifty tests, with
-  twelve SEH-only partials. Source-only checks pass; no cargo yet. Review
+  Independent PC review of all six helpers passed. The actual-bytecode
+  normal-registry probe ran but stopped immediately at open `004013e0`.
+  Root continues on `codex/phase2-script-form-flags`, based on #138, with
+  drafted `004013e0` in `unplaced/run_00401000.rs` and header accessor
+  `00500940` in `fallout_shared/bgsterminal.rs`. Forty-one native cases
+  pass; Rust checks for this follow-on have not run. The private original
+  item-payload probe is prepared but unrun. Both paths also need a04's
+  collected TLS guards (currently in #137). Full Script form/save-ID
+  integration remains open; no whole-save claim.
+- a04's collected I/O management batch has forty bodies and fifty tests,
+  with twelve SEH-only partials. All checks passed. Review
   corrected callback argument words, live queue/array/count reloads, signed
   construction loops and the incompatible Xbox layout. A suspect Xbox
   name for `005a8040` was removed in favor of a neutral PC accessor.

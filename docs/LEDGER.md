@@ -30,14 +30,14 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 11115 | 16.8% |
-| traced | 4308 | 6.5% |
+| translated | 11155 | 16.8% |
+| traced | 4304 | 6.5% |
 | platform | 3416 | 5.2% |
 | library | 21912 | 33.1% |
-| open | 25508 | 38.5% |
+| open | 25472 | 38.4% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **98** engine functions
+Translation totals count markers, not complete behavior. **110** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -140,10 +140,22 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `009b2940` | `crates/engine/src/units/fallout_ai/explosion.rs:2443` |
 | `009b2cb0` | `crates/engine/src/units/fallout_ai/explosion.rs:2565` |
 | `009b2d30` | `crates/engine/src/units/fallout_ai/explosion.rs:2579` |
+| `00c3db60` | `crates/engine/src/units/bsmain/iomanager.rs:65` |
+| `00c3e1b0` | `crates/engine/src/units/bsmain/iomanager.rs:134` |
+| `00c3e4f0` | `crates/engine/src/units/bsmain/iomanager.rs:349` |
+| `00c3e8b0` | `crates/engine/src/units/bsmain/iomanager.rs:399` |
+| `00c3ec80` | `crates/engine/src/units/bsmain/iomanager.rs:429` |
+| `00c3eeb0` | `crates/engine/src/units/bsmain/iomanager.rs:476` |
+| `00c3f7a0` | `crates/engine/src/units/bsmain/iomanager.rs:693` |
+| `00c3f8c0` | `crates/engine/src/units/bsmain/iomanager.rs:714` |
+| `00c3f960` | `crates/engine/src/units/bsmain/iomanager.rs:729` |
+| `00c3fa70` | `crates/engine/src/units/bsmain/iomanager.rs:757` |
+| `00c3fb50` | `crates/engine/src/units/bsmain/iomanager.rs:777` |
+| `00c3fce0` | `crates/engine/src/units/bsmain/iomanager.rs:836` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 15012 (37.0%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 15048 (37.1%) are translated or traced.
 
-Rust cites 16098 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 16134 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -185,7 +197,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | BSShader | 1549 | 608 | 350 | 0 | 142 | 1407 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 32 | 0 | 0 | 1247 | 2.5% |
 | fallout/misc | 1045 | 171 | 353 | 460 | 122 | 0 | 0 | 463 | 55.7% |
-| BSMain | 991 | 192 | 478 | 43 | 68 | 0 | 0 | 880 | 11.2% |
+| BSMain | 991 | 192 | 478 | 83 | 64 | 0 | 0 | 844 | 14.8% |
 | NiXenonRenderer | 965 | 172 | 298 | 1 | 5 | 959 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 112 | 620 | 0 | 0 | - |
 | fallout/magic | 705 | 162 | 378 | 7 | 69 | 0 | 0 | 629 | 10.8% |
@@ -233,8 +245,8 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 101 | 30 | 3 | 0 | 9 |
-| 2 | 1575 | 583 | 1133 | 319 | 24 | 4 | 95 |
-| 3 | 4973 | 1303 | 3609 | 890 | 148 | 26 | 300 |
+| 2 | 1575 | 583 | 1137 | 318 | 24 | 4 | 92 |
+| 3 | 4973 | 1303 | 3620 | 881 | 148 | 26 | 298 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
