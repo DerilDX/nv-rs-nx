@@ -915,13 +915,13 @@ pub fn script_locals_get_variable(
 pub fn script_locals_set_variable(e: &mut Engine, this: Ptr<ScriptLocals>, id: u32, value: f64) {
     let mut node = e.call(LOCAL_LIST_OF, &args![this]).u32();
     while node != 0 {
-        let variable = list_item(e, node);
-        if variable == 0 {
+        if list_item(e, node) == 0 {
             break;
         }
+        let variable = list_item(e, node);
         node = list_next(e, node);
         if e.mem.u32(variable) == id {
-            e.mem.set_f64(variable + 8, value);
+            e.mem.set_f64(variable + 8, x87_local_value(value));
             return;
         }
     }
@@ -1335,7 +1335,8 @@ pub fn script_locals_save_game(e: &mut Engine, this: Ptr<ScriptLocals>, buffer: 
                 if fn_005a9480(e, this, id) {
                     e.mem.set_u32(numeric, 0);
                     e.call(GET_NUMERIC_ID_FROM_DOUBLE, &args![numeric, variable + 8]);
-                    e.mem.set_u32(id_word, id | 0x8000_0000);
+                    // PC 005a9e37 reloads the ID after the conversion helper.
+                    e.mem.set_u32(id_word, e.mem.u32(variable) | 0x8000_0000);
                     e.call(BUFFER_SAVE_BYTES, &args![buffer, id_word, 4u32, 0u32]);
                     let form_id = e.mem.u32(numeric);
                     e.call(BUFFER_SAVE_FORM_ID, &args![buffer, form_id, 0u32]);
@@ -1351,7 +1352,9 @@ pub fn script_locals_save_game(e: &mut Engine, this: Ptr<ScriptLocals>, buffer: 
         let effect_data = e.get(this, ScriptLocals::m_pScriptEffectData).addr();
         e.mem.set_u8(flag, (effect_data != 0) as u8);
         e.call(BUFFER_SAVE_BYTES, &args![buffer, flag, 1u32, 0u32]);
-        if effect_data != 0 {
+        // PC 005a9ece tests the live stack byte, then reloads the pointer.
+        if e.mem.u8(flag) != 0 {
+            let effect_data = e.get(this, ScriptLocals::m_pScriptEffectData).addr();
             e.call(BUFFER_SAVE_BYTES, &args![buffer, effect_data, 8u32, 0u32]);
         }
         let any_form_flag = fn_005a8ef0(e, this, 0, 0x1000);
@@ -2548,6 +2551,19 @@ pub fn fn_005ac020(e: &mut Engine, this: Ptr<Script>) -> u32 {
     })
 }
 
+/// The FLD/FSTP double stores in PC 005ac150 and 005a9290 quiet signaling
+/// NaNs while retaining their sign and payload (masked x87 exceptions).
+fn x87_local_value(value: f64) -> f64 {
+    let bits = value.to_bits();
+    let nan =
+        bits & 0x7ff0_0000_0000_0000 == 0x7ff0_0000_0000_0000 && bits & 0x000f_ffff_ffff_ffff != 0;
+    f64::from_bits(if nan {
+        bits | 0x0008_0000_0000_0000
+    } else {
+        bits
+    })
+}
+
 // Translated from 005ac150 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Copy constructor of `SCRIPT_LOCAL` (0x18 bytes): copies the integer
 /// flag, the id and the value.
@@ -2556,11 +2572,11 @@ pub fn fn_005ac150(
     this: Ptr<ScriptLocal>,
     source: Ptr<ScriptLocal>,
 ) -> Ptr<ScriptLocal> {
-    let is_integer = e.get(source, ScriptLocal::bIsInteger);
-    e.set(this, ScriptLocal::bIsInteger, is_integer);
+    let is_integer = e.mem.u8(source.addr().wrapping_add(0x10));
+    e.mem.set_u8(this.addr().wrapping_add(0x10), is_integer);
     let id = e.get(source, ScriptLocal::uiID);
     e.set(this, ScriptLocal::uiID, id);
-    let value = e.get(source, ScriptLocal::fValue);
+    let value = x87_local_value(e.get(source, ScriptLocal::fValue));
     e.set(this, ScriptLocal::fValue, value);
     this
 }
@@ -4273,6 +4289,147 @@ mod tests {
         );
     }
 
+    const NATIVE_LOCAL_VALUES: [(u64, u64); 9] = [
+        (0, 0),
+        (0x8000_0000_0000_0000, 0x8000_0000_0000_0000),
+        (1, 1),
+        (0x4004_0000_0000_0000, 0x4004_0000_0000_0000),
+        (0x7ff0_0000_0000_0000, 0x7ff0_0000_0000_0000),
+        (0xfff0_0000_0000_0000, 0xfff0_0000_0000_0000),
+        (0x7ff8_1234_5678_9abc, 0x7ff8_1234_5678_9abc),
+        (0x7ff0_1234_5678_9abc, 0x7ff8_1234_5678_9abc),
+        (0xfff0_1234_5678_9abc, 0xfff8_1234_5678_9abc),
+    ];
+
+    #[test]
+    fn local_copy_matches_native_flag_value_and_guards() {
+        // PC005ac150, generated native oracle FCW027F/MXCSR1F80.
+        // All36 guarded cases independently compared byte-for-byte.
+        for (input_bits, output_bits) in NATIVE_LOCAL_VALUES {
+            for flag in [0, 1, 0x7f, 0xff] {
+                let mut e = Engine::new();
+                let block = e.mem.alloc(80);
+                let mut bytes = vec![0xa5; 80];
+                bytes[4..8].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+                bytes[12..20].copy_from_slice(&input_bits.to_le_bytes());
+                bytes[20] = flag;
+                e.mem.write(block, &bytes);
+                bytes[40..44].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+                bytes[48..56].copy_from_slice(&output_bits.to_le_bytes());
+                bytes[56] = flag;
+                assert_eq!(
+                    e.call(0x005ac150, &[block + 40, block + 4]).u32(),
+                    block + 40
+                );
+                assert_eq!(
+                    e.mem.bytes(block, 80),
+                    bytes,
+                    "input {input_bits:016x} flag {flag:02x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn local_copy_matches_native_overlapping_receivers() {
+        // Native005ac150 writes flag, ID, then float, with fresh source loads.
+        // These generated expected buffers were independently captured on PC.
+        for (destination, hex) in [
+            (4, "a5a5a5a578563412a5a5a5a5bc9a78563412f87fffa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"),
+            (0, "7856341278563412bc9a7856ff12f87fff12f07fffa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"),
+            (8, "a5a5a5a57856341278563412bc9a7856bc9a78563412f87fffa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"),
+            (12, "a5a5a5a578563412a5a5a5a5785634123412f07f785634123412f87fffa5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5"),
+        ] {
+            let mut e = Engine::new();
+            let block = e.mem.alloc(80);
+            e.mem.write(block, &[0xa5; 80]);
+            e.mem.set_u32(block + 4, 0x1234_5678);
+            e.mem.write(block + 12, &0x7ff0_1234_5678_9abcu64.to_le_bytes());
+            e.mem.set_u8(block + 20, 0xff);
+            let expected = (0..hex.len()).step_by(2)
+                .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(expected.len(), 80);
+            assert_eq!(e.call(0x005ac150, &[block + destination, block + 4]).u32(), block + destination);
+            assert_eq!(e.mem.bytes(block, 80), expected, "destination {destination}");
+        }
+    }
+
+    #[test]
+    fn set_variable_matches_native_first_match_value_and_guards() {
+        // Native005a9290:18 generated cases, matching ID1 or the first ID2.
+        for (mut input, mut output) in NATIVE_LOCAL_VALUES {
+            if input == 1 {
+                input = 0xf0;
+                output = 0xf0;
+            }
+            for id in [1, 2] {
+                let mut e = Engine::new();
+                let block = e.mem.alloc(168);
+                let mut bytes = vec![0xa5; 168];
+                for (offset, word) in [
+                    (16, block + 32),
+                    (32, block + 64),
+                    (36, block + 40),
+                    (40, block + 96),
+                    (44, block + 48),
+                    (48, block + 128),
+                    (52, 0),
+                    (64, 1),
+                    (96, 2),
+                    (128, 2),
+                ] {
+                    bytes[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+                }
+                e.mem.write(block, &bytes);
+                let offset = if id == 1 { 72 } else { 104 };
+                bytes[offset..offset + 8].copy_from_slice(&output.to_le_bytes());
+                e.call(
+                    0x005a9290,
+                    &args![block + 4, id as u32, f64::from_bits(input)],
+                );
+                assert_eq!(e.mem.bytes(block, 168), bytes, "id{id} input{input:016x}");
+            }
+        }
+    }
+
+    #[test]
+    fn set_variable_fetches_the_item_again_before_advancing() {
+        let mut e = script_engine();
+        let this = locals(&mut e);
+        let vars = set_variables(&mut e, this, &[(5, 2.5), (9, 7.0)]);
+        let head = e.mem.u32(this.addr() + 0xc);
+        let replacement = vars[1];
+        let calls = Rc::new(Cell::new(0));
+        let observed = calls.clone();
+        e.register_double(LIST_ITEM_SLOT, move |e, a| {
+            let count = observed.get() + 1;
+            observed.set(count);
+            if count == 2 {
+                e.mem.set_u32(a[0], replacement);
+            }
+            ret(a[0])
+        });
+        e.call_log = Some(Vec::new());
+        e.call(0x005a9290, &args![this, 9u32, 3.25f64]);
+        assert_eq!(calls.get(), 2);
+        assert_eq!(e.mem.u32(head), replacement);
+        assert_eq!(e.mem.f64(vars[0] + 8), 2.5);
+        assert_eq!(e.mem.f64(vars[1] + 8), 3.25);
+        let order = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter_map(|(address, _)| {
+                [LIST_ITEM_SLOT, LIST_NEXT]
+                    .contains(address)
+                    .then_some(*address)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(order, [LIST_ITEM_SLOT, LIST_ITEM_SLOT, LIST_NEXT]);
+    }
+
     #[test]
     fn set_variable_stores_the_value() {
         let mut e = script_engine();
@@ -4727,7 +4884,7 @@ mod tests {
             e.register(addr, |_, _| Ret::default());
         }
         e.register(GET_NUMERIC_ID_FROM_DOUBLE, |e, a| {
-            let id = e.mem.f64(a[1]) as u32;
+            let id = e.mem.u32(a[1]);
             e.mem.set_u32(a[0], id);
             Ret::default()
         });
@@ -4740,6 +4897,8 @@ mod tests {
         let buffer = install_save_buffer(&mut e);
         let this = locals(&mut e);
         let vars = set_variables(&mut e, this, &[(1, 5.0), (2, 0.0), (3, 6.0)]);
+        // Reference locals contain opaque form bits, not a numeric f64 ID.
+        e.mem.set_f64(vars[2] + 8, f64::from_bits(6));
         let master = script_with_references(&mut e, &[3]);
         e.set(this, ScriptLocals::m_pMasterScript, Ptr::new(master.addr()));
         let effect = e.mem.alloc(8);
@@ -4784,6 +4943,74 @@ mod tests {
         assert_eq!(buffer_calls.len(), 9);
     }
 
+    #[test]
+    fn save_game_reloads_reference_id_after_numeric_conversion() {
+        let mut e = script_engine();
+        let buffer = install_save_buffer(&mut e);
+        let this = locals(&mut e);
+        let vars = set_variables(&mut e, this, &[(3, f64::from_bits(0xff123456))]);
+        let master = script_with_references(&mut e, &[3]);
+        e.set(this, ScriptLocals::m_pMasterScript, Ptr::new(master.addr()));
+        set_actions(&mut e, this, &[(0, 0)]);
+        e.register_double(GET_NUMERIC_ID_FROM_DOUBLE, |e, a| {
+            e.mem.set_u32(a[0], e.mem.u32(a[1]));
+            e.mem.set_u32(a[1] - 8, 7);
+            Ret::default()
+        });
+        let headers = Rc::new(RefCell::new(Vec::new()));
+        let captured = headers.clone();
+        e.register_double(BUFFER_SAVE_BYTES, move |e, a| {
+            if a[2] == 4 {
+                captured.borrow_mut().push(e.mem.u32(a[1]));
+            }
+            Ret::default()
+        });
+        e.call(0x005a9db0, &args![this, buffer]);
+        assert_eq!(*headers.borrow(), [0x80000007]);
+        assert_eq!(e.mem.u32(vars[0]), 7);
+    }
+
+    #[test]
+    fn save_game_reloads_effect_flag_and_pointer_after_flag_write() {
+        for (has_effect, new_flag) in [(true, 1u8), (true, 0), (false, 1)] {
+            let mut e = script_engine();
+            let buffer = install_save_buffer(&mut e);
+            let this = locals(&mut e);
+            set_actions(&mut e, this, &[(0, 0)]);
+            let original = e.mem.alloc(8);
+            let replacement = e.mem.alloc(8);
+            e.set(
+                this,
+                ScriptLocals::m_pScriptEffectData,
+                Ptr::new(if has_effect { original } else { 0 }),
+            );
+            let first_flag = Rc::new(Cell::new(true));
+            let payloads = Rc::new(RefCell::new(Vec::new()));
+            let captured = payloads.clone();
+            e.register_double(BUFFER_SAVE_BYTES, move |e, a| {
+                if a[2] == 1 && first_flag.replace(false) {
+                    assert_eq!(e.mem.u8(a[1]), has_effect as u8);
+                    e.mem.set_u8(a[1], new_flag);
+                    e.set(
+                        this,
+                        ScriptLocals::m_pScriptEffectData,
+                        Ptr::new(replacement),
+                    );
+                } else if a[2] == 8 {
+                    captured.borrow_mut().push(a[1]);
+                }
+                Ret::default()
+            });
+            e.call(0x005a9db0, &args![this, buffer]);
+            let expected = if new_flag != 0 {
+                vec![replacement]
+            } else {
+                vec![]
+            };
+            assert_eq!(*payloads.borrow(), expected);
+        }
+    }
+
     /// Doubles for the `BGSLoadGameBuffer`: the sized value count is
     /// `count`, bytes come from `data` in order, the version slot gives
     /// `version` and the second slot `0x5ec0`.
@@ -4809,10 +5036,11 @@ mod tests {
     #[test]
     fn load_game_reads_variables_effect_data_and_the_action_flag() {
         let mut e = script_engine();
-        e.register(PUT_NUMERIC_ID_IN_DOUBLE, |e, a| {
-            let id = e.mem.u32(a[0]);
-            e.mem.set_f64(a[1], id as f64);
-            Ret::default()
+        // Use this unit's real reference-ID bit copy; double only memcpy.
+        e.register(MEMCPY, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            ret(a[0])
         });
         let this = locals(&mut e);
         let vars = set_variables(&mut e, this, &[(1, 0.0), (3, 0.0)]);
@@ -4831,7 +5059,7 @@ mod tests {
         e.call(0x005a_9f20, &args![this, buffer]);
         assert_eq!(e.mem.f64(vars[0] + 8), 2.5);
         // The form id the buffer gave (0xf0) is put into the double.
-        assert_eq!(e.mem.f64(vars[1] + 8), 0xf0 as f64);
+        assert_eq!(e.mem.f64(vars[1] + 8).to_bits(), 0xf0);
         let effect = e.get(this, ScriptLocals::m_pScriptEffectData);
         assert!(!effect.is_null());
         assert_eq!(e.mem.u32(effect.addr()), 0x0909_0909);
@@ -7547,5 +7775,166 @@ mod tests {
             locals.addr(),
             &[]
         ));
+    }
+
+    // PC 005a9db0: eighteen native FCW 027F / MXCSR 1F80 vectors.
+    #[test]
+    fn save_game_matches_native_numeric_reference_and_guard_vectors() {
+        for bits in [
+            0u64,
+            0x8000000000000000,
+            42.5f64.to_bits(),
+            0x7ff0000000000000,
+            0xfff0000000000000,
+            1,
+            0x7ff8000000001234,
+            0x7ff0000000001234,
+            0xfff0000000002345,
+        ] {
+            for flags in [0u32, 0x1000] {
+                let mut e = Engine::new();
+                for global in [0x011de134, 0x011ddf38, 0x011c3f2c] {
+                    e.map(global, 4);
+                }
+                let base = e.mem.alloc(0x200);
+                e.mem.set_u32(0x011de134, base + 0x130);
+                e.mem.set_u32(0x011ddf38, base + 0x140);
+                e.mem.set_u32(0x011c3f2c, 0);
+                let mut bytes = vec![0xa5; 0x200];
+                for (offset, word) in [
+                    (0x10, base + 0x50),
+                    (0x18, base + 0xd0),
+                    (0x1c, base + 0xc0),
+                    (0x20, 0),
+                    (0x30, 0x01082324),
+                    (0x34, base + 0x180),
+                    (0x38, 64),
+                    (0x3c, 0),
+                    (0x40, 0),
+                    (0x94, base + 0xb0),
+                    (0x98, 0),
+                    (0xbc, 2),
+                    (0xc0, base + 0xf0),
+                    (0xc4, base + 0xc8),
+                    (0xc8, base + 0x110),
+                    (0xcc, 0),
+                    (0xd0, base + 0xe0),
+                    (0xd4, 0),
+                    (0xe0, 0),
+                    (0xe4, flags),
+                    (0xf0, 1),
+                    (0x110, 2),
+                    (0x148, 0),
+                ] {
+                    bytes[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+                }
+                bytes[0x13c] = 0;
+                bytes[0xf8..0x100].copy_from_slice(&bits.to_le_bytes());
+                bytes[0x118..0x120].copy_from_slice(&0xff123456u64.to_le_bytes());
+                e.mem.write(base, &bytes);
+                // Ordered positive/negative zero are omitted; unordered NaNs
+                // are included with the source bits unchanged, including sNaNs.
+                let zero = matches!(bits, 0 | 0x8000000000000000);
+                let mut stream = if zero {
+                    vec![4, 0x7c]
+                } else {
+                    let mut data = vec![8, 0x7c, 1, 0, 0, 0, 0x7c];
+                    data.extend_from_slice(&bits.to_le_bytes());
+                    data.push(0x7c);
+                    data
+                };
+                stream.extend_from_slice(&[
+                    2,
+                    0,
+                    0,
+                    0x80,
+                    0x7c,
+                    0x92,
+                    0x34,
+                    0x56,
+                    0x7c,
+                    0,
+                    0x7c,
+                    (flags != 0) as u8,
+                    0x7c,
+                ]);
+                let mut expected = bytes;
+                expected[0x180..0x180 + stream.len()].copy_from_slice(&stream);
+                expected[0x3c..0x40].copy_from_slice(&(stream.len() as u32).to_le_bytes());
+                expected[0x40..0x44].copy_from_slice(&(if zero { 5u32 } else { 7 }).to_le_bytes());
+                e.call(0x005a9db0, &[base + 0x10, base + 0x30]);
+                assert_eq!(
+                    e.mem.bytes(base, 0x200),
+                    expected,
+                    "{bits:016x}/{flags:04x}"
+                );
+            }
+        }
+    }
+
+    // PC 005a9f20: nine native FCW 027F / MXCSR 1F80 generated-buffer vectors.
+
+    #[test]
+    fn load_game_matches_native_numeric_reference_and_guard_vectors() {
+        for (input, output) in [
+            (42.5f64.to_bits(), 42.5f64.to_bits()),
+            (0x7ff0000000001234, 0x7ff8000000001234),
+            (0xfff0000000002345, 0xfff8000000002345),
+        ] {
+            for fill in [0xa5, 0xcc, 0xff] {
+                let mut e = Engine::new();
+                e.map(0x01082000, 0x1000);
+                e.mem.set_u32(0x01082028, 0x008a81c0);
+                let base = e.mem.alloc(0x140);
+                let mut bytes = vec![fill; 0x140];
+                for (offset, value) in [
+                    (0x10, 0),
+                    (0x18, base + 0x90),
+                    (0x1c, base + 0x70),
+                    (0x20, base + 0x120),
+                    (0x30, 0x01082028),
+                    (0x34, base + 0xf0),
+                    (0x38, 29),
+                    (0x3c, 0),
+                    (0x70, base + 0xa0),
+                    (0x74, base + 0x78),
+                    (0x78, base + 0xc0),
+                    (0x7c, 0),
+                    (0x90, base + 0x110),
+                    (0x94, 0),
+                    (0xa0, 1),
+                    (0xc0, 2),
+                    (0x110, 0x76543210),
+                    (0x114, u32::MAX),
+                ] {
+                    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                bytes[0x4c] = 0x1b;
+                bytes[0xb0] = 0x7f;
+                bytes[0xd0] = 0xff;
+                bytes[0xa8..0xb0].copy_from_slice(&(-1f64).to_le_bytes());
+                bytes[0xc8..0xd0].copy_from_slice(&(-2f64).to_le_bytes());
+                let mut stream = vec![8, 0x7c, 1, 0, 0, 0, 0x7c];
+                stream.extend_from_slice(&input.to_le_bytes());
+                stream.extend_from_slice(&[
+                    0x7c, 2, 0, 0, 0x80, 0x7c, 0x92, 0x34, 0x56, 0x7c, 0, 0x7c, 0, 0x7c,
+                ]);
+                assert_eq!(stream.len(), 29);
+                bytes[0xf0..0x10d].copy_from_slice(&stream);
+                e.mem.write(base, &bytes);
+                let mut expected = bytes.clone();
+                expected[0x3c..0x40].copy_from_slice(&29u32.to_le_bytes());
+                expected[0xa8..0xb0].copy_from_slice(&output.to_le_bytes());
+                expected[0xc8..0xd0].copy_from_slice(&0xff123456u64.to_le_bytes());
+                expected[0x114..0x118].copy_from_slice(&0u32.to_le_bytes());
+
+                e.call(0x005a9f20, &[base + 0x10, base + 0x30]);
+                let actual = e.mem.bytes(base, 0x140);
+                assert_eq!(
+                    actual, expected,
+                    "unexpected mismatch for {input:016x}, fill{fill:02x}"
+                );
+            }
+        }
     }
 }

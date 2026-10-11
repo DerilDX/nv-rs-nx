@@ -7,6 +7,86 @@ by `world` or the viewer. Current save-reader evidence and limitations are
 in [FOS_SAVES.md](FOS_SAVES.md); overall priority stays in
 [MILESTONES.md](MILESTONES.md) and [HANDOFF.md](HANDOFF.md).
 
+## Saved-local value follow-on
+
+The next bounded batch corrects `SCRIPT_LOCAL` copying (`005ac150`) and
+`ScriptLocals::SetVariable` (`005a9290`) (Xbox PDB). PC reads and writes the
+entire integer flag byte rather than normalizing it to a Boolean. Its x87
+load/store also quiets signaling NaNs while preserving their sign and
+payload. SetVariable fetches a live list item twice before advancing and
+changes only the first matching ID. The implementation preserves those details.
+
+Two save-reader helpers, `008648e0` and `00864940`, complete the generated
+numeric/reference-local load path. The first decodes a three-byte saved
+index, stores the resolved form ID, then reports a nonzero index resolving
+to zero. It checks the index after the decoder has run; the second tests
+the three bytes with the PC short-circuit order. Reference locals store
+the form ID as opaque low 32 bits in the eight-byte slot, not a numeric
+floating-point conversion. An older test double incorrectly modeled the
+latter; its fixture now uses the real helper. The matching writer helper,
+`00865db0`, initializes and encodes the compact ID, then appends its three
+bytes. Its unused second argument remains unused, as in the PC executable.
+`ScriptLocals::SaveGame` (`005a9db0`) also reloads the reference-variable ID,
+effect flag and effect pointer after the respective helper calls, matching
+the PC reads instead of retaining values from before those calls.
+
+One hundred and two private native cases pass: forty copy cases (including
+aliases), eighteen setters, nine full generated LoadGame buffers and eleven
+reader cases, six writer cases and eighteen full generated SaveGame buffers.
+The SaveGame cases include signed zero, infinities, a subnormal, quiet and
+signaling NaNs, created-reference IDs and both action-flag states. Guards,
+raw flags, first-match behavior, return widths and
+stack cleanup are checked where defined. Native calls use FalloutNV.exe
+1.4.0.525 with FCW `027f` and MXCSR `1f80`. Independent PC/source review
+found two additional SaveGame reload gaps; both are corrected with callback
+regressions. All focused checks pass: 1,343 script tests, eight reader tests
+and ten writer tests, including thirteen new regressions. Three copied
+overlap-fixture strings had an extra trailing byte; replacing them with the
+exact independently captured 80-byte buffers resolved the initial test-only
+failure. Production behavior was unchanged by that correction.
+All 16,273 workspace tests, including doctests, strict lint, formatting and
+release/debug builds pass. Checks used one Cargo job to limit memory peaks.
+Final normal-registry release probes pass all nine LoadGame and eighteen
+SaveGame buffers against the native full-buffer expectations.
+
+Eighteen native SaveGame/LoadGame/SaveGame chains also pass, with 36
+additional calls carrying the actual saved bytes and post-load state into
+the next leg. They verify zero omission, raw reference bits, action flags
+and signaling-NaN quieting on load. The final Rust release probe passes all
+eighteen three-leg chains with the actual saved output carried into the next
+leg and distinct destination layouts. Signaling NaNs quiet on load; the next
+save preserves the resulting quiet bits.
+
+These generated buffers contain nonzero numeric and created-reference
+locals. They do not establish restoration of the unavailable mod scripts
+in the historical saves. The existing world importer uses numeric form IDs
+plus a reference-kind tag; its future engine bridge needs an explicit
+conversion to and from the engine's opaque low-bit representation. No world
+or viewer integration is included here.
+
+## Inventory source ownership probe
+
+A private read-only prototype against the preceding release registry loads
+eighteen original multi-stack Count/Health items in fresh isolated engines.
+Its immutable snapshots retain each stack, raw health bits, the separate item
+count delta, exact captured save and containing-record bytes, saved/resolved
+identities, record metadata, inventory ordinal and validated source spans.
+Untouched writes reproduce all eighteen original item payloads byte-for-byte.
+A generated three-stack fixture preserves absent versus explicit zero/one
+Count, absent versus explicit minus-one Health, and Worn nodes. Snapshots
+survive engine disposal and clone independently; two simultaneous owners
+with coincident arena addresses retain distinct data.
+
+Twenty-seven rejection cases cover mismatched metadata, detached backing
+and invalid spans. Admission excludes three complete-record decode failures
+and three unresolved holder IDs, without changing the eighteen-item target
+set. The private harness uses generated form headers and partial allocator
+startup; it is not production runtime initialization. Its strict source
+validation reparses the captured save and would need admission-time caching
+in a production API. Unknown payload semantics, whole-save writing and
+world/viewer integration remain open. The next bounded step is a reusable
+immutable source envelope, separate from gameplay mutation and selection.
+
 ## Script-extra follow-on
 
 The current normal-registry debug and release probes load one original script-bearing

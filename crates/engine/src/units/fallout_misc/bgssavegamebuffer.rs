@@ -147,6 +147,16 @@ pub fn finish_variable_value(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>, value
     });
 }
 
+// Translated from 00865db0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// `BGSSaveGameBuffer::SaveFormID` (Xbox PDB): encode the numeric form ID
+/// and append its three bytes plus separator. The second stack word is unused.
+pub fn save_numeric_form_id(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>, id: u32, _unused: u32) {
+    e.with_stack(4, |e, index| {
+        e.call(0x0084eaf0, &args![index]);
+        e.call(0x00853570, &args![index, id]);
+        e.call(0x00865570, &args![this, index, 3u32, 0u8]);
+    });
+}
 // Translated from 00865df0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BGSSaveGameBuffer::SaveFormID_ov2` (Xbox PDB): writes a three-byte
 /// numeric index for a form (zero for null). The second stack word is
@@ -167,6 +177,10 @@ pub fn save_form_id(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>, form: Ptr, _un
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00865db0,
+            save_numeric_form_id(Ptr<BGSSaveGameBuffer>, u32, u32)
+        ),
         entry!(0x00865df0, save_form_id(Ptr<BGSSaveGameBuffer>, Ptr, u32)),
         entry!(0x00866140, insert_space(Ptr<BGSSaveGameBuffer>, u32, u32)),
         entry!(
@@ -196,6 +210,79 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn numeric_form_writer_matches_native_created_id_vectors() {
+        for (id, encoded) in [
+            (0xff00_0000, [0x80, 0, 0]),
+            (0xff12_3456, [0x92, 0x34, 0x56]),
+            (0xff7f_ffff, [0xff, 0xff, 0xff]),
+        ] {
+            for unused in [0, 0xdead_beef] {
+                let mut e = Engine::new();
+                for address in [0x011de134, 0x011ddf38, 0x011c3f2c] {
+                    e.map(address, 4);
+                }
+                let base = e.mem.alloc(256);
+                e.mem.set_u32(0x011de134, base);
+                e.mem.set_u32(0x011ddf38, base);
+                e.mem.set_u32(0x011c3f2c, 0);
+                let mut bytes = vec![0xa5; 256];
+                bytes[12] = 0;
+                for (offset, word) in [
+                    (8, 0),
+                    (0x24, base + 0x60),
+                    (0x28, 64),
+                    (0x2c, 5),
+                    (0x30, 7),
+                ] {
+                    bytes[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+                }
+                e.mem.write(base, &bytes);
+                bytes[0x65..0x68].copy_from_slice(&encoded);
+                bytes[0x68] = b'|';
+                bytes[0x2c..0x30].copy_from_slice(&9u32.to_le_bytes());
+                bytes[0x30..0x34].copy_from_slice(&8u32.to_le_bytes());
+                e.call(0x00865db0, &[base + 0x20, id, unused]);
+                assert_eq!(e.mem.bytes(base, 256), bytes);
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_form_writer_initializes_then_encodes_and_appends_exact_three_bytes() {
+        for id in [0, 0x1234_5678] {
+            let mut e = Engine::new();
+            let buffer = e.new_object::<BGSSaveGameBuffer>();
+            e.register_double(0x0084eaf0, |e, a| {
+                assert_eq!(a.len(), 1);
+                e.mem.write(a[0], &[0, 0, 0, 0xa5]);
+                Ret::default()
+            });
+            e.register_double(0x00853570, move |e, a| {
+                assert_eq!(a.len(), 2);
+                assert_eq!(a[1], id);
+                assert_eq!(e.mem.bytes(a[0], 4), [0, 0, 0, 0xa5]);
+                e.mem.write(a[0], &[0x12, 0x34, 0x56]);
+                Ret::default()
+            });
+            e.register_double(0x00865570, move |e, a| {
+                assert_eq!(a.len(), 4);
+                assert_eq!(a[0], buffer.addr());
+                assert_eq!(&a[2..], &[3, 0]);
+                assert_eq!(e.mem.bytes(a[1], 4), [0x12, 0x34, 0x56, 0xa5]);
+                Ret::default()
+            });
+            e.call_log = Some(Vec::new());
+            e.call(0x00865db0, &args![buffer, id, u32::MAX]);
+            let calls = e
+                .call_log
+                .unwrap()
+                .into_iter()
+                .map(|(address, _)| address)
+                .collect::<Vec<_>>();
+            assert_eq!(calls, [0x00865db0, 0x0084eaf0, 0x00853570, 0x00865570]);
+        }
+    }
     fn fixture() -> (Engine, Ptr<BGSSaveGameBuffer>, u32, u32) {
         let mut e = Engine::new();
         e.map(0x011de134, 4);

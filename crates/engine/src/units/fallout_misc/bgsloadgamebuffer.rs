@@ -77,6 +77,27 @@ pub fn load_form_id(e: &mut Engine, this: Ptr<BGSLoadGameBuffer>) -> u32 {
     })
 }
 
+// Translated from 008648e0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// `BGSLoadGameBuffer::LoadFormID_ov2` (Xbox PDB): stores the resolved form
+/// ID and reports a nonempty saved index that failed to resolve.
+pub fn load_form_id_into(e: &mut Engine, this: Ptr<BGSLoadGameBuffer>, output: Ptr) -> bool {
+    e.with_stack(4, |e, index| {
+        e.call(0x0084eaf0, &args![index]);
+        read_data(e, this, index, 3);
+        let form = e.call(0x00853500, &args![index]).u32();
+        e.mem.set_u32(output.addr(), form);
+        !compact_id_is_zero(e, index) && e.mem.u32(output.addr()) == 0
+    })
+}
+
+// Translated from 00864940 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Tests the three compact-index bytes in order, stopping at the first nonzero byte.
+pub fn compact_id_is_zero(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr()) == 0
+        && e.mem.u8(this.addr().wrapping_add(1)) == 0
+        && e.mem.u8(this.addr().wrapping_add(2)) == 0
+}
+
 // Translated from 00864980 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Two-word raw-data wrapper (RET 8).
 pub fn load_raw(e: &mut Engine, this: Ptr<BGSLoadGameBuffer>, destination: Ptr, size: u32) {
@@ -126,6 +147,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00864820, read_data(Ptr<BGSLoadGameBuffer>, Ptr, u32)),
         entry!(0x008648a0, load_form_id(Ptr<BGSLoadGameBuffer>) -> u32),
+        entry!(
+            0x008648e0,
+            load_form_id_into(Ptr<BGSLoadGameBuffer>, Ptr) -> bool
+        ),
+        entry!(0x00864940, compact_id_is_zero(Ptr) -> bool),
         entry!(0x00864980, load_raw(Ptr<BGSLoadGameBuffer>, Ptr, u32)),
         entry!(0x00864a60, load_variable(Ptr<BGSLoadGameBuffer>) -> u32),
     ]
@@ -134,6 +160,75 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_zero_predicate_matches_native_guarded_vectors() {
+        // Eight native00864940 cases, AL result, RET0, all eleven bytes unchanged.
+        for mask in 0..8 {
+            let mut e = Engine::new();
+            let block = e.mem.alloc(11);
+            let mut bytes = vec![0xa5; 11];
+            bytes[4] = if mask & 1 != 0 { 0x80 } else { 0 };
+            bytes[5] = if mask & 2 != 0 { 0x7f } else { 0 };
+            bytes[6] = if mask & 4 != 0 { 0xff } else { 0 };
+            e.mem.write(block, &bytes);
+            assert_eq!(e.call(0x00864940, &[block + 4]).bool(), mask == 0);
+            assert_eq!(e.mem.bytes(block, 11), bytes);
+        }
+    }
+
+    #[test]
+    fn form_id_output_load_matches_native_created_ids() {
+        for (encoded, expected) in [
+            ([0x80, 0, 0], 0xff00_0000u32),
+            ([0x92, 0x34, 0x56], 0xff12_3456),
+            ([0xff, 0xff, 0xff], 0xff7f_ffff),
+        ] {
+            let mut e = Engine::new();
+            let block = e.mem.alloc(96);
+            let mut bytes = vec![0xa5; 96];
+            bytes[8..12].copy_from_slice(&(block + 48).to_le_bytes());
+            bytes[12..16].copy_from_slice(&4u32.to_le_bytes());
+            bytes[16..20].copy_from_slice(&0u32.to_le_bytes());
+            bytes[48..51].copy_from_slice(&encoded);
+            bytes[51] = b'|';
+            e.mem.write(block, &bytes);
+            bytes[16..20].copy_from_slice(&4u32.to_le_bytes());
+            bytes[64..68].copy_from_slice(&expected.to_le_bytes());
+            assert!(!e.call(0x008648e0, &[block + 4, block + 64]).bool());
+            assert_eq!(e.mem.bytes(block, 96), bytes);
+        }
+    }
+
+    #[test]
+    fn form_id_output_load_checks_live_index_after_decode_and_stores_result() {
+        for (encoded, resolved, clear_index, failed) in [
+            ([0, 0, 0], 0, false, false),
+            ([0, 0, 1], 0, false, true),
+            ([0, 0, 1], 0x1234_5678, false, false),
+            ([0, 0, 1], 0, true, false),
+        ] {
+            let (mut e, buffer, _) = fixture(&[encoded[0], encoded[1], encoded[2], b'|']);
+            let output = e.mem.alloc(12);
+            e.mem.write(output, &[0xa5; 12]);
+            e.register_double(0x00853500, move |e, a| {
+                assert_eq!(a.len(), 1);
+                assert_eq!(e.mem.bytes(a[0], 3), encoded);
+                if clear_index {
+                    e.mem.write(a[0], &[0; 3]);
+                }
+                resolved.into_ret()
+            });
+            assert_eq!(
+                e.call(0x008648e0, &args![buffer, output + 4]).bool(),
+                failed
+            );
+            assert_eq!(e.mem.u32(output + 4), resolved);
+            assert_eq!(e.mem.bytes(output, 4), [0xa5; 4]);
+            assert_eq!(e.mem.bytes(output + 8, 4), [0xa5; 4]);
+            assert_eq!(e.get(buffer, BGSLoadGameBuffer::iBufferPosition), 4);
+        }
+    }
 
     fn fixture(data: &[u8]) -> (Engine, Ptr<BGSLoadGameBuffer>, u32) {
         let mut e = Engine::new();
