@@ -33,6 +33,49 @@ reading do not establish them.
 
 ## Active work: M1
 
+HUD collection `5c12df2` passes combined engine tests, strict lint and
+formatting, including its audio correction. A fresh worker continues the
+next large HUD function. The accumulated movement/HUD/explosion batch can
+now be published; movement save/load validation runs next. Reader #130
+core CI passes and viewer CI is pending. Build 40 remains current: the
+inventory payload work still has no playable consumer or release date.
+Next action: publish the rolling batch and validate the form-map helpers.
+
+Explosion collection `5380adf` passes 13,990 combined engine tests and
+strict lint/formatting; a fresh worker starts effect items. HUD now
+validates its audio correction before the next rolling publication.
+The separately compiled form-map draft enables a byte-identical two-stack
+payload load/write probe; formal engine validation remains pending.
+Next action: collect HUD and publish the accumulated rolling batch.
+
+Rolling #129 merged `1389dab` after both CI checks. Later movement/HUD
+collections remain local pending a reviewed HUD audio-call correction.
+Reader #130 passes 15,771 workspace tests, strict lint, formatting and
+release/debug builds; its two-stack buffered read consumes all 41 bytes.
+Full ItemChange loading reaches missing form-map allocator `0043a010`
+before loading. That allocator and its refill are drafted, uncompiled.
+Explosion now validates; movement and the next HUD batch follow. Build 40
+remains current. Next action: collect these slots and validate form-map
+allocation to unblock the full payload load/write probe.
+
+HUD collection `74cd13b` passes 13,970 combined engine tests, doctest,
+strict lint and formatting. A fresh worker immediately continues its next
+normal routines. Inventory writer #128 merged `14c77da` after both CI
+checks; the reader is rebased and validating, with full ItemChange payload
+round-trip probes next. Movement and explosion drafts await their compiler
+turns. Rolling #129 awaits viewer CI. Build 40 remains current; inventory
+stack preservation has no playable consumer or next-build date yet.
+Next action: finish reader checks and exercise the two-stack round trip.
+
+Rolling #127 passed both CI checks and merged `72003ab`; #129 publishes
+explosion effect processing at `12f6153` with fresh CI. Movement continuation
+collected as `c757035`: 13,925 combined engine tests, doctest, strict lint
+and formatting pass. Six larger bodies now have normal paths implemented;
+four compiler exception-cleanup partials remain explicit. A fresh worker
+immediately continues at `00931880`. HUD now validates; the inventory reader
+and byte-identical payload round-trip probe follow. Build 40 remains current.
+Next action: collect HUD, then validate the inventory reader.
+
 Rolling #126 merged `97e7572` after both CI checks; #127 publishes the
 collected movement helpers and animation loader with fresh CI. Inventory
 follow-on #128 (`4b68ea0`) passes 15,691 core tests, strict lint, formatting and

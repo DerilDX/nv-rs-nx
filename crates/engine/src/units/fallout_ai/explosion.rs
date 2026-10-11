@@ -1,10 +1,11 @@
 //! `fallout/ai/combat/explosion.cpp` (Xbox PDB source unit), subsystem `fallout/ai`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 
-// Continuation audit (2026-10-11, round 12): normal paths of 009ae280,
-// 009b2940, 009acd60, 009ad670 and 009ae6e0 have regression coverage; all
-// remain partial for compiler SEH cleanup. Sixteen functions retain explicit
-// SEH partial markers; resume at 009b00a0. Two entries remain skipped.
+// Continuation audit (2026-10-11): normal paths of 009ae280, 009b2940,
+// 009acd60, 009ad670, 009ae6e0, 009b00a0 and 009b1810 have regression
+// coverage. 009b00a0 has no SEH frame; the other six remain partial for
+// compiler SEH cleanup. Seventeen functions retain explicit SEH partial
+// markers; no normal-path body remains skipped.
 // 009acd60 has a normal-path translation; it remains partial for compiler SEH
 //   cleanup and calls the now-translated 009ad670 Init3D path.
 // 009ad670 has its normal Init3D path translated, with a per-iteration 0xe0
@@ -12,14 +13,10 @@
 //   cleanup remains partial.
 // 009ae6e0 has its normal effect/contact/decal/sound flow translated with
 //   PC EBP slots and callback reloads. Compiler SEH cleanup remains partial;
-//   its 009b00a0 damage/target callee remains unimplemented in this unit.
-// 009b00a0 skipped: its 0x110-byte frame mixes LOS hits, HitData, multiple
-//   virtual actor callbacks and several magic/form resolution branches; exact
-//   callback reloads and hit-record lifetime remain unaudited.
-// 009b1810 skipped: RunLOSPick's four-word ABI, 0x320-byte collector layout,
-//   0x60-byte hit rows, and the two PC collector slots are now verified;
-//   the ray-input helper's callback state and nested probe cleanup remain
-//   unaudited (see the private a04 round-9 research handoff).
+//   its 009b00a0 target callee now has a normal-path translation.
+// 009b1810 has a four-word stack ABI, a 0x320-byte collector, 0x60-byte hit
+//   rows and two PC collector slots. See the private a04 round-9 handoff for
+//   the ray-input audit; exception cleanup remains open.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -142,6 +139,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009ae580, fn_009ae580(Ptr, f32)),
         entry!(0x009ae5d0, fn_009ae5d0(Ptr, u32)),
         entry!(0x009ae6e0, explosion_apply_effects(Ptr)),
+        entry!(0x009b00a0, explosion_process_targets(Ptr)),
+        entry!(0x009b1810, explosion_run_los_pick(Ptr, u32, u32, u32, Ptr) -> bool),
         entry!(0x009afbb0, fn_009afbb0(Ptr, u32) -> Ptr),
         entry!(0x009afc10, fn_009afc10(Ptr)),
         entry!(0x009afc30, fn_009afc30(Ptr) -> Ptr),
@@ -3362,12 +3361,497 @@ pub fn explosion_apply_effects(e: &mut Engine, this: Ptr) {
             index += 1;
         }
         if e.mem.u8(object + 0xd5) != 0 && e.mem.u8(object + 0xd6) == 0 {
-            // 009b00a0 has not yet been translated in this unit.
-            e.call(0x009b_00a0, &args![this]);
+            explosion_process_targets(e, this);
         }
         fn_009afc10(e, frame.point(0x40));
         fn_009b2d30(e, frame.point(0x28));
     });
+}
+
+// Translated from 009b00a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Explosion::ProcessTargets` (Xbox PDB): visits the target list, computes
+/// explosion power and radiation falloff, then applies hits and impulses.
+pub fn explosion_process_targets(e: &mut Engine, this: Ptr) {
+    let object = this.addr();
+    e.mem.set_u8(object + 0xd6, 1);
+    e.with_stack(0x110, |e, stack| {
+        let ebp = stack.addr() + 0x110;
+        let at = |offset: u32| ebp - offset;
+        let mut cursor = object + 0xa4;
+        while cursor != 0 && !e.call(0x0082_56d0, &args![cursor]).bool() {
+            let entry = e.call(0x0068_15c0, &args![cursor]).u32();
+            let target_record = e.mem.u32(entry);
+            cursor = e.call(0x0072_6070, &args![cursor]).u32();
+            if target_record == 0
+                || e.mem.u32(target_record) == 0
+                || e.mem.u8(target_record + 6) != 0
+            {
+                continue;
+            }
+            let target = e.mem.u32(target_record);
+            if e.call(0x0047_7ba0, &args![target]).bool() {
+                continue;
+            }
+            let target = e.mem.u32(target_record);
+            if e.call(0x0044_0da0, &args![target]).bool() {
+                continue;
+            }
+
+            let origin = e.vcall(object, 0x1f4, &args![]).u32();
+            let target = e.mem.u32(target_record);
+            // The two pushes before this getter remain on the stack for
+            // 00439ef0; the virtual getter itself takes no arguments.
+            let target_origin = e.vcall(target, 0x1f4, &args![]).u32();
+            let separation = e
+                .call(0x0043_9ef0, &args![target_origin, at(0xd0), origin])
+                .u32();
+            let distance = e.call(0x0045_7990, &args![separation]).f32();
+            // 00644930 reads only this; the pending distance goes to 00647920.
+            let radius = e.call(0x0064_4930, &args![this]).f32();
+            let power = e.call(0x0064_7920, &args![radius, distance]).f32();
+            let radiation = e.call(0x008d_01e0, &args![this]).f32();
+            let falloff = if radiation as f64 > e.global::<f64>(0x0101_2060) {
+                e.call(0x0064_7920, &args![radiation, distance]).f32()
+            } else {
+                1.0
+            };
+            if falloff as f64 > e.global::<f64>(0x0101_2060) {
+                let target = e.mem.u32(target_record);
+                if e.vcall(target, 0x100, &args![]).bool()
+                    && e.mem.u32(target_record) == e.global::<u32>(0x011d_ea3c)
+                {
+                    let base = e.call(0x0041_81e0, &args![this]).u32();
+                    let modifier = e.call(0x0072_6070, &args![base + 0x68]).u32();
+                    if modifier != 0 {
+                        e.call(0x0052_99a0, &args![modifier, falloff, 0u32]);
+                    }
+                }
+            }
+            if (power as f64).partial_cmp(&e.global::<f64>(0x0101_2060))
+                != Some(std::cmp::Ordering::Greater)
+            {
+                continue;
+            }
+            if e.mem.u8(target_record + 5) != 0 {
+                let source = e.vcall(object, 0x168, &args![]).u32();
+                let target = e.mem.u32(target_record);
+                e.vcall(target, 0x164, &args![source]);
+            }
+            let target = e.mem.u32(target_record);
+            let actor = if e.vcall(target, 0x100, &args![]).bool() {
+                e.mem.u32(target_record)
+            } else {
+                0
+            };
+            if actor != 0 {
+                e.call(0x008a_5300, &args![actor]);
+            }
+            let owner = if e.vcall(object, 0x168, &args![]).u32() != 0 {
+                let source = e.vcall(object, 0x168, &args![]).u32();
+                e.call(0x0055_9450, &args![source]).u32()
+            } else {
+                0
+            };
+            let target = e.mem.u32(target_record);
+            // The pushed flag belongs to SetActionFlag: 005d43c0 is a
+            // no-argument getter for the embedded script object.
+            let action = e.call(0x005d_43c0, &args![target]).u32();
+            e.call(0x005a_c750, &args![owner, action, 0x80u32]);
+            let has_weapon = !fn_009b0900(e, this).is_null();
+            let target = e.mem.u32(target_record);
+            let action = e.call(0x005d_43c0, &args![target]).u32();
+            let weapon = if has_weapon {
+                fn_009b0900(e, this).addr()
+            } else {
+                e.call(0x0041_81e0, &args![this]).u32()
+            };
+            e.call(0x005a_c750, &args![weapon, action, 0x100u32]);
+            let damage = (fn_009b0f80(e, this) as f64 * power as f64) as f32;
+            let target = e.mem.u32(target_record);
+            if e.call(0x0047_7ba0, &args![target]).bool()
+                && fn_009acce0(e, this).addr() == e.global::<u32>(0x011d_ea3c)
+            {
+                let player = e.global::<u32>(0x011d_ea3c);
+                let amount = quiet_f32(e.global::<f32>(0x0102_918c));
+                e.call(0x0096_3eb0, &args![player, 10u32, amount, 0u32]);
+            }
+            if actor == 0 {
+                let target = e.mem.u32(target_record);
+                e.vcall(target, 0x144, &args![damage, 0u32]);
+                continue;
+            }
+
+            let origin = e.vcall(object, 0x1f4, &args![]).u32();
+            let position = [
+                e.mem.u32(origin),
+                e.mem.u32(origin + 4),
+                e.mem.u32(origin + 8),
+            ];
+            if !explosion_run_los_pick(
+                e,
+                this,
+                position[0],
+                position[1],
+                position[2],
+                Ptr::new(actor),
+            ) {
+                continue;
+            }
+
+            let hit = at(0x98);
+            e.call(0x009b_4d90, &args![hit]);
+            let cause = e.mem.u32(object + 0xc8);
+            let cause = if cause != 0 && e.vcall(cause, 0x100, &args![]).bool() {
+                e.mem.u32(object + 0xc8)
+            } else {
+                0
+            };
+            e.call(0x009b_5770, &args![hit, cause, actor, this, damage]);
+            e.call(0x0089_a760, &args![actor, hit, 0u32]);
+            if actor == e.global::<u32>(0x011d_ea3c) {
+                explosion_player_hit_effect(e, at, power);
+            }
+            explosion_target_impulse(e, this, actor);
+            if !e.vcall(actor, 0x22c, &args![0u32]).bool() {
+                let base = e.call(0x0041_81e0, &args![this]).u32();
+                let has_first = e.call(0x0047_7950, &args![base, 4u32]).bool();
+                let apply = if has_first {
+                    true
+                } else {
+                    let base = e.call(0x0041_81e0, &args![this]).u32();
+                    if e.call(0x0047_7950, &args![base, 8u32]).bool() {
+                        let component = quiet_f32(e.mem.f32(at(0x84)));
+                        let component = e.call(0x00ec_62c0, &args![component as f64]).u32();
+                        e.call(0x0064_6400, &args![actor + 0xa4, component]).bool()
+                    } else {
+                        false
+                    }
+                };
+                if apply {
+                    fn_009b0d70(e, this, Ptr::new(actor), power);
+                }
+            }
+            if e.vcall(actor, 0x22c, &args![0u32]).bool() {
+                let motion = if actor == e.global::<u32>(0x011d_ea3c) {
+                    e.call(0x0095_0bb0, &args![actor, 0u32]).u32()
+                } else {
+                    e.vcall(actor, 0x1d0, &args![]).u32()
+                };
+                e.call(0x00c6_a350, &args![motion, 1u32, 1u32, 0u32, 1u32]);
+                e.call(0x0043_d410, &args![at(0xc4), 0.0f32, 0u32, 0u32]);
+                e.call(0x00a5_9c60, &args![motion, at(0xc4)]);
+            }
+        }
+    });
+}
+
+fn explosion_player_hit_effect(e: &mut Engine, at: impl Fn(u32) -> u32, power: f32) {
+    let threshold = e.call(0x0040_3e20, &args![0x011d_0030u32]).u32();
+    if e.mem.f32(threshold).partial_cmp(&power) != Some(std::cmp::Ordering::Less) {
+        return;
+    }
+    let mut points = [0u32; 3];
+    for (index, (first, second)) in [
+        (0x011c_fea0u32, 0x011d_0490u32),
+        (0x011d_0d38, 0x011d_0edc),
+        (0x011d_05e0, 0x011d_00d8),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let second = e.call(0x0040_3e20, &args![second]).u32();
+        let second = quiet_f32(e.mem.f32(second));
+        let first = e.call(0x0040_3e20, &args![first]).u32();
+        let first = quiet_f32(e.mem.f32(first));
+        points[index] = at(0xb4 - index as u32 * 8);
+        e.call(0x0045_2dc0, &args![points[index], first, second]);
+    }
+    let scaled_second = e
+        .call(0x0053_2fd0, &args![at(0xd8), power, points[1]])
+        .u32();
+    let scaled_first = e
+        .call(0x0053_2fd0, &args![at(0xe0), power, points[0]])
+        .u32();
+    let interface = e.call(0x0070_5950, &args![]).u32();
+    e.call(
+        0x007f_78f0,
+        &args![interface, scaled_first, scaled_second, points[2]],
+    );
+}
+
+fn explosion_target_impulse(e: &mut Engine, this: Ptr, actor: u32) {
+    let base = e.call(0x0041_81e0, &args![this]).u32();
+    let source = e.call(0x0072_6070, &args![base + 0x54]).u32();
+    if source == 0 {
+        return;
+    }
+    let owner = fn_009acce0(e, this).addr();
+    let owner_is_actor = owner != 0 && {
+        let reloaded_owner = fn_009acce0(e, this).addr();
+        e.vcall(reloaded_owner, 0x100, &args![]).bool()
+    };
+    if !owner_is_actor && e.mem.u32(this.addr() + 0xdc) == 0 {
+        return;
+    }
+    let location = if source == 0 { 0 } else { source + 0x18 };
+    let point = if actor == 0 { 0 } else { actor + 0x94 };
+    let caster = e.mem.u32(this.addr() + 0xdc);
+    if caster != 0 {
+        e.vcall(
+            caster + 0xc,
+            0xc,
+            &args![location, 0u32, point, 1.0f32, 0u32],
+        );
+    } else {
+        let owner = fn_009acce0(e, this).addr();
+        e.vcall(
+            owner + 0x88,
+            0xc,
+            &args![location, 0u32, point, 1.0f32, 0u32],
+        );
+    }
+}
+
+// Translated from 009b1810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Explosion::RunLOSPick` (Xbox PDB): raycasts toward the target's world
+/// bound, then tries six offset points when the target has a controller.
+// open: compiler SEH cleanup while collectors and ray inputs are live is not modeled.
+// Translation incomplete: 009b1810 - compiler SEH cleanup while collectors and ray inputs are live
+pub fn explosion_run_los_pick(
+    e: &mut Engine,
+    this: Ptr,
+    x: u32,
+    y: u32,
+    z: u32,
+    target: Ptr,
+) -> bool {
+    let base = e.call(0x0041_81e0, &args![this]).u32();
+    if e.call(0x0047_7950, &args![base, 0x10u32]).bool() {
+        return true;
+    }
+    let node = if target.is_null() {
+        0
+    } else {
+        e.vcall(target.addr(), 0x1d0, &args![]).u32()
+    };
+    let node = if target.addr() == e.global::<u32>(0x011d_ea3c) {
+        e.call(0x0095_0bb0, &args![target, 0u32]).u32()
+    } else {
+        node
+    };
+    if node == 0 || e.call(0x004b_2960, &args![node]).u32() == 0 {
+        return false;
+    }
+    let cell = e.call(0x008d_6f30, &args![target]).u32();
+    let world = if cell == 0 {
+        0
+    } else {
+        let cell = e.call(0x008d_6f30, &args![target]).u32();
+        e.call(0x0045_43c0, &args![cell]).u32()
+    };
+    if world == 0 {
+        return false;
+    }
+
+    e.with_stack(0x940, |e, stack| {
+        let ebp = stack.addr() + 0x920;
+        let at = |offset: u32| ebp - offset;
+        let position = ebp + 0x10;
+        for (index, word) in [x, y, z].into_iter().enumerate() {
+            e.mem.set_u32(position + index as u32 * 4, word);
+        }
+        e.call(0x00c8_2870, &args![0x27u32, 0x26206u32, 0u32]);
+        e.call(0x0040_1050, &args![at(0x88), 12u32, 7u32, 0x0068_15c0u32]);
+        let bound = e.call(0x0043_d450, &args![node]).u32();
+        let centre = e.call(0x0068_15c0, &args![bound]).u32();
+        copy_explosion_point(e, at(0x88), centre);
+
+        let has_probes = e.vcall(target.addr(), 0x100, &args![]).bool()
+            && e.vcall(target.addr(), 0x214, &args![]).u32() != 0;
+        if has_probes {
+            // Each point starts with the first bound centre. The PC asks for
+            // the world bound and radius again for every axis adjustment.
+            for (index, axis, sign) in [
+                (1u32, 2u32, 1.0f64),
+                (2, 2, -1.0),
+                (3, 1, 1.0),
+                (4, 1, -1.0),
+                (5, 0, 1.0),
+                (6, 0, -1.0),
+            ] {
+                let point = at(0x88) + index * 12;
+                copy_explosion_point(e, point, at(0x88));
+                let bound = e.call(0x0043_d450, &args![node]).u32();
+                let radius = e.call(0x0084_d030, &args![bound]).f64();
+                let axis_address = point + axis * 4;
+                let initial = e.mem.f32(axis_address);
+                e.mem.set_f32(
+                    axis_address,
+                    (initial as f64 + sign * (radius + radius)) as f32,
+                );
+            }
+        }
+
+        let ray = at(0x140);
+        let id = at(0x144);
+        e.call(0x004a_3c20, &args![ray]);
+        e.call(0x008c_71b0, &args![id, 0u32]);
+        e.call(0x004a_39f0, &args![id, 0x27u32]);
+        let selected = if e.vcall(target.addr(), 0x100, &args![]).bool() {
+            target.addr()
+        } else {
+            0
+        };
+        let controller = if selected != 0 {
+            e.call(0x0093_06d0, &args![selected]).u32()
+        } else {
+            0
+        };
+        let controller = if controller != 0 {
+            let controller = e.call(0x0093_06d0, &args![selected]).u32();
+            e.call(0x0081_9250, &args![controller]).u32()
+        } else {
+            e.call(0x005d_be10, &args![]).u32()
+        };
+        e.call(0x0059_ce80, &args![id, controller]);
+        let scale_slot = e.call(0x0040_3e20, &args![0x011d_1344u32]).u32();
+        let scale = quiet_f32(e.mem.f32(scale_slot));
+        let scaled = e
+            .call(0x0045_bb20, &args![this.addr() + 0xf4, at(0x154), scale])
+            .u32();
+        e.call(0x0063_c8a0, &args![position, scaled]);
+        e.call(0x004a_3f70, &args![ray, e.mem.u32(id)]);
+        e.call(0x004a_3da0, &args![ray, position]);
+        e.call(0x004a_3eb0, &args![ray, at(0x88)]);
+
+        e.call(0x004a_3a70, &args![at(0x480)]);
+        e.call(0x004a_3fb0, &args![ray, at(0x480)]);
+        e.mem.set_u8(at(0x481), 0);
+        e.vcall(world, 0xc8, &args![ray]);
+        explosion_los_scan(e, this, ebp, position, 0x4f0, 0x4fc, 0x508, true);
+        explosion_los_debug(e, ebp, position);
+
+        if has_probes && e.mem.u8(at(0x481)) != 0 {
+            for probe in 1..7 {
+                if e.mem.u8(at(0x481)) == 0 {
+                    break;
+                }
+                e.mem.set_u8(at(0x481), 0);
+                e.call(0x004a_3a70, &args![at(0x870)]);
+                e.call(0x004a_3fb0, &args![ray, at(0x870)]);
+                e.call(0x004a_3eb0, &args![ray, at(0x88) + probe * 12]);
+                e.vcall(world, 0xc8, &args![ray]);
+                explosion_los_scan(e, this, ebp, position, 0x8e0, 0x8ec, 0x8f8, false);
+                e.call(0x004a_3bc0, &args![at(0x870)]);
+            }
+        }
+        let visible = e.mem.u8(at(0x481)) == 0;
+        e.call(0x004a_3bc0, &args![at(0x480)]);
+        visible
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn explosion_los_scan(
+    e: &mut Engine,
+    this: Ptr,
+    ebp: u32,
+    position: u32,
+    hit_offset: u32,
+    delta_offset: u32,
+    scaled_offset: u32,
+    first: bool,
+) {
+    let at = |offset: u32| ebp - offset;
+    let ray = at(0x140);
+    let mut index = 0i32;
+    while e.mem.u8(at(0x481)) == 0 {
+        let hits = e.call(0x008c_dd90, &args![ray]).u32();
+        let hits = e.call(0x0046_0140, &args![hits]).u32();
+        let count = e.call(0x0072_6070, &args![hits]).i32();
+        if index >= count {
+            break;
+        }
+        let hits = e.call(0x008c_dd90, &args![ray]).u32();
+        let hits = e.call(0x0046_0140, &args![hits]).u32();
+        let row = e.call(0x004a_46b0, &args![hits, index]).u32();
+        e.call(0x0069_6c30, &args![at(hit_offset), row]);
+        // The second scan indexes probe points by this *hit* index in the PC
+        // code, even though the outer loop has a separate probe index.
+        let point = if first {
+            at(0x88)
+        } else {
+            at(0x88) + (index as u32).wrapping_mul(12)
+        };
+        e.call(0x0043_9ef0, &args![point, at(delta_offset), position]);
+        let fraction = quiet_f32(e.mem.f32(at(hit_offset - 0x10)));
+        e.call(
+            0x004a_3760,
+            &args![at(scaled_offset), fraction, at(delta_offset)],
+        );
+        let component = e.call(0x004a_51b0, &args![this.addr() + 0xf4, 2u32]).u32();
+        let normal = e.mem.f32(component);
+        let threshold = e.global::<f64>(0x0108_f2a8);
+        let mut blocked = (normal as f64).partial_cmp(&threshold) != Some(std::cmp::Ordering::Less);
+        if !blocked {
+            let distance = e.call(0x0045_7990, &args![at(scaled_offset)]).f64();
+            e.mem.set_f64(at(scaled_offset + 8), distance);
+            let setting = e.call(0x0040_3e20, &args![0x011d_150cu32]).u32();
+            blocked = (e.mem.f32(setting) as f64).partial_cmp(&e.mem.f64(at(scaled_offset + 8)))
+                != Some(std::cmp::Ordering::Greater);
+        }
+        if blocked && first {
+            let owner = fn_009acce0(e, this).addr();
+            if owner != 0 {
+                let owner = fn_009acce0(e, this).addr();
+                blocked = !e.call(0x0045_2370, &args![owner]).bool();
+            }
+        }
+        if blocked {
+            if first {
+                let level = e.call(0x0043_d4d0, &args![0x011d_0a78u32]).u32();
+                if e.mem.i32(level) > 0 {
+                    e.call(0x005b_5e40, &args![0x0108_f294u32]);
+                }
+            }
+            e.mem.set_u8(at(0x481), 1);
+        }
+        index += 1;
+    }
+}
+
+fn explosion_los_debug(e: &mut Engine, ebp: u32, position: u32) {
+    let at = |offset: u32| ebp - offset;
+    let level = e.call(0x0043_d4d0, &args![0x011d_0a78u32]).u32();
+    if e.mem.i32(level) <= 0 {
+        return;
+    }
+    let colour = if e.mem.u8(at(0x481)) != 0 {
+        e.call(
+            0x0041_4430,
+            &args![at(0x520), 1.0f32, 0.0f32, 0.0f32, 1.0f32],
+        )
+        .u32()
+    } else {
+        e.call(
+            0x0041_4430,
+            &args![at(0x534), 0.0f32, 1.0f32, 0.0f32, 1.0f32],
+        )
+        .u32()
+    };
+    for offset in [0, 4, 8, 12] {
+        e.mem
+            .set_u32(at(0x548) + offset, e.mem.u32(colour + offset));
+    }
+    let marker = e
+        .call(
+            0x004b_3890,
+            &args![position, at(0x548), at(0x88), at(0x548), 1u32],
+        )
+        .u32();
+    let duration = quiet_f32(e.global::<f32>(0x0101_81e8));
+    let world = e.global::<u32>(0x011d_ea10);
+    e.call(0x0045_8e20, &args![world, marker, duration]);
 }
 
 #[cfg(test)]
@@ -3375,6 +3859,386 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::rc::Rc;
+
+    #[test]
+    fn los_pick_handles_flag_null_target_and_empty_ray() {
+        let mut e = Engine::new();
+        for page in [
+            0x1000,
+            0x2000,
+            0x3000,
+            0x4000,
+            0x5000,
+            0x7000,
+            0x8000,
+            0x011d_e000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.register(0x0041_81e0, |_, _| 0x5000u32.into_ret());
+        e.register(0x0047_7950, |_, _| true.into_ret());
+        assert!(e
+            .call(0x009b_1810, &args![0x1000u32, 0u32, 0u32, 0u32, 0u32])
+            .bool());
+        e.register(0x0047_7950, |_, _| false.into_ret());
+        assert!(!e
+            .call(0x009b_1810, &args![0x1000u32, 0u32, 0u32, 0u32, 0u32])
+            .bool());
+
+        let mut target_slots = vec![0u32; 0x1d0 / 4 + 1];
+        target_slots[0x100 / 4] = 0x9004;
+        target_slots[0x1d0 / 4] = 0x9008;
+        e.put_vtable(0x3000, &target_slots);
+        e.mem.set_u32(0x2000, 0x3000);
+        let mut world_slots = vec![0u32; 0xc8 / 4 + 1];
+        world_slots[0xc8 / 4] = 0x900c;
+        e.put_vtable(0x4000, &world_slots);
+        e.mem.set_u32(0x5000, 0x4000);
+        e.register(0x9004, |_, _| false.into_ret());
+        e.register(0x9008, |_, _| 0x7000u32.into_ret());
+        e.register(0x900c, |_, _| Ret::default());
+        e.register(0x004b_2960, |_, _| 1u32.into_ret());
+        e.register(0x008d_6f30, |_, _| 0x6000u32.into_ret());
+        e.register(0x0045_43c0, |_, _| 0x5000u32.into_ret());
+        e.register(0x00c8_2870, |_, _| Ret::default());
+        e.register(0x0040_1050, |_, _| Ret::default());
+        e.register(0x0043_d450, |_, _| 0x7000u32.into_ret());
+        e.register(0x0068_15c0, |_, _| 0x7100u32.into_ret());
+        for address in [
+            0x004a_3c20,
+            0x008c_71b0,
+            0x004a_39f0,
+            0x0059_ce80,
+            0x0063_c8a0,
+            0x004a_3f70,
+            0x004a_3da0,
+            0x004a_3eb0,
+            0x004a_3a70,
+            0x004a_3fb0,
+            0x004a_3bc0,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(0x005d_be10, |_, _| 0u32.into_ret());
+        e.register(0x0040_3e20, |_, _| 0x8000u32.into_ret());
+        e.mem.set_f32(0x8000, 1.0);
+        e.register(0x0045_bb20, |_, a| a[1].into_ret());
+        e.register(0x008c_dd90, |_, _| 0x7100u32.into_ret());
+        e.register(0x0046_0140, |_, _| 0x7100u32.into_ret());
+        e.register(0x0072_6070, |_, _| 0u32.into_ret());
+        e.register(0x0043_d4d0, |_, _| 0x8004u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(
+                0x009b_1810,
+                &args![0x1000u32, 1.0f32, 2.0f32, 3.0f32, 0x2000u32]
+            )
+            .bool());
+        let calls = e.call_log.as_ref().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x900c)
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x004a_3bc0)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn los_hit_blocks_unless_first_ray_owner_allows_it() {
+        let mut e = Engine::new();
+        e.map(0x1000, 0x1000);
+        e.map(0x2000, 0x1000);
+        e.map(0x0108_f000, 0x1000);
+        e.mem.set_f32(0x2000, -0.5);
+        e.mem.set_u32(0x2004, 0);
+        e.set_global(0x0108_f2a8, -0.98f64);
+        e.register(0x008c_dd90, |_, _| 0x3000u32.into_ret());
+        e.register(0x0046_0140, |_, _| 0x3000u32.into_ret());
+        e.register(0x0072_6070, |_, _| 1i32.into_ret());
+        e.register(0x004a_46b0, |_, _| 0x4000u32.into_ret());
+        e.register(0x0069_6c30, |_, _| Ret::default());
+        e.register(0x0043_9ef0, |_, _| Ret::default());
+        e.register(0x004a_3760, |_, _| Ret::default());
+        e.register(0x004a_51b0, |_, _| 0x2000u32.into_ret());
+        e.register(0x0043_d4d0, |_, _| 0x2004u32.into_ret());
+        e.register(0x0045_2370, |_, _| true.into_ret());
+        e.with_stack(0x940, |e, block| {
+            let ebp = block.addr() + 0x920;
+            let blocked = ebp - 0x481;
+            explosion_los_scan(
+                e,
+                Ptr::new(0x1000),
+                ebp,
+                ebp + 0x10,
+                0x4f0,
+                0x4fc,
+                0x508,
+                true,
+            );
+            assert_eq!(e.mem.u8(blocked), 1);
+            e.mem.set_u8(blocked, 0);
+            e.mem.set_u32(0x10c8, 0x5000);
+            explosion_los_scan(
+                e,
+                Ptr::new(0x1000),
+                ebp,
+                ebp + 0x10,
+                0x4f0,
+                0x4fc,
+                0x508,
+                true,
+            );
+            assert_eq!(e.mem.u8(blocked), 0);
+            explosion_los_scan(
+                e,
+                Ptr::new(0x1000),
+                ebp,
+                ebp + 0x10,
+                0x8e0,
+                0x8ec,
+                0x8f8,
+                false,
+            );
+            assert_eq!(e.mem.u8(blocked), 1);
+        });
+    }
+
+    #[test]
+    fn los_pick_retries_controller_probes_and_destroys_each_collector() {
+        let mut e = Engine::new();
+        for page in [
+            0x1000,
+            0x2000,
+            0x3000,
+            0x4000,
+            0x5000,
+            0x7000,
+            0x8000,
+            0x0108_f000,
+            0x011d_e000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(0x0108_f2a8, -0.98f64);
+        e.mem.set_f32(0x8000, 1.0);
+        e.mem.set_f32(0x8008, -0.5);
+        for offset in [0, 4, 8] {
+            e.mem.set_f32(0x7100 + offset, 0.0);
+        }
+        let mut target_slots = vec![0u32; 0x214 / 4 + 1];
+        target_slots[0x100 / 4] = 0x9004;
+        target_slots[0x1d0 / 4] = 0x9008;
+        target_slots[0x214 / 4] = 0x9010;
+        e.put_vtable(0x3000, &target_slots);
+        e.mem.set_u32(0x2000, 0x3000);
+        let mut world_slots = vec![0u32; 0xc8 / 4 + 1];
+        world_slots[0xc8 / 4] = 0x900c;
+        e.put_vtable(0x4000, &world_slots);
+        e.mem.set_u32(0x5000, 0x4000);
+        e.register(0x9004, |_, _| true.into_ret());
+        e.register(0x9008, |_, _| 0x7000u32.into_ret());
+        e.register(0x9010, |_, _| 1u32.into_ret());
+        let rays = Rc::new(Cell::new(0));
+        let rays_for_callback = rays.clone();
+        e.register_double(0x900c, move |e, _| {
+            let number = rays_for_callback.get();
+            rays_for_callback.set(number + 1);
+            e.mem.set_f32(0x8008, if number == 0 { -0.5 } else { -1.0 });
+            Ret::default()
+        });
+        e.register(0x0041_81e0, |_, _| 0x6000u32.into_ret());
+        e.register(0x0047_7950, |_, _| false.into_ret());
+        e.register(0x004b_2960, |_, _| 1u32.into_ret());
+        e.register(0x008d_6f30, |_, _| 0x6100u32.into_ret());
+        e.register(0x0045_43c0, |_, _| 0x5000u32.into_ret());
+        e.register(0x0043_d450, |_, _| 0x7000u32.into_ret());
+        e.register(0x0068_15c0, |_, _| 0x7100u32.into_ret());
+        e.register(0x0084_d030, |_, _| 1.0f32.into_ret());
+        e.register(0x0093_06d0, |_, _| 0u32.into_ret());
+        e.register(0x005d_be10, |_, _| 0x8010u32.into_ret());
+        e.register(0x0040_3e20, |_, _| 0x8000u32.into_ret());
+        e.register(0x0045_bb20, |_, a| a[1].into_ret());
+        e.register(0x008c_dd90, |_, _| 0x7200u32.into_ret());
+        e.register(0x0046_0140, |_, _| 0x7200u32.into_ret());
+        e.register(0x0072_6070, |_, _| 1i32.into_ret());
+        e.register(0x004a_46b0, |_, _| 0x7300u32.into_ret());
+        e.register(0x0069_6c30, |e, a| {
+            e.mem.set_f32(a[0] + 0x10, 1.0);
+            Ret::default()
+        });
+        e.register(0x004a_51b0, |_, _| 0x8008u32.into_ret());
+        e.register(0x0045_7990, |_, _| 0.5f32.into_ret());
+        e.register(0x0043_d4d0, |_, _| 0x8004u32.into_ret());
+        for address in [
+            0x00c8_2870,
+            0x0040_1050,
+            0x004a_3c20,
+            0x008c_71b0,
+            0x004a_39f0,
+            0x0059_ce80,
+            0x0063_c8a0,
+            0x004a_3f70,
+            0x004a_3da0,
+            0x004a_3eb0,
+            0x004a_3a70,
+            0x004a_3fb0,
+            0x004a_3bc0,
+            0x0043_9ef0,
+            0x004a_3760,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        let visible = e
+            .call(
+                0x009b_1810,
+                &args![0x1000u32, 0.0f32, 0.0f32, 0.0f32, 0x2000u32],
+            )
+            .bool();
+        assert!(visible);
+        assert_eq!(rays.get(), 2);
+        let log = e.call_log.as_ref().unwrap();
+        assert!(log.iter().any(|(address, _)| *address == 0x005d_be10));
+        let constructors: Vec<_> = log
+            .iter()
+            .filter(|(address, _)| *address == 0x004a_3a70)
+            .map(|(_, words)| words[0])
+            .collect();
+        let destructors: Vec<_> = log
+            .iter()
+            .filter(|(address, _)| *address == 0x004a_3bc0)
+            .map(|(_, words)| words[0])
+            .collect();
+        assert_eq!(constructors.len(), 2);
+        assert_eq!(destructors, vec![constructors[1], constructors[0]]);
+    }
+
+    #[test]
+    fn process_targets_skips_empty_list_and_applies_non_actor_damage() {
+        let mut e = Engine::new();
+        for page in [
+            0x1000,
+            0x3000,
+            0x4000,
+            0x5000,
+            0x6000,
+            0x7000,
+            0x8000,
+            0x9000,
+            0x0101_2000,
+            0x011d_e000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(0x0101_2060, 0.0f64);
+        e.mem.set_f32(0x1100, 10.0);
+        e.mem.set_u32(0x5000, 0x6000);
+        e.mem.set_u32(0x6000, 0x7000);
+        e.mem.set_u32(0x8000, 1.0f32.to_bits());
+        e.mem.set_u32(0x8004, 2.0f32.to_bits());
+        e.mem.set_u32(0x8008, 3.0f32.to_bits());
+        let mut explosion_slots = vec![0u32; 0x1f4 / 4 + 1];
+        explosion_slots[0x168 / 4] = 0xa010;
+        explosion_slots[0x1f4 / 4] = 0xa000;
+        e.put_vtable(0x3000, &explosion_slots);
+        e.mem.set_u32(0x1000, 0x3000);
+        let mut target_slots = vec![0u32; 0x1f4 / 4 + 1];
+        target_slots[0x100 / 4] = 0xa030;
+        target_slots[0x144 / 4] = 0xa040;
+        target_slots[0x1f4 / 4] = 0xa020;
+        e.put_vtable(0x4000, &target_slots);
+        e.mem.set_u32(0x7000, 0x4000);
+        e.register(0xa000, |_, _| 0x8000u32.into_ret());
+        e.register(0xa010, |_, _| 0u32.into_ret());
+        e.register(0xa020, |_, _| 0x8000u32.into_ret());
+        e.register(0xa030, |_, _| false.into_ret());
+        e.register(0xa040, |_, _| Ret::default());
+        e.register(0x0068_15c0, |_, _| 0x5000u32.into_ret());
+        e.register(0x0072_6070, |_, _| 0u32.into_ret());
+        e.register(0x0047_7ba0, |_, _| false.into_ret());
+        e.register(0x0044_0da0, |_, _| false.into_ret());
+        e.register(0x0043_9ef0, |_, a| a[1].into_ret());
+        e.register(0x0045_7990, |_, _| 2.0f32.into_ret());
+        e.register(0x0064_4930, |_, _| 4.0f32.into_ret());
+        e.register(0x0064_7920, |_, _| 0.5f32.into_ret());
+        e.register(0x008d_01e0, |_, _| 0.0f32.into_ret());
+        let script_getters = Rc::new(Cell::new(0));
+        let script_getters_for_callback = script_getters.clone();
+        e.register_double(0x005d_43c0, move |e, a| {
+            assert_eq!(a, &[0x7000]);
+            let count = script_getters_for_callback.get();
+            script_getters_for_callback.set(count + 1);
+            if count == 1 {
+                // The branch was chosen before this callback changes the
+                // weapon. The base-form lookup still follows this getter.
+                e.mem.set_u32(0x10e0, 0xa000);
+            }
+            0x9000u32.into_ret()
+        });
+        e.register(0x005a_c750, |_, _| Ret::default());
+        e.register(0x0041_81e0, |_, _| 0x9000u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.register(0x0082_56d0, |_, _| true.into_ret());
+        e.call(0x009b_00a0, &args![0x1000u32]);
+        assert_eq!(e.mem.u8(0x10d6), 1);
+        assert!(!e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|(address, _)| *address == 0xa040));
+
+        e.register(0x0082_56d0, |_, _| false.into_ret());
+        e.mem.set_u8(0x6006, 1);
+        e.call(0x009b_00a0, &args![0x1000u32]);
+        assert!(!e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|(address, _)| *address == 0xa040));
+        e.mem.set_u8(0x6006, 0);
+        e.call(0x009b_00a0, &args![0x1000u32]);
+        let hits: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0xa040)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![0x7000, 5.0f32.to_bits(), 0]);
+        assert_eq!(script_getters.get(), 2);
+        let calls = e.call_log.as_ref().unwrap();
+        let getters: Vec<_> = calls
+            .iter()
+            .enumerate()
+            .filter(|(_, call)| call.0 == 0x005d_43c0)
+            .map(|(index, _)| index)
+            .collect();
+        let base = calls.iter().position(|call| call.0 == 0x0041_81e0).unwrap();
+        assert!(getters[0] < getters[1] && getters[1] < base);
+        let actions: Vec<_> = calls.iter().filter(|call| call.0 == 0x005a_c750).collect();
+        assert_eq!(actions[1].1, vec![0x9000, 0x9000, 0x100]);
+        e.set_global(0x0101_2060, f64::NAN);
+        e.call(0x009b_00a0, &args![0x1000u32]);
+        let hit_count = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0xa040)
+            .count();
+        assert_eq!(hit_count, 1, "unordered threshold must skip damage");
+    }
 
     #[test]
     fn effect_flow_early_gates_and_empty_contact_cleanup() {
@@ -3399,7 +4263,6 @@ mod tests {
             0x0062_1060,
             0x00cb_d960,
             0x00c9_f1e0,
-            0x009b_00a0,
             0x0062_1100,
             0x0062_6870,
             0x005e_0b60,
@@ -3426,14 +4289,15 @@ mod tests {
             a[0].into_ret()
         });
         e.register(0x0056_09f0, |e, a| e.mem.u8(a[0]).into_ret());
+        e.register(0x0082_56d0, |_, _| true.into_ret());
         e.mem.set_u8(0x10d5, 1);
         explosion_apply_effects(&mut e, this);
         assert_eq!(e.mem.u8(0x10d4), 1);
         let calls = e.call_log.as_ref().unwrap();
-        let targets = calls.iter().position(|call| call.0 == 0x009b_00a0).unwrap();
         let collector_cleanup = calls.iter().position(|call| call.0 == 0x0062_1100).unwrap();
         let storage_cleanup = calls.iter().position(|call| call.0 == 0x005e_0b60).unwrap();
-        assert!(targets < collector_cleanup && collector_cleanup < storage_cleanup);
+        assert_eq!(e.mem.u8(0x10d6), 1);
+        assert!(collector_cleanup < storage_cleanup);
         let calls_before = calls.len();
         explosion_apply_effects(&mut e, this);
         assert_eq!(e.call_log.as_ref().unwrap().len(), calls_before + 1);

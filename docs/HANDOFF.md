@@ -7,6 +7,86 @@ machinery runs.
 
 ## Resume here
 
+Latest, 04:22 local: HUD collection `5c12df2` passed combined engine tests,
+strict lint and formatting, including the reviewed radiation audio correction.
+Fresh `/root/a03_round16` immediately continues large `00775a00` in b0236.
+The publication hold is released: publish the accumulated movement, HUD and
+explosion batch after regenerating the ledger. a01 now owns the compiler for
+its forty-body continuation; then cycle01/fresh worker, root's two map helpers,
+then a04's forty effect-item routines. Effect-item review includes thirty-six
+matching native float vectors and callback reload/argument ownership fixes.
+Reader #130 core CI passes; viewer CI remains pending at `2b81e2a`.
+Build 40 remains current, without a confirmed next play-build date or feature
+list. Inventory stack preservation still has no playable consumer. Usage is
+75%; retain the 98% stop/handoff rule.
+
+Latest, 04:09 local: explosion collection `5380adf` passes 13,990 combined
+engine tests, doctest, strict lint and formatting. Reviewed partial-only
+advancement retains all seventeen exception-cleanup gaps. Fresh
+`/root/a04_round14` immediately started b0677, effectitem.cpp, compiler held.
+a03 now validates its eight-body HUD batch plus radiation audio correction;
+then cycle03/fresh worker, a01/cycle01 and root's map follow-on. Keep the
+later rolling push held until the HUD correction is collected. Root's
+separately compiled map draft passes the full item load and byte-identical
+41-byte rewrite; formal generated-registry validation is still pending.
+
+Latest, 04:00 local: rolling #129 passed both checks and merged `1389dab`
+at 03:56:28. `ship.sh 129` completed with `HOLD_LATER_PUSH=1`: the later
+movement/HUD collections are rebased locally but unpublished. Do not ship
+the queued HUD until a03's correction to `007738c0` is collected: its audio
+singleton getter had been given another callee's pending stack arguments.
+After that collection, regenerate the ledger and publish the next rolling
+PR (no rolling PR is currently open). HUD collection is now `f34752a`.
+
+Inventory reader #130 is open/attached at `2b81e2a`, with fresh CI. Local
+checks on merged #128 passed 15,771 workspace / 13,918 engine tests, strict
+lint, fmt and release/debug builds; it rebased cleanly onto #129. The
+buffered two-stack reader probe passes, consuming all 41 bytes. The fuller
+ItemChange probe stops while inserting its generated form into the real
+map: allocator `0043a010` is missing. No byte-identical rewrite result yet.
+Root is now on `codex/phase2-inventory-form-map`, based on #130, with two
+helpers and three tests drafted in `fallout_shared/form_map_support.rs`
+and its generated `mod.rs`, uncompiled. The allocator's refill `0043a080`
+is included; PC evidence is private `codex-audit/inventory-map-*`.
+a01 is reviewing this draft. a04 owns the heavy compiler, then cycle04,
+a01/cycle01, a03/cycle03; root's map follow-on waits. a03's next collection
+is eight normal bodies plus the radiation audio fix; three new SEH partials
+are explicit. Large `00775a00` remains wholly open for a fresh continuation.
+Build 40 remains current. Usage was 66% at 03:48; stop/handoff at 98%.
+
+Latest, 03:46 local: inventory writer #128 passed both checks and merged
+`14c77da` at 03:39:58. Root reader checkout is rebased onto that merge;
+scoped stash `9ca22a2` is applied and retained (do not apply again).
+Cycle03 completed HUD collection `74cd13b`: 13,970 combined engine tests,
+one doctest, strict lint and formatting pass. Fresh `/root/a03_round15`
+immediately continues at `00774b00`; preserve Create/DoIdle SEH partials.
+Root now owns the compiler for `check-inventory-load.ps1`, session `3847`,
+then the buffered-reader and full ItemChange payload probes. Both probes
+remain unrun. a04 follows, then a01; both have reviewed drafts ready.
+a01 has forty new normal entries through `00933890`, with sound argument
+arity and signaling-NaN store corrections. a04 has both remaining normal
+explosion bodies; reviewed partial-only advancement remains authorized
+after successful checks. Rolling #129 core passes and viewer is pending
+at `12f6153`; ship when both pass. Build 40 remains current, without a
+confirmed next play-build date or shipped inventory consumer.
+
+Latest, 03:30 local: #127 passed both CI checks and merged `72003ab` at
+03:23:48. `ship.sh 127` completed; #129 is attached at `12f6153`, titled
+"Engine: translate explosion effect processing", with fresh CI. That
+explosion collection is now `dc89abd` after rebasing. #128 core passed;
+viewer remains pending. It can merge at its exact checked head independently.
+Movement source `6ae7a25` passed 65 focused / 13,889 source engine / doc /
+strict lint / fmt / 49 hygiene tests. Cycle01 completed as `c757035` with
+13,925 combined engine tests plus doc, lint and fmt. Fresh `/root/a01_round14`
+immediately started the next normal entries at `00931880`; four reviewed
+SEH-only partials remain in the ledger. a03 now owns the compiler, then
+cycle03, root reader/probes, and a04. a04 has both remaining normal bodies
+drafted and reviewed, with a full blocked-then-clear ray test; all seventeen
+remaining partials have verified PC exception frames. After its checks,
+partial-only lane advancement is reviewed/allowed. Root's fuller ItemChange
+probe now requires byte-identical payloads after loading and writing again;
+it has not run. Usage is 60% at 03:27; the 98% stop rule remains active.
+
 Rolling #126 passed both checks and merged as `97e7572` at 02:47 local.
 `ship.sh 126` completed; attached rolling #127 is at `cb42c4d` with fresh
 CI, containing MobileObject collection now `7a1f056` and loader collection
