@@ -30,16 +30,16 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10303 | 15.5% |
-| traced | 4510 | 6.8% |
+| translated | 10454 | 15.8% |
+| traced | 4503 | 6.8% |
 | platform | 3417 | 5.2% |
 | library | 21915 | 33.1% |
-| open | 26114 | 39.4% |
+| open | 25970 | 39.2% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14406 (35.6%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14550 (35.9%) are translated or traced.
 
-Rust cites 15437 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 15581 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -70,14 +70,14 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 65 | 0 | 21269 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6265 | 997 | 0 | 0 | 3208 | 69.4% |
-| Havok SDK | 6591 | 1555 | 3499 | 53 | 77 | 0 | 0 | 6461 | 2.0% |
-| fallout/ai | 4849 | 1475 | 1888 | 2115 | 622 | 0 | 0 | 2112 | 56.4% |
+| fallout shared | 10470 | 2065 | 3149 | 6303 | 993 | 0 | 0 | 3174 | 69.7% |
+| Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
+| fallout/ai | 4849 | 1475 | 1888 | 2155 | 619 | 0 | 0 | 2075 | 57.2% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 741 | 0 | 0 | 1321 | 50.1% |
-| (unplaced) | 2353 | 470 | 0 | 30 | 408 | 1 | 0 | 1914 | 18.6% |
-| fallout shared/pathfinding | 1788 | 365 | 452 | 496 | 202 | 0 | 0 | 1090 | 39.0% |
+| (unplaced) | 2353 | 470 | 0 | 30 | 411 | 1 | 0 | 1911 | 18.7% |
+| fallout shared/pathfinding | 1788 | 365 | 452 | 532 | 203 | 0 | 0 | 1053 | 41.1% |
 | NiMain | 1619 | 261 | 1134 | 3 | 76 | 0 | 0 | 1540 | 4.9% |
-| BSHavok | 1615 | 316 | 1134 | 22 | 139 | 0 | 0 | 1454 | 10.0% |
+| BSHavok | 1615 | 316 | 1134 | 59 | 134 | 0 | 0 | 1422 | 12.0% |
 | BSShader | 1549 | 608 | 350 | 0 | 142 | 1407 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 32 | 0 | 0 | 1247 | 2.5% |
 | fallout/misc | 1045 | 171 | 353 | 425 | 134 | 0 | 0 | 486 | 53.5% |
@@ -128,9 +128,9 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | Depth | Call sites | Functions | translated | traced | platform | library | open |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
-| 1 | 143 | 117 | 96 | 34 | 3 | 0 | 10 |
-| 2 | 1575 | 583 | 1024 | 405 | 24 | 4 | 118 |
-| 3 | 4973 | 1303 | 3315 | 1119 | 154 | 26 | 359 |
+| 1 | 143 | 117 | 99 | 32 | 3 | 0 | 9 |
+| 2 | 1575 | 583 | 1047 | 399 | 24 | 4 | 101 |
+| 3 | 4973 | 1303 | 3353 | 1102 | 154 | 26 | 338 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
@@ -237,7 +237,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 99 | `008c80e0` | `AILinearTaskThreadManager::SetMainRendering` | traced |
 | 100 | `00713d80` | - | translated |
 | 101 | `008c78c0` | `AILinearTaskThreadManager::StartThreads` | traced |
-| 102 | `008ca070` | `AITaskManager::StartTasksDuringRendering` | traced |
+| 102 | `008ca070` | `AITaskManager::StartTasksDuringRendering` | translated |
 | 103 | `0086fc60` | `Main::OnIdle_UpdateAnimationsAndEffects` | translated |
 | 104 | `0043d4d0` | - | translated |
 | 105 | `0086fd70` | `Main::OnIdle_DoInterfaceIdle` | translated |
@@ -246,7 +246,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 108 | `0047d0b0` | `PathManager::QInstance` | traced |
 | 109 | `006ebc50` | `PathManager::Update` | traced |
 | 110 | `00552ba0` | - | translated |
-| 111 | `006a61b0` | `NavMeshRender::Update` | open |
+| 111 | `006a61b0` | `NavMeshRender::Update` | translated |
 | 112 | `0043d4d0` | - | translated |
 | 113 | `00408d60` | - | translated |
 | 114 | `006c0720` | `NavMeshObstacleManager::GetInstance` | translated |
@@ -266,7 +266,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 128 | `0043d4d0` | - | translated |
 | 129 | `00713d80` | - | translated |
 | 130 | `008c7990` | `AILinearTaskThreadManager::WaitForThreads` | traced |
-| 131 | `008ca300` | `AITaskManager::WaitForTasksDuringRendering` | traced |
+| 131 | `008ca300` | `AITaskManager::WaitForTasksDuringRendering` | translated |
 | 132 | `0086f6a0` | `Main::UpdateNonRenderSafeAITasks` | translated |
 | 133 | `00870610` | `Main::OnIdle_PostThreadsProcess` | translated |
 | 134 | `0070ed10` | - | traced |

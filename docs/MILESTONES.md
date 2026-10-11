@@ -56,6 +56,38 @@ acceptance routes passed. Evidence and open work:
 comparison remains pending. Next action: merge after CI and review,
 publish the play build, then begin Phase 2 (HANDOFF.md). Buffered
 player input remains an interface follow-up before moving menu idle.
+Interface/render PR #113 now passes local core/viewer tests, lint, release
+builds and all three acceptance routes. CI and merge remain pending;
+play build remains 39. Exact menu-input placement and renderer work remain
+open, and original-game comparison is not done. Evidence and owners:
+[HANDOFF.md](HANDOFF.md). Next action: merge after both required checks,
+then publish play build 40 from merged main.
+
+Navigation-render batch collected as `6855902`: 36 preserved translations
+now covered by 31 focused tests, including nonempty triangle geometry and
+512 native style vectors. Combined lead checks passed formatting, lint
+and 13,312 engine tests. These functions remain outside live gameplay.
+Next action remains interface/render CI and play build publication.
+
+Exterior-cell loader batch collected as `d68664d`: 38 translations and
+43 focused tests; combined formatting, lint and 13,355 engine tests pass.
+Rolling #112 merged as `d854fbe`; #114 holds later batches. Interface/render
+#113 is rebased onto that main and rerunning CI. Phase 2 list-adapter
+preparation is isolated and not yet validated or used by the viewer.
+Next action: merge #113 after both checks and publish play build 40.
+
+Havok-world batch collected as `195ffaa`: 40 complete functions and
+42 focused tests; combined formatting, lint and 13,397 engine tests pass.
+The isolated Phase 2 list probe now passes with installed executable data
+and the real registry. No world consumer or save round trip is established.
+Next action remains interface/render CI and play build 40 publication.
+
+Phase 1 PR 7 merged as `f917219` after both CI checks passed. Build 40
+is building from main. AI task-manager batch collected as `136fa2a`:
+28 complete and 12 partial functions (five behavior gaps, seven cleanup
+gaps), with 13,438 combined engine tests passing before the PR 7 rebase.
+The list adapter passed its initial full checks and is rebased for another
+combined check. Next action: verify and publish play build 40.
 
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).

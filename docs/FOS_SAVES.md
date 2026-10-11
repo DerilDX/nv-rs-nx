@@ -595,3 +595,19 @@ decode to its length.
 Run on all nine real saves (2026-10-07): every one parses with every byte
 accounted for, and every change form decodes to exactly its length (3,585
 to 4,509 per file; none not decoded, none failed).
+
+Read-only baseline on 2026-10-10: the user's current save directory holds
+11 `.fos` files, a different set from the nine above. Seven pass the
+inspector; four files with 123-124 plugins report 13 change-form failures
+in total (reference trailing bytes, actor separator errors and unknown
+types). All 11 outer file layouts account for their bytes, but that does
+not establish change-form support. The four saves with only the base
+game and nine official add-ons pass, including an early Doc Mitchell
+autosave. These results do not prove import or round-trip fidelity.
+
+Private per-file SHA256 values and inspector output are in
+`%USERPROFILE%\nv-re\work\phase0\codex-audit\save-baselines.json` and the
+linked logs. Input hashes were identical before and after inspection;
+no save bytes are committed. Phase 2 should first validate the ExtraData
+adapter against the supported early save. The heavily modded failures
+remain recorded gaps, not a reason to expand the active milestone now.

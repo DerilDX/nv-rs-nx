@@ -9,6 +9,28 @@
 //! messages; `Process` / `RunToCompletion` drain it and dispatch each message
 //! to the subclass's `HandleCountMessage` / `HandleMobMessage` /
 //! `HandleEndMessage` (vtable slots +0x10 / +0x14 / +0x18).
+//! The movement tasklet's `iUpdated` is Xbox PDB +0x58 and PC +0x38.
+//!
+//! The thread manager, its ten-entry PC task ring, worker semaphore helpers,
+//! and linked message queue are also translated in this unit. The actor
+//! scheduling body (`008c94e0`) and parallel scheduling body (`008ca070`)
+//! remain fail-closed. `008c94e0` leaves open its `005be5c0`/`00717e50`/
+//! `00968670` process-list traversal, the task-record conditions
+//! (`00408d60`, `0043d4d0`), six manager-tasklet queues, synchronous
+//! `008c8240` runs, and worker wake path (`008c9f70`, `008c9fd0`).
+//! `008ca070` leaves open its process-list traversal, four task-record
+//! gates, two synchronous `008c8240` branches, and parallel queue/wake/finish
+//! protocol (`008ca2e0`, manager flag +0x10180). In `008c94e0`, worker-start
+//! and final-setting branches surrounding that body run when reached; only
+//! the actor-package branch fails closed. `008c9c70` consequently fails
+//! immediately at `008c9d70`; startup and shutdown still lack the exact
+//! thread-local memory-router/file-registration and procedure-index
+//! save/restore calls (`008c9d70`, `008c9e40`).
+//! Batch completeness: 28 functions have translated behavior; 12 are
+//! partial, not complete: fail-closed behavior gaps are `008c94e0`,
+//! `008c9c70`, `008c9d70`, `008c9e40`, `008ca070`; translated normal paths
+//! with unimplemented compiler cleanup are `008c9330`, `008c9430`,
+//! `008c9ae0`, `008c9bd0`, `008c9ef0`, `008ca350`, `008ca480`. None skipped.
 //!
 //! Layouts: the PC class is 0x38 bytes where the Xbox one is 0x58 (the Xbox
 //! timing fields `StartTime`, `EndTime`, ... and `iThread` are not in the PC
@@ -45,6 +67,7 @@ const VTABLE_ANIMATION_TASK_DATA: u32 = 0x0108_5768;
 const VTABLE_ACTOR_UPDATE_TASK_DATA: u32 = 0x0108_5788;
 const VTABLE_PACKAGE_UPDATE_TASK_DATA: u32 = 0x0108_57a8;
 const VTABLE_ACTORS_SCRIPT_TASK_DATA: u32 = 0x0108_57c8;
+const VTABLE_MOVEMENT_TASK_DATA: u32 = 0x0108_57e8;
 
 /// `BSXenonTaskletData` constructor (`006c7850`): the base of the tasklet.
 const TASKLET_BASE_CONSTRUCTOR: u32 = 0x006c_7850;
@@ -142,6 +165,16 @@ layout! {
         0x34 eType: u32,
         /// Number of mobs whose script ran.
         0x3C iScriptsRun: i32,
+    }
+
+    /// `MovementTaskData` (Xbox PDB): `iUpdated` is Xbox +0x58; its PC
+    /// offset is +0x38 because the PC tasklet base is 0x20 bytes smaller.
+    pub struct MovementTaskData: 0x3C {
+        0x18 pmoblist: Ptr,
+        0x30 uiHighActorCount: u32,
+        0x34 eType: u32,
+        /// `iUpdated` (Xbox PDB +0x58; PC +0x38).
+        0x38 iUpdated: i32,
     }
 }
 
@@ -334,6 +367,67 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x008c9110,
             actors_script_task_data_handle_mob_message(Ptr<ActorsScriptTaskData>, Ptr)
         ),
+        entry!(
+            0x008c9170,
+            movement_task_data_constructor(Ptr<MovementTaskData>, u32) -> Ptr<MovementTaskData>
+        ),
+        entry!(
+            0x008c91a0,
+            movement_task_data_scalar_deleting_destructor(
+                Ptr<MovementTaskData>,
+                u32,
+            ) -> Ptr<MovementTaskData>
+        ),
+        entry!(
+            0x008c91d0,
+            movement_task_data_destructor(Ptr<MovementTaskData>)
+        ),
+        entry!(
+            0x008c91f0,
+            movement_task_data_handle_count_message(Ptr<MovementTaskData>, u32)
+        ),
+        entry!(
+            0x008c9220,
+            movement_task_data_handle_mob_message(Ptr<MovementTaskData>, Ptr)
+        ),
+        entry!(
+            0x008c9300,
+            movement_task_data_handle_end_message(Ptr<MovementTaskData>, u32)
+        ),
+        entry!(0x008c9330, ai_task_manager_constructor(Ptr) -> Ptr),
+        entry!(0x008c9430, ai_task_manager_destructor(Ptr)),
+        entry!(0x008c94e0, ai_task_manager_process(Ptr)),
+        entry!(0x008c9a20, task_queue_item_new(Ptr, u32) -> Ptr),
+        entry!(0x008c9a50, task_queue_item_existing(Ptr, u32) -> Ptr),
+        entry!(0x008c9a80, ai_task_queue_enqueue(Ptr, u32)),
+        entry!(0x008c9ae0, ai_task_thread_manager_add_thread(Ptr, u32)),
+        entry!(0x008c9bd0, ai_task_thread_constructor(Ptr, u32) -> Ptr),
+        entry!(0x008c9c70, ai_task_thread_thread_proc(Ptr) -> u32),
+        entry!(0x008c9cf0, ai_task_queue_dequeue(Ptr) -> u32),
+        entry!(0x008c9d70, ai_task_thread_on_startup(Ptr)),
+        entry!(0x008c9e40, ai_task_thread_on_shutdown(Ptr)),
+        entry!(0x008c9ec0, thread_context_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x008c9ef0, thread_context_destructor(Ptr)),
+        entry!(0x008c9f70, ai_task_thread_manager_release_semaphores(Ptr)),
+        entry!(0x008c9fb0, ai_task_thread_release_semaphore(Ptr)),
+        entry!(0x008c9fd0, ai_task_thread_manager_wake_threads(Ptr)),
+        entry!(0x008ca010, ai_task_queue_push(Ptr, Ptr)),
+        entry!(0x008ca040, ai_task_queue_push_end(Ptr)),
+        entry!(0x008ca070, ai_task_manager_process_parallel(Ptr)),
+        entry!(0x008ca2e0, ai_task_manager_release_semaphore(Ptr, u32)),
+        entry!(0x008ca300, ai_task_manager_clear_parallel_flag(Ptr)),
+        entry!(0x008ca330, ai_task_manager_signal_semaphore(Ptr, u32)),
+        entry!(0x008ca350, ai_task_message_pool_destructor(Ptr)),
+        entry!(0x008ca3c0, ai_task_message_pool_base_destructor(Ptr)),
+        entry!(0x008ca3e0, ai_task_message_pool_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x008ca410, ai_task_message_pool_array_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x008ca440, common_message_queue_constructor(Ptr, Ptr) -> Ptr),
+        entry!(0x008ca480, common_message_queue_destructor(Ptr)),
+        entry!(0x008ca500, message_queue_destructor(Ptr)),
+        entry!(0x008ca520, message_queue_base_destructor(Ptr)),
+        entry!(0x008ca540, message_queue_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x008ca570, mobile_message_queue_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x008ca5a0, common_ll_message_queue_try_push(Ptr, Ptr) -> bool),
     ]
 }
 
@@ -1217,6 +1311,539 @@ pub fn actors_script_task_data_handle_mob_message(
     }
 }
 
+// Translated from 008c9170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MovementTaskData` (Xbox PDB) constructor: constructs the tasklet base
+/// with its task type, installs the movement vtable, and clears `iUpdated`.
+pub fn movement_task_data_constructor(
+    e: &mut Engine,
+    this: Ptr<MovementTaskData>,
+    task_type: u32,
+) -> Ptr<MovementTaskData> {
+    fn_008c82e0(e, this.cast(), task_type);
+    e.mem.set_u32(this.addr(), VTABLE_MOVEMENT_TASK_DATA);
+    e.set(this, MovementTaskData::iUpdated, 0);
+    this
+}
+
+// Translated from 008c91a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MovementTaskData` (Xbox PDB) scalar deleting destructor. Bit zero of
+/// `flags` requests deallocation after destruction.
+pub fn movement_task_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<MovementTaskData>,
+    flags: u32,
+) -> Ptr<MovementTaskData> {
+    movement_task_data_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 008c91d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MovementTaskData` (Xbox PDB) destructor: restores its vtable, then
+/// destroys the `MobileObjectTaskletData` base.
+pub fn movement_task_data_destructor(e: &mut Engine, this: Ptr<MovementTaskData>) {
+    e.mem.set_u32(this.addr(), VTABLE_MOVEMENT_TASK_DATA);
+    fn_008c83a0(e, this.cast());
+}
+
+// Translated from 008c91f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MovementTaskData::HandleCountMessage` (Xbox PDB): resets the update
+/// count and enters the two critical sections in address order.
+pub fn movement_task_data_handle_count_message(
+    e: &mut Engine,
+    this: Ptr<MovementTaskData>,
+    _count: u32,
+) {
+    e.set(this, MovementTaskData::iUpdated, 0);
+    e.call(
+        CRITICAL_SECTION_ENTER,
+        &args![CRITICAL_SECTION_011DFC04, 0u32],
+    );
+    e.call(
+        CRITICAL_SECTION_ENTER,
+        &args![CRITICAL_SECTION_011DFBE8, 0u32],
+    );
+}
+
+// Translated from 008c9220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MovementTaskData::HandleMobMessage` (Xbox PDB): actor mobs call the
+/// actor update slot only when `bProcessMe` is set; other mobs follow the
+/// two executable vtable checks. Every message increments `iUpdated`.
+pub fn movement_task_data_handle_mob_message(
+    e: &mut Engine,
+    this: Ptr<MovementTaskData>,
+    mob: Ptr,
+) {
+    if mob.is_null() || !is_actor(e, mob) {
+        if e.vcall(mob.addr(), 0x224, &[]).bool() {
+            e.call(0x009b_ec10, &args![mob, 0.0f32]);
+        } else if e.vcall(mob.addr(), 0x220, &[]).bool() {
+            e.call(0x009a_e580, &args![mob, 0.0f32]);
+        }
+    } else if e.mem.u8(mob.addr() + ACTOR_PROCESS_ME) != 0 {
+        let player = player_character(e);
+        let sleeping = e.call(0x0094_df60, &args![player]).bool();
+        e.vcall(mob.addr(), 0x348, &args![0.0f32, sleeping]);
+    }
+    let updated = e.get(this, MovementTaskData::iUpdated);
+    e.set(this, MovementTaskData::iUpdated, updated.wrapping_add(1));
+}
+
+// Translated from 008c9300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MovementTaskData::HandleEndMessage` (Xbox PDB): leaves the two
+/// critical sections, first `011dfbe8`, then `011dfc04`.
+pub fn movement_task_data_handle_end_message(
+    e: &mut Engine,
+    _this: Ptr<MovementTaskData>,
+    _end_type: u32,
+) {
+    e.call(CRITICAL_SECTION_LEAVE, &args![CRITICAL_SECTION_011DFBE8]);
+    e.call(CRITICAL_SECTION_LEAVE, &args![CRITICAL_SECTION_011DFC04]);
+}
+
+// Translated from 008c9330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs the six embedded tasklet data objects and the thread manager.
+// open: compiler SEH cleanup path.
+pub fn ai_task_manager_constructor(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_008c82a0(e, this.cast(), this.addr() + 0x174);
+    fn_008c8830(e, Ptr::new(this.addr() + 0x40), this.addr() + 0x174);
+    fn_008c8ae0(e, Ptr::new(this.addr() + 0x78), this.addr() + 0x174);
+    fn_008c89a0(e, Ptr::new(this.addr() + 0xbc), this.addr() + 0x174);
+    fn_008c9020(e, Ptr::new(this.addr() + 0xf8), this.addr() + 0x174);
+    movement_task_data_constructor(e, Ptr::new(this.addr() + 0x138), this.addr() + 0x174);
+    e.call(0x008c_a680, &args![this.addr() + 0x174]);
+    e.mem.set_u8(this.addr() + 0x10180, 0);
+    this
+}
+
+// Translated from 008c9430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the embedded message pool and tasklets in reverse construction
+/// order.
+// open: compiler SEH cleanup path.
+pub fn ai_task_manager_destructor(e: &mut Engine, this: Ptr) {
+    ai_task_message_pool_destructor(e, Ptr::new(this.addr() + 0x174));
+    movement_task_data_destructor(e, Ptr::new(this.addr() + 0x138));
+    fn_008c9080(e, Ptr::new(this.addr() + 0xf8));
+    fn_008c8a00(e, Ptr::new(this.addr() + 0xbc));
+    fn_008c8b50(e, Ptr::new(this.addr() + 0x78));
+    fn_008c8890(e, Ptr::new(this.addr() + 0x40));
+    fn_008c8430(e, Ptr::new(this.addr()));
+}
+
+// Translated from 008c94e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the manager's frame of package work, creates its worker threads
+/// once, queues task records in executable order, and either drains the
+/// tasklets synchronously or wakes the workers according to the globals.
+/// `BaseProcess` and timing/settings calls remain address calls because
+/// they belong to other source units.
+// open: actor-package scheduling when global `011f1220` is set.
+pub fn ai_task_manager_process(e: &mut Engine, this: Ptr) {
+    if e.mem.u8(0x011a_34e7) != 0 {
+        if setting_byte(e, 0x011d_fb68) != 0 {
+            for processor in [1, 3, 5] {
+                ai_task_thread_manager_add_thread(e, Ptr::new(0x011d_fc24), processor);
+            }
+        }
+        e.mem.set_u8(0x011a_34e7, 0);
+    }
+    if e.mem.u8(0x011f_1220) != 0 {
+        ai_task_manager_process_body(e, this);
+    }
+    // This call is reached regardless of whether actor packages were queued.
+    if setting_value(e, 0x011c_3ea4) == 1 {
+        let value = setting_value(e, 0x011d_10d4) as u32;
+        e.call(0x0070_34c0, &args![value]);
+        e.call(0x0070_3490, &[]);
+    }
+}
+
+fn setting_byte(e: &mut Engine, setting: u32) -> u8 {
+    let data = e.call(0x0040_8d60, &args![setting]).u32();
+    e.mem.u8(data)
+}
+
+fn setting_value(e: &mut Engine, setting: u32) -> i32 {
+    let data = e.call(0x0043_d4d0, &args![setting]).u32();
+    e.mem.i32(data)
+}
+
+// Translated from 008c9a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initializes a 12-byte task queue item as a new task carrying `value`.
+pub fn task_queue_item_new(e: &mut Engine, this: Ptr, value: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), 0);
+    e.mem.set_u32(this.addr() + 4, value);
+    e.mem.set_u32(this.addr() + 8, 0);
+    this
+}
+
+// Translated from 008c9a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initializes a 12-byte task queue item as an existing task carrying
+/// `value`; the field at +4 is deliberately left untouched.
+pub fn task_queue_item_existing(e: &mut Engine, this: Ptr, value: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), 1);
+    e.mem.set_u32(this.addr() + 8, value);
+    this
+}
+
+// Translated from 008c9a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `AITaskQueue::Enqueue` body (Xbox PDB): appends `value` to the ten-entry
+/// PC circular buffer until the recorded count reaches ten.
+pub fn ai_task_queue_enqueue(e: &mut Engine, this: Ptr, value: u32) {
+    let count = e.mem.i32(this.addr() + 0x40);
+    if count < 10 {
+        let mut index = e.mem.i32(this.addr() + 0x44).wrapping_add(count);
+        if index >= 10 {
+            index = index.wrapping_sub(10);
+        }
+        e.mem.set_u32(this.addr() + 0x18 + index as u32 * 4, value);
+        e.mem.set_i32(this.addr() + 0x40, count.wrapping_add(1));
+    }
+}
+
+// Translated from 008c9c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the worker loop: wait on its start semaphore, drain the global task
+/// ring through `RunToCompletion`, release the completion semaphore, and
+/// stop when the kill byte is set.
+// open: worker startup and shutdown setup.
+pub fn ai_task_thread_thread_proc(e: &mut Engine, this: Ptr) -> u32 {
+    ai_task_thread_on_startup(e, this);
+    loop {
+        e.call(0x0044_24e0, &args![this.addr() + 0x30]);
+        if e.mem.u8(this.addr() + 0x48) != 0 {
+            break;
+        }
+        loop {
+            let tasklet = ai_task_queue_dequeue(e, Ptr::new(0x011d_fb98));
+            if tasklet == 0 {
+                break;
+            }
+            let end_arg = e.mem.u32(this.addr() + 0x4c);
+            mobile_object_tasklet_data_run_to_completion(e, Ptr::new(tasklet), end_arg);
+        }
+        e.call(0x0044_2550, &args![this.addr() + 0x3c]);
+    }
+    ai_task_thread_on_shutdown(e, this);
+    0
+}
+
+// Translated from 008c9d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Worker startup setup is left open because its Havok memory-router and
+/// thread-local procedure-index protocol has not yet been translated.
+// open: thread-local allocator setup, thread-safe file registration, and
+// procedure-index save/restore calls.
+pub fn ai_task_thread_on_startup(_e: &mut Engine, _this: Ptr) {
+    panic!("open function 008c9d70: worker startup setup");
+}
+
+// Translated from 008c9e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Worker shutdown setup is left open because its Havok memory-router and
+/// thread-local procedure-index protocol has not yet been translated.
+// open: thread-local allocator teardown and procedure-index restoration.
+pub fn ai_task_thread_on_shutdown(_e: &mut Engine, _this: Ptr) {
+    panic!("open function 008c9e40: worker shutdown setup");
+}
+
+/// The actor-package scheduling and per-frame task queueing path.
+// open: translation of the 1,340-byte process scheduling body, including
+// the package/process-list calls and its conditional task records.
+fn ai_task_manager_process_body(_e: &mut Engine, _this: Ptr) {
+    panic!("open function 008c94e0: actor-package scheduling body");
+}
+
+// Translated from 008ca070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The parallel actor-package scheduling path.
+// open: translation of its task-record gates, process-list traversal, and
+// worker wake/finish protocol.
+pub fn ai_task_manager_process_parallel(_e: &mut Engine, _this: Ptr) {
+    panic!("open function 008ca070: parallel task scheduling body");
+}
+
+// Translated from 008ca350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the message array and restores its own base vtable.
+// open: compiler exception cleanup around the generated array destructor.
+pub fn ai_task_message_pool_destructor(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0108_5834);
+    e.call(
+        0x00ec_5fce,
+        &args![this.addr() + 0x0c, 0x10u32, 0x1000u32, 0x0048_3710u32],
+    );
+    ai_task_message_pool_base_destructor(e, this);
+}
+
+// Translated from 008ca3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Restores the array base class vtable.
+pub fn ai_task_message_pool_base_destructor(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0108_583c);
+}
+
+// Translated from 008c9ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds a thread while the manager has fewer than three workers. A thread
+/// is constructed only when `operator new` returns a non-null address.
+// open: compiler SEH cleanup path.
+pub fn ai_task_thread_manager_add_thread(e: &mut Engine, this: Ptr, processor: u32) {
+    let count = e.mem.i32(this.addr() + 0x0c);
+    if count >= 3 {
+        return;
+    }
+    let thread_addr = e.call(OPERATOR_NEW, &args![0x78u32]).u32();
+    let thread = Ptr::new(thread_addr);
+    let constructed = if thread.is_null() {
+        Ptr::NULL
+    } else {
+        ai_task_thread_constructor(e, thread, processor)
+    };
+    e.mem
+        .set_u32(this.addr() + count as u32 * 4, constructed.addr());
+    e.call(0x00aa_6430, &args![constructed, 0x10000u32, 0u32, 0u32]);
+    e.call(0x00aa_6550, &args![constructed, processor]);
+    e.call(0x00aa_6540, &args![constructed, 0x0108_5804u32]);
+    e.mem.set_i32(this.addr() + 0x0c, count.wrapping_add(1));
+}
+
+// Translated from 008c9bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs a worker's `BSThread` base, two semaphores, memory router,
+/// worker index and clear kill flag.
+// open: compiler SEH cleanup path.
+pub fn ai_task_thread_constructor(e: &mut Engine, this: Ptr, thread_index: u32) -> Ptr {
+    e.call(0x00aa_6360, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0108_5818);
+    e.call(0x0086_c6a0, &args![this.addr() + 0x30, 0u32, 10u32]);
+    e.call(0x0086_c6a0, &args![this.addr() + 0x3c, 0u32, 10u32]);
+    e.call(0x00c8_5770, &args![this.addr() + 0x50]);
+    e.mem.set_u32(this.addr() + 0x4c, thread_index);
+    e.mem.set_u8(this.addr() + 0x48, 0);
+    this
+}
+
+// Translated from 008c9cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes and returns the oldest entry in the ten-slot task queue while
+/// holding its critical section. An empty queue returns zero.
+pub fn ai_task_queue_dequeue(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(CRITICAL_SECTION_ENTER, &args![this, 0u32]);
+    let mut value = 0;
+    let count = e.mem.i32(this.addr() + 0x40);
+    if count > 0 {
+        let head = e.mem.i32(this.addr() + 0x44);
+        value = e.mem.u32(this.addr() + 0x18 + head as u32 * 4);
+        e.mem.set_i32(this.addr() + 0x40, count.wrapping_sub(1));
+        let mut next = head.wrapping_add(1);
+        if next >= 10 {
+            next = 0;
+        }
+        e.mem.set_i32(this.addr() + 0x44, next);
+    }
+    e.call(CRITICAL_SECTION_LEAVE, &args![this]);
+    value
+}
+
+// Translated from 008c9ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Worker context scalar deleting destructor; bit zero of `flags` requests
+/// deallocation after member destruction.
+pub fn thread_context_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    thread_context_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 008c9ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the memory router and both semaphores, then the `BSThread`
+/// base.
+// open: compiler SEH unwind chain.
+pub fn thread_context_destructor(e: &mut Engine, this: Ptr) {
+    e.call(0x0052_d240, &args![this.addr() + 0x50]);
+    e.call(0x0055_a2d0, &args![this.addr() + 0x3c]);
+    e.call(0x0055_a2d0, &args![this.addr() + 0x30]);
+    e.call(0x00aa_63c0, &args![this]);
+}
+
+// Translated from 008c9f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Releases the start semaphore of each registered worker.
+pub fn ai_task_thread_manager_release_semaphores(e: &mut Engine, this: Ptr) {
+    let count = e.mem.i32(this.addr() + 0x0c);
+    for index in 0..count.max(0) as u32 {
+        let thread = Ptr::new(e.mem.u32(this.addr() + index * 4));
+        ai_task_thread_release_semaphore(e, thread);
+    }
+}
+
+// Translated from 008c9fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Releases a worker's semaphore at `+0x30`.
+pub fn ai_task_thread_release_semaphore(e: &mut Engine, this: Ptr) {
+    e.call(0x0044_2550, &args![this.addr() + 0x30]);
+}
+
+// Translated from 008c9fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Signals the secondary semaphore of each registered worker.
+pub fn ai_task_thread_manager_wake_threads(e: &mut Engine, this: Ptr) {
+    let count = e.mem.i32(this.addr() + 0x0c);
+    for index in 0..count.max(0) as u32 {
+        let thread = e.mem.u32(this.addr() + index * 4);
+        e.call(0x008c_7490, &args![thread]);
+    }
+}
+
+// Translated from 008ca010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Pushes an item through the queue object's virtual `Push` slot at +4.
+pub fn ai_task_queue_push(e: &mut Engine, this: Ptr, item: Ptr) {
+    e.vcall(this.addr() + 0x1c, 4, &args![item]);
+}
+
+// Translated from 008ca040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds an end message on the stack and sends it through the queue's
+/// virtual `Push` slot at +4.
+pub fn ai_task_queue_push_end(e: &mut Engine, this: Ptr) {
+    e.with_stack(12, |e, msg| {
+        fn_008c8190(e, msg.cast());
+        e.vcall(this.addr() + 0x1c, 4, &args![msg]);
+    });
+}
+
+// Translated from 008ca2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Releases the semaphore belonging to the thread at `index` in a three
+/// pointer array.
+pub fn ai_task_manager_release_semaphore(e: &mut Engine, threads: Ptr, index: u32) {
+    let thread = Ptr::new(e.mem.u32(threads.addr() + index * 4));
+    ai_task_thread_release_semaphore(e, thread);
+}
+
+// Translated from 008ca300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// If the parallel task flag is set, signals semaphore index 2 and clears
+/// the flag.
+pub fn ai_task_manager_clear_parallel_flag(e: &mut Engine, this: Ptr) {
+    if e.mem.u8(this.addr() + 0x10180) != 0 {
+        ai_task_manager_signal_semaphore(e, Ptr::new(0x011d_fc24), 2);
+        e.mem.set_u8(this.addr() + 0x10180, 0);
+    }
+}
+
+// Translated from 008ca330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Signals the secondary semaphore for the thread at `index`.
+pub fn ai_task_manager_signal_semaphore(e: &mut Engine, threads: Ptr, index: u32) {
+    let thread = e.mem.u32(threads.addr() + index * 4);
+    e.call(0x008c_7490, &args![thread]);
+}
+
+// Translated from 008ca3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Message pool base scalar deleting destructor.
+pub fn ai_task_message_pool_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    ai_task_message_pool_base_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 008ca410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Message pool scalar deleting destructor, including its array destructor.
+pub fn ai_task_message_pool_array_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    ai_task_message_pool_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 008ca440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs the common message queue base and initializes its allocator,
+/// empty head and tail pointer.
+pub fn common_message_queue_constructor(e: &mut Engine, this: Ptr, allocator: Ptr) -> Ptr {
+    e.call(0x008c_a740, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0108_5844);
+    e.mem.set_u32(this.addr() + 8, allocator.addr());
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    e.mem.set_u32(this.addr() + 0x10, this.addr() + 0x0c);
+    this
+}
+
+// Translated from 008ca480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Drains messages with the queue's `TryPop` helper, then destroys the
+/// message queue base.
+// open: compiler SEH cleanup path.
+pub fn common_message_queue_destructor(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0108_5844);
+    e.with_stack(12, |e, msg| {
+        fn_008c8190(e, msg.cast());
+        while e.call(0x006e_c390, &args![this, msg]).bool() {}
+    });
+    message_queue_destructor(e, this);
+}
+
+// Translated from 008ca500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Restores the derived message queue vtable, then destroys its base.
+pub fn message_queue_destructor(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0108_5864);
+    message_queue_base_destructor(e, this);
+}
+
+// Translated from 008ca520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Restores the message queue base vtable.
+pub fn message_queue_base_destructor(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0108_5884);
+}
+
+// Translated from 008ca540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Message queue scalar deleting destructor with the executable's bit-zero
+/// deallocation condition.
+pub fn message_queue_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    message_queue_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 008ca570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Mobile message queue scalar deleting destructor with the executable's
+/// bit-zero deallocation condition.
+pub fn mobile_message_queue_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    message_queue_base_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 008ca5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates a linked-list node from the queue's freelist and appends it at
+/// the tail. Returns false when no freelist is configured or allocation
+/// fails.
+pub fn common_ll_message_queue_try_push(e: &mut Engine, this: Ptr, value: Ptr) -> bool {
+    let pool = e.mem.u32(this.addr() + 8);
+    if pool == 0 {
+        return false;
+    }
+    e.with_stack(8, |e, out| {
+        if !e.call(0x008c_a7c0, &args![pool, out, value]).bool() {
+            return false;
+        }
+        let node = e.mem.u32(out.addr());
+        if e.mem.u32(this.addr() + 0x0c) == 0 {
+            e.mem.set_u32(this.addr() + 0x10, this.addr() + 0x0c);
+        }
+        let tail_link = e.mem.u32(this.addr() + 0x10);
+        e.mem.set_u32(tail_link, node);
+        e.mem.set_u32(node + 0x0c, 0);
+        e.mem.set_u32(this.addr() + 0x10, node + 0x0c);
+        true
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1241,6 +1868,7 @@ mod tests {
         let mut e = Engine::new();
         for page in [
             0x011d_e000u32,
+            0x011d_f000,
             0x011d_8000,
             0x011e_0000,
             0x0101_2000,
@@ -1256,7 +1884,7 @@ mod tests {
     /// An object whose first word points at a fresh vtable holding the
     /// given (byte offset, target) slots.
     fn object_with_slots(e: &mut Engine, size: u32, slots: &[(u32, u32)]) -> Ptr {
-        let table = e.mem.alloc(0x300);
+        let table = e.mem.alloc(0x400);
         for (offset, target) in slots {
             e.mem.set_u32(table + offset, *target);
         }
@@ -1268,7 +1896,7 @@ mod tests {
     /// A tasklet (any subclass, `size` bytes) with the handler slots and a
     /// queue object at +0x1C whose vtable has the two drain slots.
     fn tasklet(e: &mut Engine, size: u32, handlers: &[(u32, u32)]) -> Ptr {
-        let this = object_with_slots(e, size, handlers);
+        let this: Ptr = object_with_slots(e, size, handlers);
         let queue_table = e.mem.alloc(0x40);
         e.mem.set_u32(queue_table + 0xc, QUEUE_RUN);
         e.mem.set_u32(queue_table + 0x10, QUEUE_DRAIN);
@@ -1331,7 +1959,7 @@ mod tests {
             &mut e,
             &[HANDLE_COUNT, HANDLE_MOB, HANDLE_END, TASKLET_SET_YIELDING],
         );
-        let this = tasklet(&mut e, 0x38, &standard_handlers());
+        let this: Ptr = tasklet(&mut e, 0x38, &standard_handlers());
         e.mem.set_u32(this.addr() + 0x34, 0xe7e7);
         queue_script(
             &mut e,
@@ -1354,7 +1982,7 @@ mod tests {
             &mut e,
             &[HANDLE_COUNT, HANDLE_MOB, HANDLE_END, TASKLET_SET_YIELDING],
         );
-        let this = tasklet(&mut e, 0x38, &standard_handlers());
+        let this: Ptr = tasklet(&mut e, 0x38, &standard_handlers());
         queue_script(&mut e, QUEUE_DRAIN, vec![(1, 0, 0x55)]);
         log_calls(&mut e);
         e.call(0x008c_8130, &args![this]);
@@ -1380,7 +2008,7 @@ mod tests {
     fn dispatch_handles_each_message_type() {
         let mut e = engine();
         quiet(&mut e, &[HANDLE_COUNT, HANDLE_MOB, HANDLE_END]);
-        let this = tasklet(&mut e, 0x38, &standard_handlers());
+        let this: Ptr = tasklet(&mut e, 0x38, &standard_handlers());
         let msg: Ptr<MobileObjectMessage> = e.new_object();
         log_calls(&mut e);
         for (kind, expected_continue) in [(0u32, true), (1, true), (2, false), (3, true)] {
@@ -1403,7 +2031,7 @@ mod tests {
             &mut e,
             &[HANDLE_COUNT, HANDLE_MOB, HANDLE_END, TASKLET_SET_YIELDING],
         );
-        let this = tasklet(&mut e, 0x38, &standard_handlers());
+        let this: Ptr = tasklet(&mut e, 0x38, &standard_handlers());
         queue_script(&mut e, QUEUE_RUN, vec![(1, 0, 0x21), (1, 0, 0x22)]);
         log_calls(&mut e);
         e.call(0x008c_8240, &args![this, 3u32]);
@@ -1421,7 +2049,7 @@ mod tests {
     fn run_to_completion_stops_at_the_end_message() {
         let mut e = engine();
         quiet(&mut e, &[HANDLE_MOB, HANDLE_END]);
-        let this = tasklet(&mut e, 0x38, &standard_handlers());
+        let this: Ptr = tasklet(&mut e, 0x38, &standard_handlers());
         queue_script(&mut e, QUEUE_RUN, vec![(2, 0, 0), (1, 0, 0x21)]);
         log_calls(&mut e);
         e.call(0x008c_8240, &args![this, 4u32]);
@@ -1679,7 +2307,7 @@ mod tests {
         );
         e.mem
             .set_u8(actor.addr() + 0xbc, u8::from(scene.process_me));
-        let player = if scene.is_player {
+        let player: Ptr = if scene.is_player {
             actor
         } else {
             Ptr::new(e.mem.alloc(0x40))
@@ -2551,5 +3179,716 @@ mod tests {
         // A null mob does nothing.
         e.call(0x008c_9110, &args![this, 0u32]);
         assert_eq!(e.mem.u32(this.addr() + 0x3c), 1);
+    }
+
+    #[test]
+    fn movement_constructor_passes_the_shared_word_and_clears_its_counter() {
+        let mut e = engine();
+        quiet(
+            &mut e,
+            &[TASKLET_BASE_CONSTRUCTOR, MESSAGE_QUEUE_CONSTRUCTOR],
+        );
+        let this: Ptr<MovementTaskData> = Ptr::new(e.mem.alloc(0x3c));
+        log_calls(&mut e);
+        e.call(0x008c_9170, &args![this, 0x4321u32]);
+        assert_eq!(e.mem.u32(this.addr()), VTABLE_MOVEMENT_TASK_DATA);
+        assert_eq!(e.mem.u32(this.addr() + 0x38), 0);
+        assert_eq!(
+            calls_to(&e, MESSAGE_QUEUE_CONSTRUCTOR),
+            vec![vec![this.addr() + 0x1c, 0x4321]]
+        );
+    }
+
+    #[test]
+    fn movement_scalar_destructor_deletes_only_when_bit_zero_is_set() {
+        let mut e = engine();
+        quiet(
+            &mut e,
+            &[
+                MESSAGE_QUEUE_DESTRUCTOR,
+                TASKLET_BASE_DESTRUCTOR,
+                OPERATOR_DELETE,
+            ],
+        );
+        let this: Ptr<MovementTaskData> = Ptr::new(e.mem.alloc(0x3c));
+        log_calls(&mut e);
+        assert_eq!(
+            e.call(0x008c_91a0, &args![this, 2u32]).ptr::<()>(),
+            this.cast()
+        );
+        assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(e.mem.u32(this.addr()), VTABLE_MOVEMENT_TASK_DATA);
+        e.call(0x008c_91a0, &args![this, 3u32]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn movement_destructor_restores_vtable_before_destroying_the_base() {
+        let mut e = engine();
+        quiet(&mut e, &[MESSAGE_QUEUE_DESTRUCTOR, TASKLET_BASE_DESTRUCTOR]);
+        let this: Ptr<MovementTaskData> = Ptr::new(e.mem.alloc(0x3c));
+        log_calls(&mut e);
+        e.call(0x008c_91d0, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), VTABLE_MOVEMENT_TASK_DATA);
+        assert_eq!(
+            calls_to(&e, MESSAGE_QUEUE_DESTRUCTOR),
+            vec![vec![this.addr() + 0x1c]]
+        );
+        assert_eq!(
+            calls_to(&e, TASKLET_BASE_DESTRUCTOR),
+            vec![vec![this.addr()]]
+        );
+    }
+
+    #[test]
+    fn movement_count_resets_before_entering_both_sections() {
+        let mut e = engine();
+        quiet(&mut e, &[CRITICAL_SECTION_ENTER]);
+        let this: Ptr<MovementTaskData> = e.new_object();
+        e.set(this, MovementTaskData::iUpdated, 19);
+        log_calls(&mut e);
+        e.call(0x008c_91f0, &args![this, 4u32]);
+        assert_eq!(e.get(this, MovementTaskData::iUpdated), 0);
+        assert_eq!(
+            calls_to(&e, CRITICAL_SECTION_ENTER),
+            vec![
+                vec![CRITICAL_SECTION_011DFC04, 0],
+                vec![CRITICAL_SECTION_011DFBE8, 0],
+            ]
+        );
+    }
+
+    #[test]
+    fn movement_mob_routes_by_actor_state_and_increments_for_each_message() {
+        const ACTOR_UPDATE: u32 = 0x7000_0220;
+        const NONACTOR_A: u32 = 0x7000_0224;
+        const NONACTOR_B: u32 = 0x7000_0228;
+        const ACTOR_CHECK: u32 = 0x7000_022c;
+        let mut e = engine();
+        e.register_double(ACTOR_CHECK, |_, _| ok(1));
+        let sleeping_calls = Rc::new(RefCell::new(Vec::new()));
+        let seen_sleeping = sleeping_calls.clone();
+        e.register_double(0x0094_df60, move |_, a| {
+            seen_sleeping.borrow_mut().push(a.to_vec());
+            ok(1)
+        });
+        quiet(&mut e, &[ACTOR_UPDATE, 0x009b_ec10, 0x009a_e580]);
+        let actor = object_with_slots(
+            &mut e,
+            0x1c4,
+            &[(0x100, ACTOR_CHECK), (0x348, ACTOR_UPDATE)],
+        );
+        e.mem.set_u8(actor.addr() + ACTOR_PROCESS_ME, 1);
+        let player: Ptr = Ptr::new(e.mem.alloc(0x40));
+        e.set_global(PLAYER_CHARACTER, player.addr());
+        let not_actor = object_with_slots(
+            &mut e,
+            0x40,
+            &[
+                (0x100, ACTOR_CHECK),
+                (0x224, NONACTOR_A),
+                (0x220, NONACTOR_B),
+            ],
+        );
+        let check_calls = Rc::new(RefCell::new(0));
+        let checks = check_calls.clone();
+        e.register_double(ACTOR_CHECK, move |_, _| {
+            let call = *checks.borrow();
+            *checks.borrow_mut() += 1;
+            ok(u32::from(call == 0))
+        });
+        e.register_double(NONACTOR_A, |_, _| ok(0));
+        e.register_double(NONACTOR_B, |_, _| ok(1));
+        let this: Ptr<MovementTaskData> = e.new_object();
+        log_calls(&mut e);
+        e.call(0x008c_9220, &args![this, actor]);
+        e.call(0x008c_9220, &args![this, not_actor]);
+        assert_eq!(e.mem.u32(this.addr() + 0x38), 2);
+        assert_eq!(*sleeping_calls.borrow(), vec![vec![player.addr()]]);
+        assert_eq!(
+            calls_to(&e, ACTOR_UPDATE),
+            vec![vec![actor.addr(), 0.0f32.to_bits(), 1]]
+        );
+        assert_eq!(
+            calls_to(&e, 0x009a_e580),
+            vec![vec![not_actor.addr(), 0.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn movement_end_leaves_sections_in_the_executable_order() {
+        let mut e = engine();
+        quiet(&mut e, &[CRITICAL_SECTION_LEAVE]);
+        let this: Ptr<MovementTaskData> = e.new_object();
+        log_calls(&mut e);
+        e.call(0x008c_9300, &args![this, 0u32]);
+        assert_eq!(
+            calls_to(&e, CRITICAL_SECTION_LEAVE),
+            vec![
+                vec![CRITICAL_SECTION_011DFBE8],
+                vec![CRITICAL_SECTION_011DFC04],
+            ]
+        );
+    }
+
+    #[test]
+    fn manager_constructor_initializes_each_tasklet_and_clears_its_worker_flag() {
+        let mut e = engine();
+        quiet(
+            &mut e,
+            &[
+                TASKLET_BASE_CONSTRUCTOR,
+                MESSAGE_QUEUE_CONSTRUCTOR,
+                0x008c_a680,
+            ],
+        );
+        let this: Ptr = Ptr::new(e.mem.alloc(0x10184));
+        log_calls(&mut e);
+        assert_eq!(e.call(0x008c_9330, &args![this]).ptr::<()>(), this.cast());
+        assert_eq!(e.mem.u8(this.addr() + 0x10180), 0);
+        assert_eq!(calls_to(&e, TASKLET_BASE_CONSTRUCTOR).len(), 6);
+        assert_eq!(
+            calls_to(&e, MESSAGE_QUEUE_CONSTRUCTOR),
+            [0u32, 0x40, 0x78, 0xbc, 0xf8, 0x138]
+                .into_iter()
+                .map(|offset| vec![this.addr() + offset + 0x1c, this.addr() + 0x174])
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(calls_to(&e, 0x008c_a680), vec![vec![this.addr() + 0x174]]);
+    }
+
+    #[test]
+    fn manager_destructor_walks_embedded_tasklets_in_reverse_order() {
+        let mut e = engine();
+        quiet(
+            &mut e,
+            &[
+                MESSAGE_QUEUE_DESTRUCTOR,
+                TASKLET_BASE_DESTRUCTOR,
+                0x00ec_5fce,
+            ],
+        );
+        let this: Ptr = Ptr::new(e.mem.alloc(0x10184));
+        log_calls(&mut e);
+        e.call(0x008c_9430, &args![this]);
+        assert_eq!(calls_to(&e, MESSAGE_QUEUE_DESTRUCTOR).len(), 6);
+        assert_eq!(calls_to(&e, TASKLET_BASE_DESTRUCTOR).len(), 6);
+        assert_eq!(
+            calls_to(&e, 0x00ec_5fce),
+            vec![vec![this.addr() + 0x174 + 0x0c, 0x10, 0x1000, 0x0048_3710]]
+        );
+        let cleanup_order: Vec<(u32, Vec<u32>)> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| {
+                matches!(
+                    *address,
+                    0x00ec_5fce | MESSAGE_QUEUE_DESTRUCTOR | TASKLET_BASE_DESTRUCTOR
+                )
+            })
+            .cloned()
+            .collect();
+        let expected = [0x138u32, 0xf8, 0xbc, 0x78, 0x40, 0];
+        let mut expected_order = vec![(
+            0x00ec_5fce,
+            vec![this.addr() + 0x174 + 0x0c, 0x10, 0x1000, 0x0048_3710],
+        )];
+        for offset in expected {
+            expected_order.push((MESSAGE_QUEUE_DESTRUCTOR, vec![this.addr() + offset + 0x1c]));
+            expected_order.push((TASKLET_BASE_DESTRUCTOR, vec![this.addr() + offset]));
+        }
+        assert_eq!(cleanup_order, expected_order);
+    }
+
+    #[test]
+    fn new_queue_item_initializes_all_three_words() {
+        let mut e = engine();
+        let item: Ptr = Ptr::new(e.mem.alloc(12));
+        for offset in [0, 4, 8] {
+            e.mem.set_u32(item.addr() + offset, 0xeeee);
+        }
+        assert_eq!(
+            e.call(0x008c_9a20, &args![item, 0x1234u32]).ptr::<()>(),
+            item.cast()
+        );
+        assert_eq!(
+            [0, 4, 8].map(|offset| e.mem.u32(item.addr() + offset)),
+            [0, 0x1234, 0]
+        );
+    }
+
+    #[test]
+    fn existing_queue_item_leaves_the_new_task_word_untouched() {
+        let mut e = engine();
+        let item: Ptr = Ptr::new(e.mem.alloc(12));
+        e.mem.set_u32(item.addr() + 4, 0xeeee);
+        assert_eq!(
+            e.call(0x008c_9a50, &args![item, 0x5678u32]).ptr::<()>(),
+            item.cast()
+        );
+        assert_eq!(e.mem.u32(item.addr()), 1);
+        assert_eq!(e.mem.u32(item.addr() + 4), 0xeeee);
+        assert_eq!(e.mem.u32(item.addr() + 8), 0x5678);
+    }
+
+    #[test]
+    fn task_queue_appends_with_one_wrap_and_stops_at_capacity() {
+        let mut e = engine();
+        let queue: Ptr = Ptr::new(e.mem.alloc(0x48));
+        e.mem.set_i32(queue.addr() + 0x40, 9);
+        e.mem.set_i32(queue.addr() + 0x44, 4);
+        e.call(0x008c_9a80, &args![queue, 0xaaaa_u32]);
+        assert_eq!(e.mem.u32(queue.addr() + 0x18 + 3 * 4), 0xaaaa);
+        assert_eq!(e.mem.i32(queue.addr() + 0x40), 10);
+        e.call(0x008c_9a80, &args![queue, 0xbbbb_u32]);
+        assert_eq!(e.mem.i32(queue.addr() + 0x40), 10);
+        assert_eq!(e.mem.u32(queue.addr() + 0x18 + 4 * 4), 0);
+    }
+
+    #[test]
+    fn manager_process_clears_start_flag_and_runs_final_setting_branch() {
+        let mut e = engine();
+        e.map(0x011a_3000, 0x1000);
+        e.map(0x011f_1000, 0x1000);
+        e.map(0x011c_3000, 0x1000);
+        e.map(0x011d_1000, 0x1000);
+        let setting_byte_data = e.mem.alloc(1);
+        e.mem.set_u8(setting_byte_data, 0);
+        let setting_a = e.mem.alloc(4);
+        let setting_b = e.mem.alloc(4);
+        e.mem.set_u8(0x011a_34e7, 1);
+        e.mem.set_u8(0x011f_1220, 0);
+        e.mem.set_i32(setting_a, 1);
+        e.mem.set_i32(setting_b, 42);
+        e.register_double(0x0040_8d60, move |_, a| {
+            assert_eq!(a, &[0x011d_fb68]);
+            ok(setting_byte_data)
+        });
+        e.register_double(0x0043_d4d0, move |_, a| {
+            ok(match a[0] {
+                0x011c_3ea4 => setting_a,
+                0x011d_10d4 => setting_b,
+                _ => 0,
+            })
+        });
+        quiet(&mut e, &[0x0070_34c0, 0x0070_3490]);
+        let this: Ptr = Ptr::new(e.mem.alloc(0x10184));
+        log_calls(&mut e);
+        e.call(0x008c_94e0, &args![this]);
+        assert_eq!(e.mem.u8(0x011a_34e7), 0);
+        assert_eq!(calls_to(&e, 0x0070_34c0), vec![vec![42]]);
+        assert_eq!(calls_to(&e, 0x0070_3490), vec![vec![]]);
+    }
+
+    #[test]
+    #[should_panic(expected = "open function 008c94e0: actor-package scheduling body")]
+    fn manager_process_fails_closed_when_actor_scheduling_is_enabled() {
+        let mut e = engine();
+        e.map(0x011a_3000, 0x1000);
+        e.map(0x011f_1000, 0x1000);
+        e.mem.set_u8(0x011a_34e7, 0);
+        e.mem.set_u8(0x011f_1220, 1);
+        e.call(0x008c_94e0, &args![0x7100_0000u32]);
+    }
+
+    #[test]
+    #[should_panic(expected = "open function 008ca070: parallel task scheduling body")]
+    fn parallel_process_fails_closed_until_its_schedule_is_translated() {
+        let mut e = engine();
+        e.call(0x008c_a070, &args![0x7100_0000u32]);
+    }
+
+    #[test]
+    #[should_panic(expected = "open function 008c9d70: worker startup setup")]
+    fn worker_startup_fails_closed_until_thread_local_state_is_translated() {
+        let mut e = engine();
+        e.call(0x008c_9d70, &args![0x7100_0000u32]);
+    }
+
+    #[test]
+    #[should_panic(expected = "open function 008c9e40: worker shutdown setup")]
+    fn worker_shutdown_fails_closed_until_thread_local_state_is_translated() {
+        let mut e = engine();
+        e.call(0x008c_9e40, &args![0x7100_0000u32]);
+    }
+
+    #[test]
+    fn thread_manager_adds_at_most_three_workers_and_initializes_the_new_one() {
+        let mut e = engine();
+        quiet(
+            &mut e,
+            &[
+                0x00aa_6360,
+                0x0086_c6a0,
+                0x00c8_5770,
+                0x00aa_6430,
+                0x00aa_6550,
+                0x00aa_6540,
+            ],
+        );
+        let new_address = Rc::new(RefCell::new(0));
+        let returned = new_address.clone();
+        e.register_double(OPERATOR_NEW, move |_, _| ok(*returned.borrow()));
+        let manager: Ptr = Ptr::new(e.mem.alloc(0x10));
+        let thread_addr = e.mem.alloc(0x78);
+        *new_address.borrow_mut() = thread_addr;
+        log_calls(&mut e);
+        e.call(0x008c_9ae0, &args![manager, 2u32]);
+        assert_eq!(e.mem.u32(manager.addr()), thread_addr);
+        assert_eq!(e.mem.i32(manager.addr() + 0x0c), 1);
+        assert_eq!(e.mem.u32(thread_addr + 0x4c), 2);
+        assert_eq!(e.mem.u8(thread_addr + 0x48), 0);
+        assert_eq!(
+            calls_to(&e, 0x00aa_6430),
+            vec![vec![thread_addr, 0x10000, 0, 0]]
+        );
+        e.mem.set_i32(manager.addr() + 0x0c, 3);
+        let prior_calls = e.call_log.as_ref().unwrap().len();
+        e.call(0x008c_9ae0, &args![manager, 1u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), prior_calls + 1);
+        assert_eq!(calls_to(&e, OPERATOR_NEW).len(), 1);
+    }
+
+    #[test]
+    fn worker_constructor_passes_semaphore_addresses_and_sets_index() {
+        let mut e = engine();
+        quiet(&mut e, &[0x00aa_6360, 0x0086_c6a0, 0x00c8_5770]);
+        let this: Ptr = Ptr::new(e.mem.alloc(0x78));
+        log_calls(&mut e);
+        e.call(0x008c_9bd0, &args![this, 5u32]);
+        assert_eq!(e.mem.u32(this.addr()), 0x0108_5818);
+        assert_eq!(e.mem.u32(this.addr() + 0x4c), 5);
+        assert_eq!(e.mem.u8(this.addr() + 0x48), 0);
+        assert_eq!(
+            calls_to(&e, 0x0086_c6a0),
+            vec![
+                vec![this.addr() + 0x30, 0, 10],
+                vec![this.addr() + 0x3c, 0, 10]
+            ]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "open function 008c9d70: worker startup setup")]
+    fn worker_thread_proc_fails_at_its_open_startup_stage() {
+        let mut e = engine();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x78));
+        e.call(0x008c_9c70, &args![this]);
+    }
+
+    #[test]
+    fn task_queue_dequeue_wraps_the_head_and_leaves_empty_count_unchanged() {
+        let mut e = engine();
+        quiet(&mut e, &[CRITICAL_SECTION_ENTER, CRITICAL_SECTION_LEAVE]);
+        let queue: Ptr = Ptr::new(0x011d_fb98);
+        e.mem.set_i32(queue.addr() + 0x40, 2);
+        e.mem.set_i32(queue.addr() + 0x44, 9);
+        e.mem.set_u32(queue.addr() + 0x18 + 9 * 4, 0xaaa0);
+        e.mem.set_u32(queue.addr() + 0x18, 0xbbb0);
+        log_calls(&mut e);
+        assert_eq!(e.call(0x008c_9cf0, &args![queue]).u32(), 0xaaa0);
+        assert_eq!(e.mem.i32(queue.addr() + 0x44), 0);
+        assert_eq!(e.call(0x008c_9cf0, &args![queue]).u32(), 0xbbb0);
+        assert_eq!(e.mem.i32(queue.addr() + 0x40), 0);
+        assert_eq!(e.call(0x008c_9cf0, &args![queue]).u32(), 0);
+        assert_eq!(e.mem.i32(queue.addr() + 0x44), 1);
+        assert_eq!(calls_to(&e, CRITICAL_SECTION_ENTER).len(), 3);
+        assert_eq!(calls_to(&e, CRITICAL_SECTION_LEAVE).len(), 3);
+    }
+
+    #[test]
+    fn context_scalar_destructor_deletes_only_when_requested() {
+        let mut e = engine();
+        quiet(
+            &mut e,
+            &[0x0052_d240, 0x0055_a2d0, 0x00aa_63c0, OPERATOR_DELETE],
+        );
+        let this: Ptr = Ptr::new(e.mem.alloc(0x78));
+        log_calls(&mut e);
+        e.call(0x008c_9ec0, &args![this, 0u32]);
+        assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x008c_9ec0, &args![this, 1u32]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn context_destructor_destroys_router_semaphores_then_base() {
+        let mut e = engine();
+        quiet(&mut e, &[0x0052_d240, 0x0055_a2d0, 0x00aa_63c0]);
+        let this: Ptr = Ptr::new(e.mem.alloc(0x78));
+        log_calls(&mut e);
+        e.call(0x008c_9ef0, &args![this]);
+        assert_eq!(
+            e.call_log.as_ref().unwrap(),
+            &vec![
+                (0x008c_9ef0, vec![this.addr()]),
+                (0x0052_d240, vec![this.addr() + 0x50]),
+                (0x0055_a2d0, vec![this.addr() + 0x3c]),
+                (0x0055_a2d0, vec![this.addr() + 0x30]),
+                (0x00aa_63c0, vec![this.addr()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn thread_manager_release_walks_each_registered_pointer() {
+        let mut e = engine();
+        quiet(&mut e, &[0x0044_2550]);
+        let manager: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.mem.set_i32(manager.addr() + 0x0c, 2);
+        e.mem.set_u32(manager.addr(), 0x7100_0000);
+        e.mem.set_u32(manager.addr() + 4, 0x7100_0080);
+        log_calls(&mut e);
+        e.call(0x008c_9f70, &args![manager]);
+        assert_eq!(
+            calls_to(&e, 0x0044_2550),
+            vec![vec![0x7100_0030], vec![0x7100_00b0]]
+        );
+    }
+
+    #[test]
+    fn thread_manager_wake_signals_each_registered_pointer() {
+        let mut e = engine();
+        quiet(&mut e, &[0x008c_7490]);
+        let manager: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.mem.set_i32(manager.addr() + 0x0c, 2);
+        e.mem.set_u32(manager.addr(), 0x7100_0000);
+        e.mem.set_u32(manager.addr() + 4, 0x7100_0080);
+        log_calls(&mut e);
+        e.call(0x008c_9fd0, &args![manager]);
+        assert_eq!(
+            calls_to(&e, 0x008c_7490),
+            vec![vec![0x7100_0000], vec![0x7100_0080]]
+        );
+    }
+
+    #[test]
+    fn worker_release_uses_its_start_semaphore() {
+        let mut e = engine();
+        quiet(&mut e, &[0x0044_2550]);
+        let this: Ptr = Ptr::new(e.mem.alloc(0x78));
+        log_calls(&mut e);
+        e.call(0x008c_9fb0, &args![this]);
+        assert_eq!(calls_to(&e, 0x0044_2550), vec![vec![this.addr() + 0x30]]);
+    }
+
+    #[test]
+    fn queue_push_uses_the_queue_vtable_slot_four() {
+        let mut e = engine();
+        quiet(&mut e, &[QUEUE_RUN]);
+        let pushed: Ptr = Ptr::new(0x7100_0040);
+        let queue: Ptr = Ptr::new(e.mem.alloc(0x30));
+        let table = e.mem.alloc(0x40);
+        e.mem.set_u32(table + 4, QUEUE_RUN);
+        e.mem.set_u32(queue.addr() + 0x1c, table);
+        log_calls(&mut e);
+        e.call(0x008c_a010, &args![queue, pushed]);
+        assert_eq!(
+            calls_to(&e, QUEUE_RUN),
+            vec![vec![queue.addr() + 0x1c, pushed.addr()]]
+        );
+    }
+
+    #[test]
+    fn queue_push_end_sends_a_zeroed_end_message() {
+        let mut e = engine();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let captured = seen.clone();
+        e.register_double(QUEUE_RUN, move |e, a| {
+            captured.borrow_mut().push(vec![
+                a[0],
+                a[1],
+                e.mem.u32(a[1]),
+                e.mem.u32(a[1] + 4),
+                e.mem.u32(a[1] + 8),
+            ]);
+            Ret::default()
+        });
+        let queue: Ptr = Ptr::new(e.mem.alloc(0x30));
+        let table = e.mem.alloc(0x40);
+        e.mem.set_u32(table + 4, QUEUE_RUN);
+        e.mem.set_u32(queue.addr() + 0x1c, table);
+        e.call(0x008c_a040, &args![queue]);
+        let captured = seen.borrow();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0][0], queue.addr() + 0x1c);
+        assert_eq!(&captured[0][2..], &[2, 0, 0]);
+    }
+
+    #[test]
+    fn release_semaphore_helper_uses_the_indexed_thread() {
+        let mut e = engine();
+        quiet(&mut e, &[0x0044_2550]);
+        let threads: Ptr = Ptr::new(0x011d_fc24);
+        e.mem.map(0x7100_0000, 0x80);
+        e.mem.set_u32(threads.addr() + 8, 0x7100_0000);
+        e.mem.set_u32(0x7100_0030, 0xaaaa);
+        log_calls(&mut e);
+        e.call(0x008c_a2e0, &args![threads, 2u32]);
+        assert_eq!(calls_to(&e, 0x0044_2550), vec![vec![0x7100_0030]]);
+    }
+
+    #[test]
+    fn clear_parallel_flag_signals_index_two_then_clears_the_byte() {
+        let mut e = engine();
+        quiet(&mut e, &[0x008c_7490]);
+        e.mem.set_u32(0x011d_fc24 + 8, 0xaaaa);
+        let manager: Ptr = Ptr::new(e.mem.alloc(0x10184));
+        e.mem.set_u8(manager.addr() + 0x10180, 1);
+        log_calls(&mut e);
+        e.call(0x008c_a300, &args![manager]);
+        assert_eq!(e.mem.u8(manager.addr() + 0x10180), 0);
+        assert_eq!(calls_to(&e, 0x008c_7490), vec![vec![0xaaaa]]);
+        e.call(0x008c_a300, &args![manager]);
+        assert_eq!(calls_to(&e, 0x008c_7490).len(), 1);
+    }
+
+    #[test]
+    fn manager_signal_helper_signals_the_indexed_thread() {
+        let mut e = engine();
+        quiet(&mut e, &[0x008c_7490]);
+        let threads: Ptr = Ptr::new(0x011d_fc24);
+        e.mem.set_u32(threads.addr() + 4, 0x1234);
+        log_calls(&mut e);
+        e.call(0x008c_a330, &args![threads, 1u32]);
+        assert_eq!(calls_to(&e, 0x008c_7490), vec![vec![0x1234]]);
+    }
+
+    #[test]
+    fn message_pool_destructor_runs_the_array_destructor_then_resets_base() {
+        let mut e = engine();
+        quiet(&mut e, &[0x00ec_5fce]);
+        let this: Ptr = Ptr::new(e.mem.alloc(0x1000c));
+        log_calls(&mut e);
+        e.call(0x008c_a350, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), 0x0108_583c);
+        assert_eq!(
+            calls_to(&e, 0x00ec_5fce),
+            vec![vec![this.addr() + 0x0c, 0x10, 0x1000, 0x0048_3710]]
+        );
+    }
+
+    #[test]
+    fn message_pool_base_destructor_sets_its_vtable() {
+        let mut e = engine();
+        let this: Ptr = Ptr::new(e.mem.alloc(0x20));
+        e.call(0x008c_a3c0, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), 0x0108_583c);
+    }
+
+    #[test]
+    fn message_pool_base_deleting_destructor_obeys_the_allocation_flag() {
+        let mut e = engine();
+        quiet(&mut e, &[OPERATOR_DELETE]);
+        let base: Ptr = Ptr::new(e.mem.alloc(0x20));
+        log_calls(&mut e);
+        e.call(0x008c_a3e0, &args![base, 0u32]);
+        assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(e.mem.u32(base.addr()), 0x0108_583c);
+    }
+
+    #[test]
+    fn message_pool_array_deleting_destructor_frees_on_bit_zero() {
+        let mut e = engine();
+        quiet(&mut e, &[0x00ec_5fce, OPERATOR_DELETE]);
+        let array: Ptr = Ptr::new(e.mem.alloc(0x1000c));
+        log_calls(&mut e);
+        e.call(0x008c_a410, &args![array, 1u32]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![array.addr()]]);
+    }
+
+    #[test]
+    fn common_message_queue_constructor_sets_allocator_and_empty_tail() {
+        let mut e = engine();
+        quiet(&mut e, &[0x008c_a740]);
+        let queue: Ptr = Ptr::new(e.mem.alloc(0x20));
+        let allocator: Ptr = Ptr::new(0x7100_0050);
+        log_calls(&mut e);
+        e.call(0x008c_a440, &args![queue, allocator]);
+        assert_eq!(e.mem.u32(queue.addr()), 0x0108_5844);
+        assert_eq!(e.mem.u32(queue.addr() + 8), allocator.addr());
+        assert_eq!(e.mem.u32(queue.addr() + 0xc), 0);
+        assert_eq!(e.mem.u32(queue.addr() + 0x10), queue.addr() + 0xc);
+        assert_eq!(calls_to(&e, 0x008c_a740), vec![vec![queue.addr()]]);
+    }
+
+    #[test]
+    fn common_message_queue_drain_stops_on_the_first_empty_pop() {
+        let mut e = engine();
+        let pops = Rc::new(RefCell::new(0u32));
+        let count = pops.clone();
+        e.register_double(0x006e_c390, move |_, _| {
+            *count.borrow_mut() += 1;
+            ok(u32::from(*count.borrow() == 1))
+        });
+        let queue: Ptr = Ptr::new(e.mem.alloc(0x20));
+        log_calls(&mut e);
+        e.call(0x008c_a480, &args![queue]);
+        assert_eq!(*pops.borrow(), 2);
+        assert_eq!(e.mem.u32(queue.addr()), 0x0108_5884);
+        assert_eq!(calls_to(&e, 0x006e_c390).len(), 2);
+    }
+
+    #[test]
+    fn message_queue_destructor_restores_derived_vtable() {
+        let mut e = engine();
+        let queue: Ptr = Ptr::new(e.mem.alloc(0x20));
+        e.call(0x008c_a500, &args![queue]);
+        assert_eq!(e.mem.u32(queue.addr()), 0x0108_5884);
+    }
+
+    #[test]
+    fn message_queue_base_destructor_sets_base_vtable() {
+        let mut e = engine();
+        let queue: Ptr = Ptr::new(e.mem.alloc(0x20));
+        e.call(0x008c_a520, &args![queue]);
+        assert_eq!(e.mem.u32(queue.addr()), 0x0108_5884);
+    }
+
+    #[test]
+    fn message_queue_scalar_deleting_destructor_deletes_on_bit_zero() {
+        let mut e = engine();
+        quiet(&mut e, &[OPERATOR_DELETE]);
+        let first: Ptr = Ptr::new(e.mem.alloc(0x20));
+        log_calls(&mut e);
+        e.call(0x008c_a540, &args![first, 0u32]);
+        assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(e.mem.u32(first.addr()), 0x0108_5884);
+    }
+
+    #[test]
+    fn mobile_message_queue_scalar_deleting_destructor_deletes_on_bit_zero() {
+        let mut e = engine();
+        quiet(&mut e, &[OPERATOR_DELETE]);
+        let second: Ptr = Ptr::new(e.mem.alloc(0x20));
+        log_calls(&mut e);
+        e.call(0x008c_a570, &args![second, 1u32]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![second.addr()]]);
+        assert_eq!(e.mem.u32(second.addr()), 0x0108_5884);
+    }
+
+    #[test]
+    fn linked_message_queue_push_appends_and_reports_allocator_failure() {
+        let mut e = engine();
+        let queue: Ptr = Ptr::new(e.mem.alloc(0x20));
+        let node = e.mem.alloc(0x20);
+        let pool: Ptr = Ptr::new(0x7100_0000);
+        e.mem.set_u32(queue.addr() + 8, pool.addr());
+        e.mem.set_u32(queue.addr() + 0xc, 0);
+        e.mem.set_u32(queue.addr() + 0x10, queue.addr() + 0x0c);
+        e.register_double(0x008c_a7c0, move |e, a| {
+            e.mem.set_u32(a[1], node);
+            ok(1)
+        });
+        log_calls(&mut e);
+        assert!(e.call(0x008c_a5a0, &args![queue, 0x1234u32]).bool());
+        assert_eq!(e.mem.u32(queue.addr() + 0x0c), node);
+        assert_eq!(e.mem.u32(node + 0x0c), 0);
+        assert_eq!(e.mem.u32(queue.addr() + 0x10), node + 0x0c);
+        e.mem.set_u32(queue.addr() + 8, 0);
+        assert!(!e.call(0x008c_a5a0, &args![queue, 0x5678u32]).bool());
+        assert_eq!(calls_to(&e, 0x008c_a7c0).len(), 1);
     }
 }

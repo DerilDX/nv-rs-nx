@@ -7,62 +7,76 @@ machinery runs.
 
 ## Resume here
 
-Codex takeover, 2026-10-10: #109 passed both CI checks and was squash-merged
-as `b995218`. The lead branch was rebased to that commit and pushed. There
-was no new rolling PR immediately after the merge. The ship
-script stopped after the merge/rebase; recovery verified main and recreated
-the automatically deleted remote branch with a normal push.
+Codex takeover, 2026-10-10: rolling PRs #109 and #112 passed both CI
+checks and were squash-merged as `b995218` and `d854fbe`. Current rolling
+PR #114 contains the later navigation-render and exterior-cell loader
+batches, ledger and handoff. The lead branch is `claude/engine-crate`.
 
-Active in this session: a04 restarted from its partial file and a03 started
-its original task. The interface/render agent owns p2 and is finishing
-the WIP (now `5fc95c9` after rebase onto `b995218`). a05 and a06 are waiting
-for an available agent and
-still have their original task files: do not reset them before first restart.
-The session supports three child agents plus the lead; rotate translation
-slots while p2 runs. a01 was collected as `74f7fb1` (40 functions), and
-`cycle.sh` prepared its next b0329 task (78 entries left, starting at
-`00698680`; include `traced` entries). It is waiting for capacity after the
-remaining original slots. Play build remains 39.
+Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
+The lead branch is rebased onto that main.
+Only ledger/milestone conflicts needed resolution. Local validation
+passed 15,108 core tests, 182 viewer release tests, formatting, lint and
+release builds. Doc Mitchell, Back in the Saddle and Ghost Town Gunfight
+acceptance routes passed; private evidence is under
+`%USERPROFILE%/nv-re/acceptance/pr7-resume-20261010`. This is not a
+comparison with the original game. Exact menu-input placement and GPU
+renderer work remain open in FRAME_SKELETON.md. Build 40 is compiling
+from merged main in p2; play copy remains 39 until publication is verified.
 
-Validation: a01's 40 preserved translations pass their 38 focused tests
-after correcting an expectation for `00697010`'s unusual distance
-comparison; collection passed formatting, lint and 13,281 engine tests
-plus doc tests on the lead branch. a04's 36 preserved
-translations lacked tests, which are now being added. Native `nv-call`
-spot checks cover five `00698620` point products and 512 `006a5da0` flag
-combinations (private evidence under `phase0/codex-audit`), not whole units.
-p2's 182 release-profile viewer tests and 15,108 core tests passed after
-repairing WIP model/test errors. The missing model call
-was voice pause `0070bbe0` at `0070bb03`; a queue mock also made a deferred
-deletion loop run forever. Both workspaces passed lint; final release
-builds and acceptance are pending. No new play build has been published.
+Slot state: a01 is active on its prepared navigation continuation; a04
+is active on b0160 explosion.cpp. a03's next b0331 pathmanager.cpp task
+is prepared but idle. a06's next b0360 continuation is prepared but idle.
+a05 was collected as `136fa2a` (28 complete, 12 partial; five behavior gaps
+and seven exception-cleanup gaps). Its next b0158 task has 12 entries
+left, starting at `008ca620`, prepared but idle. Runtime allows three
+children plus the lead; rotate slots only after their owner stops.
+
+Collection validation: a01 passed 13,281 engine tests; a04 added 31
+focused tests and passed 13,312 combined engine tests; a03 passed 13,355
+combined engine tests. a06 passed 13,397 combined engine tests.
+a05 passed 13,438 combined engine tests before the PR 7 rebase.
+Formatting, engine lint and doc tests passed for
+each collection. Native spot checks cover five `00698620` point products
+and 512 `006a5da0` flag combinations, not whole units. These translations
+are not newly playable behavior.
+
+Lead Phase 2 preparation is isolated in managed worktree
+`%USERPROFILE%/.codex/worktrees/phase2-extra-data/wt-phase0`, branch
+`codex/phase2-extra-data`. Commit `0a00e09` adds an explicit engine-owned
+ExtraData list handle and four traced missing helpers; focused integration
+tests passed, as did all 15,124 core tests, lint, formatting and release
+build. Full checks rerun after rebasing onto `f917219`; the milestone
+note is still uncommitted in that worktree.
+The installed-executable real-registry probe passes construction, add,
+lookup and detach. No world/viewer consumer or save writer is added.
+Private probes/native vectors and the read-only 11-save baseline are in
+`phase0/codex-audit`; FOS_SAVES.md records the decoder limits. Update this
+paragraph when the adapter checks finish; do not treat it as completed.
 
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead
 of deleting caches, and retains scratch evidence. Do not use another
-deletion path to bypass that denial. Ending the hung test recovered space.
+deletion path to bypass that denial.
 
 Next steps:
 
-1. Ship the rolling PR from `claude/engine-crate` once both checks pass;
-   `gh pr list --head claude/engine-crate` identifies the current number.
+1. Finish the merged-main viewer build and Doc route, then publish play
+   build 40 with a plain-language WHATS-NEW entry and verify the copy.
 2. Collect completed slots with one `cycle.sh NN 0 0` at a time. Never
-   cycle an active agent's worktree. Restart a05 and a06 from their existing
-   task files before resetting them; then rotate a01's prepared next task.
-3. Finish p2 validation, amend its WIP into a proper commit, push and open
-   the interface/render PR. Rebase if another batch merges; retain both
-   sides' tests and regenerate the ledger. Merge only with both checks
-   passing. Detailed models and open wiring: FRAME_SKELETON.md.
-4. After that PR merges: play build 40 from main, then Phase 2. Keep the
-   early menu-input boundary recorded as a follow-up, not a new priority.
+   cycle an active agent's worktree. Rotate prepared tasks as capacity opens.
+3. Ship rolling PR #114 when both checks pass; rebase affected branches
+   after another merge, retaining tests and regenerating the ledger.
+4. Finish the isolated Phase 2 adapter's real-registry checks, then its
+   bounded PR. Payload conversion, world ownership and save round trips
+   remain open; decoding a save does not prove a lossless round trip.
 
 ## Where things stand
 
 - **Phase 0** (engine map, ledger) is merged (#72). `docs/LEDGER.md` is the
   coverage table; regenerate with
   `cargo run -q --release --manifest-path scripts/ledger/Cargo.toml`.
-- **Engine crate** (`crates/engine`, ADR-0006): 10,303 of FalloutNV.exe's
-  functions are translated (15.5% of all, see LEDGER.md), each with a
+- **Engine crate** (`crates/engine`, ADR-0006): 10,454 of FalloutNV.exe's
+  functions are translated (15.8% of all, see LEDGER.md), each with a
   `// Translated from <addr>` marker and tests. They run in the crate's
   emulated 32-bit memory, not yet in play.
 - **Units finished:** main.cpp, actor.cpp (all 7 parts), playercharacter.cpp
@@ -74,8 +88,8 @@ Next steps:
   BSMenu/tile.cpp, highprocess.cpp parts 1, 2, 4 and 5, navmesh.cpp,
   pathinglocation.cpp, bgssceneinfo.cpp, bgssaveloadgame.cpp, and others.
 - **In progress (translation lanes; see "Resume here" for current owners):**
-  navmesh_util.cpp (a01), exteriorcellloader.cpp (a03), navmeshrender.cpp
-  (a04), aitaskmanager.cpp lane 2 (a05; MovementTaskData still needs its
+  navmesh_util.cpp (a01, active), pathmanager.cpp (a03, prepared), explosion.cpp
+  (a04, active), aitaskmanager.cpp lane 2 (a05; MovementTaskData still needs its
   layout, see the file header), bhkworld.obj (a06).
 - **Phase 1 (frame skeleton) wiring:**
   - PR 1 frame map (#84), PR 2 `world::frame` (#86), PR 3 Bevy order from the
@@ -84,14 +98,11 @@ Next steps:
     `frame_order::PlayerSet`.
   - PR 5 world and time stage (#105): merged.
   - PR 6 AI task stage (#107): merged.
-  - PR 7 interface and render: resumed WIP in worktree
-    `%USERPROFILE%\nv-re\work\agents\p2`, branch
-    `claude/phase1-interface-stage` (see "Resume here"). Merge after both
-    checks pass, rebasing first if translation PRs merged meanwhile (LEDGER.md
-    and engine unit test modules can conflict; keep both sides' tests).
-  - After that: Phase 2 (state model in engine memory, save round trip; see
+  - PR 7 interface and render (#113): merged as `f917219` after both checks.
+    Acceptance passed; exact open boundaries remain in FRAME_SKELETON.md.
+  - Phase 2 (state model in engine memory, save round trip; see
     ENGINE_PORT_PLAN.md).
-- **Rolling translation PR:** #109 merged; the next batch is on branch
+- **Rolling translation PR:** #109 and #112 merged; #114 is open on branch
   `claude/engine-crate` (see "Resume here").
 - **Play build** (the user's `Desktop\nv-rs-play`): Build 39 = main with #107.
   After the next wiring PR merges, build `viewer` in release from main
