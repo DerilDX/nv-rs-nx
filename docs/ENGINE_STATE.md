@@ -74,6 +74,28 @@ used only by skipped bodies remain unresolved. Next action: translate that
 PC predicate and continue the probe. Neither script-extra preservation nor
 a whole-save round trip has passed.
 
+The next follow-on implements flag predicate `004013e0` and embedded-header
+accessor `00500940`. PC disassembly and forty-one generated native cases
+confirm mask 8 at receiver +8 (AL result, no writes) and receiver +0x18
+without a memory read (including null and address wrap). Two new registry
+regressions and all 16,062 workspace tests pass (14,209 engine unit tests),
+as do strict lint, formatting and release/debug builds. Independent PC
+review found no discrepancy. No Xbox name is asserted for these folded
+accessors; the bool ABI observes AL only.
+
+With the merged effect-item TLS guards, the private normal-registry script
+probe now passes. It processes the installed script's exact 234 compiled
+bytes, reaches both real BEGIN event handlers and builds the expected
+reference action entry, without game-function doubles. Receivers and
+allocator startup remain generated/partial; three references belonging
+only to skipped bodies remain unresolved. This does not run those bodies.
+
+The original script-item probe now runs with exact saved ID mappings. It
+stops at untranslated `008d0360`, the owner reference's virtual predicate,
+before the saved script extra is loaded. The item rewrite assertion has
+not run. Next action: translate that PC dependency and rerun the original
+item load/write probe. Whole-save and world/viewer integration remain open.
+
 ## List boundary
 
 The handle delegates construction, count, bitmap lookup, cached lookup,

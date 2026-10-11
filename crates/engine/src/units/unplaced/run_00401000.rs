@@ -29,11 +29,19 @@ pub fn fn_00401170(e: &mut Engine, this: Ptr) -> u8 {
     e.mem.u8(this.addr() + 4)
 }
 
+// Translated from 004013e0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Tests mask 8 in the word at +8, returning only the boolean in AL.
+/// No Xbox PDB name is mapped to this folded field predicate.
+pub fn fn_004013e0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr().wrapping_add(8)) & 8 != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00401050, fn_00401050(u32, u32, i32, u32)),
         entry!(0x00401170, fn_00401170(Ptr) -> u8),
+        entry!(0x004013e0, fn_004013e0(Ptr) -> bool),
     ]
 }
 
@@ -75,5 +83,24 @@ mod tests {
         // Neighbouring bytes are not part of the result.
         e.mem.set_u8(object.addr() + 5, 0xff);
         assert_eq!(e.call(0x0040_1170, &args![object]).u32(), 0x5a);
+    }
+
+    #[test]
+    fn flag_predicate_matches_native_al_and_preserves_all_bytes() {
+        // Thirty-six guarded native cases, unpacked exe SHA-256
+        // 19406942e48724d797300c4ea6be9ac69a32f670b8c35db09279a2258422739f,
+        // FCW 027f / MXCSR 1f80: AL follows bit 3, RET 0, no memory writes.
+        let values = [0, 7, u32::MAX, !8u32]
+            .into_iter()
+            .chain((0..32).map(|bit| 1u32 << bit));
+        let mut e = Engine::new();
+        let block = e.mem.alloc(20);
+        for value in values {
+            e.mem.write(block, &[0xa5; 20]);
+            e.mem.set_u32(block + 12, value);
+            let before = e.mem.bytes(block, 20);
+            assert_eq!(e.call(0x004013e0, &[block + 4]).bool(), value & 8 != 0);
+            assert_eq!(e.mem.bytes(block, 20), before);
+        }
     }
 }
