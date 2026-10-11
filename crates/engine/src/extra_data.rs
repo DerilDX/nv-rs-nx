@@ -63,6 +63,20 @@ impl ExtraList {
         engine.call(0x0041_9ad0, &[self.0.addr(), count as u16 as u32]);
     }
 
+    /// Reads `ExtraHealth::fHealth` (Xbox PDB, `004186f0`), or the native
+    /// -1.0 default when absent. Use `has(engine, 0x25)` to distinguish an
+    /// absent extra from an explicitly stored -1.0 value.
+    pub fn health(self, engine: &mut Engine) -> f32 {
+        engine.call(0x0041_86f0, &[self.0.addr()]).f32()
+    }
+
+    /// Creates or updates the health extra (`00419970`). The native setter
+    /// keeps a node for every value, including zero and -1.0, and quiets
+    /// signaling NaNs through its x87 load/store. It does not clamp values.
+    pub fn set_health(self, engine: &mut Engine, health: f32) {
+        engine.call(0x0041_9970, &[self.0.addr(), health.to_bits()]);
+    }
+
     /// Tests the native 21-byte presence bitmap (`0040fe80`).
     pub fn has(self, engine: &mut Engine, kind: u8) -> bool {
         engine
@@ -181,6 +195,45 @@ mod tests {
             assert_eq!(list.get(&mut engine, 0x43), Some(other));
             assert!(next(&engine, other).is_null());
         }
+        assert_eq!(engine.mem.u32(0x011c_3920), 0);
+        assert_eq!(engine.mem.u32(0x011c_3924), 0);
+    }
+
+    #[test]
+    fn real_health_registry_keeps_explicit_defaults_and_native_float_bits() {
+        let mut engine = engine();
+        engine.map(0x0101_2000, 0x1000);
+        engine.mem.set_f32(0x0101_2054, -1.0);
+        let list = ExtraList::new(&mut engine);
+        assert_eq!(list.health(&mut engine), -1.0);
+        assert!(!list.has(&mut engine, 0x25));
+        list.set_item_count(&mut engine, 4);
+        // First value exercises allocation; the rest update that same node.
+        let mut health_node = None;
+        for (input, expected) in [
+            (0x7f80_0001, 0x7fc0_0001),
+            (0x0000_0000, 0x0000_0000),
+            (0x8000_0000, 0x8000_0000),
+            (0x42c8_8000, 0x42c8_8000),
+            (0xbf80_0000, 0xbf80_0000),
+            (0xff80_0001, 0xffc0_0001),
+        ] {
+            list.set_health(&mut engine, f32::from_bits(input));
+            assert_eq!(list.health(&mut engine).to_bits(), expected);
+            let node = list.get(&mut engine, 0x25).unwrap();
+            assert_eq!(engine.mem.u32(node.addr() + 0x0c), expected);
+            if let Some(previous) = health_node {
+                assert_eq!(node, previous);
+            }
+            health_node = Some(node);
+            assert!(list.has(&mut engine, 0x25));
+            assert_eq!(list.len(&mut engine), 2);
+            assert_eq!(list.item_count(&mut engine), 4);
+        }
+        let node = health_node.unwrap();
+        engine.mem.set_u32(node.addr() + 0x0c, 0x7f80_0001);
+        assert_eq!(list.health(&mut engine).to_bits(), 0x7fc0_0001);
+        assert_eq!(engine.mem.u32(node.addr() + 0x0c), 0x7f80_0001);
         assert_eq!(engine.mem.u32(0x011c_3920), 0);
         assert_eq!(engine.mem.u32(0x011c_3924), 0);
     }

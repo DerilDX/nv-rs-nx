@@ -2356,10 +2356,11 @@ pub fn extra_leveled_item_compare(e: &mut Engine, this: Ptr<ExtraLeveledItem>, o
 // Translated from 00431d10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ExtraHealth`'s constructor (the engine map has no name for it; the class is
 /// the one whose vtable `010158e4` it stores): extra-data type 0x25, storing
-/// `health`. Returns `this`.
+/// `health` through x87 FLD/FSTP (signaling NaNs become quiet). Returns `this`.
 pub fn fn_00431d10(e: &mut Engine, this: Ptr<ExtraHealth>, health: f32) -> Ptr<ExtraHealth> {
     construct_base(e, this.cast(), TYPE_HEALTH, EXTRA_HEALTH_VTABLE);
-    e.set(this, ExtraHealth::fHealth, health);
+    let bits = super::extradatalist::x87_float_bits(health.to_bits());
+    e.set(this, ExtraHealth::fHealth, f32::from_bits(bits));
     this
 }
 
@@ -5426,6 +5427,32 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn health_constructor_matches_native_header_and_x87_store_vectors() {
+        // Generated cases checked on FalloutNV.exe 1.4.0.525, SHA256
+        // 19406942e48724d797300c4ea6be9ac69a32f670b8c35db09279a2258422739f.
+        // Ryzen AI 9 HX 370, FCW 027F / MXCSR 1F80; no game-function doubles.
+        let mut e = Engine::new();
+        let object = e.mem.alloc(20);
+        for (input, output) in [
+            (0x0000_0000u32, 0x0000_0000u32),
+            (0x8000_0000, 0x8000_0000),
+            (0x42c8_8000, 0x42c8_8000),
+            (0xbf80_0000, 0xbf80_0000),
+            (0x7f80_0001, 0x7fc0_0001),
+            (0xff80_0001, 0xffc0_0001),
+        ] {
+            e.mem.write(object, &[0xaa; 20]);
+            assert_eq!(e.call(0x00431d10, &[object, input]).u32(), object);
+            let mut expected = [0xaa; 20];
+            expected[..4].copy_from_slice(&0x0101_58e4u32.to_le_bytes());
+            expected[4] = 0x25;
+            expected[8..12].fill(0);
+            expected[12..16].copy_from_slice(&output.to_le_bytes());
+            assert_eq!(e.mem.bytes(object, 20), expected);
+        }
+    }
 
     fn ret(value: u32) -> Ret {
         Ret {

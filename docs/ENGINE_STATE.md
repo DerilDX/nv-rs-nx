@@ -117,3 +117,35 @@ other extras are not imported by the probe and no save bytes are written.
 Next action: merge after CI, then continue the health payload adapter.
 World ownership and full save
 round trips remain open.
+
+## Health payload follow-on
+
+`ExtraHealth` (Xbox PDB) is a 0x10-byte object with `fHealth` at +0x0c;
+PC constructor `00431d10` confirms the layout. The health adapter delegates
+to `004186f0` / `00419970`. An absent node reads the native -1.0 default,
+whereas setting -1.0 creates or updates a node; presence remains distinct
+from the float value. Zero and negative values are not clamped or removed.
+
+Six generated native constructor vectors preserve signed zero, ordinary
+values, padding and the following guard word; signaling NaNs become quiet
+through FLD/FSTP. A private Rust registry probe reproduced the existing
+constructor mismatch (7f800001 remained signaling instead of 7fc00001).
+The constructor now uses the existing x87 bit conversion helper. Regression
+tests cover the native vectors and list creation/update, presence, stable
+node identity, count preservation and a read that leaves its source bytes
+untouched. All 74 health-related tests pass, including these two new
+regressions. The installed-executable registry probe now produces the
+native quiet-NaN result `7fc00001` for constructor input `7f800001`.
+
+A preliminary real-registry getter/setter probe passes ordinary values,
+explicit defaults and signaling NaN handling; the setter already quieted
+its argument before reaching the constructor. The early Doc Mitchell save
+contains 20 health payloads. A read-only probe adapted all 20 health and
+14 count payloads across 3,319 extra lists from 3,365 reference/actor forms.
+Values and presence read back correctly, and removing count nodes retained
+the health nodes. The source save SHA-256 remained unchanged. No
+game-function doubles or save writes were used. On the merged list-adapter
+base, all 15,315 core tests (13,462 engine), formatting, workspace clippy
+with warnings denied and the release build pass. This also validates the
+unchanged count source in the health follow-on. CI still gates merging.
+No world/viewer consumer or save writer is added.

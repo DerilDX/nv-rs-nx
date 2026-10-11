@@ -118,6 +118,13 @@ gaps), with 13,438 combined engine tests passing before the PR 7 rebase.
 The list adapter passed its initial full checks and is rebased for another
 combined check. Next action: verify and publish play build 40.
 
+Phase 2 health payload, 2026-10-10: native vectors exposed and now verify
+the constructor's signaling-NaN correction. The read-only reference-save
+probe passes all 20 health and 14 count payloads, with the source hash
+unchanged. All 15,315 core tests, formatting, lint and release build pass.
+No world consumer or save writer is added. Next action: merge the count
+dependency, then gate the health follow-on on CI; see ENGINE_STATE.md.
+
 Phase 2 count dependency, 2026-10-10: list adapter #115 is merged.
 The missing base destructor now matches a generated native sentinel case.
 Count creation, signed updates and removal pass through the real registry.
