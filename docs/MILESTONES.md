@@ -33,6 +33,16 @@ reading do not establish them.
 
 ## Active work: M1
 
+Loaded-area bounds collected as `86886d9`: 29 complete functions and three
+explicit exception-cleanup partials; 13,790 combined engine tests, strict
+lint and formatting pass. A fresh MobileObject worker started immediately.
+Animation-group validation now has the compiler. Rolling #123 is open at
+`f963f09`; #122 has passed core CI and awaits viewer CI. Root save-buffer
+writing/growth/insertion code and tests are prepared, with six native
+constructor cases, but uncompiled. Build 40 remains published; no new
+viewer behavior or next-build date is established. Next action: finish
+animation validation and the save-buffer probe; ship each passing PR.
+
 Rolling #121 merged as `eda98da`. Explosion Initialize collection
 `e4de812` passes 13,756 combined engine tests, strict lint and formatting;
 exception cleanup remains partial. Its fresh worker starts `009ad670`.

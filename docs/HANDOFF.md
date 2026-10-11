@@ -14,22 +14,26 @@ a slot with unfinished work. Ship rolling PRs once both current-head checks
 pass. The saved 98% usage stop/handoff rule still applies.
 
 Rolling #121 passed both checks and merged as `eda98da`. The lead branch
-`claude/engine-crate` is rebased onto it. The next rolling batch is ready
-to publish: multibound `feac2df` and Explosion Initialize `e4de812` pass
+`claude/engine-crate` is rebased onto it. Rolling PR #123 is open at
+`f963f09`: multibound `feac2df` and Explosion Initialize `e4de812` pass
 13,756 combined engine tests, lint and formatting. Three multibound SEH
 partials and Initialize's SEH partial remain explicit. Inspect the attached
-rolling PR after publication; retain later local commits behind its head.
+rolling PR; retain later local commits behind its head. Loaded-area
+collection `86886d9` is held locally behind #123 and passes 13,790 combined
+engine tests, strict lint and formatting.
 Merged rolling PRs: #109 `b995218`, #112 `d854fbe`, #114 `89e1a0b`,
 #116 `c23f744`, #119 `951c0c7`, #120 `3a92d0a`, #121 `eda98da`.
 Leave unrelated contributor PRs alone.
 
 Slot state:
 
-- a01 `/root/a01_loadedarea`, `agent-01`: fresh b0405 worker owns
-  `fallout_shared_havok/loadedareabound.rs` (32 functions), prepared but
-  validating with the exclusive compiler. All 32 bodies and 34 tests are written; three constructors
-  or destructors retain explicit SEH partials. Reviewed argument arity,
-  callback reloads and wrapping pointer arithmetic are corrected.
+- a01 `/root/a01_mobileobject`, `agent-01`: fresh b0155 worker owns
+  `fallout_ai/mobileobject.rs`, researching/editing with compiler held.
+  LoadedAreaBound source `44c5bda` was collected as `86886d9`: 29 complete,
+  three SEH partials, 34 focused / 13,758 source engine / 49 hygiene tests,
+  strict lint and formatting pass. Reviewed argument arity, callback
+  reloads and wrapping pointer arithmetic are corrected. Its cycle wrote
+  the new MobileObject task and a fresh agent started immediately.
   cycle01 collected `a902f84`: `00699b60` normal path and the `0069ad40`
   immediate-vtable correction pass 121 focused and 13,724 combined engine
   tests, lint and formatting; the source also passed 49 hygiene tests.
@@ -44,12 +48,16 @@ Slot state:
   tests, 13,727 source engine tests, strict lint/fmt and 49 hygiene pass.
   Argument order, callback reloads, impact-object naming and x87 stores
   were reviewed against the PC instructions. It remains SEH partial.
-  The fresh worker starts `009ad670`; the other three bodies remain
+  The fresh worker prepared `009ad670` with four tests; the other three bodies remain
   untouched. Later-address evidence is in
   private `agents/scratch/a04/round9-009b1810-handoff.md`. Research/editing
-  only until the compiler grant. Fourteen collected SEH partials remain.
+  only until the compiler grant. Root PC review caught action-record
+  offsets and CString argument arity; both are corrected, and x87 stores
+  now have signaling-NaN coverage. The draft adds a fifteenth SEH partial.
+  Worker is also reviewing root save-buffer code read-only while held.
 - a03 `/root/a03_animgroup`, `agent-03`: fresh b0041 worker owns
-  `fallout_shared/tesanimgroup.rs` (40 functions), prepared, compiler held.
+  `fallout_shared/tesanimgroup.rs` (40 functions), validating with the
+  exclusive compiler after cycle01 released it.
   37 complete bodies and two SEH partials are registered. `005f3a20` remains
   unregistered/open; its full normal path is unfinished, with private
   `scratch/a03/005f3a20-handoff.md` for the next cycle. Reviews corrected
@@ -96,11 +104,15 @@ Lead Phase 2 work:
   concrete adapter issues. World consumers, payload conversion and FOS
   writing remain open. Next research traces buffered extra-data saving
   (`00426a30`) and the currently scaffolded save-buffer constructors.
-- The follow-on has five uncommitted files: form_support, bgsloadformbuffer,
-  bgssaveloadinitialdata, bgssavegamebuffer and bgssaveformbuffer. Nine
-  constructor/getter dependencies and generated tests are prepared but
+- The follow-on has nine uncommitted files: form_support, bgsloadformbuffer,
+  bgssaveloadinitialdata, bgssavegamebuffer, bgssaveformbuffer,
+  bgsloadgamesubbuffer, run_008660b0, run_008661e0 and run_00ec7ce3. Eighteen
+  constructor/getter/writer dependencies and generated tests are prepared but
   uncompiled; six guarded constructor vectors passed the native executable.
-  Byte-writing/growth dependencies remain open. Private evidence uses the
+  Byte writing, growth, insertion and variable-size value paths are drafted;
+  CRT checked movement at `00ec7ce3` is also drafted with three native
+  generated cases passing. Its error handler/TLS callees remain untraced;
+  error-path tests use doubles. Private evidence uses the
   `codex-audit/save-boundary-*` and `save-buffer-headers-native*` files.
 
 ONE heavy engine compiler across all worktrees, `-j2`, existing debug cache,
