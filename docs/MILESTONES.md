@@ -33,6 +33,68 @@ reading do not establish them.
 
 ## Active work: M1
 
+Health adapter #118 passed both checks and merged as `a0ee61d` on
+2026-10-10 at 22:32 local time. Rolling #119 is rebased onto that main
+and includes the checked navigation continuation; fresh CI gates it.
+Next action: finish pathfinding collection and validate allocator startup.
+
+Navigation collection `d24c517` passes 13,698 combined engine tests,
+lint and formatting. Two additional normal paths retain explicit
+exception-cleanup partials; the last edge-repair body remains unregistered.
+A fresh worker researches it while pathfinding validates. Rolling #119
+and health #118 have passed core CI and await viewer CI.
+Next action: collect pathfinding and validate the lead allocator helpers.
+
+Explosion's owner/weapon callback-reload correction and nine further
+functions pass 13,695 combined engine tests, lint and formatting.
+Collection `a2fe87a` removes the publishing hold on the next rolling
+batch. A fresh worker owns its 18 remaining entries (eleven explicit
+exception-cleanup partials and seven untranslated). Navigation validates
+next. These translations do not yet establish newly playable behavior.
+Next action: publish the checked batch and collect the next finished slot.
+
+Count adapter #117 passed both checks and merged as `cbca26e` on
+2026-10-10 local time. Health #118 is rebased onto main with unchanged
+implementation and fresh CI. Lead form dependencies pass 124 focused and
+13,466 engine tests, lint and formatting; the reference probe reaches the
+uninitialized allocator. Its traced startup helpers are prepared. Next
+action: validate those dependencies and the pending explosion corrections.
+
+Rolling #116 passed both checks and merged as `c23f744` on 2026-10-10
+local time. Pathfinding's reviewed corrections and 35 further functions
+pass 13,680 combined engine tests, lint and formatting; a fresh agent
+owns its next task. The next rolling batch remains local until explosion's
+owner-reload correction passes. Lead reference-constructor helpers and
+form callback-reload regressions are in focused validation. Next action:
+collect the checked explosion correction and open the next rolling PR.
+
+Continuous update, 2026-10-10: navigation's relocation fix and three more
+functions pass 13,638 combined engine tests, lint and formatting. A fresh
+agent owns its three remaining geometry functions. Pathfinding validates
+its review corrections next; explosion's owner reload fix is prepared
+while its fresh agent continues the queued functions.
+Count #117 and health #118 pass local checks and await CI; the health
+probe checks 20 health and 14 count payloads with the save unchanged.
+Reference-constructor dependency work is prepared but uncompiled.
+Next action: collect the review fixes and ship remote #116 after CI.
+
+Phase 2 list adapter #115 passed both checks and merged as `94165e8` on
+2026-10-10 local time. Count follow-on #117 now targets main with fresh CI;
+health adaptation is in local validation. Pathfinding collection adds 35
+complete functions and five explicit exception-cleanup partials; 13,599
+combined engine tests, lint and formatting pass. A fresh agent is on its
+next task. Next action: finish health validation and ship remote #116
+after its viewer check passes; the local navigation relocation fix still
+gates publishing the subsequent batch.
+
+Navigation collection, 2026-10-10: 36 further functions pass 13,577
+combined engine tests, lint and formatting. PC review found a buffer
+relocation case in `0069b030` that still needs a correction and regression;
+this batch remains local until fixed. A fresh navigation agent is working
+on that correction and the six remaining queue entries. Pathfinding now
+has the serialized compiler window. Next action: collect checked work and
+ship the existing remote #116 when both checks pass.
+
 Review corrections collected, 2026-10-10: a04 adds 24 further functions
 and fixes the reviewed point-copy/accessor ABIs and x87 NaN stores;
 13,541 combined engine tests, lint and formatting pass. The ledger now

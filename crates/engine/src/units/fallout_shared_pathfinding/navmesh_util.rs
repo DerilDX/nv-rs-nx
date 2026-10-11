@@ -10,13 +10,17 @@
 //! is the mesh) or of its embedded search grid at `NavMesh + 0xA8`
 //! ([`NavMeshGrid`], `this` is the grid).
 //!
-//! This continuation covers the next 40 queue entries after `00698620`:
-//! 36 functions are translated below; `006987d0`, `006997e0`, `00699b60`,
-//! and `0069aa20` are skipped because their large geometry/edge mutation
-//! bodies remain unresolved. A continuation must resume at `006987d0`; if
-//! those four are completed, the next queue entry after this window is
-//! `0069af10`.
+//! Earlier batches fully translated 110 of the 113 entries. This batch closes
+//! the door-record, neighboring-portal, and undo-operation initialization
+//! paths, fixes the append helper's buffer reload after construction, and adds
+//! normal-path translations for two larger geometry routines. One topology-
+//! repair routine remains unregistered; exception-unwind cleanup is partial in
+//! the two new translations.
 //!
+// translated: 006987d0 - normal-path obstacle-footprint scan; exception unwind omitted.
+// open: 00699b60 - edge-pair map rebuild, winding/proximity repair, allocation ownership, and nearest-vertex selection; exception unwind omitted.
+// translated: 006bd040 - normal-path body; exception unwind omitted.
+//
 //! Conventions in this file:
 //! - Methods the engine map leaves unnamed are `fn_<address>`, named by what
 //!   the body does in their doc comment.
@@ -235,6 +239,14 @@ const VECTOR_CONSTRUCTOR_ITERATOR: u32 = 0x0040_1050;
 const ELEMENT_16_CONSTRUCTOR: u32 = 0x006d_5320;
 /// `NiPoint3` default constructor (`this`; only returns it).
 const POINT3_DEFAULT_CONSTRUCTOR: u32 = 0x0068_15c0;
+
+/// Vtables of the obstacle-query arrays/maps assembled by the functions
+/// below (PC `FalloutNV.exe` 1.4.0.525).
+const NAV_MESH_INFO_POINTER_ARRAY_VTABLE: u32 = 0x0106_b1a4;
+const NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE: u32 = 0x0106_b1b8;
+const BOOLEAN_ARRAY_VTABLE: u32 = 0x0106_b1cc;
+const FAST_NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE: u32 = 0x0106_b1e0;
+const FAST_NAV_MESH_VERTEX_MAP_BASE_VTABLE: u32 = 0x0106_b1f4;
 
 /// "No triangle" in a 16-bit triangle index.
 const NO_TRIANGLE: u16 = 0xffff;
@@ -2177,6 +2189,69 @@ pub fn fn_006997b0(e: &mut Engine, this: Ptr, key: u16, out: Ptr) {
     e.call(0x0069_afb0, &args![this.byte_add(0xe0), key, out]);
 }
 
+// Translated from 006997e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Collects triangles intersecting the narrowed obstacle bounds, then marks
+/// them as closed-door triangles and appends records for this door. Existing
+/// records for the same door are preserved. Normal-path temporary destruction
+/// is retained; compiler exception unwinding is omitted.
+pub fn fn_006997e0(e: &mut Engine, this: Ptr<NavMesh>, door: Ptr, bounds: Ptr) -> bool {
+    e.with_stack(52, |e, scratch| {
+        let extent = scratch;
+        let adjustment = scratch.byte_add(12);
+        let triangles = scratch.byte_add(24);
+        let reference = scratch.byte_add(40);
+        let record = scratch.byte_add(44);
+        e.call(
+            0x0043_9ef0,
+            &args![bounds.byte_add(0x4c), extent, bounds.byte_add(0x40)],
+        );
+        for axis in 0..3 {
+            let initial = e.mem.u32(0x011f_426c + axis * 4);
+            e.mem.set_u32(adjustment.addr() + axis * 4, initial);
+        }
+        let absolute = |e: &mut Engine, axis: u32| {
+            let value = e.mem.f32(extent.addr() + axis * 4);
+            e.call(0x0040_8840, &args![value]).f64()
+        };
+        let x = absolute(e, 0);
+        let y = absolute(e, 1);
+        // TEST AH,0x41 takes the alternate branch for <= and unordered.
+        let candidate = if y > x { 0 } else { 1 };
+        let smaller = absolute(e, candidate);
+        let z = absolute(e, 2);
+        let axis = if z > smaller { candidate } else { 2 };
+        let value = -absolute(e, axis) * e.mem.f64(0x0106_b168);
+        e.mem.set_f32(adjustment.addr() + axis * 4, value as f32);
+        e.call(0x0069_17d0, &args![triangles]);
+        e.call(0x0063_3c90, &args![reference, bounds]);
+        // The same-unit spatial collector remains open; dispatch by address
+        // until its translation is available, preserving its real ABI.
+        e.call(0x0069_87d0, &args![this, reference, adjustment, triangles]);
+        e.call(0x0045_cec0, &args![reference]);
+        let mut index = 0u32;
+        while index < e.call(ARRAY_SIZE, &args![triangles]).u32() {
+            let element = e.call(0x005e_eda0, &args![triangles, index]).u32();
+            let triangle_index = e.mem.u16(element);
+            let existing = nav_mesh_get_closed_door_info_for_triangle(e, this, triangle_index);
+            if existing.is_null() || e.mem.u32(existing.addr()) != door.addr() {
+                let element = e.call(0x005e_eda0, &args![triangles, index]).u32();
+                let triangle_index = e.mem.u16(element);
+                let triangle = e.call(0x0055_82f0, &args![this, triangle_index]).u32();
+                e.call(0x0069_1570, &args![triangle, 0x1000u32]);
+                e.call(0x0069_2870, &args![record]);
+                e.mem.set_u32(record.addr(), door.addr());
+                let element = e.call(0x005e_eda0, &args![triangles, index]).u32();
+                let triangle_index = e.mem.u16(element);
+                e.mem.set_u16(record.addr() + 4, triangle_index);
+                fn_0069b030(e, this.byte_add(0x68), record);
+            }
+            index = index.wrapping_add(1);
+        }
+        e.call(0x0069_1800, &args![triangles]);
+    });
+    true
+}
+
 // Translated from 00699af0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Returns the first closed-door edge record at `NavMesh + 0x68` whose
 /// triangle index matches `triangle`, or null if no entry matches.
@@ -2323,6 +2398,108 @@ pub fn fn_0069a7a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 pub fn fn_0069a7d0(e: &mut Engine, this: Ptr) {
     e.call(0x0069_b2f0, &args![this.byte_add(0x18)]);
     e.call(0x0069_b2f0, &args![this.byte_add(8)]);
+}
+
+// Translated from 0069aa20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Repairs the neighboring mesh's portal record when it has one candidate
+/// edge or when reversed endpoints identify a unique match. Normal reference
+/// cleanup is retained; compiler exception unwinding is omitted.
+pub fn fn_0069aa20(e: &mut Engine, this: Ptr<NavMesh>) -> bool {
+    let mut triangle_index = 0u32;
+    while triangle_index < e.call(0x0055_8200, &args![this]).u32() {
+        let triangle = e
+            .call(0x0055_82f0, &args![this, triangle_index as u16])
+            .u32();
+        if triangle != 0 && e.call(0x0069_0e10, &args![triangle]).bool() {
+            for edge in 0..3i32 {
+                if !e.call(0x0068_f1d0, &args![triangle, edge]).bool() {
+                    continue;
+                }
+                let extra_index = e.call(0x0068_f2c0, &args![triangle, edge]).u16();
+                let extra = e.call(0x0069_3d30, &args![this, extra_index]).u32();
+                e.with_stack(76, |e, scratch| {
+                    let reference = scratch;
+                    let start = scratch.byte_add(4);
+                    let end = scratch.byte_add(16);
+                    let other_start = scratch.byte_add(28);
+                    let other_end = scratch.byte_add(40);
+                    let difference = scratch.byte_add(52);
+                    let second_difference = scratch.byte_add(64);
+                    e.call(0x0042_fb00, &args![reference]);
+                    let holder = Ptr::new(e.mem.u32(extra + 4));
+                    if fn_0069ad00(e, holder, reference) {
+                        let other_index = e.mem.u16(extra + 8);
+                        let other_mesh = e.call(POINTER_GET, &args![reference]).ptr::<NavMesh>();
+                        let other_triangle =
+                            e.call(0x0055_82f0, &args![other_mesh, other_index]).u32();
+                        if other_triangle != 0 {
+                            let mut candidates = 0;
+                            let mut chosen = -1i32;
+                            for candidate in 0..3i32 {
+                                if e.call(0x0068_f1d0, &args![other_triangle, candidate])
+                                    .bool()
+                                {
+                                    candidates += 1;
+                                    chosen = candidate;
+                                }
+                            }
+                            if candidates != 0 {
+                                e.call(
+                                    0x0068_f0c0,
+                                    &args![this, triangle_index as u16, edge, start, end],
+                                );
+                                for candidate in 0..3i32 {
+                                    let other_index = e.mem.u16(extra + 8);
+                                    let other_mesh = e.call(POINTER_GET, &args![reference]).u32();
+                                    e.call(
+                                        0x0068_f0c0,
+                                        &args![
+                                            other_mesh,
+                                            other_index,
+                                            candidate,
+                                            other_start,
+                                            other_end
+                                        ],
+                                    );
+                                    let delta = e
+                                        .call(0x0043_9ef0, &args![start, difference, other_end])
+                                        .u32();
+                                    let distance = e.call(0x004a_7290, &args![delta]).f64();
+                                    if distance < e.mem.f64(0x0106_b178) {
+                                        let delta = e
+                                            .call(
+                                                0x0043_9ef0,
+                                                &args![end, second_difference, other_start],
+                                            )
+                                            .u32();
+                                        let distance = e.call(0x004a_7290, &args![delta]).f64();
+                                        if distance < e.mem.f64(0x0106_b178) {
+                                            chosen = candidate;
+                                            candidates = 1;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if candidates == 1 {
+                                let other_index = e.mem.u16(extra + 8);
+                                let other_mesh =
+                                    e.call(POINTER_GET, &args![reference]).ptr::<NavMesh>();
+                                let target = fn_006976a0(e, other_mesh, other_index, chosen);
+                                let mesh_info = e.call(0x0068_efb0, &args![this]).u32();
+                                e.mem.set_u32(target.addr() + 4, mesh_info);
+                                e.mem.set_u16(target.addr() + 8, triangle_index as u16);
+                                e.mem.set_u32(target.addr(), 3);
+                            }
+                        }
+                    }
+                    e.call(0x0042_fa40, &args![reference]);
+                });
+            }
+        }
+        triangle_index = triangle_index.wrapping_add(1);
+    }
+    true
 }
 
 // Translated from 0069ad00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2571,9 +2748,833 @@ pub fn fn_0069ae60(e: &mut Engine, first: Ptr, second: Ptr) -> u32 {
     }
 }
 
+// Translated from 0069af10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the `BSSimpleArray<NavMeshInfo*>` used by the obstacle query.
+pub fn fn_0069af10(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem
+        .set_u32(this.addr(), NAV_MESH_INFO_POINTER_ARRAY_VTABLE);
+    e.call(0x0084_54f0, &args![this, 1u32]);
+    this
+}
+
+// Translated from 0069af30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs the `BSSimpleArray<NavMeshEdgeHandle>` storage at `this`.
+pub fn fn_0069af30(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem
+        .set_u32(this.addr(), NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE);
+    e.call(0x0069_ba70, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 0069af60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the `BSSimpleArray<NavMeshEdgeHandle>` storage at `this`.
+pub fn fn_0069af60(e: &mut Engine, this: Ptr) {
+    e.mem
+        .set_u32(this.addr(), NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE);
+    e.call(0x0084_54f0, &args![this, 1u32]);
+}
+
+// Translated from 0069af80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates storage for `count` three-float points (`count * 0xC`).
+pub fn fn_0069af80(e: &mut Engine, _this: Ptr, count: u32) -> Ptr {
+    Ptr::new(e.call(0x0040_1000, &args![count.wrapping_mul(12)]).u32())
+}
+
+// Translated from 0069afb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned short, NiPointer<ObstacleData>>>,
+/// unsigned short, NiPointer<ObstacleData>>::GetAt` (Xbox PDB): assigns the
+/// matching item's `NiPointer` to `out`, returning whether it was found.
+pub fn ni_t_map_base_obstacle_get_at(e: &mut Engine, this: Ptr, key: u16, out: Ptr) -> bool {
+    let bucket = e.vcall(this.addr(), 4, &args![u32::from(key)]).u32();
+    let table = e.mem.u32(this.addr() + 8);
+    let mut item = e.mem.u32(table + bucket * 4);
+    while item != 0 {
+        let stored_key = e.mem.u16(item + 4);
+        if e.vcall(
+            this.addr(),
+            8,
+            &args![u32::from(key), u32::from(stored_key)],
+        )
+        .bool()
+        {
+            e.call(POINTER_ASSIGN, &args![out, item + 6]);
+            return true;
+        }
+        item = e.mem.u32(item);
+    }
+    false
+}
+
+// Translated from 0069b030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends the six-byte edge handle at `value` to the array and returns its
+/// former size.
+pub fn fn_0069b030(e: &mut Engine, this: Ptr, value: Ptr) -> u32 {
+    let index = e.call(0x0084_5460, &args![this]).u32();
+    let target = e.mem.u32(this.addr() + 4) + index * 8;
+    e.call(0x0069_27d0, &args![this, target, 1u32]);
+    // The constructor call may relocate the backing buffer; PC reloads +4.
+    let target = e.mem.u32(this.addr() + 4) + index * 8;
+    fn_0069a690(e, Ptr::new(target), value);
+    index
+}
+
+// Translated from 0069b080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns whether the map's item count at `+0xC` is zero.
+pub fn fn_0069b080(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0xc) == 0
+}
+
+// Translated from 0069b0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds a 16-bit key and copies the item's packed value at `item + 6` to
+/// `out`.
+pub fn fn_0069b0a0(e: &mut Engine, this: Ptr, key: u16, out: Ptr) -> bool {
+    let bucket = e.vcall(this.addr(), 4, &args![u32::from(key)]).u32();
+    let table = e.mem.u32(this.addr() + 8);
+    let mut item = e.mem.u32(table + bucket * 4);
+    while item != 0 {
+        let stored_key = e.mem.u16(item + 4);
+        if e.vcall(
+            this.addr(),
+            8,
+            &args![u32::from(key), u32::from(stored_key)],
+        )
+        .bool()
+        {
+            e.mem.set_u32(out.addr(), e.mem.u32(item + 6));
+            return true;
+        }
+        item = e.mem.u32(item);
+    }
+    false
+}
+
+// Translated from 0069b120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes `count` four-byte entries at `index`, destroying removed objects
+/// and shifting the following entries down.
+pub fn fn_0069b120(e: &mut Engine, this: Ptr, index: u32, count: u32) {
+    let size = e.mem.u32(this.addr() + 8);
+    let tail = size.wrapping_sub(index).wrapping_sub(count);
+    let moved = e.call(0x0042_f5a0, &args![tail, count]).u32();
+    let buffer = e.mem.u32(this.addr() + 4);
+    e.call(0x0082_2820, &args![buffer + index * 4, count]);
+    e.call(
+        0x0042_fb60,
+        &args![buffer + index * 4, buffer + size * 4 - moved * 4, moved],
+    );
+    e.mem.set_u32(this.addr() + 8, size.wrapping_sub(count));
+}
+
+// Translated from 0069b1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl equality comparator for pointers to 16-bit triangle indices.
+pub fn fn_0069b1b0(e: &mut Engine, first: Ptr, second: Ptr) -> bool {
+    e.mem.u16(first.addr()) == e.mem.u16(second.addr())
+}
+
+// Translated from 0069b1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the `BSSimpleArray<bool>` storage at `this`.
+pub fn fn_0069b1d0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), BOOLEAN_ARRAY_VTABLE);
+    e.call(0x0084_54f0, &args![this, 1u32]);
+}
+
+// Translated from 0069b1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates storage for `count` 12-byte fast edge handles.
+pub fn fn_0069b1f0(e: &mut Engine, _this: Ptr, count: u32) -> Ptr {
+    Ptr::new(e.call(0x0040_1000, &args![count.wrapping_mul(12)]).u32())
+}
+
+// Translated from 0069b220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards both values to the native memory-move helper; ECX (`this`) is
+/// unused by the body.
+pub fn fn_0069b220(e: &mut Engine, _this: Ptr, first: Ptr, second: Ptr) {
+    e.call(0x0042_f5d0, &args![first, second]);
+}
+
+// Translated from 0069b240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds a 16-bit value in a `BSSimpleArray`, calling `comparator(element,
+/// key)` from `start`; returns -1 when there is no match.
+pub fn fn_0069b240(e: &mut Engine, this: Ptr, key: Ptr, start: u32, comparator: u32) -> i32 {
+    let count = e.mem.u32(this.addr() + 8);
+    let buffer = e.mem.u32(this.addr() + 4);
+    if buffer == 0 {
+        return -1;
+    }
+    for index in start..count {
+        if e.call(comparator, &args![buffer + index * 2, key]).bool() {
+            return index as i32;
+        }
+    }
+    -1
+}
+
+// Translated from 0069b2a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compares the unsigned 16-bit value and 32-bit value at the two pointers.
+pub fn fn_0069b2a0(e: &mut Engine, first: Ptr, second: Ptr) -> bool {
+    u32::from(e.mem.u16(first.addr())) == e.mem.u32(second.addr())
+}
+
+// Translated from 0069b2c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs `BSSimpleArray<FastNavMeshEdgeHandle>` with an empty buffer.
+pub fn fn_0069b2c0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem
+        .set_u32(this.addr(), FAST_NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE);
+    e.call(0x0069_ba70, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 0069b2f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys `BSSimpleArray<FastNavMeshEdgeHandle>` at `this`.
+pub fn fn_0069b2f0(e: &mut Engine, this: Ptr) {
+    e.mem
+        .set_u32(this.addr(), FAST_NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE);
+    e.call(0x0084_54f0, &args![this, 1u32]);
+}
+
+// Translated from 0069b310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends a 12-byte fast edge handle to the array, returning its old size.
+pub fn fn_0069b310(e: &mut Engine, this: Ptr, value: Ptr) -> u32 {
+    let index = e.call(0x0097_8bc0, &args![this]).u32();
+    let element = e.mem.u32(this.addr() + 4) + index * 12;
+    e.call(0x0069_b9d0, &args![this, element, 1u32]);
+    e.call(0x006b_c870, &args![element, value]);
+    index
+}
+
+// Translated from 0069b360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base constructor for the fast-vertex `NiTMap`: allocate and zero its
+/// bucket table, set hash size/count and install the base vtable.
+pub fn fn_0069b360(e: &mut Engine, this: Ptr, bucket_count: u32) -> Ptr {
+    let bytes = bucket_count.wrapping_mul(4);
+    e.mem
+        .set_u32(this.addr(), FAST_NAV_MESH_VERTEX_MAP_BASE_VTABLE);
+    e.mem.set_u32(this.addr() + 4, bucket_count);
+    e.mem.set_u32(this.addr() + 0xc, 0);
+    let buckets = e.call(0x00aa_1070, &args![bytes]).u32();
+    e.mem.set_u32(this.addr() + 8, buckets);
+    e.call(0x0040_3d30, &args![buckets, 0u32, bytes]);
+    this
+}
+
+// Translated from 0069b3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Inserts or updates the fast-vertex map item for its two-word key.
+pub fn fn_0069b3d0(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32, value: u32) {
+    let bucket = e.vcall(this.addr(), 4, &args![key_low, key_high]).u32();
+    let buckets = e.mem.u32(this.addr() + 8);
+    let slot = buckets + bucket * 4;
+    let mut item = e.mem.u32(slot);
+    while item != 0 {
+        if e.vcall(
+            this.addr(),
+            8,
+            &args![e.mem.u32(item + 4), e.mem.u32(item + 8), key_low, key_high],
+        )
+        .bool()
+        {
+            e.mem.set_u32(item + 0xc, value);
+            return;
+        }
+        item = e.mem.u32(item);
+    }
+    let item = e.vcall(this.addr(), 0x14, &[]).u32();
+    // The native code constructs the key into a temporary and passes it by
+    // value with `item` and `value` to the slot +0xC SetValue method.
+    e.vcall(this.addr(), 0xc, &args![item, key_low, key_high, value]);
+    e.mem.set_u32(item, e.mem.u32(slot));
+    e.mem.set_u32(slot, item);
+    let count = e.mem.u32(this.addr() + 0xc);
+    e.mem.set_u32(this.addr() + 0xc, count.wrapping_add(1));
+}
+
+// Translated from 0069b4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds the fast-vertex map value for `key` and writes it to `out`.
+pub fn fn_0069b4d0(e: &mut Engine, this: Ptr, key_low: u32, key_high: u32, out: Ptr) -> bool {
+    let bucket = e.vcall(this.addr(), 4, &args![key_low, key_high]).u32();
+    let mut item = e.mem.u32(e.mem.u32(this.addr() + 8) + bucket * 4);
+    while item != 0 {
+        if e.vcall(
+            this.addr(),
+            8,
+            &args![e.mem.u32(item + 4), e.mem.u32(item + 8), key_low, key_high],
+        )
+        .bool()
+        {
+            e.mem.set_u32(out.addr(), e.mem.u32(item + 0xc));
+            return true;
+        }
+        item = e.mem.u32(item);
+    }
+    false
+}
+
+// Translated from 0069b560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Advances the fast-vertex map iterator and copies the current key/value.
+pub fn fn_0069b560(e: &mut Engine, this: Ptr, iterator: Ptr, key_out: Ptr, value_out: Ptr) {
+    let item = e.mem.u32(iterator.addr());
+    e.call(0x0069_a690, &args![key_out, item + 4]);
+    e.mem.set_u32(value_out.addr(), e.mem.u32(item + 0xc));
+    let next = e.mem.u32(item);
+    if next != 0 {
+        e.mem.set_u32(iterator.addr(), next);
+        return;
+    }
+    let low = e.mem.u32(key_out.addr());
+    let high = e.mem.u32(key_out.addr() + 4);
+    let start = e
+        .vcall(this.addr(), 4, &args![low, high])
+        .u32()
+        .wrapping_add(1);
+    let bucket_count = e.mem.u32(this.addr() + 4);
+    let buckets = e.mem.u32(this.addr() + 8);
+    for bucket in start..bucket_count {
+        let candidate = e.mem.u32(buckets + bucket * 4);
+        if candidate != 0 {
+            e.mem.set_u32(iterator.addr(), candidate);
+            return;
+        }
+    }
+    e.mem.set_u32(iterator.addr(), 0);
+}
+
+// Translated from 0069b620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Hashes a fast-vertex handle and reduces it by the bucket count.
+pub fn ni_t_map_fast_vertex_key_to_hash_index(
+    e: &mut Engine,
+    this: Ptr,
+    low: u32,
+    high: u32,
+) -> u32 {
+    let hash = e.with_stack(8, |e, key| {
+        e.mem.set_u32(key.addr(), low);
+        e.mem.set_u32(key.addr() + 4, high);
+        fn_0069b640(e, key)
+    });
+    // `DIV` in 0069b620 clears EDX before dividing, so only EAX (the low
+    // word of this 64-bit hash) participates in the unsigned remainder.
+    (hash as u32) % e.mem.u32(this.addr() + 4)
+}
+
+// Translated from 0069b640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the 64-bit hash accumulator for the fast-vertex key.
+pub fn fn_0069b640(e: &mut Engine, key: Ptr) -> u64 {
+    let low = e.mem.u32(key.addr());
+    let high = e.mem.u16(key.addr() + 4);
+    let shifted = i64::from(low as i32).wrapping_shl(32);
+    let shifted_high_word = (u32::from(high) << 16) as i32;
+    shifted.wrapping_add(i64::from(shifted_high_word)) as u64
+}
+
+// Translated from 0069b680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compares two two-word fast-vertex keys through the game's key comparator.
+pub fn ni_t_map_fast_vertex_is_keys_equal(
+    e: &mut Engine,
+    _this: Ptr,
+    first_low: u32,
+    first_high: u32,
+    second_low: u32,
+    second_high: u32,
+) -> bool {
+    e.with_stack(16, |e, keys| {
+        e.mem.set_u32(keys.addr(), first_low);
+        e.mem.set_u32(keys.addr() + 4, first_high);
+        e.mem.set_u32(keys.addr() + 8, second_low);
+        e.mem.set_u32(keys.addr() + 12, second_high);
+        e.call(0x006d_4ca0, &args![keys, keys.byte_add(8)]).bool()
+    })
+}
+
+// Translated from 0069b6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a fast-vertex key in the map item and writes its value at `+0xC`.
+pub fn ni_t_map_fast_vertex_set_value(
+    e: &mut Engine,
+    _this: Ptr,
+    item: Ptr,
+    key_low: u32,
+    key_high: u32,
+    value: u32,
+) {
+    e.with_stack(8, |e, key| {
+        e.mem.set_u32(key.addr(), key_low);
+        e.mem.set_u32(key.addr() + 4, key_high);
+        e.call(0x0069_a690, &args![item.byte_add(4), key]);
+    });
+    e.mem.set_u32(item.addr() + 0xc, value);
+}
+
+// Translated from 0069b6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the fast-vertex map: removes all items and frees its buckets.
+pub fn fn_0069b6d0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0106_b184);
+    e.call(0x0043_8af0, &args![this]);
+    fn_0069b730(e, this);
+}
+
+// Translated from 0069b730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the map base and frees its bucket table.
+pub fn fn_0069b730(e: &mut Engine, this: Ptr) {
+    e.mem
+        .set_u32(this.addr(), FAST_NAV_MESH_VERTEX_MAP_BASE_VTABLE);
+    e.call(0x0043_8af0, &args![this]);
+    let buckets = e.mem.u32(this.addr() + 8);
+    e.call(0x00aa_10f0, &args![buckets]);
+}
+
+// Translated from 0069b760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates and constructs a 16-byte map item.
+pub fn fn_0069b760(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(e.call(0x0069_b8a0, &args![this.byte_add(0xc)]).u32())
+}
+
+// Translated from 0069b780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears a map item's value and returns it to the allocator.
+pub fn fn_0069b780(e: &mut Engine, this: Ptr, item: Ptr) {
+    e.mem.set_u32(item.addr() + 0xc, 0);
+    e.call(0x006b_8310, &args![this.byte_add(0xc), item]);
+}
+
+// Translated from 0069b7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar-deleting destructor for `BSSimpleArray<NavMeshInfo*>`.
+pub fn fn_0069b7b0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0069af10(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0069b7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar-deleting destructor for `BSSimpleArray<NavMeshEdgeHandle>`.
+pub fn fn_0069b7e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0069af60(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0069b810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar-deleting destructor for `BSSimpleArray<bool>`.
+pub fn fn_0069b810(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0069b1d0(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0069b840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar-deleting destructor for `BSSimpleArray<FastNavMeshEdgeHandle>`.
+pub fn fn_0069b840(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0069b2f0(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0069b870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar-deleting destructor for the fast-vertex map base.
+pub fn fn_0069b870(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0069b730(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0069b8a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates a 16-byte fast-vertex map item and constructs it when non-null.
+pub fn fn_0069b8a0(e: &mut Engine, _this: Ptr) -> Ptr {
+    let item = e.call(0x0040_1000, &args![0x10u32]).u32();
+    if item == 0 {
+        Ptr::NULL
+    } else {
+        e.call(0x0069_b920, &args![Ptr::<()>::new(item)]).ptr()
+    }
+}
+
 /// This unit's translated functions, by exe address.
+// Translated from 006bc8e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the mesh and undo data, resets the operation, and reserves the
+/// mesh's vertex and triangle arrays from the undo record's counts.
+pub fn fn_006bc8e0(e: &mut Engine, this: Ptr, mesh: Ptr, undo: Ptr) -> bool {
+    e.mem.set_u32(this.addr(), mesh.addr());
+    e.mem.set_u32(this.addr() + 8, undo.addr());
+    e.call(0x006b_ebd0, &args![this]);
+    let undo = e.mem.u32(this.addr() + 8);
+    let mesh = e.mem.u32(this.addr());
+    let vertices = e.mem.u32(undo + 0x10);
+    e.call(0x0069_4890, &args![mesh + 0x28, vertices, 1u32]);
+    let undo = e.mem.u32(this.addr() + 8);
+    let mesh = e.mem.u32(this.addr());
+    let triangles = e.mem.u32(undo + 0x18);
+    e.call(0x0069_49d0, &args![mesh + 0x38, triangles, 1u32]);
+    true
+}
+
+// Translated from 006bd040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds the obstacle's four transformed corners, projects their heights
+/// against the mesh, appends the resulting vertices and perimeter edges to
+/// this operation's undo arrays, and marks edges longer than 64 units for
+/// undo ownership. The operation stores the mesh at `this`, its obstacle
+/// `NiPointer` at `this + 4`, created vertex pointers at `this + 0x1c`, and
+/// created edge pointers at `this + 0x30`. C++ exception unwinding is omitted.
+// Translation incomplete: 006bd040 - exception unwind cleanup for temporary point arrays and smart pointers.
+pub fn fn_006bd040(e: &mut Engine, this: Ptr) {
+    let obstacle_pointer = this.byte_add(4);
+    e.with_stack(0x108, |e, scratch| {
+        let corners = scratch.byte_add(0xc8);
+        for (index, (x_offset, y_offset)) in
+            [(0x40, 0x44), (0x40, 0x50), (0x4c, 0x50), (0x4c, 0x44)]
+                .into_iter()
+                .enumerate()
+        {
+            let obstacle = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+            let z = e.mem.f32(obstacle.addr() + 0x48);
+            let obstacle = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+            let y = e.mem.f32(obstacle.addr() + y_offset);
+            let obstacle = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+            let x = e.mem.f32(obstacle.addr() + x_offset);
+            let point = corners.byte_add(index as u32 * 12);
+            e.call(POINT3_CONSTRUCT, &args![point, x, y, z]);
+        }
+
+        let first_obstacle = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+        let second_obstacle = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+        let height_delta =
+            e.mem.f32(first_obstacle.addr() + 0x6c) - e.mem.f32(second_obstacle.addr() + 0x60);
+        let height_index = e.call(0x006a_d3b0, &args![height_delta, 1u32, 0u32]).u16();
+
+        let projected = scratch.byte_add(0x90);
+        for index in 0..4u32 {
+            // The executable pushes this translation pointer before the
+            // separate smart-pointer reload used to obtain the matrix.
+            let translation_object = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+            let matrix_object = e.call(POINTER_GET, &args![obstacle_pointer]).ptr::<()>();
+            let matrix = matrix_object.byte_add(0x1c);
+            let output = scratch.byte_add(0x14);
+            let corner = corners.byte_add(index * 12);
+            let rotated = e
+                .call(0x004b_4500, &args![matrix, output, corner])
+                .ptr::<()>();
+            let point = projected.byte_add(index * 12);
+            e.call(
+                POINT3_ADD,
+                &args![rotated, point, translation_object.byte_add(0x10)],
+            );
+            let z = e.mem.f32(point.addr() + 8);
+            let z_out = scratch.byte_add(0x70);
+            e.mem.set_f32(z_out.addr(), z);
+            let limit: f32 = e.global(0x0101_e704);
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            if e.call(0x0069_7b70, &args![mesh, point, limit, height_delta, z_out])
+                .bool()
+            {
+                e.mem.set_f32(point.addr() + 8, e.mem.f32(z_out.addr()));
+            }
+        }
+
+        let mut vertex_handles = [Ptr::<()>::NULL; 4];
+        for index in 0..4u32 {
+            let point = projected.byte_add(index * 12);
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            let vertex_index = e.call(0x0069_0fe0, &args![mesh, point]).u16();
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            let vertex = e
+                .call(0x006b_f3c0, &args![mesh, vertex_index, 1u32, 0u32, 0u32])
+                .ptr::<()>();
+            vertex_handles[index as usize] = vertex;
+            e.with_stack(4, |e, item| {
+                e.mem.set_u32(item.addr(), vertex.addr());
+                e.call(ARRAY_ADD_DWORD, &args![this.byte_add(0x1c), item]);
+            });
+        }
+
+        let mut edges = [Ptr::<()>::NULL; 4];
+        for index in 0..4u32 {
+            let next = (index + 1) % 4;
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            edges[index as usize] = e
+                .call(
+                    0x006b_f4d0,
+                    &args![
+                        mesh,
+                        vertex_handles[index as usize],
+                        vertex_handles[next as usize],
+                        1u32
+                    ],
+                )
+                .ptr::<()>();
+            e.with_stack(4, |e, item| {
+                e.mem.set_u32(item.addr(), edges[index as usize].addr());
+                e.call(ARRAY_ADD_DWORD, &args![this.byte_add(0x30), item]);
+            });
+        }
+
+        let long_edge_threshold: f64 = e.global(SIXTY_FOUR);
+        for edge in edges {
+            let first_index = e.mem.u16(e.mem.u32(edge.addr()));
+            let second_index = e.mem.u16(e.mem.u32(edge.addr() + 4));
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            let first_vertex = e
+                .call(VERTEX_POINTER, &args![mesh, first_index])
+                .ptr::<()>();
+            let mesh = Ptr::<NavMesh>::new(e.mem.u32(this.addr()));
+            let second_vertex = e
+                .call(VERTEX_POINTER, &args![mesh, second_index])
+                .ptr::<()>();
+            let difference = scratch.byte_add(0x20);
+            e.call(
+                POINT3_SUBTRACT,
+                &args![first_vertex, difference, second_vertex],
+            );
+            if e.call(POINT3_SQUARED_LENGTH_2D, &args![difference]).f64() > long_edge_threshold {
+                e.mem.set_u16(edge.addr() + 0x16, height_index);
+                e.mem.set_u8(edge.addr() + 0x18, 1);
+                e.mem.set_u8(edge.addr() + 0x19, 1);
+                e.call(0x006e_5cc0, &args![edge.byte_add(0x1c), obstacle_pointer]);
+            }
+        }
+    });
+}
+
+// Translated from 006987d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds triangle indices from the cells covered by a transformed obstacle
+/// footprint when the triangle is not disabled, its bounds overlap, and its
+/// center, vertical ray, or one of its edges intersects the footprint. The
+/// three stack arguments are the reference smart-pointer, the adjustment
+/// point, and the output triangle array. C++ exception unwinding is omitted.
+// Translation incomplete: 006987d0 - exception unwind cleanup for temporary vectors and references.
+pub fn fn_006987d0(
+    e: &mut Engine,
+    this: Ptr<NavMesh>,
+    reference: Ptr,
+    adjustment: Ptr,
+    triangles: Ptr,
+) {
+    e.with_stack(0x150, |e, scratch| {
+        let grid = mesh_grid(this);
+        let min_row = scratch.byte_add(0x00);
+        let min_column = scratch.byte_add(0x04);
+        let max_row = scratch.byte_add(0x08);
+        let max_column = scratch.byte_add(0x0c);
+        let reference_object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+        e.call(
+            GRID_CELL_OF_POINT,
+            &args![grid, reference_object.byte_add(0x58), min_row, min_column],
+        );
+        let reference_object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+        e.call(
+            GRID_CELL_OF_POINT,
+            &args![grid, reference_object.byte_add(0x64), max_row, max_column],
+        );
+
+        let corners = scratch.byte_add(0x10);
+        for (index, (x_offset, y_offset, y_sign, x_sign)) in [
+            (0x40, 0x44, -1.0f32, -1.0f32),
+            (0x40, 0x50, 1.0, -1.0),
+            (0x4c, 0x50, 1.0, 1.0),
+            (0x4c, 0x44, -1.0, 1.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+            let z = e.mem.f32(object.addr() + 0x48);
+            let object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+            let y = e.mem.f32(object.addr() + y_offset) + e.mem.f32(adjustment.addr() + 4) * y_sign;
+            let object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+            let x = e.mem.f32(object.addr() + x_offset) + e.mem.f32(adjustment.addr()) * x_sign;
+            e.call(
+                POINT3_CONSTRUCT,
+                &args![corners.byte_add(index as u32 * 12), x, y, z],
+            );
+        }
+        let first = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+        let second = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+        let height_delta = e.mem.f32(first.addr() + 0x6c) - e.mem.f32(second.addr() + 0x60);
+
+        let mut row = e.mem.u32(min_row.addr());
+        let last_row = e.mem.u32(max_row.addr());
+        while row <= last_row {
+            let mut column = e.mem.u32(min_column.addr());
+            let last_column = e.mem.u32(max_column.addr());
+            while column <= last_column {
+                let cell_triangles = fn_006967c0(e, grid, column, row);
+                if !cell_triangles.is_null() {
+                    let mut item_index = 0;
+                    while item_index < array_size(e, cell_triangles) {
+                        let item = e
+                            .call(ARRAY_ELEMENT_2, &args![cell_triangles, item_index])
+                            .ptr::<()>();
+                        if e.call(
+                            ARRAY_FIND_WORD,
+                            &args![triangles, item, 0u32, WORD_COMPARATOR],
+                        )
+                        .i32()
+                            == -1
+                        {
+                            let triangle_index = e.mem.u16(item.addr());
+                            let triangle = triangle_of(e, this, triangle_index as u32);
+                            if !e.call(TRIANGLE_FLAGS_SET, &args![triangle, 0x20u32]).bool() {
+                                let low = scratch.byte_add(0x70);
+                                let high = scratch.byte_add(0x7c);
+                                let float_max: f32 = e.global(FLOAT_MAX);
+                                let neg_float_max: f32 = e.global(NEGATIVE_FLOAT_MAX);
+                                write_point(e, low.addr(), [float_max; 3]);
+                                write_point(e, high.addr(), [neg_float_max; 3]);
+                                for vertex_index in 0..3u32 {
+                                    let vertex = corner_pointer(e, this, triangle, vertex_index);
+                                    for axis in 0..3u32 {
+                                        let component = e.mem.f32(vertex.addr() + axis * 4);
+                                        let previous_low = e.mem.f32(low.addr() + axis * 4);
+                                        let previous_high = e.mem.f32(high.addr() + axis * 4);
+                                        let low_value = e
+                                            .call(0x0040_ebd0, &args![previous_low, component])
+                                            .f32();
+                                        let high_value = e
+                                            .call(0x0040_4010, &args![previous_high, component])
+                                            .f32();
+                                        e.mem.set_f32(low.addr() + axis * 4, low_value);
+                                        e.mem.set_f32(high.addr() + axis * 4, high_value);
+                                    }
+                                }
+                                let z_pad: f64 = e.global(0x0102_e430);
+                                let max_z = (e.mem.f32(high.addr() + 8) as f64 + z_pad) as f32;
+                                e.mem.set_f32(high.addr() + 8, max_z);
+                                let object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                let transformed_center = scratch.byte_add(0x88);
+                                e.call(
+                                    POINT3_ADD,
+                                    &args![object.byte_add(0x64), transformed_center, adjustment],
+                                );
+                                let object = e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                let transformed_origin = scratch.byte_add(0x94);
+                                e.call(
+                                    POINT3_SUBTRACT,
+                                    &args![object.byte_add(0x58), transformed_origin, adjustment],
+                                );
+                                let bounds_overlap = e
+                                    .call(
+                                        0x006d_93d0,
+                                        &args![transformed_origin, transformed_center, low, high],
+                                    )
+                                    .bool();
+                                if bounds_overlap {
+                                    let accepted = e.call(
+                                        GET_CENTER,
+                                        &args![this, triangle_index, scratch.byte_add(0xac)],
+                                    );
+                                    let center = accepted.ptr::<()>();
+                                    let center_inside = e
+                                        .call(
+                                            0x006c_3570,
+                                            &args![center, reference, height_delta, 128.0f32],
+                                        )
+                                        .bool();
+                                    let mut intersects = center_inside;
+                                    if !intersects {
+                                        let object =
+                                            e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                        let probe_point = object.byte_add(0x10);
+                                        let height_out = scratch.byte_add(0x64);
+                                        intersects = e
+                                            .call(
+                                                0x0069_7730,
+                                                &args![
+                                                    this,
+                                                    triangle_index,
+                                                    probe_point,
+                                                    height_out,
+                                                    height_delta,
+                                                    128.0f32
+                                                ],
+                                            )
+                                            .bool();
+                                    }
+                                    if !intersects {
+                                        for edge in 0..3u32 {
+                                            let next = if edge == 2 { 0 } else { edge + 1 };
+                                            let first_diff = scratch.byte_add(0xb8);
+                                            let first_local = scratch.byte_add(0xd0);
+                                            let matrix_object =
+                                                e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                            let transform = matrix_object.byte_add(0x1c + 0x10);
+                                            let translation_object =
+                                                e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                            let translation = translation_object.byte_add(0x10);
+                                            let first_vertex =
+                                                corner_pointer(e, this, triangle, edge);
+                                            e.call(
+                                                POINT3_SUBTRACT,
+                                                &args![first_vertex, first_diff, translation],
+                                            );
+                                            let first_local = e
+                                                .call(
+                                                    0x004b_3ae0,
+                                                    &args![first_local, first_diff, transform],
+                                                )
+                                                .ptr();
+                                            let second_diff = scratch.byte_add(0xc4);
+                                            let second_local = scratch.byte_add(0xdc);
+                                            let matrix_object =
+                                                e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                            let transform = matrix_object.byte_add(0x1c + 0x10);
+                                            let translation_object =
+                                                e.call(POINTER_GET, &args![reference]).ptr::<()>();
+                                            let translation = translation_object.byte_add(0x10);
+                                            let second_vertex =
+                                                corner_pointer(e, this, triangle, next);
+                                            e.call(
+                                                POINT3_SUBTRACT,
+                                                &args![second_vertex, second_diff, translation],
+                                            );
+                                            let second_local = e
+                                                .call(
+                                                    0x004b_3ae0,
+                                                    &args![second_local, second_diff, transform],
+                                                )
+                                                .ptr();
+                                            for obstacle_edge in 0..4u32 {
+                                                let obstacle_next = (obstacle_edge + 1) % 4;
+                                                if fn_00696540(
+                                                    e,
+                                                    first_local,
+                                                    second_local,
+                                                    corners.byte_add(obstacle_edge * 12),
+                                                    corners.byte_add(obstacle_next * 12),
+                                                ) {
+                                                    intersects = true;
+                                                    break;
+                                                }
+                                            }
+                                            if intersects {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if intersects {
+                                        e.call(ARRAY_ADD_WORD, &args![triangles, item]);
+                                    }
+                                }
+                            }
+                        }
+                        item_index += 1;
+                    }
+                }
+                column = column.wrapping_add(1);
+            }
+            row = row.wrapping_add(1);
+        }
+    });
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0069aa20, fn_0069aa20(Ptr<NavMesh>) -> bool),
+        entry!(0x006997e0, fn_006997e0(Ptr<NavMesh>, Ptr, Ptr) -> bool),
+        entry!(0x006bc8e0, fn_006bc8e0(Ptr, Ptr, Ptr) -> bool),
+        entry!(0x006bd040, fn_006bd040(Ptr)),
+        entry!(0x006987d0, fn_006987d0(Ptr<NavMesh>, Ptr, Ptr, Ptr)),
         entry!(0x006953b0, nav_mesh_fix_portals_from_nav_mesh_deletion(Ptr)),
         entry!(0x00695660, fn_00695660(Ptr<NavMesh>, u16)),
         entry!(0x006957d0, fn_006957d0(Ptr<NavMeshTriangle>) -> bool),
@@ -2686,6 +3687,45 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069ae60, fn_0069ae60(Ptr, Ptr) -> u32),
         entry!(0x0069aeb0, fn_0069aeb0(Ptr, Ptr)),
         entry!(0x0069aee0, fn_0069aee0(Ptr) -> Ptr),
+        entry!(0x0069af10, fn_0069af10(Ptr) -> Ptr),
+        entry!(0x0069af30, fn_0069af30(Ptr) -> Ptr),
+        entry!(0x0069af60, fn_0069af60(Ptr)),
+        entry!(0x0069af80, fn_0069af80(Ptr, u32) -> Ptr),
+        entry!(0x0069afb0, ni_t_map_base_obstacle_get_at(Ptr, u16, Ptr) -> bool),
+        entry!(0x0069b030, fn_0069b030(Ptr, Ptr) -> u32),
+        entry!(0x0069b080, fn_0069b080(Ptr) -> bool),
+        entry!(0x0069b0a0, fn_0069b0a0(Ptr, u16, Ptr) -> bool),
+        entry!(0x0069b120, fn_0069b120(Ptr, u32, u32)),
+        entry!(0x0069b1b0, fn_0069b1b0(Ptr, Ptr) -> bool),
+        entry!(0x0069b1d0, fn_0069b1d0(Ptr)),
+        entry!(0x0069b1f0, fn_0069b1f0(Ptr, u32) -> Ptr),
+        entry!(0x0069b220, fn_0069b220(Ptr, Ptr, Ptr)),
+        entry!(0x0069b240, fn_0069b240(Ptr, Ptr, u32, u32) -> i32),
+        entry!(0x0069b2a0, fn_0069b2a0(Ptr, Ptr) -> bool),
+        entry!(0x0069b2c0, fn_0069b2c0(Ptr) -> Ptr),
+        entry!(0x0069b2f0, fn_0069b2f0(Ptr)),
+        entry!(0x0069b310, fn_0069b310(Ptr, Ptr) -> u32),
+        entry!(0x0069b360, fn_0069b360(Ptr, u32) -> Ptr),
+        entry!(0x0069b3d0, fn_0069b3d0(Ptr, u32, u32, u32)),
+        entry!(0x0069b4d0, fn_0069b4d0(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0069b560, fn_0069b560(Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x0069b620, ni_t_map_fast_vertex_key_to_hash_index(Ptr, u32, u32) -> u32),
+        entry!(0x0069b640, fn_0069b640(Ptr) -> u64),
+        entry!(0x0069b680, ni_t_map_fast_vertex_is_keys_equal(Ptr, u32, u32, u32, u32) -> bool),
+        entry!(
+            0x0069b6a0,
+            ni_t_map_fast_vertex_set_value(Ptr, Ptr, u32, u32, u32)
+        ),
+        entry!(0x0069b6d0, fn_0069b6d0(Ptr)),
+        entry!(0x0069b730, fn_0069b730(Ptr)),
+        entry!(0x0069b760, fn_0069b760(Ptr) -> Ptr),
+        entry!(0x0069b780, fn_0069b780(Ptr, Ptr)),
+        entry!(0x0069b7b0, fn_0069b7b0(Ptr, u32) -> Ptr),
+        entry!(0x0069b7e0, fn_0069b7e0(Ptr, u32) -> Ptr),
+        entry!(0x0069b810, fn_0069b810(Ptr, u32) -> Ptr),
+        entry!(0x0069b840, fn_0069b840(Ptr, u32) -> Ptr),
+        entry!(0x0069b870, fn_0069b870(Ptr, u32) -> Ptr),
+        entry!(0x0069b8a0, fn_0069b8a0(Ptr) -> Ptr),
     ]
 }
 
@@ -2709,6 +3749,426 @@ mod tests {
             st0: value as f64,
             ..Ret::default()
         }
+    }
+
+    #[test]
+    fn obstacle_undo_reloads_smart_pointers_and_mesh_between_calls() {
+        let mut e = Engine::new();
+        e.map(0x0101_e000, 0x1000);
+        e.map(0x0102_4000, 0x1000);
+        let operation = Ptr::new(e.mem.alloc(0x40));
+        let mesh_a = e.mem.alloc(0x100);
+        let mesh_b = e.mem.alloc(0x100);
+        let mesh_c = e.mem.alloc(0x100);
+        let pointer = e.mem.alloc(4);
+        let translation_object = e.mem.alloc(0x100);
+        let matrix_object = e.mem.alloc(0x100);
+        let returned_transform = e.mem.alloc(12);
+        let pointer_gets = Rc::new(RefCell::new(0usize));
+        let get_index = pointer_gets.clone();
+        e.mem.set_u32(operation.addr(), mesh_a);
+        e.mem.set_u32(operation.addr() + 4, pointer);
+        e.mem.set_f32(translation_object + 0x6c, 100.0);
+        e.mem.set_f32(matrix_object + 0x60, 10.0);
+        e.mem.set_f32(0x0101_e704, 500.0);
+        e.mem.set_f64(SIXTY_FOUR, 64.0);
+        e.register_double(POINTER_GET, move |e, a| {
+            assert_eq!(a[0], operation.addr() + 4);
+            let mut index = get_index.borrow_mut();
+            let call = *index;
+            *index += 1;
+            if call == 13 {
+                // The first returned object stays in ESI, while this second
+                // getter changes its field before the native code reads it.
+                e.mem.set_f32(translation_object + 0x6c, 125.0);
+            }
+            let object = if call % 2 == 0 || call == 12 {
+                translation_object
+            } else {
+                matrix_object
+            };
+            ret(object)
+        });
+        let height_seen = Rc::new(RefCell::new(None));
+        let captured_height = height_seen.clone();
+        e.register_double(0x006a_d3b0, move |_, a| {
+            *captured_height.borrow_mut() = Some(a.to_vec());
+            ret(7)
+        });
+        let matrix_seen = Rc::new(RefCell::new(Vec::new()));
+        let captured_matrix = matrix_seen.clone();
+        e.register_double(0x004b_4500, move |e, a| {
+            captured_matrix.borrow_mut().push((a[0], a[1]));
+            e.mem.set_f32(returned_transform, 1.0);
+            e.mem.set_f32(returned_transform + 4, 2.0);
+            e.mem.set_f32(returned_transform + 8, 3.0);
+            ret(returned_transform)
+        });
+        let add_receivers = Rc::new(RefCell::new(Vec::new()));
+        let captured_add = add_receivers.clone();
+        e.register_double(POINT3_ADD, move |e, a| {
+            captured_add.borrow_mut().push((a[0], a[2]));
+            let output = a[1];
+            let receiver = a[0];
+            let translation = a[2];
+            for axis in 0..3 {
+                let value = e.mem.f32(receiver + axis * 4) + e.mem.f32(translation + axis * 4);
+                e.mem.set_f32(output + axis * 4, value);
+            }
+            ret(output)
+        });
+        e.register_double(POINT3_CONSTRUCT, |e, a| {
+            for axis in 0..3 {
+                e.mem
+                    .set_f32(a[0] + axis * 4, f32::from_bits(a[axis as usize + 1]));
+            }
+            ret(a[0])
+        });
+        let projection_meshes = Rc::new(RefCell::new(Vec::new()));
+        let captured_projection = projection_meshes.clone();
+        e.register_double(0x0069_7b70, move |e, a| {
+            captured_projection.borrow_mut().push(a[0]);
+            e.mem.set_u32(operation.addr(), mesh_b);
+            ret(0)
+        });
+        let vertex_calls = Rc::new(RefCell::new(Vec::new()));
+        let captured_vertex = vertex_calls.clone();
+        e.register_double(0x0069_0fe0, move |e, a| {
+            captured_vertex.borrow_mut().push(a[0]);
+            e.mem.set_u32(operation.addr(), mesh_c);
+            ret(0)
+        });
+        let create_edge_meshes = Rc::new(RefCell::new(Vec::new()));
+        let captured_edge_mesh = create_edge_meshes.clone();
+        e.register_double(0x006b_f3c0, move |e, a| {
+            captured_edge_mesh.borrow_mut().push(a[0]);
+            ret(e.mem.alloc(8))
+        });
+        e.register_double(0x006b_f4d0, |e, a| {
+            let edge = e.mem.alloc(0x30);
+            e.mem.set_u32(edge, a[1]);
+            e.mem.set_u32(edge + 4, a[2]);
+            ret(edge)
+        });
+        e.register_double(ARRAY_ADD_DWORD, |_, _| ret(0));
+        e.register_double(VERTEX_POINTER, |e, a| {
+            let point = e.mem.alloc(12);
+            e.mem.set_f32(point, a[1] as f32);
+            e.mem.set_f32(point + 4, 0.0);
+            e.mem.set_f32(point + 8, 0.0);
+            ret(point)
+        });
+        e.register_double(POINT3_SUBTRACT, |e, a| {
+            for axis in 0..3 {
+                let value = e.mem.f32(a[0] + axis * 4) - e.mem.f32(a[2] + axis * 4);
+                e.mem.set_f32(a[1] + axis * 4, value);
+            }
+            ret(a[1])
+        });
+        e.register_double(POINT3_SQUARED_LENGTH_2D, |_, _| ret_float(0.0));
+        e.register_double(0x006e_5cc0, |_, _| ret(0));
+
+        fn_006bd040(&mut e, operation);
+
+        assert_eq!(
+            height_seen.borrow().as_ref().unwrap(),
+            &vec![115.0f32.to_bits(), 1, 0]
+        );
+        assert_eq!(matrix_seen.borrow()[0].0, matrix_object + 0x1c);
+        assert_eq!(
+            add_receivers.borrow()[0],
+            (returned_transform, translation_object + 0x10)
+        );
+        assert_eq!(projection_meshes.borrow()[0], mesh_a);
+        assert_eq!(projection_meshes.borrow()[1], mesh_b);
+        assert_eq!(vertex_calls.borrow()[0], mesh_b);
+        assert_eq!(create_edge_meshes.borrow()[0], mesh_c);
+    }
+
+    #[test]
+    fn obstacle_triangle_collector_skips_disabled_triangles() {
+        let mut e = Engine::new();
+        e.map(0x0101_5000, 0x3000);
+        e.map(0x0102_e000, 0x1000);
+        let mesh = Ptr::<NavMesh>::new(e.mem.alloc(0x200));
+        let grid = mesh_grid(mesh);
+        let cell = e.mem.alloc(16);
+        let cell_items = e.mem.alloc(2);
+        let output = Ptr::new(e.mem.alloc(16));
+        let triangle = Ptr::<()>::new(e.mem.alloc(16));
+        let reference = Ptr::new(e.mem.alloc(4));
+        let adjustment = Ptr::new(e.mem.alloc(12));
+        let object = e.mem.alloc(0x80);
+        e.mem.set_u32(grid.addr(), 1);
+        e.mem.set_u32(grid.addr() + 0x24, cell);
+        e.mem.set_u32(cell + 4, cell_items);
+        e.mem.set_u32(cell + 8, 1);
+        e.mem.set_u16(cell_items, 3);
+        e.mem.set_f32(object + 0x40, -1.0);
+        e.mem.set_f32(object + 0x44, -1.0);
+        e.mem.set_f32(object + 0x48, 0.0);
+        e.mem.set_f32(object + 0x4c, 1.0);
+        e.mem.set_f32(object + 0x50, 1.0);
+        e.mem.set_f32(object + 0x60, 0.0);
+        e.mem.set_f32(object + 0x6c, 0.0);
+        e.mem.set_f32(0x0101_6970, f32::MAX);
+        e.mem.set_f32(0x0101_5f5c, -f32::MAX);
+        e.mem.set_f64(0x0102_e430, 128.0);
+        e.register_double(POINTER_GET, move |_, _| ret(object));
+        e.register_double(GRID_CELL_OF_POINT, |e, a| {
+            e.mem.set_u32(a[2], 0);
+            e.mem.set_u32(a[3], 0);
+            ret(0)
+        });
+        e.register_double(POINT3_CONSTRUCT, |e, a| {
+            for axis in 0..3 {
+                e.mem
+                    .set_f32(a[0] + axis * 4, f32::from_bits(a[axis as usize + 1]));
+            }
+            ret(a[0])
+        });
+        e.register_double(ARRAY_SIZE, move |_, a| {
+            ret(if a[0] == cell { 1 } else { 0 })
+        });
+        e.register_double(ARRAY_ELEMENT_2, move |_, a| ret(cell_items + a[1] * 2));
+        e.register_double(ARRAY_FIND_WORD, |_, _| ret(u32::MAX));
+        e.register_double(GET_TRIANGLE, move |_, _| ret(triangle.addr()));
+        e.register_double(TRIANGLE_FLAGS_SET, |_, a| {
+            assert_eq!(a[1], 0x20);
+            ret(1)
+        });
+
+        fn_006987d0(&mut e, mesh, reference, adjustment, output);
+
+        assert_eq!(e.mem.u32(output.addr() + 8), 0);
+    }
+
+    #[test]
+    fn obstacle_triangle_collector_accepts_intersection_deduplicates_and_rejects_bounds() {
+        let mut e = Engine::new();
+        e.map(0x0101_5000, 0x3000);
+        e.map(0x0102_e000, 0x1000);
+        let mesh = Ptr::<NavMesh>::new(e.mem.alloc(0x200));
+        let grid = mesh_grid(mesh);
+        let cells = e.mem.alloc(4 * 16);
+        let mut cell_arrays = Vec::new();
+        for cell_index in 0..4u32 {
+            let cell = cells + cell_index * 16;
+            let item = e.mem.alloc(2);
+            e.mem.set_u32(cell + 4, item);
+            e.mem.set_u32(cell + 8, 1);
+            e.mem.set_u16(item, 3);
+            cell_arrays.push(cell);
+        }
+        let output = Ptr::new(e.mem.alloc(16));
+        let output_items = e.mem.alloc(8);
+        e.mem.set_u32(output.addr() + 4, output_items);
+        let reference = Ptr::new(e.mem.alloc(4));
+        let adjustment = Ptr::new(e.mem.alloc(12));
+        let object = e.mem.alloc(0x80);
+        let corner_z_source = e.mem.alloc(0x80);
+        let corner_y_source = e.mem.alloc(0x80);
+        let corner_x_source = e.mem.alloc(0x80);
+        let triangle = e.mem.alloc(16);
+        let vertices = [e.mem.alloc(12), e.mem.alloc(12), e.mem.alloc(12)];
+        e.mem.set_u32(grid.addr(), 2);
+        e.mem.set_u32(grid.addr() + 0x24, cells);
+        e.mem.set_f32(object + 0x40, -2.0);
+        e.mem.set_f32(object + 0x44, -2.0);
+        e.mem.set_f32(object + 0x48, 0.0);
+        e.mem.set_f32(object + 0x4c, 2.0);
+        e.mem.set_f32(object + 0x50, 2.0);
+        for axis in 0..3 {
+            e.mem.set_f32(object + 0x58 + axis * 4, -1.0);
+            e.mem.set_f32(object + 0x64 + axis * 4, 1.0);
+        }
+        e.mem.set_f32(corner_z_source + 0x48, 5.0);
+        e.mem.set_f32(corner_y_source + 0x44, -2.0);
+        e.mem.set_f32(corner_x_source + 0x40, -2.0);
+        // One triangle edge crosses the obstacle's vertical side at x=-2.
+        for (axis, point) in [[-3.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+            .into_iter()
+            .enumerate()
+        {
+            write_point(&mut e, vertices[axis], point);
+        }
+        e.mem.set_f32(0x0101_6970, f32::MAX);
+        e.mem.set_f32(0x0101_5f5c, -f32::MAX);
+        e.mem.set_f64(0x0102_e430, 128.0);
+
+        let grid_calls = Rc::new(RefCell::new(0u32));
+        let captured_grid_calls = grid_calls.clone();
+        e.register_double(GRID_CELL_OF_POINT, move |e, a| {
+            let mut calls = captured_grid_calls.borrow_mut();
+            let upper = *calls > 0;
+            *calls += 1;
+            e.mem.set_u32(a[2], u32::from(upper));
+            e.mem.set_u32(a[3], u32::from(upper));
+            ret(0)
+        });
+        let pointer_gets = Rc::new(RefCell::new(0u32));
+        let captured_pointer_gets = pointer_gets.clone();
+        e.register_double(POINTER_GET, move |_, _| {
+            let mut call = captured_pointer_gets.borrow_mut();
+            let current = *call;
+            *call += 1;
+            ret(match current {
+                2 => corner_z_source,
+                3 => corner_y_source,
+                4 => corner_x_source,
+                _ => object,
+            })
+        });
+        let corners_built = Rc::new(RefCell::new(Vec::new()));
+        let captured_corners_built = corners_built.clone();
+        e.register_double(POINT3_CONSTRUCT, move |e, a| {
+            for axis in 0..3 {
+                e.mem
+                    .set_f32(a[0] + axis * 4, f32::from_bits(a[axis as usize + 1]));
+            }
+            captured_corners_built.borrow_mut().push([
+                f32::from_bits(a[1]),
+                f32::from_bits(a[2]),
+                f32::from_bits(a[3]),
+            ]);
+            ret(a[0])
+        });
+        e.register_double(ARRAY_SIZE, move |e, a| {
+            if cell_arrays.contains(&a[0]) {
+                ret(1)
+            } else {
+                ret(e.mem.u32(a[0] + 8))
+            }
+        });
+        e.register_double(ARRAY_ELEMENT_2, |e, a| ret(e.mem.u32(a[0] + 4) + a[1] * 2));
+        e.register_double(ARRAY_FIND_WORD, |e, a| {
+            let key = e.mem.u16(a[1]);
+            let count = e.mem.u32(a[0] + 8);
+            let buffer = e.mem.u32(a[0] + 4);
+            for index in 0..count {
+                if e.mem.u16(buffer + index * 2) == key {
+                    return ret(index);
+                }
+            }
+            ret(u32::MAX)
+        });
+        e.register_double(ARRAY_ADD_WORD, |e, a| {
+            let count = e.mem.u32(a[0] + 8);
+            let buffer = e.mem.u32(a[0] + 4);
+            let value = e.mem.u16(a[1]);
+            e.mem.set_u16(buffer + count * 2, value);
+            e.mem.set_u32(a[0] + 8, count + 1);
+            ret(count)
+        });
+        e.register_double(GET_TRIANGLE, move |_, _| ret(triangle));
+        e.register_double(TRIANGLE_VERTEX, |_, a| ret(a[1]));
+        e.register_double(VERTEX_POINTER, move |_, a| ret(vertices[a[1] as usize]));
+        e.register_double(TRIANGLE_FLAGS_SET, |_, _| ret(0));
+        e.register_double(0x0040_ebd0, |_, a| {
+            ret_float(f32::min(f32::from_bits(a[0]), f32::from_bits(a[1])))
+        });
+        e.register_double(0x0040_4010, |_, a| {
+            ret_float(f32::max(f32::from_bits(a[0]), f32::from_bits(a[1])))
+        });
+        e.register_double(POINT3_ADD, |e, a| {
+            for axis in 0..3 {
+                let value = e.mem.f32(a[0] + axis * 4) + e.mem.f32(a[2] + axis * 4);
+                e.mem.set_f32(a[1] + axis * 4, value);
+            }
+            ret(a[1])
+        });
+        e.register_double(POINT3_SUBTRACT, |e, a| {
+            for axis in 0..3 {
+                let value = e.mem.f32(a[0] + axis * 4) - e.mem.f32(a[2] + axis * 4);
+                e.mem.set_f32(a[1] + axis * 4, value);
+            }
+            ret(a[1])
+        });
+        e.register_double(0x004b_3ae0, |e, a| {
+            for axis in 0..3 {
+                let value = e.mem.f32(a[1] + axis * 4);
+                e.mem.set_f32(a[0] + axis * 4, value);
+            }
+            ret(a[0])
+        });
+        let overlap_calls = Rc::new(RefCell::new(0u32));
+        let captured_overlap_calls = overlap_calls.clone();
+        e.register_double(0x006d_93d0, move |e, a| {
+            assert_eq!(a.len(), 4);
+            *captured_overlap_calls.borrow_mut() += 1;
+            let overlaps = (0..3).all(|axis| {
+                let origin = e.mem.f32(a[0] + axis * 4);
+                let center = e.mem.f32(a[1] + axis * 4);
+                let low = e.mem.f32(a[2] + axis * 4);
+                let high = e.mem.f32(a[3] + axis * 4);
+                center > low && origin < high
+            });
+            ret(overlaps as u32)
+        });
+        let center_calls = Rc::new(RefCell::new(0u32));
+        let captured_center_calls = center_calls.clone();
+        e.register_double(GET_CENTER, move |e, a| {
+            *captured_center_calls.borrow_mut() += 1;
+            write_point(e, a[2], [0.0; 3]);
+            ret(a[2])
+        });
+        let center_hits = Rc::new(RefCell::new(0u32));
+        let captured_center_hits = center_hits.clone();
+        e.register_double(0x006c_3570, move |_, _| {
+            *captured_center_hits.borrow_mut() += 1;
+            ret(0)
+        });
+        e.register_double(0x0069_7730, |_, _| ret(0));
+        e.register_double(POINT2_CONSTRUCT, |e, a| {
+            e.mem.set_f32(a[0], f32::from_bits(a[1]));
+            e.mem.set_f32(a[0] + 4, f32::from_bits(a[2]));
+            ret(a[0])
+        });
+        let segment_calls = Rc::new(RefCell::new(0u32));
+        let captured_segment_calls = segment_calls.clone();
+        e.register_double(SEGMENTS_INTERSECT_2D, move |e, a| {
+            let points: Vec<[f32; 2]> = a
+                .iter()
+                .map(|pointer| [e.mem.f32(*pointer), e.mem.f32(*pointer + 4)])
+                .collect();
+            *captured_segment_calls.borrow_mut() += 1;
+            let [[ax, ay], [bx, by], [cx, cy], [dx, dy]] = points.as_slice() else {
+                unreachable!()
+            };
+            let cross = |p: [f32; 2], q: [f32; 2], r: [f32; 2]| {
+                (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+            };
+            let first = [*ax, *ay];
+            let second = [*bx, *by];
+            let third = [*cx, *cy];
+            let fourth = [*dx, *dy];
+            let crosses = cross(first, second, third) * cross(first, second, fourth) <= 0.0
+                && cross(third, fourth, first) * cross(third, fourth, second) <= 0.0;
+            ret(crosses as u32)
+        });
+
+        fn_006987d0(&mut e, mesh, reference, adjustment, output);
+        assert_eq!(e.mem.u32(output.addr() + 8), 1);
+        assert_eq!(e.mem.u16(output_items), 3);
+        assert_eq!(*overlap_calls.borrow(), 1);
+        assert_eq!(*center_calls.borrow(), 1);
+        assert_eq!(*center_hits.borrow(), 1);
+        assert_eq!(*segment_calls.borrow(), 1);
+        assert_eq!(
+            corners_built.borrow()[0],
+            [-2.0, -2.0, 5.0],
+            "corner fields come from fresh pointer getter returns per coordinate"
+        );
+
+        e.mem.set_u32(output.addr() + 8, 0);
+        e.mem.set_f32(object + 0x58, 100.0);
+        e.mem.set_f32(object + 0x64, 100.0);
+        fn_006987d0(&mut e, mesh, reference, adjustment, output);
+        assert_eq!(e.mem.u32(output.addr() + 8), 0);
+        assert_eq!(*overlap_calls.borrow(), 2);
+        assert_eq!(*center_calls.borrow(), 1);
+        assert_eq!(*center_hits.borrow(), 1);
+        assert_eq!(*segment_calls.borrow(), 1);
     }
 
     #[test]
@@ -5214,5 +6674,873 @@ mod tests {
                 expected_bits
             );
         }
+    }
+
+    #[test]
+    fn navmesh_info_array_destructor_sets_derived_vtable_and_clears() {
+        let mut e = Engine::new();
+        let this = Ptr::new(e.mem.alloc(16));
+        let calls = recorder(&mut e, 0x0084_54f0, 0);
+        fn_0069af10(&mut e, this);
+        assert_eq!(e.mem.u32(this.addr()), NAV_MESH_INFO_POINTER_ARRAY_VTABLE);
+        assert_eq!(&*calls.borrow(), &[vec![this.addr(), 1]]);
+    }
+
+    #[test]
+    fn navmesh_edge_handle_array_constructor_sets_vtable_and_initializes() {
+        let mut e = Engine::new();
+        let this = Ptr::new(e.mem.alloc(16));
+        let calls = recorder(&mut e, 0x0069_ba70, 0);
+        assert_eq!(fn_0069af30(&mut e, this), this);
+        assert_eq!(e.mem.u32(this.addr()), NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE);
+        assert_eq!(&*calls.borrow(), &[vec![this.addr(), 0, 0]]);
+    }
+
+    #[test]
+    fn navmesh_edge_handle_array_destructor_clears() {
+        let mut e = Engine::new();
+        let this = Ptr::new(e.mem.alloc(16));
+        let calls = recorder(&mut e, 0x0084_54f0, 0);
+        fn_0069af60(&mut e, this);
+        assert_eq!(e.mem.u32(this.addr()), NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE);
+        assert_eq!(&*calls.borrow(), &[vec![this.addr(), 1]]);
+    }
+
+    #[test]
+    fn navmesh_point_storage_allocation_multiplies_count_by_twelve() {
+        let mut e = Engine::new();
+        let calls = recorder(&mut e, 0x0040_1000, 0x7000);
+        assert_eq!(fn_0069af80(&mut e, Ptr::NULL, 5), Ptr::new(0x7000));
+        assert_eq!(&*calls.borrow(), &[vec![60]]);
+    }
+
+    #[test]
+    fn obstacle_map_get_at_finds_and_assigns_pointer_value() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        let table = e.mem.alloc(4);
+        let vtable = e.mem.alloc(16);
+        let item = e.mem.alloc(16);
+        let out = Ptr::new(e.mem.alloc(4));
+        let hash = 0x00ab_1000;
+        let equal = 0x00ab_1010;
+        e.map(vtable, 16);
+        e.mem.set_u32(vtable + 4, hash);
+        e.mem.set_u32(vtable + 8, equal);
+        e.mem.set_u32(map.addr(), vtable);
+        e.mem.set_u32(map.addr() + 4, 1);
+        e.mem.set_u32(map.addr() + 8, table);
+        e.mem.set_u32(table, item);
+        e.mem.set_u32(item, 0);
+        e.mem.set_u16(item + 4, 7);
+        e.mem.set_u32(item + 6, 0x7788);
+        e.register(hash, |_, _| ret(0));
+        e.register(equal, |_, a| ret((a[1] == a[2]) as u32));
+        let assign = recorder(&mut e, POINTER_ASSIGN, 0);
+        assert!(ni_t_map_base_obstacle_get_at(&mut e, map, 7, out));
+        assert_eq!(&*assign.borrow(), &[vec![out.addr(), item + 6]]);
+    }
+
+    #[test]
+    fn edge_handle_array_append_grows_and_copies_record() {
+        let mut e = Engine::new();
+        let this = Ptr::new(e.mem.alloc(16));
+        let buffer = e.mem.alloc(24);
+        let source = Ptr::new(e.mem.alloc(8));
+        e.mem.set_u32(this.addr() + 4, buffer);
+        e.mem.set_u32(source.addr(), 0x1122_3344);
+        e.mem.set_u16(source.addr() + 4, 0x5566);
+        recorder(&mut e, 0x0084_5460, 2);
+        recorder(&mut e, 0x0069_27d0, 0);
+        assert_eq!(fn_0069b030(&mut e, this, source), 2);
+        assert_eq!(e.mem.u32(buffer + 16), 0x1122_3344);
+        assert_eq!(e.mem.u16(buffer + 20), 0x5566);
+    }
+
+    #[test]
+    fn edge_handle_append_reloads_buffer_after_constructor_relocation() {
+        let mut e = Engine::new();
+        let this = Ptr::new(e.mem.alloc(16));
+        let old_buffer = e.mem.alloc(24);
+        let new_buffer = e.mem.alloc(24);
+        let source = Ptr::new(e.mem.alloc(8));
+        e.mem.set_u32(this.addr() + 4, old_buffer);
+        e.mem.set_u32(old_buffer + 16, 0xaaaa_bbbb);
+        e.mem.set_u32(old_buffer + 20, 0xcccc_dddd);
+        e.mem.set_u32(new_buffer + 20, 0xeeee_ffff);
+        e.mem.set_u32(source.addr(), 0x1122_3344);
+        e.mem.set_u16(source.addr() + 4, 0x5566);
+        recorder(&mut e, 0x0084_5460, 2);
+        e.register_double(0x0069_27d0, move |e, a| {
+            assert_eq!(a, &[this.addr(), old_buffer + 16, 1]);
+            e.mem.set_u32(this.addr() + 4, new_buffer);
+            ret(0)
+        });
+        assert_eq!(fn_0069b030(&mut e, this, source), 2);
+        assert_eq!(e.mem.u32(new_buffer + 16), 0x1122_3344);
+        assert_eq!(e.mem.u32(new_buffer + 20), 0xeeee_5566);
+        assert_eq!(e.mem.u32(old_buffer + 16), 0xaaaa_bbbb);
+        assert_eq!(e.mem.u32(old_buffer + 20), 0xcccc_dddd);
+    }
+
+    #[test]
+    fn undo_operation_reserves_arrays_and_reloads_mutated_members() {
+        let mut e = Engine::new();
+        let operation = Ptr::new(e.mem.alloc(12));
+        let mesh = Ptr::new(e.mem.alloc(0x48));
+        let undo = Ptr::new(e.mem.alloc(0x20));
+        let replacement_mesh = e.mem.alloc(0x48);
+        let replacement_undo = e.mem.alloc(0x20);
+        e.mem.set_u32(undo.addr() + 0x10, 17);
+        e.mem.set_u32(undo.addr() + 0x18, 19);
+        e.mem.set_u32(replacement_undo + 0x18, 23);
+        e.mem.set_u32(operation.addr() + 4, 0x1234_5678);
+        e.register_double(0x006b_ebd0, move |e, a| {
+            assert_eq!(a, &[operation.addr()]);
+            assert_eq!(e.mem.u32(operation.addr()), mesh.addr());
+            assert_eq!(e.mem.u32(operation.addr() + 8), undo.addr());
+            ret(0)
+        });
+        e.register_double(0x0069_4890, move |e, a| {
+            assert_eq!(a, &[mesh.addr() + 0x28, 17, 1]);
+            e.mem.set_u32(operation.addr(), replacement_mesh);
+            e.mem.set_u32(operation.addr() + 8, replacement_undo);
+            ret(0)
+        });
+        let triangles = recorder(&mut e, 0x0069_49d0, 0);
+        assert!(fn_006bc8e0(&mut e, operation, mesh, undo));
+        assert_eq!(
+            &*triangles.borrow(),
+            &[vec![replacement_mesh + 0x38, 23, 1]]
+        );
+        assert_eq!(e.mem.u32(operation.addr() + 4), 0x1234_5678);
+    }
+
+    #[test]
+    fn closed_door_collection_selects_smallest_extent_and_releases_temporaries() {
+        for (extent, chosen) in [
+            ([1.0f32, -2.0, 3.0], 0),
+            ([3.0, -1.0, 2.0], 1),
+            ([2.0, 3.0, -1.0], 2),
+            ([3.0, 2.0, -1.0], 2),
+            ([2.0, 2.0, 2.0], 2),
+            ([f32::NAN, 2.0, 3.0], 1),
+        ] {
+            let mut e = Engine::new();
+            let mesh = e.new_object::<NavMesh>();
+            let bounds = Ptr::new(e.mem.alloc(0x58));
+            e.map(0x011f_4000, 0x1000);
+            e.map(0x0106_b000, 0x1000);
+            e.mem.set_f64(0x0106_b168, 0.49000000953674316);
+            for axis in 0..3 {
+                e.mem.set_f32(0x011f_426c + axis * 4, 10.0 + axis as f32);
+            }
+            e.register_double(0x0043_9ef0, move |e, a| {
+                assert_eq!(a[0], bounds.addr() + 0x4c);
+                assert_eq!(a[2], bounds.addr() + 0x40);
+                for (axis, value) in extent.iter().enumerate() {
+                    e.mem.set_f32(a[1] + axis as u32 * 4, *value);
+                }
+                ret(a[1])
+            });
+            e.register(0x0040_8840, |_, a| ret_float(f32::from_bits(a[0]).abs()));
+            recorder(&mut e, 0x0069_17d0, 0);
+            recorder(&mut e, 0x0063_3c90, 0);
+            e.register_double(0x0069_87d0, move |e, a| {
+                assert_eq!(a[0], mesh.addr());
+                for (axis, component) in extent.iter().enumerate() {
+                    let expected = if axis == chosen {
+                        (-f64::from(component.abs()) * 0.49000000953674316) as f32
+                    } else {
+                        10.0 + axis as f32
+                    };
+                    assert_eq!(e.mem.f32(a[2] + axis as u32 * 4), expected);
+                }
+                ret(0)
+            });
+            recorder(&mut e, ARRAY_SIZE, 0);
+            let reference_destroy = recorder(&mut e, 0x0045_cec0, 0);
+            let array_destroy = recorder(&mut e, 0x0069_1800, 0);
+            assert!(fn_006997e0(&mut e, mesh, Ptr::new(0x1234), bounds));
+            assert_eq!(reference_destroy.borrow().len(), 1);
+            assert_eq!(array_destroy.borrow().len(), 1);
+        }
+    }
+
+    #[test]
+    fn closed_door_collection_appends_absent_and_different_door_records() {
+        for old_door in [None, Some(0x1234u32), Some(0x5678u32)] {
+            let mut e = Engine::new();
+            let mesh = e.new_object::<NavMesh>();
+            let bounds = Ptr::new(e.mem.alloc(0x58));
+            let element = e.mem.alloc(2);
+            let existing = e.mem.alloc(8);
+            let buffer = e.mem.alloc(16);
+            e.mem.set_u16(element, 7);
+            e.mem.set_u16(existing + 4, 7);
+            e.mem.set_u32(existing, old_door.unwrap_or(0));
+            e.mem.set_u32(mesh.addr() + 0x6c, buffer);
+            e.map(0x011f_4000, 0x1000);
+            e.map(0x0106_b000, 0x1000);
+            e.mem.set_f64(0x0106_b168, 0.49);
+            e.register(0x0043_9ef0, |e, a| {
+                for axis in 0..3 {
+                    e.mem.set_f32(a[1] + axis * 4, 2.0);
+                }
+                ret(a[1])
+            });
+            e.register(0x0040_8840, |_, a| ret_float(f32::from_bits(a[0]).abs()));
+            for address in [
+                0x0069_17d0,
+                0x0063_3c90,
+                0x0069_87d0,
+                0x0045_cec0,
+                0x0069_1800,
+                0x0069_2870,
+                0x0069_27d0,
+            ] {
+                recorder(&mut e, address, 0);
+            }
+            e.register_double(ARRAY_SIZE, move |_, a| {
+                ret(if a[0] == mesh.addr() + 0x68 {
+                    u32::from(old_door.is_some())
+                } else {
+                    1
+                })
+            });
+            recorder(&mut e, 0x005e_eda0, element);
+            recorder(&mut e, 0x0069_50d0, existing);
+            recorder(&mut e, 0x0055_82f0, 0x8765);
+            recorder(&mut e, 0x0084_5460, 1);
+            let flag = recorder(&mut e, 0x0069_1570, 0);
+            assert!(fn_006997e0(&mut e, mesh, Ptr::new(0x1234), bounds));
+            if old_door == Some(0x1234) {
+                assert!(flag.borrow().is_empty());
+                assert_eq!(e.mem.u32(buffer + 8), 0);
+            } else {
+                assert_eq!(&*flag.borrow(), &[vec![0x8765, 0x1000]]);
+                assert_eq!(e.mem.u32(buffer + 8), 0x1234);
+                assert_eq!(e.mem.u16(buffer + 12), 7);
+            }
+        }
+    }
+
+    #[test]
+    fn portal_repair_covers_rejections_unique_fallback_and_endpoint_matching() {
+        // mode: null source, inactive source, no portal, prohibited holder,
+        // empty reference, missing neighbor, then the candidate cases.
+        for mode in 0..15 {
+            let mut e = Engine::new();
+            let mesh = e.new_object::<NavMesh>();
+            let neighbor = e.new_object::<NavMesh>();
+            let source_triangle = e.mem.alloc(16);
+            let neighbor_triangle = e.mem.alloc(16);
+            let extra = e.mem.alloc(12);
+            let holder = e.mem.alloc(0x58);
+            let target = e.mem.alloc(12);
+            e.mem.set_u32(extra + 4, holder);
+            e.mem.set_u16(extra + 8, 7);
+            e.mem.set_u32(holder + 0x54, 0x1111);
+            e.mem.set_u32(target, 0xaaaa);
+            e.map(0x0106_b000, 0x1000);
+            e.mem.set_f64(0x0106_b178, 400.0);
+            recorder(&mut e, 0x0055_8200, 1);
+            e.register_double(0x0055_82f0, move |_, a| {
+                if a[0] == mesh.addr() {
+                    assert_eq!(a[1], 0);
+                    ret(if mode == 0 { 0 } else { source_triangle })
+                } else {
+                    assert_eq!(a, &[neighbor.addr(), 7]);
+                    ret(if mode == 5 { 0 } else { neighbor_triangle })
+                }
+            });
+            recorder(&mut e, 0x0069_0e10, u32::from(mode != 1));
+            e.register_double(0x0068_f1d0, move |_, a| {
+                ret(u32::from(if a[0] == source_triangle {
+                    mode != 2 && a[1] == 0
+                } else {
+                    let count = if mode == 6 {
+                        0
+                    } else if mode == 7 {
+                        1
+                    } else {
+                        2
+                    };
+                    a[1] < count
+                }))
+            });
+            recorder(&mut e, 0x0068_f2c0, 9);
+            e.register_double(0x0069_3d30, move |_, a| {
+                assert_eq!(a, &[mesh.addr(), 9]);
+                ret(extra)
+            });
+            recorder(&mut e, 0x0042_fb00, 0);
+            recorder(&mut e, 0x0068_f320, u32::from(mode == 3));
+            e.register_double(0x0069_0890, |_, a| {
+                assert_eq!(a[1], 0x1111);
+                ret(0)
+            });
+            recorder(
+                &mut e,
+                POINTER_GET,
+                if mode == 4 { 0 } else { neighbor.addr() },
+            );
+            e.register_double(0x0068_f0c0, move |e, a| {
+                assert_eq!(a.len(), 5);
+                let first = if a[0] == mesh.addr() {
+                    assert_eq!(&a[1..3], &[0, 0]);
+                    1
+                } else {
+                    assert_eq!(a[0], neighbor.addr());
+                    assert_eq!(a[1], u32::from(e.mem.u16(extra + 8)));
+                    assert!(a[2] < 3);
+                    3
+                };
+                e.mem.set_u32(a[3], first);
+                e.mem.set_u32(a[4], first + 1);
+                ret(0)
+            });
+            e.register(0x0043_9ef0, |e, a| {
+                assert_eq!(a.len(), 3);
+                let endpoints = (e.mem.u32(a[0]), e.mem.u32(a[2]));
+                assert!(matches!(endpoints, (1, 4) | (2, 3)));
+                ret(a[1])
+            });
+            let distances = Rc::new(RefCell::new(0usize));
+            let distance_count = distances.clone();
+            e.register_double(0x004a_7290, move |e, _| {
+                let mut count = distance_count.borrow_mut();
+                if mode == 14 && *count == 0 {
+                    // Reload the changed neighbor index for the next
+                    // candidate and the final insertion.
+                    e.mem.set_u16(extra + 8, 11);
+                }
+                let value = match mode {
+                    9 => 1.0,                     // Both endpoints match on candidate zero.
+                    10 if *count % 2 == 0 => 1.0, // Second endpoint rejects.
+                    11 => f32::NAN,               // Unordered comparison rejects.
+                    12 if *count >= 1 => 1.0,     // Candidate one matches.
+                    13 if *count % 2 == 0 => 1.0,
+                    13 => f32::NAN, // Second endpoint unordered rejects.
+                    14 if *count >= 1 => 1.0,
+                    _ => 400.0, // Equality rejects; single candidate survives.
+                };
+                *count += 1;
+                ret_float(value)
+            });
+            let selected = recorder(&mut e, GET_EDGE_EXTRA_INFO, target);
+            recorder(&mut e, 0x0068_efb0, 0x1234);
+            let destroyed = recorder(&mut e, 0x0042_fa40, 0);
+            assert!(fn_0069aa20(&mut e, mesh));
+            assert_eq!(destroyed.borrow().len(), usize::from(mode >= 3));
+            if [7, 9, 12, 14].contains(&mode) {
+                let expected_edge = u32::from(mode == 12 || mode == 14);
+                let expected_triangle = if mode == 14 { 11 } else { 7 };
+                assert_eq!(
+                    &*selected.borrow(),
+                    &[vec![neighbor.addr(), expected_triangle, expected_edge]]
+                );
+                assert_eq!(e.mem.u32(target), 3);
+                assert_eq!(e.mem.u32(target + 4), 0x1234);
+                assert_eq!(e.mem.u16(target + 8), 0);
+            } else {
+                assert!(selected.borrow().is_empty());
+                assert_eq!(e.mem.u32(target), 0xaaaa);
+            }
+            if mode == 6 {
+                assert_eq!(*distances.borrow(), 0);
+            }
+        }
+    }
+    #[test]
+    fn obstacle_map_is_empty_reads_item_count() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        assert!(fn_0069b080(&mut e, map));
+        e.mem.set_u32(map.addr() + 0xc, 1);
+        assert!(!fn_0069b080(&mut e, map));
+    }
+
+    #[test]
+    fn obstacle_map_value_lookup_copies_packed_value() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        let table = e.mem.alloc(4);
+        let vtable = e.mem.alloc(16);
+        let item = e.mem.alloc(16);
+        let out = Ptr::new(e.mem.alloc(4));
+        let hash = 0x00ab_1020;
+        let equal = 0x00ab_1030;
+        e.map(vtable, 16);
+        e.mem.set_u32(vtable + 4, hash);
+        e.mem.set_u32(vtable + 8, equal);
+        e.mem.set_u32(map.addr(), vtable);
+        e.mem.set_u32(map.addr() + 8, table);
+        e.mem.set_u32(table, item);
+        e.mem.set_u32(item, 0);
+        e.mem.set_u16(item + 4, 9);
+        e.mem.set_u32(item + 6, 0x1234_5678);
+        e.register(hash, |_, _| ret(0));
+        e.register(equal, |_, a| ret((a[1] == a[2]) as u32));
+        assert!(fn_0069b0a0(&mut e, map, 9, out));
+        assert_eq!(e.mem.u32(out.addr()), 0x1234_5678);
+    }
+
+    #[test]
+    fn array_remove_destroys_shifts_and_reduces_size() {
+        let mut e = Engine::new();
+        let array = Ptr::new(e.mem.alloc(16));
+        e.mem.set_u32(array.addr() + 4, 0x4000);
+        e.mem.set_u32(array.addr() + 8, 8);
+        let move_count = recorder(&mut e, 0x0042_f5a0, 3);
+        let destroy = recorder(&mut e, 0x0082_2820, 0);
+        let shift = recorder(&mut e, 0x0042_fb60, 0);
+        fn_0069b120(&mut e, array, 2, 2);
+        assert_eq!(&*move_count.borrow(), &[vec![4, 2]]);
+        assert_eq!(&*destroy.borrow(), &[vec![0x4008, 2]]);
+        assert_eq!(&*shift.borrow(), &[vec![0x4008, 0x4014, 3]]);
+        assert_eq!(e.mem.u32(array.addr() + 8), 6);
+    }
+
+    #[test]
+    fn triangle_index_comparator_compares_values_not_addresses() {
+        let mut e = Engine::new();
+        let first = Ptr::new(e.mem.alloc(2));
+        let second = Ptr::new(e.mem.alloc(2));
+        e.mem.set_u16(first.addr(), 12);
+        e.mem.set_u16(second.addr(), 12);
+        assert!(fn_0069b1b0(&mut e, first, second));
+        e.mem.set_u16(second.addr(), 13);
+        assert!(!fn_0069b1b0(&mut e, first, second));
+    }
+
+    #[test]
+    fn boolean_array_destructor_sets_vtable_and_clears() {
+        let mut e = Engine::new();
+        let this = Ptr::new(e.mem.alloc(16));
+        let calls = recorder(&mut e, 0x0084_54f0, 0);
+        fn_0069b1d0(&mut e, this);
+        assert_eq!(e.mem.u32(this.addr()), BOOLEAN_ARRAY_VTABLE);
+        assert_eq!(&*calls.borrow(), &[vec![this.addr(), 1]]);
+    }
+
+    #[test]
+    fn fast_edge_storage_allocation_multiplies_count_by_twelve() {
+        let mut e = Engine::new();
+        let calls = recorder(&mut e, 0x0040_1000, 0x7100);
+        assert_eq!(fn_0069b1f0(&mut e, Ptr::NULL, 3), Ptr::new(0x7100));
+        assert_eq!(&*calls.borrow(), &[vec![36]]);
+    }
+
+    #[test]
+    fn memory_helper_wrapper_forwards_both_arguments() {
+        let mut e = Engine::new();
+        let calls = recorder(&mut e, 0x0042_f5d0, 0);
+        fn_0069b220(&mut e, Ptr::NULL, Ptr::new(0x12), Ptr::new(0x34));
+        assert_eq!(&*calls.borrow(), &[vec![0x12, 0x34]]);
+    }
+
+    #[test]
+    fn word_array_search_calls_comparator_from_start_and_returns_index() {
+        let mut e = Engine::new();
+        let array = Ptr::new(e.mem.alloc(16));
+        let buffer = e.mem.alloc(8);
+        let key = Ptr::new(e.mem.alloc(2));
+        e.mem.set_u32(array.addr() + 4, buffer);
+        e.mem.set_u32(array.addr() + 8, 4);
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let captured = calls.clone();
+        e.register_double(0x00ab_1040, move |_, a| {
+            captured.borrow_mut().push(a.to_vec());
+            ret((a[0] == buffer + 4 && a[1] == key.addr()) as u32)
+        });
+        assert_eq!(fn_0069b240(&mut e, array, key, 1, 0x00ab_1040), 2);
+        assert_eq!(calls.borrow().len(), 2);
+    }
+
+    #[test]
+    fn unsigned_word_to_dword_comparator_checks_numeric_value() {
+        let mut e = Engine::new();
+        let first = Ptr::new(e.mem.alloc(2));
+        let second = Ptr::new(e.mem.alloc(4));
+        e.mem.set_u16(first.addr(), 0xfffe);
+        e.mem.set_u32(second.addr(), 0xfffe);
+        assert!(fn_0069b2a0(&mut e, first, second));
+        e.mem.set_u32(second.addr(), 0xffff_fffe);
+        assert!(!fn_0069b2a0(&mut e, first, second));
+    }
+
+    #[test]
+    fn fast_edge_array_constructor_sets_vtable_and_initializes() {
+        let mut e = Engine::new();
+        let this = Ptr::new(e.mem.alloc(16));
+        let calls = recorder(&mut e, 0x0069_ba70, 0);
+        assert_eq!(fn_0069b2c0(&mut e, this), this);
+        assert_eq!(
+            e.mem.u32(this.addr()),
+            FAST_NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE
+        );
+        assert_eq!(&*calls.borrow(), &[vec![this.addr(), 0, 0]]);
+    }
+
+    #[test]
+    fn fast_edge_array_destructor_sets_vtable_and_clears() {
+        let mut e = Engine::new();
+        let this = Ptr::new(e.mem.alloc(16));
+        let calls = recorder(&mut e, 0x0084_54f0, 0);
+        fn_0069b2f0(&mut e, this);
+        assert_eq!(
+            e.mem.u32(this.addr()),
+            FAST_NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE
+        );
+        assert_eq!(&*calls.borrow(), &[vec![this.addr(), 1]]);
+    }
+
+    #[test]
+    fn fast_edge_array_append_constructs_and_copies_item() {
+        let mut e = Engine::new();
+        let this = Ptr::new(e.mem.alloc(16));
+        let buffer = e.mem.alloc(36);
+        let source = Ptr::new(e.mem.alloc(12));
+        e.mem.set_u32(this.addr() + 4, buffer);
+        let grow = recorder(&mut e, 0x0097_8bc0, 2);
+        let construct = recorder(&mut e, 0x0069_b9d0, 0);
+        let copy = recorder(&mut e, 0x006b_c870, 0);
+        assert_eq!(fn_0069b310(&mut e, this, source), 2);
+        assert_eq!(&*grow.borrow(), &[vec![this.addr()]]);
+        assert_eq!(&*construct.borrow(), &[vec![this.addr(), buffer + 24, 1]]);
+        assert_eq!(&*copy.borrow(), &[vec![buffer + 24, source.addr()]]);
+    }
+
+    #[test]
+    fn fast_vertex_map_base_constructor_allocates_and_zeroes_buckets() {
+        let mut e = Engine::new();
+        let this = Ptr::new(e.mem.alloc(16));
+        let allocate = recorder(&mut e, 0x00aa_1070, 0x7200);
+        let clear = recorder(&mut e, 0x0040_3d30, 0);
+        assert_eq!(fn_0069b360(&mut e, this, 8), this);
+        assert_eq!(e.mem.u32(this.addr()), FAST_NAV_MESH_VERTEX_MAP_BASE_VTABLE);
+        assert_eq!(e.mem.u32(this.addr() + 4), 8);
+        assert_eq!(e.mem.u32(this.addr() + 8), 0x7200);
+        assert_eq!(e.mem.u32(this.addr() + 0xc), 0);
+        assert_eq!(&*allocate.borrow(), &[vec![32]]);
+        assert_eq!(&*clear.borrow(), &[vec![0x7200, 0, 32]]);
+    }
+
+    #[test]
+    fn fast_vertex_map_inserts_key_and_value_into_empty_bucket() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        let vtable = e.mem.alloc(0x20);
+        let buckets = e.mem.alloc(8);
+        let item = e.mem.alloc(16);
+        let hash = 0x00ab_1100;
+        let equal = 0x00ab_1110;
+        let allocate = 0x00ab_1130;
+        e.map(vtable, 0x20);
+        e.mem.set_u32(vtable + 4, hash);
+        e.mem.set_u32(vtable + 8, equal);
+        e.mem.set_u32(vtable + 0xc, 0x0069_b6a0);
+        e.mem.set_u32(vtable + 0x14, allocate);
+        e.mem.set_u32(map.addr(), vtable);
+        e.mem.set_u32(map.addr() + 4, 2);
+        e.mem.set_u32(map.addr() + 8, buckets);
+        e.mem.set_u32(map.addr() + 0xc, 0);
+        e.register(hash, |_, _| ret(1));
+        e.register(equal, |_, _| ret(0));
+        e.register_double(allocate, move |_, _| ret(item));
+        fn_0069b3d0(&mut e, map, 0x1122_3344, 0x5566, 0x7788_99aa);
+        assert_eq!(e.mem.u32(buckets + 4), item);
+        assert_eq!(e.mem.u32(item), 0);
+        assert_eq!(e.mem.u32(item + 4), 0x1122_3344);
+        assert_eq!(e.mem.u16(item + 8), 0x5566);
+        assert_eq!(e.mem.u32(item + 0xc), 0x7788_99aa);
+        assert_eq!(e.mem.u32(map.addr() + 0xc), 1);
+    }
+
+    #[test]
+    fn fast_vertex_map_updates_existing_key_without_allocating() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        let vtable = e.mem.alloc(0x20);
+        let buckets = e.mem.alloc(8);
+        let item = e.mem.alloc(16);
+        let hash = 0x00ab_1160;
+        let equal = 0x00ab_1170;
+        let allocate = 0x00ab_1180;
+        e.map(vtable, 0x20);
+        e.mem.set_u32(vtable + 4, hash);
+        e.mem.set_u32(vtable + 8, equal);
+        e.mem.set_u32(vtable + 0xc, 0x0069_b6a0);
+        e.mem.set_u32(vtable + 0x14, allocate);
+        e.mem.set_u32(map.addr(), vtable);
+        e.mem.set_u32(map.addr() + 4, 2);
+        e.mem.set_u32(map.addr() + 8, buckets);
+        e.mem.set_u32(map.addr() + 0xc, 1);
+        e.mem.set_u32(buckets, item);
+        e.mem.set_u32(item + 4, 0x1122_3344);
+        e.mem.set_u32(item + 8, 0x5566);
+        e.register(hash, |_, _| ret(0));
+        e.register(equal, |_, a| ret((a[1] == a[3] && a[2] == a[4]) as u32));
+        let allocate = recorder(&mut e, allocate, 0x7fff);
+
+        fn_0069b3d0(&mut e, map, 0x1122_3344, 0x5566, 0xaabb_ccdd);
+
+        assert_eq!(e.mem.u32(item + 0xc), 0xaabb_ccdd);
+        assert_eq!(e.mem.u32(map.addr() + 0xc), 1);
+        assert!(allocate.borrow().is_empty());
+    }
+
+    #[test]
+    fn fast_vertex_map_lookup_returns_matching_value() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        let vtable = e.mem.alloc(0x10);
+        let buckets = e.mem.alloc(4);
+        let item = e.mem.alloc(16);
+        let out = Ptr::new(e.mem.alloc(4));
+        let hash = 0x00ab_1140;
+        let equal = 0x00ab_1150;
+        e.map(vtable, 0x10);
+        e.mem.set_u32(vtable + 4, hash);
+        e.mem.set_u32(vtable + 8, equal);
+        e.mem.set_u32(map.addr(), vtable);
+        e.mem.set_u32(map.addr() + 8, buckets);
+        e.mem.set_u32(buckets, item);
+        e.mem.set_u32(item, 0);
+        e.mem.set_u32(item + 4, 0x1122_3344);
+        e.mem.set_u32(item + 8, 0x5566);
+        e.mem.set_u32(item + 0xc, 0xaabb_ccdd);
+        e.register(hash, |_, _| ret(0));
+        e.register(equal, |_, a| ret((a[1] == a[3]) as u32));
+        assert!(fn_0069b4d0(&mut e, map, 0x1122_3344, 0x5566, out));
+        assert_eq!(e.mem.u32(out.addr()), 0xaabb_ccdd);
+    }
+
+    #[test]
+    fn fast_vertex_map_lookup_miss_preserves_output_value() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        let vtable = e.mem.alloc(0x10);
+        let buckets = e.mem.alloc(4);
+        let out = Ptr::new(e.mem.alloc(4));
+        let hash = 0x00ab_1190;
+        e.map(vtable, 0x10);
+        e.mem.set_u32(vtable + 4, hash);
+        e.mem.set_u32(map.addr(), vtable);
+        e.mem.set_u32(map.addr() + 8, buckets);
+        e.mem.set_u32(out.addr(), 0xdead_beef);
+        e.register(hash, |_, _| ret(0));
+        assert!(!fn_0069b4d0(&mut e, map, 0x1234_5678, 0x9abc, out));
+        assert_eq!(e.mem.u32(out.addr()), 0xdead_beef);
+    }
+
+    #[test]
+    fn fast_vertex_map_iterator_copies_current_key_value_and_follows_link() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        let iterator = Ptr::new(e.mem.alloc(4));
+        let key_out = Ptr::new(e.mem.alloc(8));
+        let value_out = Ptr::new(e.mem.alloc(4));
+        let item = e.mem.alloc(16);
+        let next = e.mem.alloc(16);
+        e.mem.set_u32(iterator.addr(), item);
+        e.mem.set_u32(item, next);
+        e.mem.set_u32(item + 4, 0x1234_5678);
+        e.mem.set_u16(item + 8, 0x9abc);
+        e.mem.set_u32(item + 0xc, 0x5566_7788);
+        fn_0069b560(&mut e, map, iterator, key_out, value_out);
+        assert_eq!(e.mem.u32(iterator.addr()), next);
+        assert_eq!(e.mem.u32(key_out.addr()), 0x1234_5678);
+        assert_eq!(e.mem.u16(key_out.addr() + 4), 0x9abc);
+        assert_eq!(e.mem.u32(value_out.addr()), 0x5566_7788);
+
+        let vtable = e.mem.alloc(8);
+        let buckets = e.mem.alloc(12);
+        let later_item = e.mem.alloc(16);
+        let hash = 0x00ab_11a0;
+        e.map(vtable, 8);
+        e.mem.set_u32(vtable + 4, hash);
+        e.mem.set_u32(map.addr(), vtable);
+        e.mem.set_u32(map.addr() + 4, 3);
+        e.mem.set_u32(map.addr() + 8, buckets);
+        e.mem.set_u32(buckets + 4, later_item);
+        e.mem.set_u32(next, 0);
+        e.mem.set_u32(next + 4, 0x8765_4321);
+        e.mem.set_u16(next + 8, 0xdef0);
+        e.mem.set_u32(next + 0xc, 0x1122_3344);
+        e.register(hash, |_, _| ret(0));
+        fn_0069b560(&mut e, map, iterator, key_out, value_out);
+        assert_eq!(e.mem.u32(iterator.addr()), later_item);
+        assert_eq!(e.mem.u32(key_out.addr()), 0x8765_4321);
+        assert_eq!(e.mem.u16(key_out.addr() + 4), 0xdef0);
+        assert_eq!(e.mem.u32(value_out.addr()), 0x1122_3344);
+    }
+
+    #[test]
+    fn fast_vertex_hash_index_uses_native_hash_and_remainder() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(8));
+        e.mem.set_u32(map.addr() + 4, 7);
+        let key = Ptr::new(e.mem.alloc(8));
+        e.mem.set_u32(key.addr(), 2);
+        e.mem.set_u16(key.addr() + 4, 3);
+        let hash = fn_0069b640(&mut e, key);
+        assert_eq!(
+            ni_t_map_fast_vertex_key_to_hash_index(&mut e, map, 2, 3),
+            (hash as u32) % 7
+        );
+    }
+
+    #[test]
+    fn fast_vertex_hash_shifts_the_signed_first_word_and_adds_high_word() {
+        let mut e = Engine::new();
+        let key = Ptr::new(e.mem.alloc(8));
+        e.mem.set_u32(key.addr(), 2);
+        e.mem.set_u16(key.addr() + 4, 3);
+        assert_eq!(fn_0069b640(&mut e, key), 0x0000_0002_0003_0000);
+        e.mem.set_u32(key.addr(), u32::MAX);
+        assert_eq!(fn_0069b640(&mut e, key), 0xffff_ffff_0003_0000);
+        e.mem.set_u32(key.addr(), 0);
+        e.mem.set_u16(key.addr() + 4, 0x8000);
+        assert_eq!(fn_0069b640(&mut e, key), 0xffff_ffff_8000_0000);
+    }
+
+    #[test]
+    fn fast_vertex_key_equality_forwards_both_struct_addresses() {
+        let mut e = Engine::new();
+        let calls = Rc::new(RefCell::new(None));
+        let captured = calls.clone();
+        e.register_double(0x006d_4ca0, move |e, a| {
+            *captured.borrow_mut() = Some((a[0], a[1], e.mem.u32(a[0]), e.mem.u32(a[1])));
+            ret(1)
+        });
+        assert!(ni_t_map_fast_vertex_is_keys_equal(
+            &mut e,
+            Ptr::NULL,
+            1,
+            2,
+            3,
+            4
+        ));
+        let captured = calls.borrow().unwrap();
+        assert_ne!(captured.0, captured.1);
+        assert_eq!((captured.2, captured.3), (1, 3));
+    }
+
+    #[test]
+    fn fast_vertex_set_value_copies_key_and_writes_value() {
+        let mut e = Engine::new();
+        let item = Ptr::new(e.mem.alloc(16));
+        ni_t_map_fast_vertex_set_value(&mut e, Ptr::NULL, item, 0x1122_3344, 0x5566, 0xaabb_ccdd);
+        assert_eq!(e.mem.u32(item.addr() + 4), 0x1122_3344);
+        assert_eq!(e.mem.u16(item.addr() + 8), 0x5566);
+        assert_eq!(e.mem.u32(item.addr() + 0xc), 0xaabb_ccdd);
+    }
+
+    #[test]
+    fn fast_vertex_map_destructor_removes_items_and_frees_buckets() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        e.mem.set_u32(map.addr() + 8, 0x7300);
+        let remove = recorder(&mut e, 0x0043_8af0, 0);
+        let free = recorder(&mut e, 0x00aa_10f0, 0);
+        fn_0069b6d0(&mut e, map);
+        assert_eq!(e.mem.u32(map.addr()), FAST_NAV_MESH_VERTEX_MAP_BASE_VTABLE);
+        assert_eq!(&*remove.borrow(), &[vec![map.addr()], vec![map.addr()]]);
+        assert_eq!(&*free.borrow(), &[vec![0x7300]]);
+    }
+
+    #[test]
+    fn fast_vertex_map_base_destructor_removes_items_and_frees_buckets() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        e.mem.set_u32(map.addr() + 8, 0x7400);
+        let remove = recorder(&mut e, 0x0043_8af0, 0);
+        let free = recorder(&mut e, 0x00aa_10f0, 0);
+        fn_0069b730(&mut e, map);
+        assert_eq!(e.mem.u32(map.addr()), FAST_NAV_MESH_VERTEX_MAP_BASE_VTABLE);
+        assert_eq!(&*remove.borrow(), &[vec![map.addr()]]);
+        assert_eq!(&*free.borrow(), &[vec![0x7400]]);
+    }
+
+    #[test]
+    fn fast_vertex_map_new_item_forwards_to_allocator() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        let calls = recorder(&mut e, 0x0069_b8a0, 0x7500);
+        assert_eq!(fn_0069b760(&mut e, map), Ptr::new(0x7500));
+        assert_eq!(&*calls.borrow(), &[vec![map.addr() + 0xc]]);
+    }
+
+    #[test]
+    fn fast_vertex_map_delete_item_clears_value_and_releases_item() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        let item = Ptr::new(e.mem.alloc(16));
+        e.mem.set_u32(item.addr() + 0xc, 0x7788);
+        let free = recorder(&mut e, 0x006b_8310, 0);
+        fn_0069b780(&mut e, map, item);
+        assert_eq!(e.mem.u32(item.addr() + 0xc), 0);
+        assert_eq!(&*free.borrow(), &[vec![map.addr() + 0xc, item.addr()]]);
+    }
+
+    #[test]
+    fn scalar_deleting_array_destructors_free_only_when_flag_is_set() {
+        for (destroyer, vtable) in [
+            (
+                fn_0069b7b0 as fn(&mut Engine, Ptr, u32) -> Ptr,
+                NAV_MESH_INFO_POINTER_ARRAY_VTABLE,
+            ),
+            (fn_0069b7e0, NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE),
+            (fn_0069b810, BOOLEAN_ARRAY_VTABLE),
+            (fn_0069b840, FAST_NAV_MESH_EDGE_HANDLE_ARRAY_VTABLE),
+        ] {
+            let mut e = Engine::new();
+            let this = Ptr::new(e.mem.alloc(16));
+            let clear = recorder(&mut e, 0x0084_54f0, 0);
+            let free = recorder(&mut e, 0x0040_1030, 0);
+            assert_eq!(destroyer(&mut e, this, 0), this);
+            assert_eq!(e.mem.u32(this.addr()), vtable);
+            assert_eq!(clear.borrow().len(), 1);
+            assert!(free.borrow().is_empty());
+            destroyer(&mut e, this, 1);
+            assert_eq!(free.borrow().len(), 1);
+        }
+    }
+
+    #[test]
+    fn fast_vertex_map_scalar_deleting_destructor_obeys_delete_flag() {
+        let mut e = Engine::new();
+        let map = Ptr::new(e.mem.alloc(16));
+        e.mem.set_u32(map.addr() + 8, 0x7600);
+        let remove = recorder(&mut e, 0x0043_8af0, 0);
+        let free_table = recorder(&mut e, 0x00aa_10f0, 0);
+        let free_object = recorder(&mut e, 0x0040_1030, 0);
+        assert_eq!(fn_0069b870(&mut e, map, 0), map);
+        assert!(free_object.borrow().is_empty());
+        fn_0069b870(&mut e, map, 1);
+        assert_eq!(free_object.borrow().len(), 1);
+        assert_eq!(remove.borrow().len(), 2);
+        assert_eq!(free_table.borrow().len(), 2);
+    }
+
+    #[test]
+    fn fast_vertex_item_allocation_skips_constructor_when_allocation_fails() {
+        let mut e = Engine::new();
+        let allocation = recorder(&mut e, 0x0040_1000, 0);
+        assert_eq!(fn_0069b8a0(&mut e, Ptr::NULL), Ptr::NULL);
+        assert_eq!(&*allocation.borrow(), &[vec![16]]);
+    }
+
+    #[test]
+    fn fast_vertex_item_allocation_constructs_non_null_item() {
+        let mut e = Engine::new();
+        let item = e.mem.alloc(16);
+        let allocation = recorder(&mut e, 0x0040_1000, item);
+        let constructor = recorder(&mut e, 0x0069_b920, item);
+        assert_eq!(fn_0069b8a0(&mut e, Ptr::NULL), Ptr::new(item));
+        assert_eq!(&*allocation.borrow(), &[vec![16]]);
+        assert_eq!(&*constructor.borrow(), &[vec![item]]);
     }
 }

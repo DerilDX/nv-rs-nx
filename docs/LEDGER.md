@@ -30,18 +30,35 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10541 | 15.9% |
-| traced | 4495 | 6.8% |
+| translated | 10683 | 16.1% |
+| traced | 4469 | 6.7% |
 | platform | 3417 | 5.2% |
 | library | 21915 | 33.1% |
-| open | 25891 | 39.1% |
+| open | 25775 | 38.9% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **12** engine functions
+Translation totals count markers, not complete behavior. **40** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
 | --- | --- |
+| `006987d0` | `crates/engine/src/units/fallout_shared_pathfinding/navmesh_util.rs:3346` |
+| `006bd040` | `crates/engine/src/units/fallout_shared_pathfinding/navmesh_util.rs:3221` |
+| `006e9cc0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:55` |
+| `006e9db0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:82` |
+| `006e9fc0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:139` |
+| `006ea510` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:288` |
+| `006ea780` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:370` |
+| `006eac70` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:530` |
+| `006eae40` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:581` |
+| `006eb440` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:822` |
+| `006eb6b0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:896` |
+| `006eb8c0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:982` |
+| `006eb9d0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1016` |
+| `006ebd30` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1154` |
+| `006ec000` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1262` |
+| `006ec130` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1294` |
+| `006ec4b0` | `crates/engine/src/units/fallout_shared_pathfinding/pathmanager.rs:1377` |
 | `008c9330` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1407` |
 | `008c9430` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1423` |
 | `008c94e0` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1438` |
@@ -54,10 +71,21 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `008ca070` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1562` |
 | `008ca350` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1571` |
 | `008ca480` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1782` |
+| `009abf30` | `crates/engine/src/units/fallout_ai/explosion.rs:641` |
+| `009ac200` | `crates/engine/src/units/fallout_ai/explosion.rs:1031` |
+| `009ac5a0` | `crates/engine/src/units/fallout_ai/explosion.rs:189` |
+| `009ac9c0` | `crates/engine/src/units/fallout_ai/explosion.rs:302` |
+| `009ae140` | `crates/engine/src/units/fallout_ai/explosion.rs:701` |
+| `009afaf0` | `crates/engine/src/units/fallout_ai/explosion.rs:751` |
+| `009b0e00` | `crates/engine/src/units/fallout_ai/explosion.rs:1140` |
+| `009b1090` | `crates/engine/src/units/fallout_ai/explosion.rs:922` |
+| `009b22c0` | `crates/engine/src/units/fallout_ai/explosion.rs:1622` |
+| `009b2cb0` | `crates/engine/src/units/fallout_ai/explosion.rs:1834` |
+| `009b2d30` | `crates/engine/src/units/fallout_ai/explosion.rs:1848` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14629 (36.1%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14745 (36.4%) are translated or traced.
 
-Rust cites 15661 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 15798 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -88,12 +116,12 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 65 | 0 | 21269 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6305 | 991 | 0 | 0 | 3174 | 69.7% |
+| fallout shared | 10470 | 2065 | 3149 | 6306 | 990 | 0 | 0 | 3174 | 69.7% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
-| fallout/ai | 4849 | 1475 | 1888 | 2203 | 622 | 0 | 0 | 2024 | 58.3% |
+| fallout/ai | 4849 | 1475 | 1888 | 2230 | 613 | 0 | 0 | 2006 | 58.6% |
 | fallout/interface | 2645 | 991 | 1247 | 583 | 741 | 0 | 0 | 1321 | 50.1% |
-| (unplaced) | 2353 | 470 | 0 | 30 | 411 | 1 | 0 | 1911 | 18.7% |
-| fallout shared/pathfinding | 1788 | 365 | 452 | 567 | 196 | 0 | 0 | 1025 | 42.7% |
+| (unplaced) | 2353 | 470 | 0 | 30 | 412 | 1 | 0 | 1910 | 18.8% |
+| fallout shared/pathfinding | 1788 | 365 | 452 | 681 | 179 | 0 | 0 | 928 | 48.1% |
 | NiMain | 1619 | 261 | 1134 | 3 | 76 | 0 | 0 | 1540 | 4.9% |
 | BSHavok | 1615 | 316 | 1134 | 59 | 134 | 0 | 0 | 1422 | 12.0% |
 | BSShader | 1549 | 608 | 350 | 0 | 142 | 1407 | 0 | 0 | - |
@@ -146,9 +174,9 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | Depth | Call sites | Functions | translated | traced | platform | library | open |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
-| 1 | 143 | 117 | 99 | 32 | 3 | 0 | 9 |
-| 2 | 1575 | 583 | 1048 | 398 | 24 | 4 | 101 |
-| 3 | 4973 | 1303 | 3381 | 1076 | 154 | 26 | 336 |
+| 1 | 143 | 117 | 100 | 31 | 3 | 0 | 9 |
+| 2 | 1575 | 583 | 1053 | 394 | 24 | 4 | 100 |
+| 3 | 4973 | 1303 | 3393 | 1074 | 154 | 26 | 326 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
@@ -262,7 +290,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 106 | `00702360` | `Interface::IsInMenuMode` | translated |
 | 107 | `007058e0` | `Interface::LastMinuteUpdate` | translated |
 | 108 | `0047d0b0` | `PathManager::QInstance` | traced |
-| 109 | `006ebc50` | `PathManager::Update` | traced |
+| 109 | `006ebc50` | `PathManager::Update` | translated |
 | 110 | `00552ba0` | - | translated |
 | 111 | `006a61b0` | `NavMeshRender::Update` | translated |
 | 112 | `0043d4d0` | - | translated |

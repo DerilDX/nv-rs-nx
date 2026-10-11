@@ -7,14 +7,18 @@ machinery runs.
 
 ## Resume here
 
-Codex takeover, 2026-10-10: rolling PRs #109, #112 and #114 passed both CI
-checks and were squash-merged as `b995218`, `d854fbe` and `89e1a0b`.
-Current rolling PR #116 contains the later navigation continuation and
-explosion helpers, ledger and handoff. The explosion review corrections have been collected and checked;
-#116 needs fresh CI on the updated head before merging. The lead branch is `claude/engine-crate`.
+Codex takeover, 2026-10-10: rolling PRs #109, #112, #114 and #116 passed
+both CI checks and were squash-merged as `b995218`, `d854fbe`, `89e1a0b`
+and `c23f744`. The lead branch is `claude/engine-crate`. Its later batches
+include explosion collection `a2fe87a`: the owner/weapon callback-reload
+correction and nine more functions pass 13,695 combined engine tests,
+lint and formatting. Rolling PR #119 is open and attached, now rebased
+onto health merge `a0ee61d` with the checked navigation continuation
+included. Fresh CI gates this combined head. The old remote branch was absent
+after #116 merged; an empty-ref lease safely recreated it.
 
 Phase 1 PR 7 (#113) passed both checks and merged as `f917219`.
-The lead branch is rebased onto current main `89e1a0b`.
+The lead branch is rebased onto current main `a0ee61d` (health PR #118).
 Only ledger/milestone conflicts needed resolution. Local validation
 passed 15,108 core tests, 182 viewer release tests, formatting, lint and
 release builds. Doc Mitchell, Back in the Saddle and Ghost Town Gunfight
@@ -30,18 +34,37 @@ two routes also passed (VCG02 410 s, VMS16 339 s); logs are in
 Continuous translation remains active until the user says stop: collect each
 finished slot with cycle.sh, immediately start its prepared next task, and
 ship rolling PRs as soon as both checks pass. Runtime currently permits only
-three children and rejects fresh threads because of stale pending slots;
-idle workers are reused for new prepared tasks.
+three children. Fresh agent creation works again; each collected slot gets
+a fresh worker, with heavy compilation serialized across all worktrees.
 
-Slot state: a01 navigation continuation is owned by worker `/root/a04`
-(not the explosion worker). Its previous 36 complete / 4 skipped batch was
-collected as `a8b4daf`; the new task starts with open `006987d0`.
-a03 b0331 pathmanager.cpp is running under `/root/a03`.
-a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round4`.
-Its 24-function continuation and all reviewed ABI/NaN/accessor corrections
-were collected as `57fdb72`; 13,541 combined engine tests, lint and formatting
-pass. Native copy vectors and missing branch tests are included. 37 queue
-entries remain, starting `009ac200`. a04 is researching with cargo held.
+Slot state: a01 navigation continuation is owned by fresh worker
+`/root/a01_round7`. Collection `b50add8` adds three complete functions and
+fixes `0069b030` to reload its buffer after a callback that may relocate it.
+The regression verifies the old storage is untouched; 13,638 combined
+engine tests, lint and formatting pass. Two normal-path geometry translations
+(`006987d0`, `006bd040`) were collected as `d24c517`, with explicit
+exception-cleanup partials and callback regressions. All 13,698 combined
+engine tests, lint and formatting pass. This follow-on is included in
+rebased PR #119. `00699b60` remains unregistered: its edge/list ownership and
+repair paths are unresolved; the fresh worker owns that investigation.
+a03 b0331 pathmanager.cpp is running under fresh `/root/a03_round4`.
+Collection `7321030` adds 29 complete and six partial functions plus all
+reviewed corrections to earlier argument-slot ownership, output ordering,
+callback reloads and completion pointers. The combined 13,680 engine
+tests, lint and formatting pass. Forty entries remain: 15 explicit
+exception-cleanup partials and 25 untouched, starting `006ec5b0`.
+a04 b0160 explosion.cpp is running under fresh worker `/root/a04_round6`.
+Its latest 21-function continuation was collected as `00532d6`; 13,633
+combined engine tests, lint and formatting pass. Native sort permutations
+cover duplicate keys, NaN, signed zero and infinities. Sixteen entries
+remain, starting `009ac5a0`. New PC review requires `009b0f80` to reload
+the owner after its virtual IsActor callback; the fresh worker owns that
+correction and a mutation regression. It must also mark the already
+documented omitted exception cleanup as explicit partials. Keep this local
+batch was held until corrected; merged #116 excludes it. Collection
+`a2fe87a` now passes all checks: six new complete functions, three new
+partials and eight older partials explicitly marked. The fresh task has
+18 entries: eleven exception-cleanup partials and seven untranslated.
 a06's next b0360 and a05's next b0158 (12 entries starting `008ca620`)
 are prepared and waiting for capacity. Never collect/reset an active slot.
 a05's collected batch has 28 complete / 12 partial functions; gaps remain
@@ -56,31 +79,40 @@ each collection. Native spot checks cover five `00698620` point products
 and 512 `006a5da0` flag combinations, not whole units. These translations
 are not newly playable behavior.
 
-Lead Phase 2 PR #115 is open at `c819461` after rebasing onto #114, branch
+Lead Phase 2 PR #115 passed both CI checks and merged as `94165e8`, branch
 `codex/phase2-extra-data`, in managed worktree
 `%USERPROFILE%/.codex/worktrees/phase2-extra-data/wt-phase0`.
 It adds the engine-owned ExtraData list handle and four traced helpers.
-After rebasing onto merged #113, all 15,154 core tests (13,301 engine),
-clippy, formatting and release build passed; CI gates its merge.
+Local core tests, clippy, formatting, release build and both CI checks passed.
 The installed-executable real-registry probe passes construction, add,
 lookup and detach. No world/viewer consumer or save writer is added.
 Private probes/native vectors and the read-only 11-save baseline are in
 `phase0/codex-audit`; FOS_SAVES.md records the decoder limits.
-The lead has now switched that managed checkout to a separate follow-on
-branch `codex/phase2-extra-count`, closing the count destruction dependency;
-commit `ec6a70e` is separate from #115. Its pre-rebase full core test suite
-passed 15,156 tests. The rebased attempt (session 75073) failed during
-rustc memory allocation, before tests; no assertion failure. It is closed.
-Retry tests, clippy and release serially; private logs are
-`phase2-count-rebased-*`.
-Its real-save count probe passes 14 payloads across 3,319 extra lists.
-The count follow-on is draft PR #117 at `117d104`, stacked on #115; retarget
-onto main after #115 merges. No root cargo process is active. The managed
-checkout is now `codex/phase2-extra-health`, with uncommitted adapter and
-constructor-test changes. A native vector caught signaling-NaN handling in
-`00431d10`; the fix and health adapter tests are not yet compiled. Simultaneous engine test
-compilers exhausted host memory; ONE heavy engine compile may run at a
-time now. a01 has the current validation window; a03, a04 and root wait,
+The count follow-on #117 passed both checks and merged as `cbca26e` at
+21:56 local time. Health PR #118 passed both fresh checks and merged as
+`a0ee61d` at 22:32 local time. The health implementation is unchanged.
+Their milestone notes are separate
+from rolling history, and their generated ledger changes are deferred to
+rolling integration. Merge-tree checks against #116 pass without conflicts.
+Health checks passed: 74 focused tests, all 15,315 core tests, lint, formatting
+and release build. The real-save probe passes all 20 health and 14 count
+payloads with the source hash unchanged; count source is unchanged in
+this validated follow-on. No root process is active. The managed checkout
+is now `codex/phase2-reference-state`, commit `9469f51`, based on #115.
+Ten form-construction helpers and two callback-reload fixes pass 124
+focused tests, all 13,466 engine tests, lint, formatting and debug build.
+Five native header and two zero-capacity array vectors pass. The actual
+reference probe now reaches `00aa1070` and stops at the uninitialized
+allocator. Nine allocator and counter-import helpers and their tests are
+prepared but uncompiled in `nisystem/allocator_support.rs`, its module
+registration, `nisystem/bsniallocator.rs`, `bscore/memorymanager.rs`
+and `fallout_shared/form_support.rs`.
+Three native allocator-header vectors pass. No public reference adapter
+exists yet; next validate and continue the real startup dependency chain.
+
+Simultaneous engine compilers exhausted host memory; ONE heavy engine
+compile may run at a time. a03 has the current validation window;
+root is next. Other workers wait,
 continuing research/review. The lead grants each next window explicitly.
 Machine note: automatic policy blocked removal of idle p3's target cache;
 nothing was deleted. Private `task.sh` now warns below 40 GB free instead
@@ -89,13 +121,13 @@ deletion path to bypass that denial.
 
 Next steps:
 
-1. Continue the count-payload dependency and real-save validation; build 40
-   is published and all three acceptance routes have passed.
+1. Continue reference-constructor dependency research/validation while
+   health PR #118 awaits CI. Build 40 and all three routes passed.
 2. Collect completed slots with one `cycle.sh NN 0 0` at a time. Never
    cycle an active agent's worktree. Rotate prepared tasks as capacity opens.
-3. Ship updated #116 when both checks pass; rebase affected branches
-   after another merge, retaining tests and regenerating the ledger.
-4. Rebase #115 after the next main merge and require both CI checks.
+3. After the explosion correction passes collection, push and open the
+   next rolling PR; ship when both checks pass. Preserve local review holds.
+4. Merge #118 after both fresh checks pass on its new main-based head.
    Payload conversion, world ownership and save round trips
    remain open; decoding a save does not prove a lossless round trip.
 
