@@ -86,12 +86,17 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005f_3780, fn_005f3780(Ptr, u32) -> f64),
         entry!(0x005f_3870, fn_005f3870(Ptr) -> Ptr),
         entry!(0x005f_38d0, fn_005f38d0(Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x005f_3a20, fn_005f3a20(Ptr, Ptr) -> Ptr),
         entry!(0x005f_4b70, fn_005f4b70(Ptr, u8)),
         entry!(0x005f_4b90, fn_005f4b90(Ptr, u8)),
         entry!(0x005f_4bb0, fn_005f4bb0(Ptr, u32)),
         entry!(0x005f_4bd0, fn_005f4bd0(Ptr, u32, u8)),
         entry!(0x005f_4c00, fn_005f4c00(Ptr, u32) -> u8),
         entry!(0x005f_4c40, fn_005f4c40(Ptr, Ptr)),
+        entry!(0x005f_4c70, fn_005f4c70(Ptr) -> f64),
+        entry!(0x005f_4c90, fn_005f4c90(Ptr, Ptr) -> Ptr),
+        entry!(0x005f_4cc0, fn_005f4cc0(Ptr, u16) -> bool),
+        entry!(0x005f_4d00, fn_005f4d00(Ptr, Ptr)),
     ]
 }
 
@@ -515,6 +520,43 @@ pub fn fn_005f4c40(e: &mut Engine, this: Ptr, value: Ptr) {
     }
 }
 
+// Translated from 005f4c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the length of this group's vector at +0x1c through the game's
+/// vector helper, preserving its x87 floating-point result.
+pub fn fn_005f4c70(e: &mut Engine, this: Ptr) -> f64 {
+    e.call(0x0045_7990, &args![this.addr().wrapping_add(0x1c)])
+        .f64()
+}
+
+// Translated from 005f4c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies this group's three-word vector at +0x1c to `out` and returns `out`.
+pub fn fn_005f4c90(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
+    for offset in [0, 4, 8] {
+        let word = e.mem.u32(this.addr().wrapping_add(0x1c + offset));
+        e.mem.set_u32(out.addr().wrapping_add(offset), word);
+    }
+    out
+}
+
+// Translated from 005f4cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Tests whether the group type is 0, 1 or 0xaa. The `this` register is unused.
+pub fn fn_005f4cc0(e: &mut Engine, _this: Ptr, group: u16) -> bool {
+    matches!(fn_005f2440(e, group), 0 | 1 | 0xaa)
+}
+
+// Translated from 005f4d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAnimGroup::FillPriorityArray` (Xbox PDB): reads priorities for eight
+/// named sequence bones and stores each non-null table entry at +8..+15.
+pub fn fn_005f4d00(e: &mut Engine, this: Ptr, sequence: Ptr) {
+    for index in 0..8u32 {
+        let name = e.mem.u32(0x0119_9bcc + index * 4);
+        if name != 0 {
+            let priority = e.call(0x004e_f9a0, &args![sequence, name, 0u32]).u32();
+            e.mem.set_u8(this.addr() + 8 + index, priority as u8);
+        }
+    }
+}
+
 // Translated from 005f4bd0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores the per-sound flag at entry `index` when it is below `soundCount`.
 pub fn fn_005f4bd0(e: &mut Engine, this: Ptr, index: u32, value: u8) {
@@ -668,10 +710,1455 @@ pub fn fn_005f38d0(
     }
 }
 
+const ANIM_NAME_TABLE: u32 = 0x0119_77d8;
+const ANIM_LOOP_TABLE: u32 = 0x0119_77e0;
+const ANIM_CATEGORY_TABLE: u32 = 0x0119_77e4;
+const ANIM_SECTION_TABLE: u32 = 0x0119_77e8;
+const SECTION_OVERRIDE_TABLE: u32 = 0x0119_9ad4;
+const ENUM_NAME_TABLE: u32 = 0x0119_9b50;
+const NOTE_SPECIAL_PREFIX: u32 = 0x011a_8244;
+const NOTE_FRAME_SCALE: u32 = 0x0101_db88;
+
+fn anim_prefix(e: &mut Engine, text: u32, prefix: u32) -> bool {
+    let length = e.call(STRLEN, &args![prefix]).u32();
+    e.call(STRNICMP, &args![text, prefix, length]).i32() == 0
+}
+
+fn anim_bad_note(e: &mut Engine, note: u32, time: f32, filename: Ptr) {
+    let line_end = e.call(STRCHR, &args![note, 13u32]).u32();
+    if line_end != 0 {
+        e.mem.set_u8(line_end, 0);
+    }
+    anim_bad_note_truncated(e, note, time, filename);
+    if line_end != 0 {
+        e.mem.set_u8(line_end, 13);
+    }
+}
+
+fn anim_bad_note_truncated(e: &mut Engine, note: u32, time: f32, filename: Ptr) {
+    let scale = e.global::<f64>(NOTE_FRAME_SCALE);
+    let frame_time = (f64::from(time) * scale) as f32;
+    // The conversion helper takes the float in one stack word; the filename
+    // pushed before it remains on the stack for the subsequent log call.
+    let frame = e.call(0x0040_6d90, &args![frame_time]).u32();
+    e.call(
+        INVALID_ACTION_LOG,
+        &args![0x0104_8748u32, note, frame, filename],
+    );
+}
+
+fn anim_split_field(e: &mut Engine, text: u32) -> u32 {
+    let comma = e.call(STRCHR, &args![text, 44u32]).u32();
+    let separator = if comma == 0 {
+        e.call(STRCHR, &args![text, 32u32]).u32()
+    } else {
+        comma
+    };
+    if separator == 0 {
+        0
+    } else {
+        e.mem.set_u8(separator, 0);
+        separator.wrapping_add(1)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn anim_sound_or_enum(
+    e: &mut Engine,
+    group: Ptr,
+    note: u32,
+    line_base: u32,
+    key_index: u32,
+    time: f32,
+    filename: Ptr,
+    is_enum: bool,
+    frame: u32,
+) -> bool {
+    if group.is_null() {
+        return false;
+    }
+    let line_end = e.call(STRCHR, &args![note, 13u32]).u32();
+    if line_end != 0 {
+        e.mem.set_u8(line_end, 0);
+    }
+    let prefix = if is_enum { 0x0104_877c } else { 0x0102_38a8 };
+    let value_start = note.wrapping_add(e.call(STRLEN, &args![prefix]).u32());
+    let value_buffer = frame.wrapping_add(0x350);
+    e.call(0x0040_6d30, &args![value_buffer, 0x104u32, value_start]);
+    let mut second = anim_split_field(e, value_buffer);
+    while second != 0 && e.mem.u8(second) == b' ' {
+        second = second.wrapping_add(1);
+    }
+    let third = if second != 0 {
+        anim_split_field(e, second)
+    } else {
+        0
+    };
+    let mut bad = false;
+    if is_enum {
+        let mut enum_index = 0u32;
+        while enum_index < 0x1f {
+            let name = e.mem.u32(ENUM_NAME_TABLE + enum_index * 4);
+            if e.call(0x0040_4dc0, &args![name, value_buffer]).i32() == 0 {
+                break;
+            }
+            enum_index += 1;
+        }
+        if enum_index == 0x1f {
+            bad = true;
+        } else {
+            let index = e.call(0x005f_36f0, &args![group]).u32();
+            fn_005f2820(e, group, index.wrapping_add(1));
+            fn_005f29f0(e, group, index, time);
+            let packed = note.wrapping_sub(line_base).wrapping_shl(8) | key_index;
+            fn_005f2a70(e, group, index, enum_index as u8, packed);
+        }
+    } else {
+        let handler = e.global::<u32>(0x011c_3f2c);
+        let sound = e.call(0x0046_16c0, &args![handler, value_buffer]).u32();
+        if sound == 0 {
+            bad = true;
+        } else {
+            let audio_value = e.call(0x0084_e3a0, &args![sound]).u32();
+            let audio = e.call(0x0045_3a70, &args![]).u32();
+            e.call(0x00ad_8050, &args![audio, audio_value, 0u32]);
+            let index = e.call(0x005f_36f0, &args![group]).u32();
+            fn_005f2820(e, group, index.wrapping_add(1));
+            fn_005f29f0(e, group, index, time);
+            fn_005f2a30(e, group, index, sound);
+            if second != 0 && e.mem.u8(second) != 0 {
+                let number = e.call(0x00ec_a573, &args![second]).f64() as f32;
+                fn_005f2ac0(e, group, index, number);
+            }
+            if third != 0 {
+                let number = e.call(0x00ec_a573, &args![third]).f64() as f32;
+                fn_005f2b20(e, group, index, number.to_bits());
+            }
+        }
+    }
+    if bad {
+        anim_bad_note_truncated(e, note, time, filename);
+    }
+    if line_end != 0 {
+        e.mem.set_u8(line_end, 13);
+    }
+    bad
+}
+
+fn anim_read_number_tag(e: &mut Engine, group: Ptr, text: u32) -> bool {
+    for (prefix, length, target) in [
+        (0x0104_87b0u32, 8u32, 0x007f_7c90u32),
+        (0x0104_87a4, 9, 0x005f_4b90),
+        (0x0104_879c, 6, 0x005f_4b70),
+        (0x0104_8794, 6, 0x008b_f4e0),
+    ] {
+        if e.call(STRNICMP, &args![text, prefix, length]).i32() == 0 {
+            let mut number = text.wrapping_add(length);
+            if e.mem.u8(number) == b' ' {
+                number = number.wrapping_add(1);
+            }
+            let value = e.call(0x00ec_a6d3, &args![number]).u32();
+            if target == 0x005f_4b90 {
+                fn_005f4b90(e, group, value as u8);
+            } else if target == 0x005f_4b70 {
+                fn_005f4b70(e, group, value as u8);
+            } else {
+                e.call(target, &args![group, value]);
+            }
+            return true;
+        }
+    }
+    false
+}
+
+fn anim_parent_note(e: &mut Engine, group: Ptr, note_string: u32) {
+    let inspected = e.call(0x0043_b1b0, &args![note_string]).u32();
+    let offset = if e.mem.u8(inspected + 4) == b' ' {
+        5
+    } else {
+        4
+    };
+    let value = e
+        .call(0x0043_b1b0, &args![note_string])
+        .u32()
+        .wrapping_add(offset);
+    fn_005f4bb0(e, group, value);
+}
+
+fn anim_time_section(e: &Engine, group_type: u32, section: u32) -> u32 {
+    e.mem
+        .u32(ANIM_SECTION_TABLE + group_type * 0x24 + section * 4)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn anim_timing_note(
+    e: &mut Engine,
+    sequence: Ptr,
+    filename: Ptr,
+    note: u32,
+    time: f32,
+    move_type: u32,
+    weapon: u32,
+    prefixed: u8,
+    group: &mut Ptr,
+    cached_type: &mut u32,
+    section: &mut u32,
+) -> (bool, bool) {
+    let mut ty = 0u32;
+    while ty < 0xf5 {
+        if *cached_type != 0xff {
+            ty = *cached_type;
+        }
+        let type_name = e.mem.u32(ANIM_NAME_TABLE + ty * 0x24);
+        let name = e.call(0x0041_3f40, &args![sequence]).u32();
+        let text = e.call(0x0043_b1b0, &args![name]).u32();
+        if e.call(0x0040_4dc0, &args![type_name, text]).i32() == 0 {
+            *cached_type = ty;
+            let mut section_id = anim_time_section(e, ty, *section);
+            if section_id == u32::MAX {
+                return (false, false);
+            }
+            let category = e.mem.u32(ANIM_CATEGORY_TABLE + ty * 0x24);
+            if (ty == 2 && *section == 1) || (category == 5 && *section == 2) {
+                let override_name = e.mem.u32(SECTION_OVERRIDE_TABLE + category * 4);
+                if anim_prefix(e, note, override_name) {
+                    section_id = 3;
+                    *section = 3;
+                }
+            }
+            let expected = e
+                .mem
+                .u32(SECTION_NAME_TABLE + section_id * 0x2c + category * 4);
+            if anim_prefix(e, note, expected) {
+                if group.is_null() {
+                    let allocated = e.call(0x00aa_13e0, &args![0x3cu32]).u32();
+                    if allocated != 0 {
+                        let group_id = if ty == 2 {
+                            ty
+                        } else {
+                            fn_005f2370(e, move_type, weapon as u16, ty, prefixed)
+                        };
+                        *group = fn_005f21c0(e, Ptr::new(allocated), group_id as u16);
+                    }
+                }
+                if time > -1.0 {
+                    fn_005f3740(e, *group, section_id, time);
+                }
+                let looping = e.call(0x0059_bb30, &args![sequence]).bool();
+                if category == 1 && looping {
+                    if e.mem.u32(ANIM_LOOP_TABLE + ty * 0x24) != 1 {
+                        e.call(INVALID_ACTION_LOG, &args![0x0104_8718u32, filename]);
+                        *section += 1;
+                        return (false, true);
+                    }
+                } else if category != 1 && !looping {
+                    e.call(INVALID_ACTION_LOG, &args![0x0104_86e4u32, filename]);
+                    *section += 1;
+                    return (false, true);
+                }
+                *section += 1;
+                return (false, false);
+            }
+            let next = anim_time_section(e, ty, *section);
+            if *section == 5 || next == u32::MAX {
+                anim_bad_note(e, note, time, filename);
+                return (false, true);
+            }
+            return (false, false);
+        }
+        if ty == *cached_type {
+            break;
+        }
+        ty += 1;
+    }
+    if ty == 0xf5 {
+        let name = e.call(0x0041_3f40, &args![sequence]).u32();
+        let text = e.call(0x0043_b1b0, &args![name]).u32();
+        e.call(INVALID_ACTION_LOG, &args![0x0104_86a0u32, text, filename]);
+        return (true, true);
+    }
+    (false, false)
+}
+
+fn anim_validate(e: &mut Engine, group: Ptr, sequence: Ptr, filename: Ptr) -> bool {
+    fn_005f4d00(e, group, sequence);
+    let ty = fn_005f2420(e, group);
+    let category = e.mem.u32(ANIM_CATEGORY_TABLE + ty * 0x24);
+    let mut last = 1u32;
+    match category {
+        2 => {
+            let one = fn_005f3780(e, group, 1);
+            let zero = fn_005f3780(e, group, 0);
+            if one < zero {
+                fn_005f3740(e, group, 1, zero as f32);
+            }
+            let two = fn_005f3780(e, group, 2);
+            let one = fn_005f3780(e, group, 1);
+            if two < one {
+                let three = fn_005f3780(e, group, 3);
+                fn_005f3740(e, group, 2, three as f32);
+            }
+            last = 3;
+        }
+        3 | 4 => last = 2,
+        5 => {
+            let two = fn_005f3780(e, group, 2);
+            let one = fn_005f3780(e, group, 1);
+            if two < one {
+                fn_005f3740(e, group, 2, one as f32);
+            }
+            last = 4;
+        }
+        6 | 10 => last = 2,
+        7 => last = 4,
+        8 | 9 => last = 3,
+        _ => {}
+    }
+    let end = fn_005f3780(e, group, last);
+    let start = fn_005f3780(e, group, 0);
+    let mut bad = false;
+    if end <= start {
+        let current_type = fn_005f2420(e, group);
+        let name = e.mem.u32(ANIM_NAME_TABLE + current_type * 0x24);
+        e.call(INVALID_ACTION_LOG, &args![0x0104_8658u32, name, filename]);
+        bad = true;
+    }
+    let blend = e.mem.u8(group.addr() + 0x29);
+    let blend_in = e.mem.u8(group.addr() + 0x2a);
+    let blend_out = e.mem.u8(group.addr() + 0x2b);
+    if blend != 0 && (blend_in != 0 || blend_out != 0) {
+        let current_type = fn_005f2420(e, group);
+        let name = e.mem.u32(ANIM_NAME_TABLE + current_type * 0x24);
+        e.call(
+            INVALID_ACTION_LOG,
+            &args![0x0104_8600u32, name, filename, blend, blend_in, blend_out],
+        );
+        bad = true;
+    }
+    bad
+}
+
+// Translated from 005f3a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESAnimGroup::LoadAnimGroup` (Xbox PDB): scans the sequence's object names,
+/// parses note keys into timing, sound and enum entries, validates the group,
+/// and returns its allocated pointer. Compiler SEH unwinding is not modeled.
+// Translation incomplete: 005f3a20 - compiler SEH unwinding is not modeled.
+pub fn fn_005f3a20(e: &mut Engine, sequence: Ptr, filename: Ptr) -> Ptr {
+    e.with_stack(0x500, |e, frame| {
+        e.call(STRRCHR, &args![filename, 0x5cu32]);
+        e.call(0x0043_b2b0, &args![1u32]);
+        let model = e.call(0x006c_9900, &args![sequence]).u32();
+        let model_name = e.call(0x0043_b1b0, &args![model]).u32();
+        let non_accum_name = frame.addr();
+        e.call(
+            0x0040_6d00,
+            &args![non_accum_name, 0x40u32, 0x0104_884cu32, model_name],
+        );
+        let mut model_index = u32::MAX;
+        let mut non_accum_index = u32::MAX;
+        let object_name = frame.addr() + 0x80;
+        let mut index = 0u32;
+        loop {
+            let count = e.call(0x0084_e3a0, &args![sequence]).u32();
+            if index >= count {
+                break;
+            }
+            e.call(0x00a3_07c0, &args![sequence, index, object_name]);
+            if e.mem.u8(object_name) == 0 {
+                let name = e.call(0x0041_3f40, &args![sequence]).u32();
+                let text = e.call(0x0043_b1b0, &args![name]).u32();
+                e.call(INVALID_ACTION_LOG, &args![0x0104_881cu32, index, text]);
+            } else if e.call(0x0040_4dc0, &args![model_name, object_name]).i32() == 0 {
+                model_index = index;
+            } else if e
+                .call(0x0040_4dc0, &args![non_accum_name, object_name])
+                .i32()
+                == 0
+            {
+                non_accum_index = index;
+            }
+            if model_index != u32::MAX && non_accum_index != u32::MAX {
+                let sound = fn_005f4c00(e, sequence, model_index);
+                fn_005f4bd0(e, sequence, non_accum_index, sound);
+                break;
+            }
+            index += 1;
+        }
+        let out_move = frame.addr() + 0x190;
+        let out_weapon = out_move + 4;
+        let out_prefixed = out_move + 8;
+        fn_005f38d0(
+            e,
+            filename,
+            Ptr::new(out_move),
+            Ptr::new(out_weapon),
+            Ptr::new(out_prefixed),
+        );
+        let mut group = Ptr::NULL;
+        let mut bad = false;
+        if !sequence.is_null() && e.call(0x0070_0300, &args![sequence]).u32() != 0 {
+            let note_out = frame.addr() + 0x1a0;
+            let notes = e.call(0x0070_0300, &args![sequence]).u32();
+            let note_keys = e.call(0x0049_5f30, &args![notes, note_out]).u32();
+            let note_count = e.mem.u32(note_out);
+            let mut cached_type = 0xffu32;
+            let mut section = 0u32;
+            let mut stop_notes = false;
+            for key_index in 0..note_count {
+                let key = note_keys + key_index * 8;
+                let handle = e.call(0x0071_7e50, &args![key]).u32();
+                let note_string = frame.addr() + 0x1b0;
+                e.call(0x0048_af40, &args![note_string, handle]);
+                let time = e.call(0x006a_7f50, &args![key]).f64() as f32;
+                if !e.call(0x0048_af70, &args![note_string]).bool() {
+                    let name = e.call(0x0041_3f40, &args![sequence]).u32();
+                    let text = e.call(0x0043_b1b0, &args![name]).u32();
+                    e.call(
+                        INVALID_ACTION_LOG,
+                        &args![0x0104_87c8u32, f64::from(time), text, filename],
+                    );
+                    bad = true;
+                } else {
+                    let compare_source = e.call(0x0043_b1b0, &args![note_string]).u32();
+                    if anim_prefix(e, compare_source, 0x0104_87bc) {
+                        anim_parent_note(e, group, note_string);
+                    } else {
+                        let source = e.call(0x0043_b1b0, &args![note_string]).u32();
+                        let copied = frame.addr() + 0x1c0;
+                        e.call(0x0040_6d30, &args![copied, 0x104u32, source]);
+                        let mut note = copied;
+                        while note != 0 && e.call(STRLEN, &args![note]).u32() != 0 {
+                            if e.mem.u8(note) == 13 {
+                                note = fn_005f3870(e, Ptr::new(note)).addr();
+                                if note == 0 {
+                                    break;
+                                }
+                            }
+                            let special = e.global::<u32>(NOTE_SPECIAL_PREFIX);
+                            if anim_prefix(e, note, special) {
+                                if !e.call(0x0097_4d90, &args![group]).bool() {
+                                    e.call(0x0092_9260, &args![group, e.mem.u8(note + 2)]);
+                                }
+                            } else if !anim_read_number_tag(e, group, note) {
+                                let is_sound = anim_prefix(e, note, 0x0104_878c);
+                                let is_enum = anim_prefix(e, note, 0x0104_8784);
+                                if is_sound || is_enum {
+                                    bad |= anim_sound_or_enum(
+                                        e,
+                                        group,
+                                        note,
+                                        copied,
+                                        key_index,
+                                        time,
+                                        filename,
+                                        is_enum,
+                                        frame.addr(),
+                                    );
+                                } else {
+                                    let (stop, note_bad) = anim_timing_note(
+                                        e,
+                                        sequence,
+                                        filename,
+                                        note,
+                                        time,
+                                        e.mem.u32(out_move),
+                                        e.mem.u32(out_weapon),
+                                        e.mem.u8(out_prefixed),
+                                        &mut group,
+                                        &mut cached_type,
+                                        &mut section,
+                                    );
+                                    bad |= note_bad;
+                                    if stop {
+                                        stop_notes = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            note = fn_005f3870(e, Ptr::new(note)).addr();
+                        }
+                    }
+                }
+                e.call(0x0043_81b0, &args![note_string]);
+                if stop_notes {
+                    break;
+                }
+            }
+            if !group.is_null() {
+                bad |= anim_validate(e, group, sequence, filename);
+            }
+        }
+        e.call(0x0043_b2b0, &args![0u32]);
+        if bad {
+            let path = e.call(0x00c3_bb80, &args![]).u32();
+            e.call(INVALID_ACTION_LOG, &args![0x0104_85c8u32, path]);
+        }
+        group
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Ret;
+
+    #[test]
+    fn loader_scans_sequence_then_returns_null_without_note_keys() {
+        let mut e = Engine::new();
+        e.map(0x2000, 0x100);
+        e.map(0x3000, 0x20);
+        e.map(0x3100, 0x20);
+        e.mem.set_u8(0x3000, b'a');
+        e.mem.set_u8(0x3100, b'm');
+        e.register_double(STRRCHR, |_, arguments| {
+            assert_eq!(arguments, [0x3000, 0x5c]);
+            Ret::default()
+        });
+        e.register_double(0x0043_b2b0, |_, arguments| {
+            assert_eq!(arguments.len(), 1);
+            Ret::default()
+        });
+        e.register_double(0x006c_9900, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret {
+                eax: 0x2100,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0043_b1b0, |_, arguments| {
+            assert_eq!(arguments, [0x2100]);
+            Ret {
+                eax: 0x3100,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_6d00, |e, arguments| {
+            assert_eq!(arguments.len(), 4);
+            assert_eq!(arguments[1..], [0x40, 0x0104_884c, 0x3100]);
+            e.mem.set_u8(arguments[0], 0);
+            Ret::default()
+        });
+        e.register_double(0x0084_e3a0, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret::default()
+        });
+        e.register_double(0x0070_0300, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret {
+                eax: 0x4000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0049_5f30, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            assert_eq!(arguments[0], 0x4000);
+            e.mem.set_u32(arguments[1], 0);
+            Ret {
+                eax: 0x5000,
+                ..Ret::default()
+            }
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x005f_3a20, &[0x2000, 0x3000]).u32(), 0);
+        let calls = e.call_log.take().unwrap();
+        let toggles: Vec<_> = calls
+            .iter()
+            .filter(|(address, _)| *address == 0x0043_b2b0)
+            .map(|(_, arguments)| arguments[0])
+            .collect();
+        assert_eq!(toggles, [1, 0]);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == STRRCHR)
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0070_0300)
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0049_5f30)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn loader_reads_note_callback_and_ignores_sound_before_group_allocation() {
+        let mut e = Engine::new();
+        e.map(0x2000, 0x100);
+        e.map(0x3000, 0x20);
+        e.map(0x3100, 0x20);
+        e.map(0x5000, 8);
+        e.map(0x6100, 16);
+        e.map(0x6200, 4);
+        e.map(NOTE_SPECIAL_PREFIX, 4);
+        e.mem.set_u32(0x5004, 0x6100);
+        e.mem.set_u32(NOTE_SPECIAL_PREFIX, 0x9000);
+        for (index, byte) in b"Sound: x\0".iter().enumerate() {
+            e.mem.set_u8(0x6100 + index as u32, *byte);
+        }
+        e.register_double(STRRCHR, |_, arguments| {
+            assert_eq!(arguments, [0x3000, 0x5c]);
+            Ret::default()
+        });
+        e.register_double(0x0043_b2b0, |_, arguments| {
+            assert_eq!(arguments.len(), 1);
+            Ret::default()
+        });
+        e.register_double(0x006c_9900, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret {
+                eax: 0x2100,
+                ..Ret::default()
+            }
+        });
+        let mut note_getter_calls = 0;
+        e.register_double(0x0043_b1b0, move |_, arguments| {
+            let pointer = if arguments[0] == 0x2100 {
+                0x3100
+            } else {
+                note_getter_calls += 1;
+                if note_getter_calls == 1 {
+                    0x6200
+                } else {
+                    0x6100
+                }
+            };
+            Ret {
+                eax: pointer,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_6d00, |e, arguments| {
+            assert_eq!(arguments.len(), 4);
+            e.mem.set_u8(arguments[0], 0);
+            Ret::default()
+        });
+        e.register_double(0x0084_e3a0, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret::default()
+        });
+        e.register_double(0x0070_0300, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret {
+                eax: 0x4000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0049_5f30, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            assert_eq!(arguments[0], 0x4000);
+            e.mem.set_u32(arguments[1], 1);
+            Ret {
+                eax: 0x5000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0071_7e50, |_, arguments| {
+            assert_eq!(arguments, [0x5000]);
+            Ret {
+                eax: 0x5004,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0048_af40, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            assert_eq!(arguments[1], 0x5004);
+            e.mem.set_u32(arguments[0], e.mem.u32(arguments[1]));
+            Ret::default()
+        });
+        e.register_double(0x006a_7f50, |_, arguments| {
+            assert_eq!(arguments, [0x5000]);
+            Ret {
+                st0: 1.25,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0048_af70, |e, arguments| {
+            assert_eq!(arguments.len(), 1);
+            Ret {
+                eax: u32::from(e.mem.u32(arguments[0]) != 0),
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_6d30, |e, arguments| {
+            assert_eq!(arguments.len(), 3);
+            assert_eq!(arguments[2], 0x6100);
+            let mut index = 0;
+            loop {
+                let byte = e.mem.u8(arguments[2] + index);
+                e.mem.set_u8(arguments[0] + index, byte);
+                if byte == 0 {
+                    break;
+                }
+                index += 1;
+            }
+            Ret::default()
+        });
+        e.register_double(STRLEN, |e, arguments| {
+            let length = match arguments[0] {
+                0x0104_87bc => 4,
+                0x9000 => 3,
+                0x0104_878c => 6,
+                0x0104_8784 => 5,
+                address => {
+                    let mut size = 0;
+                    while e.mem.u8(address + size) != 0 {
+                        size += 1;
+                    }
+                    size
+                }
+            };
+            Ret {
+                eax: length,
+                ..Ret::default()
+            }
+        });
+        e.register_double(STRNICMP, |_, arguments| {
+            assert_eq!(arguments.len(), 3);
+            Ret {
+                eax: u32::from(arguments[1] != 0x0104_878c),
+                ..Ret::default()
+            }
+        });
+        e.register_double(STRCHR, |_, arguments| {
+            assert_eq!(arguments.len(), 2);
+            assert_eq!(arguments[1], 10);
+            Ret::default()
+        });
+        e.register_double(0x0043_81b0, |_, arguments| {
+            assert_eq!(arguments.len(), 1);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x005f_3a20, &[0x2000, 0x3000]).u32(), 0);
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0071_7e50)
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0043_81b0)
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, arguments)| *address == 0x0043_b1b0 && arguments[0] != 0x2100)
+                .count(),
+            2
+        );
+        assert_eq!(e.mem.u8(0x6100), b'S');
+    }
+
+    #[test]
+    fn empty_note_log_keeps_filename_and_two_word_time_argument() {
+        let mut e = Engine::new();
+        e.map(0x2000, 0x100);
+        e.map(0x3000, 0x20);
+        e.register_double(STRRCHR, |_, arguments| {
+            assert_eq!(arguments, [0x3000, 0x5c]);
+            Ret::default()
+        });
+        e.register_double(0x0043_b2b0, |_, arguments| {
+            assert_eq!(arguments.len(), 1);
+            Ret::default()
+        });
+        e.register_double(0x006c_9900, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret {
+                eax: 0x2100,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0043_b1b0, |_, arguments| Ret {
+            eax: if arguments[0] == 0x2100 {
+                0x3100
+            } else {
+                0x3200
+            },
+            ..Ret::default()
+        });
+        e.register_double(0x0040_6d00, |e, arguments| {
+            assert_eq!(arguments.len(), 4);
+            e.mem.set_u8(arguments[0], 0);
+            Ret::default()
+        });
+        e.register_double(0x0084_e3a0, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret::default()
+        });
+        e.register_double(0x0070_0300, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret {
+                eax: 0x4000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0049_5f30, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            assert_eq!(arguments[0], 0x4000);
+            e.mem.set_u32(arguments[1], 1);
+            Ret {
+                eax: 0x5000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0071_7e50, |_, arguments| {
+            assert_eq!(arguments, [0x5000]);
+            Ret {
+                eax: 0x5004,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0048_af40, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            e.mem.set_u32(arguments[0], 0);
+            Ret::default()
+        });
+        e.register_double(0x006a_7f50, |_, arguments| {
+            assert_eq!(arguments, [0x5000]);
+            Ret {
+                st0: 1.5,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0048_af70, |_, arguments| {
+            assert_eq!(arguments.len(), 1);
+            Ret::default()
+        });
+        e.register_double(0x0041_3f40, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret {
+                eax: 0x2008,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0043_81b0, |_, arguments| {
+            assert_eq!(arguments.len(), 1);
+            Ret::default()
+        });
+        e.register_double(0x00c3_bb80, |_, arguments| {
+            assert!(arguments.is_empty());
+            Ret {
+                eax: 0x3300,
+                ..Ret::default()
+            }
+        });
+        e.register_double(INVALID_ACTION_LOG, |_, arguments| {
+            if arguments[0] == 0x0104_87c8 {
+                assert_eq!(arguments.len(), 5);
+                let time_words = 1.5f64.to_bits();
+                assert_eq!(arguments[1], time_words as u32);
+                assert_eq!(arguments[2], (time_words >> 32) as u32);
+                assert_eq!(arguments[3..], [0x3200, 0x3000]);
+            } else {
+                assert_eq!(arguments, [0x0104_85c8, 0x3300]);
+            }
+            Ret::default()
+        });
+        assert_eq!(e.call(0x005f_3a20, &[0x2000, 0x3000]).u32(), 0);
+    }
+
+    #[test]
+    fn timing_note_stores_time_and_advances_section_after_a_name_match() {
+        let mut e = Engine::new();
+        e.map(0x2000, 0x3c);
+        e.map(0x3000, 0x100);
+        e.map(0x4000, 0x20);
+        e.map(0x4010, 0x20);
+        e.map(ANIM_NAME_TABLE, 0x24);
+        e.map(SECTION_NAME_TABLE, 0x2c);
+        e.mem.set_u32(0x2014, 4);
+        e.mem.set_u32(0x2018, 0x3000);
+        e.mem.set_u32(ANIM_NAME_TABLE, 0x4000);
+        e.mem.set_u32(ANIM_CATEGORY_TABLE, 2);
+        e.mem.set_u32(ANIM_SECTION_TABLE, 0);
+        e.mem.set_u32(SECTION_NAME_TABLE + 8, 0x4010);
+        for (address, value) in [
+            (0x4000, b'T'),
+            (0x4010, b'S'),
+            (0x4011, b't'),
+            (0x4012, b'a'),
+            (0x4013, b'r'),
+            (0x4014, b't'),
+        ] {
+            e.mem.set_u8(address, value);
+        }
+        e.register_double(0x0041_3f40, |_, arguments| {
+            assert_eq!(arguments, [0x5000]);
+            Ret {
+                eax: 0x5008,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0043_b1b0, |_, arguments| {
+            assert_eq!(arguments, [0x5008]);
+            Ret {
+                eax: 0x4000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_4dc0, |_, arguments| {
+            assert_eq!(arguments, [0x4000, 0x4000]);
+            Ret::default()
+        });
+        e.register_double(STRLEN, |_, arguments| {
+            assert_eq!(arguments, [0x4010]);
+            Ret {
+                eax: 5,
+                ..Ret::default()
+            }
+        });
+        e.register_double(STRNICMP, |_, arguments| {
+            assert_eq!(arguments, [0x6000, 0x4010, 5]);
+            Ret::default()
+        });
+        e.register_double(0x0059_bb30, |_, arguments| {
+            assert_eq!(arguments, [0x5000]);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+        let mut group = Ptr::new(0x2000);
+        let mut cached = 0xff;
+        let mut section = 0;
+        assert_eq!(
+            anim_timing_note(
+                &mut e,
+                Ptr::new(0x5000),
+                Ptr::new(0x7000),
+                0x6000,
+                2.5,
+                0,
+                0,
+                0,
+                &mut group,
+                &mut cached,
+                &mut section,
+            ),
+            (false, false)
+        );
+        assert_eq!(group.addr(), 0x2000);
+        assert_eq!(cached, 0);
+        assert_eq!(section, 1);
+        assert_eq!(e.mem.f32(0x3000), 2.5);
+    }
+
+    #[test]
+    fn bad_sound_note_splits_the_name_and_reports_the_original_line() {
+        let mut e = Engine::new();
+        let note = b"Sound: Missing, 0.7, 2.0\r\n\0";
+        let cr_address = 0x6000 + note.iter().position(|byte| *byte == b'\r').unwrap() as u32;
+        e.map(0x2000, 0x3c);
+        e.map(0x5000, 0x500);
+        e.map(0x6000, note.len() as u32);
+        e.map(0x011c_3f2c, 4);
+        e.map(NOTE_FRAME_SCALE, 8);
+        e.mem.set_u32(0x011c_3f2c, 0x8000);
+        e.set_global(NOTE_FRAME_SCALE, 30.0f64);
+        for (index, byte) in note.iter().enumerate() {
+            e.mem.set_u8(0x6000 + index as u32, *byte);
+        }
+        e.register_double(STRCHR, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            let mut address = arguments[0];
+            while e.mem.u8(address) != 0 {
+                if e.mem.u8(address) == arguments[1] as u8 {
+                    return Ret {
+                        eax: address,
+                        ..Ret::default()
+                    };
+                }
+                address += 1;
+            }
+            Ret::default()
+        });
+        e.register_double(STRLEN, |_, arguments| {
+            assert_eq!(arguments, [0x0102_38a8]);
+            Ret {
+                eax: 7,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_6d30, |e, arguments| {
+            assert_eq!(arguments.len(), 3);
+            assert_eq!(arguments[1], 0x104);
+            let mut index = 0;
+            loop {
+                let byte = e.mem.u8(arguments[2] + index);
+                e.mem.set_u8(arguments[0] + index, byte);
+                if byte == 0 {
+                    break;
+                }
+                index += 1;
+            }
+            Ret::default()
+        });
+        e.register_double(0x0046_16c0, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            assert_eq!(arguments[0], 0x8000);
+            assert_eq!(e.mem.u8(arguments[1]), b'M');
+            assert_eq!(e.mem.u8(arguments[1] + 7), 0);
+            Ret::default()
+        });
+        e.register_double(0x0040_6d90, |_, arguments| {
+            assert_eq!(arguments, [37.5f32.to_bits()]);
+            Ret {
+                eax: 38,
+                ..Ret::default()
+            }
+        });
+        e.register_double(INVALID_ACTION_LOG, move |e, arguments| {
+            assert_eq!(arguments, [0x0104_8748, 0x6000, 38, 0x7000]);
+            assert_eq!(e.mem.u8(cr_address), 0);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(anim_sound_or_enum(
+            &mut e,
+            Ptr::new(0x2000),
+            0x6000,
+            0x6000,
+            0,
+            1.25,
+            Ptr::new(0x7000),
+            false,
+            0x5000,
+        ));
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == STRCHR)
+                .count(),
+            3
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0046_16c0)
+                .count(),
+            1
+        );
+        assert_eq!(e.mem.u8(cr_address), b'\r');
+    }
+
+    #[test]
+    fn valid_sound_note_precaches_and_stores_time_priority_and_weight() {
+        let mut e = Engine::new();
+        let note = b"Sound: Snd, 0.5, 1.25\0";
+        e.map(0x2000, 0x3c);
+        e.map(0x3000, 0x10);
+        e.map(0x5000, 0x500);
+        e.map(0x6000, note.len() as u32);
+        e.map(0x011c_3f2c, 4);
+        e.map(NOTE_PRIORITY_SCALE, 8);
+        e.mem.set_u32(0x011c_3f2c, 0x7000);
+        e.set_global(NOTE_PRIORITY_SCALE, 250.0f64);
+        for (index, byte) in note.iter().enumerate() {
+            e.mem.set_u8(0x6000 + index as u32, *byte);
+        }
+        e.register_double(STRCHR, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            let mut address = arguments[0];
+            while e.mem.u8(address) != 0 {
+                if e.mem.u8(address) == arguments[1] as u8 {
+                    return Ret {
+                        eax: address,
+                        ..Ret::default()
+                    };
+                }
+                address += 1;
+            }
+            Ret::default()
+        });
+        e.register_double(STRLEN, |_, arguments| {
+            assert_eq!(arguments, [0x0102_38a8]);
+            Ret {
+                eax: 7,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_6d30, |e, arguments| {
+            assert_eq!(arguments.len(), 3);
+            let mut index = 0;
+            loop {
+                let byte = e.mem.u8(arguments[2] + index);
+                e.mem.set_u8(arguments[0] + index, byte);
+                if byte == 0 {
+                    break;
+                }
+                index += 1;
+            }
+            Ret::default()
+        });
+        e.register_double(0x0046_16c0, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            assert_eq!(arguments[0], 0x7000);
+            assert_eq!(e.mem.u8(arguments[1]), b'S');
+            assert_eq!(e.mem.u8(arguments[1] + 3), 0);
+            Ret {
+                eax: 0x8000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0084_e3a0, |_, arguments| {
+            assert_eq!(arguments, [0x8000]);
+            Ret {
+                eax: 0x9000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0045_3a70, |_, arguments| {
+            assert!(arguments.is_empty());
+            Ret {
+                eax: 0xa000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00ad_8050, |_, arguments| {
+            assert_eq!(arguments, [0xa000, 0x9000, 0]);
+            Ret::default()
+        });
+        e.register_double(0x005f_36f0, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret::default()
+        });
+        e.register_double(OPERATOR_NEW, |_, arguments| {
+            assert_eq!(arguments, [0x10]);
+            Ret {
+                eax: 0x3000,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00ec_a573, |e, arguments| {
+            assert_eq!(arguments.len(), 1);
+            Ret {
+                st0: if e.mem.u8(arguments[0]) == b'0' {
+                    0.5
+                } else {
+                    1.25
+                },
+                ..Ret::default()
+            }
+        });
+        e.call_log = Some(vec![]);
+        assert!(!anim_sound_or_enum(
+            &mut e,
+            Ptr::new(0x2000),
+            0x6000,
+            0x6000,
+            0,
+            1.5,
+            Ptr::new(0x7000),
+            false,
+            0x5000,
+        ));
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x00ad_8050)
+                .count(),
+            1
+        );
+        assert_eq!(e.mem.u32(0x2034), 1);
+        assert_eq!(e.mem.f32(0x3000), 1.5);
+        assert_eq!(e.mem.u8(0x3004), 125);
+        assert_eq!(e.mem.u32(0x3008), 1.25f32.to_bits());
+        assert_eq!(e.mem.u32(0x300c), 0x8000);
+    }
+
+    #[test]
+    fn blend_tag_skips_one_space_and_writes_the_group_byte() {
+        let mut e = Engine::new();
+        e.map(0x2000, 0x3c);
+        e.map(0x6000, 12);
+        for (index, byte) in b"Blend: 17\0".iter().enumerate() {
+            e.mem.set_u8(0x6000 + index as u32, *byte);
+        }
+        e.register_double(STRNICMP, |_, arguments| {
+            assert_eq!(arguments.len(), 3);
+            Ret {
+                eax: if arguments[1] == 0x0104_879c { 0 } else { 1 },
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00ec_a6d3, |_, arguments| {
+            assert_eq!(arguments, [0x6007]);
+            Ret {
+                eax: 17,
+                ..Ret::default()
+            }
+        });
+        assert!(anim_read_number_tag(&mut e, Ptr::new(0x2000), 0x6000));
+        assert_eq!(e.mem.u8(0x2029), 17);
+    }
+
+    #[test]
+    fn parent_note_reloads_the_text_after_inspecting_the_space() {
+        let mut e = Engine::new();
+        e.map(0x2000, 0x3c);
+        e.map(0x4000, 8);
+        e.mem.set_u8(0x4004, b' ');
+        let mut getter_calls = 0;
+        e.register_double(0x0043_b1b0, move |_, arguments| {
+            assert_eq!(arguments, [0x3000]);
+            getter_calls += 1;
+            Ret {
+                eax: if getter_calls == 1 { 0x4000 } else { 0x5000 },
+                ..Ret::default()
+            }
+        });
+        e.call_log = Some(vec![]);
+        anim_parent_note(&mut e, Ptr::new(0x2000), 0x3000);
+        assert_eq!(e.mem.u32(0x2030), 0x5005);
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0043_b1b0)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn enum_note_allocates_entry_and_packs_key_index_into_weight() {
+        let mut e = Engine::new();
+        let note = b"Enum: Foo\0";
+        e.map(0x2000, 0x3c);
+        e.map(0x3000, 0x10);
+        e.map(0x5000, 0x500);
+        e.map(0x6000, note.len() as u32);
+        e.map(ENUM_NAME_TABLE, 0x1f * 4);
+        e.mem.set_u32(ENUM_NAME_TABLE, 0x7000);
+        for (index, byte) in note.iter().enumerate() {
+            e.mem.set_u8(0x6000 + index as u32, *byte);
+        }
+        e.register_double(STRCHR, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            let mut address = arguments[0];
+            while e.mem.u8(address) != 0 {
+                if e.mem.u8(address) == arguments[1] as u8 {
+                    return Ret {
+                        eax: address,
+                        ..Ret::default()
+                    };
+                }
+                address += 1;
+            }
+            Ret::default()
+        });
+        e.register_double(STRLEN, |_, arguments| {
+            assert_eq!(arguments, [0x0104_877c]);
+            Ret {
+                eax: 6,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x0040_6d30, |e, arguments| {
+            assert_eq!(arguments.len(), 3);
+            let mut index = 0;
+            loop {
+                let byte = e.mem.u8(arguments[2] + index);
+                e.mem.set_u8(arguments[0] + index, byte);
+                if byte == 0 {
+                    break;
+                }
+                index += 1;
+            }
+            Ret::default()
+        });
+        e.register_double(0x0040_4dc0, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            assert_eq!(arguments[0], 0x7000);
+            assert_eq!(e.mem.u8(arguments[1]), b'F');
+            Ret::default()
+        });
+        e.register_double(0x005f_36f0, |_, arguments| {
+            assert_eq!(arguments, [0x2000]);
+            Ret::default()
+        });
+        e.register_double(OPERATOR_NEW, |_, arguments| {
+            assert_eq!(arguments, [0x10]);
+            Ret {
+                eax: 0x3000,
+                ..Ret::default()
+            }
+        });
+        assert!(!anim_sound_or_enum(
+            &mut e,
+            Ptr::new(0x2000),
+            0x6000,
+            0x6000,
+            3,
+            1.25,
+            Ptr::new(0x8000),
+            true,
+            0x5000,
+        ));
+        assert_eq!(e.mem.u32(0x2034), 1);
+        assert_eq!(e.mem.u32(0x2038), 0x3000);
+        assert_eq!(e.mem.f32(0x3000), 1.25);
+        assert_eq!(e.mem.u8(0x3004), 0);
+        assert_eq!(e.mem.u32(0x3008), 3);
+    }
+
+    #[test]
+    fn validation_repairs_required_times_for_category_two() {
+        let mut e = Engine::new();
+        e.map(0x2000, 0x3c);
+        e.map(0x3000, 0x10);
+        e.map(ANIM_NAME_TABLE, 0x24);
+        e.map(0x0119_9bcc, 0x20);
+        e.mem.set_u16(0x2010, 0);
+        e.mem.set_u32(0x2014, 4);
+        e.mem.set_u32(0x2018, 0x3000);
+        e.mem.set_u32(ANIM_CATEGORY_TABLE, 2);
+        for (index, time) in [2.0f32, 1.0, 1.0, 3.0].into_iter().enumerate() {
+            e.mem.set_f32(0x3000 + index as u32 * 4, time);
+        }
+        e.register_double(ISNAN, |_, arguments| {
+            assert_eq!(arguments.len(), 2);
+            Ret::default()
+        });
+        assert!(!anim_validate(
+            &mut e,
+            Ptr::new(0x2000),
+            Ptr::new(0x4000),
+            Ptr::new(0x5000),
+        ));
+        assert_eq!(e.mem.f32(0x3004), 2.0);
+        assert_eq!(e.mem.f32(0x3008), 3.0);
+    }
+
+    #[test]
+    fn validation_reloads_group_type_for_both_tail_diagnostics() {
+        let mut e = Engine::new();
+        e.map(0x2000, 0x3c);
+        e.map(0x3000, 8);
+        e.map(ANIM_NAME_TABLE, 0x48);
+        e.map(0x0119_9bcc, 0x20);
+        e.mem.set_u16(0x2010, 0);
+        e.mem.set_u32(0x2014, 2);
+        e.mem.set_u32(0x2018, 0x3000);
+        e.mem.set_f32(0x3000, 1.0);
+        e.mem.set_f32(0x3004, 0.0);
+        e.mem.set_u32(ANIM_NAME_TABLE, 0x7000);
+        e.mem.set_u32(ANIM_NAME_TABLE + 0x24, 0x7010);
+        e.mem.set_u8(0x2029, 1);
+        e.mem.set_u8(0x202a, 2);
+        e.register_double(ISNAN, |e, arguments| {
+            assert_eq!(arguments.len(), 2);
+            e.mem.set_u16(0x2010, 1);
+            Ret::default()
+        });
+        e.register_double(INVALID_ACTION_LOG, |_, arguments| {
+            if arguments[0] == 0x0104_8658 {
+                assert_eq!(arguments, [0x0104_8658, 0x7010, 0x5000]);
+            } else {
+                assert_eq!(arguments, [0x0104_8600, 0x7010, 0x5000, 1, 2, 0]);
+            }
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(anim_validate(
+            &mut e,
+            Ptr::new(0x2000),
+            Ptr::new(0x4000),
+            Ptr::new(0x5000),
+        ));
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(address, _)| *address == INVALID_ACTION_LOG)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn vector_length_forwards_x87_result_from_interior_vector() {
+        let mut e = Engine::new();
+        e.register_double(0x0045_7990, |_, arguments| {
+            assert_eq!(arguments, [0x201c]);
+            Ret {
+                st0: 3.25,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(e.call(0x005f_4c70, &[0x2000]).f64(), 3.25);
+    }
+
+    #[test]
+    fn vector_reader_copies_three_words_and_returns_the_output() {
+        let mut e = Engine::new();
+        e.map(0x2000, 0x3c);
+        e.map(0x3000, 12);
+        for (offset, word) in [(0, 0x3f80_0000), (4, 0x4000_0000), (8, 0x4040_0000)] {
+            e.mem.set_u32(0x201c + offset, word);
+        }
+        assert_eq!(e.call(0x005f_4c90, &[0x2000, 0x3000]).u32(), 0x3000);
+        assert_eq!(e.mem.u32(0x3000), 0x3f80_0000);
+        assert_eq!(e.mem.u32(0x3004), 0x4000_0000);
+        assert_eq!(e.mem.u32(0x3008), 0x4040_0000);
+    }
+
+    #[test]
+    fn type_predicate_accepts_only_native_zero_one_and_aa_types() {
+        let mut e = Engine::new();
+        for (group, expected) in [
+            (0x100u32, true),
+            (0x101, true),
+            (0x1aa, true),
+            (0x102, false),
+        ] {
+            assert_eq!(e.call(0x005f_4cc0, &[0, group]).bool(), expected);
+        }
+    }
+
+    #[test]
+    fn fill_priority_array_skips_null_names_and_preserves_other_bytes() {
+        let mut e = Engine::new();
+        e.map(0x2000, 0x3c);
+        e.map(0x0119_9bcc, 0x20);
+        e.mem.set_u32(0x0119_9bcc, 0x4000);
+        e.mem.set_u32(0x0119_9bcc + 8, 0x4010);
+        e.mem.set_u8(0x2008, 0x7e);
+        e.mem.set_u8(0x2009, 0x7d);
+        e.mem.set_u8(0x200a, 0x7c);
+        e.register_double(0x004e_f9a0, |_, arguments| {
+            assert_eq!(arguments[0], 0x3000);
+            assert_eq!(arguments[2], 0);
+            Ret {
+                eax: if arguments[1] == 0x4000 { 4 } else { 9 },
+                ..Ret::default()
+            }
+        });
+        e.call(0x005f_4d00, &[0x2000, 0x3000]);
+        assert_eq!(
+            (e.mem.u8(0x2008), e.mem.u8(0x2009), e.mem.u8(0x200a)),
+            (4, 0x7d, 9)
+        );
+    }
 
     #[test]
     fn animation_group_packing_matches_native_vectors() {

@@ -33,6 +33,28 @@ reading do not establish them.
 
 ## Active work: M1
 
+Animation loader collected as `6c569b7`: 13,879 combined engine tests,
+strict lint and formatting pass. Three compiler-cleanup partials remain
+explicit; a fresh worker immediately started HUDMainMenu. Root now validates
+the inventory payload dependencies and two-stack probe. Build 40 remains
+current, without a new viewer consumer. Next action: finish this bounded
+writer check, then collect the reviewed explosion effects batch.
+
+MobileObject collected as `8f92810`: 34 complete functions and 13,864
+combined engine tests, strict lint and formatting pass. A fresh worker
+immediately tackles its larger remaining bodies. Animation loader now
+validates; root's two-stack inventory probe follows. Rolling #126 and
+save-buffer #125 await CI. Build 40 remains current; these translations
+have no viewer consumer yet, so no next-build date is established.
+Next action: collect the loader and validate the inventory payload probe.
+
+Rolling #124 passed both checks and merged `c6ac7eb`. Rolling #126 now
+publishes animation parsing and Init3D; save-buffer #125 is rebased with
+fresh CI. MobileObject is validating; the animation loader is queued.
+Root inventory writing has 16 helpers/15 tests prepared and a two-stack
+probe ready, uncompiled. Next action: collect the queued slot batches and
+validate that probe; Build 40 remains current.
+
 Init3D collected as `407caf3`: 13,824 combined engine tests, strict lint
 and formatting pass; SEH cleanup remains explicit. Fresh a04 immediately
 starts the next explosion routine while a01 validates MobileObject.

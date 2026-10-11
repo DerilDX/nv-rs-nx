@@ -7,13 +7,30 @@ machinery runs.
 
 ## Resume here
 
+Latest batch: animation loader source `99fb056` collected as `6c569b7`;
+13,879 combined engine tests, strict lint and formatting pass. All 44
+unit entries have normal behavior; only SEH cleanup at `005f21c0`,
+`005f22d0`, `005f3a20` remains partial. Reviewed partial-only advancement
+retains these gaps. Fresh `/root/a03_hudmainmenu` immediately started b0236,
+HUDMainMenu, compiler held. Root now owns the compiler: session `34376`,
+private `codex-audit/check-inventory-buffer.ps1`, then the prepared
+`run-inventory-buffer-probe.ps1`. a04's six-test effect batch waits next;
+a01 continues the full movement body, then has its compiler turn.
+
 User resumed after the usage reset on 2026-10-11. Continuous translation
 is active: collect each finished, committed slot with `cycle.sh NN 0 0`,
 then immediately start a fresh agent on its new task. Never reset or cycle
 a slot with unfinished work. Ship rolling PRs once both current-head checks
 pass. The saved 98% usage stop/handoff rule still applies.
 
-Save-buffer PR #125 is open/attached at `7c58130`, based on merged #123.
+Rolling #124 passed both checks and merged as `c6ac7eb` at 02:12 local.
+`ship.sh 124` succeeded; rolling #126 is open/attached at `9343898`, with
+animation collection now `00a246f` and Init3D now `ca298df`. Fresh CI gates it.
+Save-buffer PR #125 is based on #124, now at `685c26c`, with fresh CI.
+Its generated-ledger delta was removed so rolling integration owns that
+shared snapshot and independent source PRs can merge without count conflicts.
+Source is unchanged. Follow-on safety stash `a7e3ae0` was reapplied and
+retained; do not apply it again.
 Its 18 dependencies pass 15,641 core tests (13,788 engine), strict workspace
 lint, formatting, release and debug builds. The real-registry probe writes
 count 5 / health 42.5 and the FOS payload decoder reads exactly both back.
@@ -25,7 +42,17 @@ Root session `37952` finished. Init3D source `d4fabeb` collected as
 49 hygiene tests, strict lint and formatting pass. Cycle04 session
 `77634` completed and fresh `/root/a04_round12` immediately started
 `009ae6e0`. a01 now owns the compiler; then cycle01, a03/cycle03, root.
-Start fresh workers after each cycle.
+Cycle01 has since completed as `8f92810`: 34 MobileObject functions,
+13,864 combined engine tests, strict lint and formatting pass. Source
+`f7e4c04` passed 40 focused, 13,830 engine and 49 hygiene tests. Fresh
+`/root/a01_mobileobject_cont` immediately started the six remaining larger
+bodies in address order, with compiler held. a03 now has the exclusive
+compiler for its five-body loader batch; then cycle03, then root inventory.
+a04's `009ae6e0` normal-path draft remains unregistered during review:
+callback snapshots, x87 stores, distance comparison and contact-sort
+pointer fixes have regressions prepared, uncompiled. Start fresh workers
+after each cycle. Root's 16-helper/15-test inventory follow-on and private
+two-stack payload probe remain prepared, uncompiled.
 
 Reference #122 and rolling #123 passed both checks and merged as `6bea9a1`
 and `8b5eebe`. Rolling #124 is open/attached at `9c519be`, containing loaded
@@ -107,13 +134,19 @@ Lead Phase 2 work:
   3,365 forms with the source unchanged. This is not a save round trip.
 - Managed checkout `%USERPROFILE%/.codex/worktrees/phase2-extra-data/wt-phase0`
   now uses follow-on branch `codex/phase2-inventory-payload`, based on #125.
-  The checked save-buffer branch remains pushed separately at `7c58130`.
-  Inventory follow-on has 15 new helpers and 14 tests prepared but
+  The checked save-buffer branch remains pushed separately at `574c3c5`.
+  Inventory follow-on has 16 new helpers and 15 tests prepared but
   uncompiled: form-ID encoding, bidirectional maps, constructors and
   callback allocation/release. Root owns its twelve unit files; no other
   agent may edit them. `git status` lists the exact files. Seven native
   generated vectors pass (created-ID decoding and key equality), and
-  independent static review found no concrete mismatch. No world changes.
+  independent static review of the first fifteen bodies found no concrete
+  mismatch. The last helper constructs a list node (`00470440`), checked
+  against PC assembly. Private `inventory-buffer-probe.rs` is prepared but
+  not run; it writes one entry with delta -2 and two distinct count/health
+  stacks, then uses the FOS inventory decoder. No world changes.
+  Safety stash `063e7833f97201d3ff909bb96784ddd3f0050afb` was applied after
+  rebasing the follow-on onto updated #125; retain but do not reapply it.
   PR #122 (`codex/phase2-reference-state`) merged as `6bea9a1` after both
   checks passed on head `8e11001`. Its ten form helpers,
   nine allocator/counter helpers, form callback-reload corrections and the
