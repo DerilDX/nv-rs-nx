@@ -7,6 +7,47 @@ machinery runs.
 
 ## Resume here
 
+Latest, 04:49 local: persistence follow-on #132 is published and attached at
+`6513c26`, with three dependency helpers and four regressions. All 15,781
+workspace tests (13,928 engine), strict lint, formatting and release/debug
+builds pass. Both probes now pass using the normal generated registry:
+the synthetic two-stack payload and 10,201 original count/health-only item
+payloads from eight saves, including eighteen multi-stack entries. Three
+containing records that fail full decoding remain excluded. Generated form,
+map, mode and partial allocator startup are explicit boundaries; this is
+still not whole-save or playable inventory acceptance.
+
+Root's clean published map branch has a new follow-on branch,
+`codex/phase2-inventory-script-locals`: constructor `005a8b80` and two tests
+are drafted in `tesscript.rs`, uncompiled. Three guarded native vectors pass.
+Do not claim script extras work: their actual script forms and save-ID maps
+are not yet supplied by the broader exploratory fixture. a04 owns the
+compiler; a03, a01, then root follow their respective collect/cycle steps.
+Rolling #131 core passes and viewer CI remains pending at `d6dcc8e`.
+Build 40 remains current, with no confirmed next-build date or feature list.
+Usage 84%; retain the 98% stop/handoff rule.
+
+Latest, 04:33 local: movement collection `757af70` passes 14,051 combined
+engine tests, doctest, strict lint and formatting. Fresh `/root/a01_round15`
+immediately starts its remaining normal bodies at `009339a0`; ten SEH-only
+partials remain explicit. Root now owns the compiler, session `57033`, for
+the persistence follow-on; a04 then a03 follow. a03's next HUD body remains
+explicitly partial beyond `00776731`; reviewed argument/global reload fixes
+are in its draft. a04's forty-body effect-item batch is ready, uncompiled.
+
+Reader #130 merged `bad2f96` after both CI checks. Rolling #131 is attached,
+head `d6dcc8e`, rebased onto that merge with only generated-ledger conflicts;
+fresh core/viewer CI is required. Later movement `757af70` remains local.
+Root branch `codex/phase2-inventory-form-map` is based on merged #130;
+stash `a4d2a67` is applied and retained, never apply it again. Its three
+helpers/four tests cover form-map allocation and a shared buffer setter.
+The draft count/health probe reads eight real saves and rewrites all 10,201
+selected item payloads byte-identically, including eighteen multi-stack
+entries; three full-record decode failures are excluded. This is not a FOS
+round trip. The broader inventory probe reaches missing `005a8b80` in script
+loading; investigate next after this batch. Final generated-registry probes
+remain pending after the build. Build 40 remains current. Usage 78%.
+
 Latest, 04:22 local: HUD collection `5c12df2` passed combined engine tests,
 strict lint and formatting, including the reviewed radiation audio correction.
 Fresh `/root/a03_round16` immediately continues large `00775a00` in b0236.

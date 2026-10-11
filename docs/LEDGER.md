@@ -30,18 +30,20 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 10965 | 16.5% |
-| traced | 4375 | 6.6% |
+| translated | 11044 | 16.7% |
+| traced | 4331 | 6.5% |
 | platform | 3417 | 5.2% |
 | library | 21913 | 33.1% |
-| open | 25589 | 38.6% |
+| open | 25554 | 38.6% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **69** engine functions
+Translation totals count markers, not complete behavior. **77** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
 | --- | --- |
+| `00404760` | `crates/engine/src/units/fallout_shared_magic/effectitem.rs:441` |
+| `00404a00` | `crates/engine/src/units/fallout_shared_magic/effectitem.rs:547` |
 | `004391c0` | `crates/engine/src/units/fallout_shared/multiboundmarkerdata.rs:188` |
 | `00439410` | `crates/engine/src/units/fallout_shared/multiboundmarkerdata.rs:312` |
 | `00439490` | `crates/engine/src/units/fallout_shared/multiboundmarkerdata.rs:332` |
@@ -93,7 +95,13 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `008ca070` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1562` |
 | `008ca350` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1571` |
 | `008ca480` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1782` |
-| `0092ec40` | `crates/engine/src/units/fallout_ai/mobileobject.rs:166` |
+| `0092ec40` | `crates/engine/src/units/fallout_ai/mobileobject.rs:259` |
+| `009319c0` | `crates/engine/src/units/fallout_ai/mobileobject.rs:1584` |
+| `009320e0` | `crates/engine/src/units/fallout_ai/mobileobject.rs:1817` |
+| `00932b70` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2094` |
+| `00933010` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2254` |
+| `00933150` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2289` |
+| `00933270` | `crates/engine/src/units/fallout_ai/mobileobject.rs:2325` |
 | `009abf30` | `crates/engine/src/units/fallout_ai/explosion.rs:1256` |
 | `009ac200` | `crates/engine/src/units/fallout_ai/explosion.rs:1646` |
 | `009ac5a0` | `crates/engine/src/units/fallout_ai/explosion.rs:189` |
@@ -112,9 +120,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `009b2cb0` | `crates/engine/src/units/fallout_ai/explosion.rs:2565` |
 | `009b2d30` | `crates/engine/src/units/fallout_ai/explosion.rs:2579` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14931 (36.8%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14966 (36.9%) are translated or traced.
 
-Rust cites 15998 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 16038 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -147,7 +155,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 65 | 0 | 21269 | 0 | - |
 | fallout shared | 10470 | 2065 | 3149 | 6380 | 956 | 0 | 0 | 3134 | 70.1% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
-| fallout/ai | 4849 | 1475 | 1888 | 2275 | 600 | 0 | 0 | 1974 | 59.3% |
+| fallout/ai | 4849 | 1475 | 1888 | 2314 | 572 | 0 | 0 | 1963 | 59.5% |
 | fallout/interface | 2645 | 991 | 1247 | 630 | 724 | 0 | 0 | 1291 | 51.2% |
 | (unplaced) | 2353 | 470 | 0 | 39 | 408 | 1 | 0 | 1905 | 19.0% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 711 | 173 | 0 | 0 | 904 | 49.4% |
@@ -167,7 +175,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout shared/facegen | 433 | 63 | 91 | 0 | 55 | 0 | 0 | 378 | 12.7% |
 | BSMenu | 361 | 136 | 221 | 165 | 39 | 0 | 0 | 157 | 56.5% |
 | BSAudio | 304 | 75 | 141 | 0 | 31 | 0 | 0 | 273 | 10.2% |
-| fallout shared/magic | 296 | 43 | 83 | 8 | 68 | 0 | 0 | 220 | 25.7% |
+| fallout shared/magic | 296 | 43 | 83 | 48 | 52 | 0 | 0 | 196 | 33.8% |
 | BSSystem | 275 | 54 | 36 | 1 | 37 | 237 | 0 | 0 | - |
 | NiCollision | 215 | 104 | 115 | 0 | 4 | 0 | 0 | 211 | 1.9% |
 | fallout shared/distant terrain system | 204 | 37 | 62 | 1 | 26 | 0 | 0 | 177 | 13.2% |
@@ -204,8 +212,8 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 101 | 30 | 3 | 0 | 9 |
-| 2 | 1575 | 583 | 1087 | 365 | 24 | 4 | 95 |
-| 3 | 4973 | 1303 | 3511 | 979 | 154 | 26 | 303 |
+| 2 | 1575 | 583 | 1121 | 331 | 24 | 4 | 95 |
+| 3 | 4973 | 1303 | 3549 | 941 | 154 | 26 | 303 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 

@@ -1,14 +1,9 @@
 //! `fallout/ai/mobileobject.cpp` (Xbox PDB source unit), subsystem `fallout/ai`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 //!
-//! Continuation queue: the first 40 address-ordered entries end at 00931850.
-//! Continuation of those 40 entries:
-//! - 0092ec40: normal destructor path registered; compiler SEH cleanup open.
-//! - 0092ed60, 009308f0: normal paths registered; runtime validation pending.
-//! - 00930c70, 00931710: normal paths registered; compiler SEH cleanup open.
-//! - 0092f260: normal movement path registered; compiler SEH cleanup open.
-//!
-//! Next address-ordered queue entry after this bounded batch: 00931880.
+//! The first 80 address-ordered entries end at 00933890. Normal paths for
+//! this batch are translated; compiler-only SEH cleanup is marked at each
+//! affected body. The next queue entry is 009339a0.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -119,6 +114,104 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00931850,
             mobile_object_get_current_process_type(Ptr<MobileObject>) -> i32
         ),
+        entry!(0x00931880, fn_00931880(Ptr<MobileObject>) -> bool),
+        entry!(
+            0x00931920,
+            mobile_object_change_process_level(Ptr<MobileObject>, u8) -> bool
+        ),
+        entry!(0x009319c0, fn_009319c0(Ptr<MobileObject>, i32) -> bool),
+        entry!(
+            0x00931b60,
+            mobile_object_set_heading(Ptr<MobileObject>, f32)
+        ),
+        entry!(0x00931cc0, fn_00931cc0(Ptr<MobileObject>, Ptr)),
+        entry!(0x00931d30, fn_00931d30(Ptr<MobileObject>, f32)),
+        entry!(
+            0x00931d70,
+            mobile_object_get_looking(Ptr<MobileObject>) -> f64
+        ),
+        entry!(
+            0x00931d90,
+            mobile_object_set_looking(Ptr<MobileObject>, f32)
+        ),
+        entry!(0x00931e50, fn_00931e50(Ptr<MobileObject>, f32)),
+        entry!(0x00931e80, fn_00931e80(Ptr<MobileObject>)),
+        entry!(0x00931ed0, fn_00931ed0(Ptr<MobileObject>, Ptr) -> Ptr),
+        entry!(0x00931f30, fn_00931f30(Ptr<MobileObject>, Ptr)),
+        entry!(0x00931f80, fn_00931f80(Ptr<MobileObject>, f32)),
+        entry!(
+            0x00931fb0,
+            mobile_object_set_chase_bip(Ptr<MobileObject>, u8)
+        ),
+        entry!(0x00931ff0, fn_00931ff0(Ptr<MobileObject>, Ptr) -> u16),
+        entry!(0x00932070, mobile_object_save_game(Ptr<MobileObject>, Ptr)),
+        entry!(
+            0x009320e0,
+            mobile_object_load_game(Ptr<MobileObject>, Ptr, Ptr)
+        ),
+        entry!(
+            0x00932490,
+            mobile_object_init_load_game(Ptr<MobileObject>, Ptr, Ptr)
+        ),
+        entry!(
+            0x00932520,
+            mobile_object_finish_init_load_game(Ptr<MobileObject>, u32, Ptr)
+        ),
+        entry!(0x00932750, fn_00932750(Ptr<MobileObject>, u32)),
+        entry!(
+            0x00932880,
+            mobile_object_save_game_ov2(Ptr<MobileObject>, Ptr)
+        ),
+        entry!(
+            0x00932a00,
+            mobile_object_load_game_ov2(Ptr<MobileObject>, Ptr)
+        ),
+        entry!(0x00932b70, fn_00932b70(Ptr<MobileObject>, Ptr)),
+        entry!(0x00932d60, fn_00932d60(Ptr<MobileObject>, Ptr)),
+        entry!(0x00932f60, fn_00932f60(Ptr<MobileObject>, Ptr)),
+        entry!(
+            0x00933010,
+            fn_00933010(Ptr<MobileObject>, Ptr, Ptr, u8, u32) -> Ptr
+        ),
+        entry!(
+            0x00933150,
+            fn_00933150(Ptr<MobileObject>, Ptr, u32, u8, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x00933270,
+            mobile_object_play_sound_by_editor_name(
+                Ptr<MobileObject>,
+                Ptr,
+                Ptr,
+                u8,
+                u32,
+                u32,
+            ) -> Ptr
+        ),
+        entry!(0x009333e0, mobile_object_set_delete(Ptr<MobileObject>, u8)),
+        entry!(0x00933480, fn_00933480(Ptr) -> bool),
+        entry!(
+            0x009334b0,
+            mobile_object_get_desired_process_level(Ptr<MobileObject>) -> i32
+        ),
+        entry!(
+            0x009335b0,
+            mobile_object_load_3d(Ptr<MobileObject>, u8) -> Ptr
+        ),
+        entry!(0x00933630, fn_00933630(Ptr<MobileObject>, Ptr) -> Ptr),
+        entry!(
+            0x009336c0,
+            mobile_object_is_in_dialogue(Ptr<MobileObject>) -> bool
+        ),
+        entry!(0x00933700, fn_00933700(Ptr<MobileObject>, Ptr) -> Ptr),
+        entry!(0x00933790, fn_00933790(Ptr<MobileObject>, u32) -> u32),
+        entry!(0x009337b0, fn_009337b0(Ptr<MobileObject>) -> bool),
+        entry!(0x00933810, fn_00933810(Ptr) -> Ptr),
+        entry!(
+            0x00933840,
+            mobile_object_is_in_dialogue_with_player(Ptr<MobileObject>) -> bool
+        ),
+        entry!(0x00933890, fn_00933890(Ptr<MobileObject>, u8)),
     ]
 }
 
@@ -1427,6 +1520,1050 @@ pub fn mobile_object_get_current_process_type(e: &mut Engine, this: Ptr<MobileOb
         -1
     } else {
         e.call(0x0045_cd60, &args![process]).i32()
+    }
+}
+
+// Translated from 00931880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Tests whether process level one can be entered in the loaded cell, then
+/// either invokes the high-process transition or deletes the reference.
+pub fn fn_00931880(e: &mut Engine, this: Ptr<MobileObject>) -> bool {
+    if e.vcall(this.addr(), 0x1d0, &args![]).u32() == 0 {
+        return true;
+    }
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    let world = e.global::<u32>(0x011d_ea10);
+    if !e.call(0x0045_11e0, &args![world, cell, 1u32]).bool() {
+        return true;
+    }
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if e.call(0x0045_cd60, &args![process]).u32() != 0 {
+        e.vcall(this.addr(), 0x240, &args![]);
+        true
+    } else {
+        if !this.is_null() {
+            e.vcall(this.addr(), 0x10, &args![1u32]);
+        }
+        false
+    }
+}
+
+// Translated from 00931920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::ChangeProcessLevel` (Xbox PDB): tests the requested cell
+/// and changes a live process, deleting the reference at level zero.
+pub fn mobile_object_change_process_level(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    level: u8,
+) -> bool {
+    if e.vcall(this.addr(), 0x1d0, &args![]).u32() == 0 {
+        return true;
+    }
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    let world = e.global::<u32>(0x011d_ea10);
+    if !e
+        .call(0x0045_11e0, &args![world, cell, level as u32])
+        .bool()
+    {
+        return true;
+    }
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if e.call(0x0045_cd60, &args![process]).u32() != 0 {
+        e.vcall(this.addr(), 0x240, &args![]);
+        true
+    } else {
+        if !this.is_null() {
+            e.vcall(this.addr(), 0x10, &args![1u32]);
+        }
+        false
+    }
+}
+
+// Translated from 009319c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Creates, removes or changes the process to the requested level.
+/// Compiler SEH cleanup for an exceptional process construction is omitted.
+// Translation incomplete: 009319c0 - compiler SEH exception cleanup.
+pub fn fn_009319c0(e: &mut Engine, this: Ptr<MobileObject>, level: i32) -> bool {
+    if level == -1 {
+        e.call(0x0040_fbf0, &args![0x011f_11a0u32, 0u32]);
+        let process = e.get(this, MobileObject::pCurrentProcess);
+        let had_process = !process.is_null();
+        if had_process {
+            let process_type = e.call(0x0045_cd60, &args![process]).u32();
+            e.call(0x0096_d470, &args![0x011e_0e80u32, this, process_type]);
+            let process = e.get(this, MobileObject::pCurrentProcess);
+            if !process.is_null() {
+                e.vcall(process.addr(), 0, &args![1u32]);
+            }
+            e.set(this, MobileObject::pCurrentProcess, Ptr::NULL);
+        }
+        e.call(0x0040_fba0, &args![0x011f_11a0u32]);
+        return had_process;
+    }
+    if e.get(this, MobileObject::pCurrentProcess).is_null() {
+        let allocation = e.call(0x0040_1000, &args![0xb4u32]).ptr::<u8>();
+        let process = if allocation.is_null() {
+            Ptr::NULL
+        } else {
+            e.call(0x0090_6dc0, &args![allocation]).ptr()
+        };
+        e.set(this, MobileObject::pCurrentProcess, process);
+    }
+    if mobile_object_get_current_process_type(e, this) == level {
+        return false;
+    }
+    let slot = match level {
+        0 => 0x240,
+        1 => 0x24c,
+        2 => 0x248,
+        3 => 0x244,
+        _ => return false,
+    };
+    e.vcall(this.addr(), slot, &args![]).bool()
+}
+
+// Translated from 00931b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::SetHeading` (Xbox PDB): clamps a requested heading and
+/// routes an actor's relative heading to its reference angle setter.
+pub fn mobile_object_set_heading(e: &mut Engine, this: Ptr<MobileObject>, angle: f32) {
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        if e.vcall(this.addr(), 0x230, &args![]).bool() {
+            return;
+        }
+        let state = e.vcall(this.addr(), 0x214, &args![]).u32();
+        if matches!(state, 4 | 5 | 9 | 10) {
+            let process = e.get(this, MobileObject::pCurrentProcess);
+            if e.vcall(process.addr(), 0x4c8, &args![]).u32() != 0
+                && e.vcall(this.addr(), 0x100, &args![]).bool()
+            {
+                return;
+            }
+        }
+    }
+    let mut heading = e.call(0x004b_1480, &args![quiet_f32(angle)]).f64() as f32;
+    if e.vcall(this.addr(), 0x100, &args![]).bool() && e.call(0x0087_eeb0, &args![this]).bool() {
+        heading = ((heading as f64) - (e.mem.f32(this.addr() + 0x2c) as f64)) as f32;
+        while (heading as f64) < e.global::<f64>(0x0101_ff58) {
+            heading = ((heading as f64) + e.global::<f64>(0x0101_ff48)) as f32;
+        }
+        while (heading as f64) >= e.global::<f64>(0x0101_ff40) {
+            heading = ((heading as f64) - e.global::<f64>(0x0101_ff48)) as f32;
+        }
+        e.call(0x0057_57a0, &args![this, quiet_f32(heading)]);
+    } else {
+        e.call(0x0057_57d0, &args![this, quiet_f32(heading)]);
+    }
+}
+
+// Translated from 00931cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets heading toward another reference using the two virtual position getters.
+pub fn fn_00931cc0(e: &mut Engine, this: Ptr<MobileObject>, other: Ptr) {
+    let origin = e.vcall(this.addr(), 0x1f4, &args![]).ptr::<u8>();
+    e.with_stack(12, |e, delta| {
+        let destination = e.vcall(other.addr(), 0x1f4, &args![]).ptr::<u8>();
+        e.call(0x0043_9ef0, &args![destination, delta, origin]);
+        let angle = e.call(0x004b_13c0, &args![delta]).f64() as f32;
+        e.vcall(this.addr(), 0x2c4, &args![angle]);
+    });
+}
+
+// Translated from 00931d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds an angle to the virtual heading getter and sets the result.
+pub fn fn_00931d30(e: &mut Engine, this: Ptr<MobileObject>, increment: f32) {
+    let heading = e.vcall(this.addr(), 0x2bc, &args![0u32]).f64();
+    let updated = (heading + increment as f64) as f32;
+    e.vcall(this.addr(), 0x2c4, &args![updated]);
+}
+
+// Translated from 00931d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::GetLooking` (Xbox PDB): reads the float from the angle pointer.
+pub fn mobile_object_get_looking(e: &mut Engine, this: Ptr<MobileObject>) -> f64 {
+    let angle = e.call(0x0043_0830, &args![this]).ptr::<u8>();
+    e.mem.f32(angle.addr()) as f64
+}
+
+// Translated from 00931d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::SetLooking` (Xbox PDB): clamps the looking angle to the
+/// native lower bound and the actor's animation-dependent upper bound.
+pub fn mobile_object_set_looking(e: &mut Engine, this: Ptr<MobileObject>, angle: f32) {
+    let mut upper = quiet_f32(e.global::<f32>(0x0108_a7f8));
+    if e.vcall(this.addr(), 0x100, &args![]).bool() {
+        let state = e.vcall(this.addr(), 0x214, &args![]).i32();
+        if (1..=5).contains(&state) {
+            let limit = e.call(0x0040_3e20, &args![0x011c_d8ccu32]).ptr::<u8>();
+            upper =
+                ((quiet_f32(e.mem.f32(limit.addr())) as f64) * e.global::<f64>(0x0102_3128)) as f32;
+        }
+    }
+    let lower = e.global::<f64>(0x0108_a7f0);
+    let result = if (angle as f64) < lower {
+        quiet_f32(e.global::<f32>(0x0108_a7ec))
+    } else if upper < angle {
+        upper
+    } else {
+        quiet_f32(angle)
+    };
+    e.call(0x0057_5770, &args![this, result]);
+}
+
+// Translated from 00931e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds to the current looking angle, then applies the usual clamp.
+pub fn fn_00931e50(e: &mut Engine, this: Ptr<MobileObject>, increment: f32) {
+    let angle = mobile_object_get_looking(e, this);
+    mobile_object_set_looking(e, this, (angle + increment as f64) as f32);
+}
+
+// Translated from 00931e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the current process if present and clears its pointer.
+pub fn fn_00931e80(e: &mut Engine, this: Ptr<MobileObject>) {
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0, &args![1u32]);
+    }
+    e.set(this, MobileObject::pCurrentProcess, Ptr::NULL);
+}
+
+// Translated from 00931ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the first word of a controller-derived value, or a default value
+/// constructed into a stack temporary when no controller exists.
+pub fn fn_00931ed0(e: &mut Engine, this: Ptr<MobileObject>, output: Ptr) -> Ptr {
+    let controller = mobile_object_get_char_controller(e, this);
+    e.with_stack(16, |e, temporary| {
+        let source = if controller.is_null() {
+            e.call(0x008c_71b0, &args![temporary, 0u32]).ptr::<u8>()
+        } else {
+            e.call(0x0070_c440, &args![controller, temporary])
+                .ptr::<u8>()
+        };
+        let value = e.mem.u32(source.addr());
+        e.mem.set_u32(output.addr(), value);
+    });
+    output
+}
+
+// Translated from 00931f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads controller linear velocity, or copies the three global defaults.
+pub fn fn_00931f30(e: &mut Engine, this: Ptr<MobileObject>, output: Ptr) {
+    let controller = mobile_object_get_char_controller(e, this);
+    if controller.is_null() {
+        for index in 0..3 {
+            let value = e.global::<u32>(0x011f_426c + index * 4);
+            e.mem.set_u32(output.addr() + index * 4, value);
+        }
+    } else {
+        e.call(0x0066_ca00, &args![controller, output]);
+    }
+}
+
+// Translated from 00931f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards a size value to the character controller when present.
+pub fn fn_00931f80(e: &mut Engine, this: Ptr<MobileObject>, size: f32) {
+    let controller = mobile_object_get_char_controller(e, this);
+    if !controller.is_null() {
+        e.call(0x00c7_08a0, &args![controller, quiet_f32(size)]);
+    }
+}
+
+// Translated from 00931fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::SetChaseBip` (Xbox PDB): sets controller bit 0x800.
+pub fn mobile_object_set_chase_bip(e: &mut Engine, this: Ptr<MobileObject>, enabled: u8) {
+    let controller = mobile_object_get_char_controller(e, this);
+    if !controller.is_null() {
+        e.call(
+            0x0062_9670,
+            &args![controller.addr() + 0x410, 0x800u32, enabled as u32],
+        );
+    }
+}
+
+// Translated from 00931ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds the reference's save size and any current-process save size to one.
+pub fn fn_00931ff0(e: &mut Engine, this: Ptr<MobileObject>, output: Ptr) -> u16 {
+    let base = e.call(0x0055_e730, &args![this, output]).u32() as u16;
+    let mut count = 1u16.wrapping_add(base);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        let extra = e.vcall(process.addr(), 0x548, &args![output, this]).u32() as u16;
+        count = count.wrapping_add(extra);
+    }
+    count
+}
+
+// Translated from 00932070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::SaveGame` (Xbox PDB): writes a process-type byte, the
+/// reference data, then the current process' data when present.
+pub fn mobile_object_save_game(e: &mut Engine, this: Ptr<MobileObject>, output: Ptr) {
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    let process_type = if process.is_null() {
+        0xffu8
+    } else {
+        e.call(0x0045_cd60, &args![process]).u32() as u8
+    };
+    e.with_stack(1, |e, byte| {
+        e.mem.set_u8(byte.addr(), process_type);
+        e.call(0x0048_4ce0, &args![this, byte, 1u32]);
+    });
+    e.call(0x0055_e940, &args![this, output]);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x550, &args![output, this]);
+    }
+}
+
+// Translated from 009320e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::LoadGame` (Xbox PDB): restores the saved process type,
+/// reference data, and the process-specific data in native order.
+/// Compiler SEH cleanup for exceptional construction is omitted.
+// Translation incomplete: 009320e0 - compiler SEH exception cleanup.
+pub fn mobile_object_load_game(e: &mut Engine, this: Ptr<MobileObject>, input: Ptr, flags: Ptr) {
+    let saved_type = e.with_stack(1, |e, byte| {
+        e.call(0x0048_4d00, &args![this, byte, 1u32]);
+        e.mem.u8(byte.addr()) as i8
+    });
+    if saved_type == -1 {
+        let process = e.get(this, MobileObject::pCurrentProcess);
+        if !process.is_null() {
+            e.call(0x0040_fbf0, &args![0x011f_11a0u32, 0u32]);
+            let process = e.get(this, MobileObject::pCurrentProcess);
+            let process_type = e.call(0x0045_cd60, &args![process]).u32();
+            e.call(0x0096_d470, &args![0x011e_0e80u32, this, process_type]);
+            let process = e.get(this, MobileObject::pCurrentProcess);
+            if !process.is_null() {
+                e.vcall(process.addr(), 0, &args![1u32]);
+            }
+            e.call(0x0040_fba0, &args![0x011f_11a0u32]);
+            e.set(this, MobileObject::pCurrentProcess, Ptr::NULL);
+        }
+    } else if (0..=3).contains(&saved_type) {
+        let level = saved_type as usize;
+        let process = e.get(this, MobileObject::pCurrentProcess);
+        if process.is_null() {
+            let sizes = [0x46cu32, 0x25c, 0xc8, 0xb4];
+            let ctors = [0x008d_7510u32, 0x0091_3fe0, 0x0092_c950, 0x0090_6dc0];
+            let allocation = e.call(0x0040_1000, &args![sizes[level]]).ptr::<u8>();
+            let process = if allocation.is_null() {
+                Ptr::NULL
+            } else {
+                e.call(ctors[level], &args![allocation]).ptr()
+            };
+            e.set(this, MobileObject::pCurrentProcess, process);
+            e.call(
+                0x0096_d450,
+                &args![0x011e_0e80u32, this, level as u32, 0u32, 0u32, 0u32],
+            );
+        } else if e.call(0x0045_cd60, &args![process]).i32() != saved_type as i32 {
+            let slots = [0x240, 0x24c, 0x248, 0x244];
+            e.vcall(this.addr(), slots[level], &args![]);
+        }
+    }
+    if e.vcall(this.addr(), 0x1d0, &args![]).u32() != 0 {
+        let cell = e.call(0x008d_6f30, &args![this]).u32();
+        let world = e.global::<u32>(0x011d_ea10);
+        if !e.call(0x0045_11e0, &args![world, cell, 0u32]).bool() || saved_type != 0 {
+            e.vcall(this.addr(), 0x1cc, &args![0u32, 1u32]);
+        }
+    }
+    e.call(0x0055_ec40, &args![this, input, flags]);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x558, &args![input, flags, this]);
+    }
+}
+
+// Translated from 00932490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::InitLoadGame` (Xbox PDB): initializes reference load state
+/// before calling the process load initializer when it exists.
+pub fn mobile_object_init_load_game(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    input: Ptr,
+    flags: Ptr,
+) {
+    e.call(0x0055_f5f0, &args![this, input, flags]);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x560, &args![input, flags, this]);
+    }
+}
+
+// Translated from 00932520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::FinishInitLoadGame` (Xbox PDB): attaches the controller
+/// and completes or discards the saved process according to reference state.
+pub fn mobile_object_finish_init_load_game(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    flags: u32,
+    input: Ptr,
+) {
+    e.call(0x0055_f780, &args![this, flags, input]);
+    let actor = e
+        .call(
+            0x00ec_43fb,
+            &args![this, 0u32, 0x0118_4920u32, 0x0118_46d4u32, 0u32],
+        )
+        .ptr::<u8>();
+    let actor_state = if actor.is_null() {
+        false
+    } else {
+        let state = e.call(0x004f_8960, &args![actor]).u32();
+        state == 2 || (state != 2 && e.call(0x004f_8960, &args![actor]).u32() == 1)
+    };
+    if actor_state {
+        e.vcall(this.addr(), 0x2a0, &args![]);
+    } else if flags & 6 != 0 {
+        let controller = mobile_object_get_char_controller(e, this);
+        if !controller.is_null() && e.call(0x008d_6f30, &args![this]).u32() != 0 {
+            let cell = e.call(0x008d_6f30, &args![this]).ptr::<u8>();
+            let world = e.call(0x0045_43c0, &args![cell]).u32();
+            e.call(0x00c7_0c90, &args![controller, world]);
+        }
+        if !controller.is_null() && !e.call(0x005c_0860, &args![controller]).bool() {
+            let position = e.call(0x0043_6aa0, &args![this]).ptr::<u8>();
+            e.with_stack(12, |e, copied| {
+                move_copy_vec(e, copied.addr(), position.addr());
+                e.call(0x0056_20e0, &args![controller, copied]);
+            });
+        }
+    }
+    if e.get(this, MobileObject::pCurrentProcess).is_null() {
+        return;
+    }
+    e.call(0x0040_fbf0, &args![0x011f_11a0u32, 0u32]);
+    if e.call(0x0044_0d80, &args![this]).bool() || e.call(0x0044_0da0, &args![this]).bool() {
+        let process = e.get(this, MobileObject::pCurrentProcess);
+        let process_type = e.call(0x0045_cd60, &args![process]).u32();
+        e.call(0x0096_d470, &args![0x011e_0e80u32, this, process_type]);
+        let process = e.get(this, MobileObject::pCurrentProcess);
+        if !process.is_null() {
+            e.vcall(process.addr(), 0, &args![1u32]);
+        }
+        e.set(this, MobileObject::pCurrentProcess, Ptr::NULL);
+    } else if e.call(0x0043_fcd0, &args![this]).u32() == 0
+        && this.addr() != e.global::<u32>(0x011d_ea3c)
+    {
+        let process = e.get(this, MobileObject::pCurrentProcess);
+        let process_type = e.call(0x0045_cd60, &args![process]).u32();
+        let can_demote = if process_type == 0 {
+            true
+        } else {
+            let process = e.get(this, MobileObject::pCurrentProcess);
+            e.call(0x0045_cd60, &args![process]).u32() == 1
+        };
+        if can_demote {
+            e.vcall(this.addr(), 0x248, &args![]);
+            let hour = e.call(0x0086_7da0, &args![0x011d_e7b8u32]).f64();
+            let elapsed = (hour - e.global::<f64>(0x0101_1588)) as f32;
+            let process = e.get(this, MobileObject::pCurrentProcess);
+            e.call(0x0069_3d50, &args![process, elapsed]);
+            e.call(0x0096_f400, &args![0x011e_0e80u32, this]);
+        }
+    }
+    e.call(0x0040_fba0, &args![0x011f_11a0u32]);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x564, &args![flags, input, this]);
+    }
+}
+
+// Translated from 00932750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes weapon state for flag 0x20, then updates process and removes a
+/// process whose reference no longer qualifies for the active list.
+pub fn fn_00932750(e: &mut Engine, this: Ptr<MobileObject>, flags: u32) {
+    if flags & 0x20 != 0 {
+        e.call(0x0057_1b50, &args![this]);
+        e.call(0x0048_3710, &args![this]);
+        e.call(0x0045_34f0, &args![this, 0u32]);
+        e.call(0x0048_3710, &args![this]);
+    }
+    e.call(0x0055_f240, &args![this, flags]);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x56c, &args![flags, this]);
+    }
+    let manager = e.global::<u32>(0x011d_e45c);
+    if !e.call(0x0055_f5b0, &args![manager]).bool() {
+        return;
+    }
+    let manager = e.global::<u32>(0x011d_e45c);
+    if !e.call(0x0047_c850, &args![manager]).bool()
+        || e.get(this, MobileObject::pCurrentProcess).is_null()
+    {
+        return;
+    }
+    if !e.call(0x0044_0da0, &args![this]).bool() && !e.call(0x0044_0d80, &args![this]).bool() {
+        return;
+    }
+    e.call(0x0040_fbf0, &args![0x011f_11a0u32, 0u32]);
+    let process_type = mobile_object_get_current_process_type(e, this);
+    e.call(0x0096_d470, &args![0x011e_0e80u32, this, process_type]);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0, &args![1u32]);
+    }
+    e.set(this, MobileObject::pCurrentProcess, Ptr::NULL);
+    e.call(0x0040_fba0, &args![0x011f_11a0u32]);
+}
+
+// Translated from 00932880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::SaveGame_ov2` (Xbox PDB): writes the process type, reference
+/// state, mobile object fields, two form IDs and optional process data.
+pub fn mobile_object_save_game_ov2(e: &mut Engine, this: Ptr<MobileObject>, buffer: Ptr) {
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    let process_type = if process.is_null() {
+        0xffu8
+    } else {
+        e.call(0x0045_cd60, &args![process]).u32() as u8
+    };
+    e.with_stack(1, |e, byte| {
+        e.mem.set_u8(byte.addr(), process_type);
+        e.call(0x0086_5e50, &args![buffer, byte, 1u32, 0u32]);
+    });
+    e.call(0x0056_2230, &args![this, buffer]);
+    for (offset, count) in [
+        (0x84, 1u32),
+        (0x85, 1),
+        (0x7c, 1),
+        (0x7f, 1),
+        (0x80, 1),
+        (0x7d, 1),
+        (0x7e, 1),
+        (0x86, 1),
+        (0x74, 4),
+        (0x78, 4),
+        (0x81, 1),
+        (0x83, 1),
+    ] {
+        e.call(
+            0x0086_5e50,
+            &args![buffer, this.addr() + offset, count, 0u32],
+        );
+    }
+    for field in [
+        MobileObject::pTalkingActivator,
+        MobileObject::pDialogueItemTarget,
+    ] {
+        let form = e.get(this, field);
+        e.call(0x0086_5df0, &args![buffer, form, 0u32]);
+    }
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x54c, &args![buffer]);
+    }
+}
+
+// Translated from 00932a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::LoadGame_ov2` (Xbox PDB): restores process and mobile
+/// fields, conditionally reads the newer flag byte, then form IDs and process.
+pub fn mobile_object_load_game_ov2(e: &mut Engine, this: Ptr<MobileObject>, buffer: Ptr) {
+    let saved_type = e.with_stack(1, |e, byte| {
+        e.mem.set_u8(byte.addr(), 0xff);
+        e.call(0x0086_4980, &args![buffer, byte, 1u32]);
+        e.mem.u8(byte.addr()) as i8
+    });
+    fn_009319c0(e, this, saved_type as i32);
+    e.call(0x0056_23d0, &args![this, buffer]);
+    for (offset, count) in [
+        (0x84, 1u32),
+        (0x85, 1),
+        (0x7c, 1),
+        (0x7f, 1),
+        (0x80, 1),
+        (0x7d, 1),
+        (0x7e, 1),
+        (0x86, 1),
+        (0x74, 4),
+        (0x78, 4),
+        (0x81, 1),
+    ] {
+        e.call(0x0086_4980, &args![buffer, this.addr() + offset, count]);
+    }
+    if e.vcall(buffer.addr(), 0, &args![]).u32() as u8 >= 8 {
+        e.call(0x0086_4980, &args![buffer, this.addr() + 0x83, 1u32]);
+    }
+    e.call(0x0086_48e0, &args![buffer, this.addr() + 0x6c]);
+    e.call(0x0086_48e0, &args![buffer, this.addr() + 0x70]);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x554, &args![buffer]);
+    }
+}
+
+// Translated from 00932b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resolves saved talking/dialogue references, then restores process and 3D
+/// state after loading the reference. Constructor exception cleanup omitted.
+// Translation incomplete: 00932b70 - compiler SEH exception cleanup.
+pub fn fn_00932b70(e: &mut Engine, this: Ptr<MobileObject>, buffer: Ptr) {
+    e.call(0x0056_2660, &args![this, buffer]);
+    for (offset, target) in [(0x6c, 0x0118_41ccu32), (0x70, 0x0118_4920)] {
+        let saved = e.mem.u32(this.addr() + offset);
+        let resolved = if saved == 0 {
+            0
+        } else {
+            let form = e.call(0x0048_39c0, &args![saved]).u32();
+            e.call(
+                0x00ec_43fb,
+                &args![form, 0u32, 0x0118_3028u32, target, 0u32],
+            )
+            .u32()
+        };
+        e.mem.set_u32(this.addr() + offset, resolved);
+    }
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x55c, &args![buffer]);
+    }
+    if e.vcall(this.addr(), 0x1d0, &args![]).u32() != 0
+        && !e.vcall(this.addr(), 0x224, &args![]).bool()
+        && mobile_object_get_char_controller(e, this).is_null()
+    {
+        e.vcall(this.addr(), 0x1c4, &args![]);
+    }
+    if e.get(this, MobileObject::pCurrentProcess).is_null()
+        && !e.call(0x0043_7b90, &args![this]).bool()
+    {
+        let allocation = e.call(0x0040_1000, &args![0xb4u32]).ptr::<u8>();
+        let process = if allocation.is_null() {
+            Ptr::NULL
+        } else {
+            e.call(0x0090_6dc0, &args![allocation]).ptr()
+        };
+        e.set(this, MobileObject::pCurrentProcess, process);
+        let desired = mobile_object_get_desired_process_level(e, this);
+        fn_009319c0(e, this, desired);
+    }
+    if e.call(0x0043_fcd0, &args![this]).u32() != 0 {
+        let process = e.get(this, MobileObject::pCurrentProcess);
+        let eligible = if process.is_null() {
+            true
+        } else {
+            let level = e.call(0x0045_cd60, &args![process]).u32();
+            if level == 3 {
+                true
+            } else {
+                let process = e.get(this, MobileObject::pCurrentProcess);
+                e.call(0x0045_cd60, &args![process]).u32() == 2
+            }
+        };
+        if eligible {
+            e.vcall(this.addr(), 0x1cc, &args![0u32, 1u32]);
+        }
+    }
+}
+
+// Translated from 00932d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finishes process load, updates temporary process-list membership, restores
+/// say-to data and reconciles process level with the loaded cell.
+pub fn fn_00932d60(e: &mut Engine, this: Ptr<MobileObject>, buffer: Ptr) {
+    e.call(0x0056_27c0, &args![this, buffer]);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x570, &args![buffer]);
+        if e.call(0x0043_7b90, &args![this]).bool() {
+            e.call(0x0040_fbf0, &args![0x011f_11a0u32, 0u32]);
+            let process = e.get(this, MobileObject::pCurrentProcess);
+            let level = e.call(0x0045_cd60, &args![process]).u32();
+            e.call(0x0096_d470, &args![0x011e_0e80u32, this, level]);
+            let process = e.get(this, MobileObject::pCurrentProcess);
+            if !process.is_null() {
+                e.vcall(process.addr(), 0, &args![1u32]);
+            }
+            e.call(0x0040_fba0, &args![0x011f_11a0u32]);
+            e.set(this, MobileObject::pCurrentProcess, Ptr::NULL);
+        } else if e.call(0x0043_fcd0, &args![this]).u32() == 0
+            && this.addr() != e.global::<u32>(0x011d_ea3c)
+        {
+            let process = e.get(this, MobileObject::pCurrentProcess);
+            let level = e.call(0x0045_cd60, &args![process]).u32();
+            let can_demote = if level == 0 {
+                true
+            } else {
+                let process = e.get(this, MobileObject::pCurrentProcess);
+                e.call(0x0045_cd60, &args![process]).u32() == 1
+            };
+            if can_demote {
+                let desired = mobile_object_get_desired_process_level(e, this);
+                if desired == 2 || desired == 3 {
+                    let manager = e.global::<u32>(0x011d_df38);
+                    if e.call(0x0042_ce10, &args![manager]).bool() {
+                        e.vcall(
+                            this.addr(),
+                            if desired == 2 { 0x248 } else { 0x244 },
+                            &args![],
+                        );
+                        let hour = e.call(0x0086_7da0, &args![0x011d_e7b8u32]).f64();
+                        let elapsed = (hour - e.global::<f64>(0x0101_1588)) as f32;
+                        let process = e.get(this, MobileObject::pCurrentProcess);
+                        e.call(0x0069_3d50, &args![process, elapsed]);
+                        e.call(0x0096_f400, &args![0x011e_0e80u32, this]);
+                    } else {
+                        e.call(0x0096_e870, &args![0x011e_0e80u32, this]);
+                    }
+                }
+            }
+        }
+    }
+    if !e.get(this, MobileObject::bVoiceFileDone) {
+        let extras = e.call(0x005d_43c0, &args![this]).u32();
+        if e.call(0x0042_ede0, &args![extras]).u32() == 0 {
+            let sound = e.call(0x0084_e3a0, &args![this]).u32();
+            e.call(0x0093_6ac0, &args![sound, 1u32]);
+        }
+    }
+    let manager = e.global::<u32>(0x011d_df38);
+    if e.call(0x0042_ce10, &args![manager]).bool() && !e.call(0x0043_7b90, &args![this]).bool() {
+        let desired = mobile_object_get_desired_process_level(e, this);
+        fn_009319c0(e, this, desired);
+    }
+}
+
+// Translated from 00932f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets mobile object's voice/dialogue fields after reference and process
+/// state have finished loading.
+pub fn fn_00932f60(e: &mut Engine, this: Ptr<MobileObject>, buffer: Ptr) {
+    e.call(0x0056_29a0, &args![this, buffer]);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x568, &args![buffer]);
+    }
+    mobile_object_set_chase_bip(e, this, 0);
+    e.set(this, MobileObject::cSoundCallBackSet, 0xff);
+    e.set(this, MobileObject::bSoundCallBackSuccess, false);
+    e.set(this, MobileObject::bSpeakingDone, true);
+    e.set(this, MobileObject::bSoundFileDone, true);
+    e.set(this, MobileObject::bVoiceFileDone, true);
+    e.set(this, MobileObject::bTalkingToPlayer, false);
+    e.set(this, MobileObject::bIgnoreChangeAnimationCall, false);
+    e.set(this, MobileObject::bUseEmotion, true);
+    e.mem.set_u32(this.addr() + 0x74, 0);
+    e.set(this, MobileObject::fSayToFailVoiceTimer, 0.0);
+    e.set(this, MobileObject::bDoNotRunSayToCallBack, false);
+}
+
+fn sound_set_position(e: &mut Engine, this: Ptr<MobileObject>, handle: Ptr) {
+    let position = e.vcall(this.addr(), 0x1f4, &args![]).ptr::<u8>();
+    let x = quiet_f32(e.mem.f32(position.addr()));
+    let y = quiet_f32(e.mem.f32(position.addr() + 4));
+    let z = quiet_f32(e.mem.f32(position.addr() + 8));
+    e.call(0x00ad_8b60, &args![handle, x, y, z]);
+}
+
+// Translated from 00933010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Creates a sound handle by filename, optionally positions it on this
+/// mobile object, plays it and assigns it to the caller's output handle.
+/// Compiler exception-only SEH cleanup is omitted.
+// Translation incomplete: 00933010 - compiler SEH exception cleanup.
+pub fn fn_00933010(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    output: Ptr,
+    filename: Ptr,
+    play: u8,
+    flags: u32,
+) -> Ptr {
+    e.with_stack(12, |e, handle| {
+        e.call(0x0041_a250, &args![handle]);
+        e.with_stack(12, |e, instance| {
+            let audio = e.call(0x0045_3a70, &args![]).ptr::<u8>();
+            let created = e
+                .call(0x00ad_7480, &args![audio, instance, filename, flags, 0u32])
+                .ptr::<u8>();
+            e.call(0x0041_8900, &args![handle, created]);
+            e.call(0x0048_3710, &args![instance]);
+        });
+        if e.vcall(this.addr(), 0x1d0, &args![]).u32() != 0 && flags & 2 != 0 {
+            sound_set_position(e, this, handle);
+            let object = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+            e.call(0x00ad_8f20, &args![handle, object]);
+        }
+        e.call(0x00ad_8830, &args![handle, play as u32]);
+        e.call(0x0041_8900, &args![output, handle]);
+        e.call(0x0048_3710, &args![handle]);
+    });
+    output
+}
+
+// Translated from 00933150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Creates and plays a sound handle by numeric ID. Its fifth stack word is
+/// consumed by the native RET but not read by the body.
+/// Compiler exception-only SEH cleanup is omitted.
+// Translation incomplete: 00933150 - compiler SEH exception cleanup.
+pub fn fn_00933150(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    output: Ptr,
+    sound_id: u32,
+    play: u8,
+    flags: u32,
+    _unused_5: u32,
+) -> Ptr {
+    e.with_stack(12, |e, handle| {
+        e.call(0x0041_a250, &args![handle]);
+        e.with_stack(12, |e, instance| {
+            let audio = e.call(0x0045_3a70, &args![]).ptr::<u8>();
+            let created = e
+                .call(0x00ad_73b0, &args![audio, instance, sound_id, flags])
+                .ptr::<u8>();
+            e.call(0x0041_8900, &args![handle, created]);
+            e.call(0x0048_3710, &args![instance]);
+        });
+        if e.call(0x0043_fcd0, &args![this]).u32() != 0 && flags & 2 != 0 {
+            sound_set_position(e, this, handle);
+            let object = e.call(0x0043_fcd0, &args![this]).u32();
+            e.call(0x00ad_8f20, &args![handle, object]);
+        }
+        e.call(0x00ad_8830, &args![handle, play as u32]);
+        e.call(0x0041_8900, &args![output, handle]);
+        e.call(0x0048_3710, &args![handle]);
+    });
+    output
+}
+
+// Translated from 00933270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::PlaySoundByEditorName` (Xbox PDB): looks up a sound record,
+/// creates and positions its handle when found, then assigns the output.
+/// Its fifth stack word is unused. Compiler SEH exception cleanup omitted.
+// Translation incomplete: 00933270 - compiler SEH exception cleanup.
+pub fn mobile_object_play_sound_by_editor_name(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    output: Ptr,
+    editor_name: Ptr,
+    play: u8,
+    flags: u32,
+    _unused_5: u32,
+) -> Ptr {
+    e.with_stack(12, |e, handle| {
+        e.call(0x0041_a250, &args![handle]);
+        if e.vcall(this.addr(), 0x1d0, &args![]).u32() != 0 {
+            let handler = e.global::<u32>(0x011c_3f2c);
+            let sound = e
+                .call(0x0046_16c0, &args![handler, editor_name])
+                .ptr::<u8>();
+            if !sound.is_null() {
+                let id = e.call(0x0084_e3a0, &args![sound]).u32();
+                e.with_stack(12, |e, instance| {
+                    let audio = e.call(0x0045_3a70, &args![]).ptr::<u8>();
+                    let created = e
+                        .call(0x00ad_73b0, &args![audio, instance, id, flags])
+                        .ptr::<u8>();
+                    e.call(0x0041_8900, &args![handle, created]);
+                    e.call(0x0048_3710, &args![instance]);
+                });
+                if flags & 2 != 0 {
+                    sound_set_position(e, this, handle);
+                    let object = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+                    e.call(0x00ad_8f20, &args![handle, object]);
+                }
+                e.call(0x00ad_89e0, &args![handle, 1.0f32]);
+                e.call(0x00ad_8830, &args![handle, play as u32]);
+            }
+        }
+        e.call(0x0041_8900, &args![output, handle]);
+        e.call(0x0048_3710, &args![handle]);
+    });
+    output
+}
+
+// Translated from 009334b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::GetDesiredProcessLevel` (Xbox PDB): chooses a process
+/// level from sleep, cell loading and the reference's current cell.
+pub fn mobile_object_get_desired_process_level(e: &mut Engine, this: Ptr<MobileObject>) -> i32 {
+    let manager = e.global::<u32>(0x011d_e45c);
+    if !e.call(0x0047_c850, &args![manager]).bool() {
+        let player = e.global::<u32>(0x011d_ea3c);
+        if e.call(0x0094_df60, &args![player]).bool() {
+            return mobile_object_get_current_process_type(e, this);
+        }
+    }
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    let manager = e.global::<u32>(0x011d_df38);
+    let active = e.call(0x0042_ce10, &args![manager]).bool()
+        || e.call(0x0043_fcd0, &args![this]).u32() != 0
+        || {
+            let list = e.global::<u32>(0x011c_3b3c);
+            e.call(0x0044_5750, &args![list, this]).bool()
+        };
+    if active {
+        let world = e.global::<u32>(0x011d_ea10);
+        if e.call(0x0045_11e0, &args![world, cell, 1u32]).bool() {
+            return 0;
+        }
+        let world = e.global::<u32>(0x011d_ea10);
+        if e.call(0x0045_11e0, &args![world, cell, 0u32]).bool() {
+            return 1;
+        }
+    }
+    let low = cell != 0 && e.call(0x0055_1620, &args![cell]).bool();
+    if !low {
+        let world = e.global::<u32>(0x011d_ea10);
+        if !e.call(0x0045_11e0, &args![world, cell, 0u32]).bool() {
+            return 3;
+        }
+    }
+    2
+}
+
+// Translated from 009333e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::SetDelete` (Xbox PDB): marks the reference for deletion,
+/// detaches it from other mobile objects and invokes its cleanup callback.
+pub fn mobile_object_set_delete(e: &mut Engine, this: Ptr<MobileObject>, delete: u8) {
+    e.call(0x0056_4930, &args![this, delete as u32]);
+    e.call(0x0096_e870, &args![0x011e_0e80u32, this]);
+    if delete != 0 {
+        let actor = e
+            .call(
+                0x00ec_43fb,
+                &args![this, 0u32, 0x0118_4920u32, 0x011a_1224u32, 0u32],
+            )
+            .u32();
+        let flag = actor != 0 || fn_00933480(e, this.cast());
+        mobile_object_clean_up_other_mobile_objects(e, this, flag as u8);
+        e.vcall(this.addr(), 0x2fc, &args![]);
+    }
+}
+
+// Translated from 00933480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Tests whether the supplied object can be cast to the PC type at 0118A690.
+pub fn fn_00933480(e: &mut Engine, object: Ptr) -> bool {
+    e.call(
+        0x00ec_43fb,
+        &args![object, 0u32, 0x0118_3028u32, 0x0118_a690u32, 0u32],
+    )
+    .u32()
+        != 0
+}
+
+// Translated from 009335b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::Load3D` (Xbox PDB): loads reference 3D and supplies
+/// relevant extra data to the current process when available.
+pub fn mobile_object_load_3d(e: &mut Engine, this: Ptr<MobileObject>, load: u8) -> Ptr {
+    let model = e.call(0x0056_b2d0, &args![this, load as u32]).ptr::<u8>();
+    e.call(0x0093_6f50, &args![this, 0u32]);
+    if !model.is_null() {
+        let process = e.get(this, MobileObject::pCurrentProcess);
+        if !process.is_null() {
+            let name = e.call(0x0050_ea90, &args![]).u32();
+            let extra = e.call(0x00a5_bdd0, &args![model, name]).ptr::<u8>();
+            if !extra.is_null() {
+                let process = e.get(this, MobileObject::pCurrentProcess);
+                e.vcall(process.addr(), 0x5f4, &args![extra]);
+            }
+        }
+    }
+    model.cast()
+}
+
+fn mobile_object_vector_from_process(
+    e: &mut Engine,
+    this: Ptr<MobileObject>,
+    output: Ptr,
+    vector_getter: u32,
+    base_getter: u32,
+    global: u32,
+) -> Ptr {
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if !process.is_null() {
+        let first = e.vcall(process.addr(), 0x5f0, &args![]).ptr::<u8>();
+        if !first.is_null() {
+            let process = e.get(this, MobileObject::pCurrentProcess);
+            let second = e.vcall(process.addr(), 0x5f0, &args![]).ptr::<u8>();
+            e.call(vector_getter, &args![second, global]);
+            for index in 0..3 {
+                let value = e.global::<u32>(global + index * 4);
+                e.mem.set_u32(output.addr() + index * 4, value);
+            }
+            return output;
+        }
+    }
+    e.call(base_getter, &args![this, output]);
+    output
+}
+
+// Translated from 00933630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the first process vector or falls back to the reference's vector.
+pub fn fn_00933630(e: &mut Engine, this: Ptr<MobileObject>, output: Ptr) -> Ptr {
+    mobile_object_vector_from_process(e, this, output, 0x0050_ea10, 0x0056_fb10, 0x011e_05d0)
+}
+
+// Translated from 009336c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::IsinDialogue` (Xbox PDB): checks current package type 0x1C.
+pub fn mobile_object_is_in_dialogue(e: &mut Engine, this: Ptr<MobileObject>) -> bool {
+    let package = e.call(0x0093_44a0, &args![this]).ptr::<u8>();
+    !package.is_null() && e.call(0x0041_ca90, &args![package]).u32() == 0x1c
+}
+
+// Translated from 00933700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the second process vector or falls back to the reference's vector.
+pub fn fn_00933700(e: &mut Engine, this: Ptr<MobileObject>, output: Ptr) -> Ptr {
+    mobile_object_vector_from_process(e, this, output, 0x0050_ea50, 0x0056_fba0, 0x011e_05e0)
+}
+
+// Translated from 00933790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns zero without inspecting its one unused stack parameter.
+pub fn fn_00933790(_e: &mut Engine, _this: Ptr<MobileObject>, _unused_1: u32) -> u32 {
+    0
+}
+
+// Translated from 009337b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Tests whether the controller's current state object reports state two.
+pub fn fn_009337b0(e: &mut Engine, this: Ptr<MobileObject>) -> bool {
+    let controller = mobile_object_get_char_controller(e, this);
+    if controller.is_null() || fn_00933810(e, controller).is_null() {
+        return false;
+    }
+    let state = fn_00933810(e, controller);
+    e.vcall(state.addr(), 0xc, &args![]).u32() == 2
+}
+
+// Translated from 00933810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns a character controller's current state object.
+pub fn fn_00933810(e: &mut Engine, controller: Ptr) -> Ptr {
+    let proxy = e.mem.u32(controller.addr() + 0x3ec);
+    let state = e.mem.u32(controller.addr() + 0x3f0);
+    e.call(0x00cb_c510, &args![proxy, state]).ptr()
+}
+
+// Translated from 00933840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MobileObject::IsInDialoguewithPlayer` (Xbox PDB): asks the interface
+/// and the process before reporting player dialogue.
+pub fn mobile_object_is_in_dialogue_with_player(e: &mut Engine, this: Ptr<MobileObject>) -> bool {
+    if !e.call(0x0070_50d0, &args![]).bool() {
+        return false;
+    }
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    !process.is_null() && e.vcall(process.addr(), 0x2d8, &args![]).bool()
+}
+
+// Translated from 00933890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Notifies the process of a dialogue change and updates three linked
+/// process objects when the dialogue target is active.
+pub fn fn_00933890(e: &mut Engine, this: Ptr<MobileObject>, active: u8) {
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    if process.is_null() {
+        return;
+    }
+    e.vcall(process.addr(), 0x2dc, &args![active as u32]);
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    let first = e.vcall(process.addr(), 0x790, &args![]).ptr::<u8>();
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    let second = e.vcall(process.addr(), 0x798, &args![]).ptr::<u8>();
+    let process = e.get(this, MobileObject::pCurrentProcess);
+    let third = e.vcall(process.addr(), 0x7a0, &args![]).ptr::<u8>();
+    if !third.is_null() {
+        let changed = e.call(0x0096_11e0, &args![third]).ptr::<u8>();
+        if !changed.is_null() && !first.is_null() && !second.is_null() {
+            let changed = e.call(0x0096_11e0, &args![third]).ptr::<u8>();
+            e.call(0x0049_02f0, &args![changed, 1u32]);
+            e.call(0x0049_02f0, &args![first, 1u32]);
+            e.call(0x0049_02f0, &args![second, 1u32]);
+        }
+    }
+    if active != 0 {
+        let process = e.get(this, MobileObject::pCurrentProcess);
+        e.vcall(process.addr(), 0x660, &args![]);
+        let player = e.global::<u32>(0x011d_ea3c);
+        let process = e.get(this, MobileObject::pCurrentProcess);
+        e.vcall(process.addr(), 0x634, &args![player]);
     }
 }
 
@@ -3072,5 +4209,944 @@ mod tests {
         e.mem.set_u32(0x1068, 0x2000);
         stub(&mut e, 0x0045_cd60, 3);
         assert_eq!(mobile_object_get_current_process_type(&mut e, this), 3);
+    }
+
+    fn process_level_fixture(e: &mut Engine) -> Ptr<MobileObject> {
+        let this = mapped(e);
+        e.map(0x5000, 0x1000);
+        e.mem.set_u32(this.addr(), 0x5000);
+        e.mem.set_u32(0x1068, 0x2000);
+        e.mem.set_u32(0x51d0, 0x7000);
+        e.mem.set_u32(0x5240, 0x7010);
+        e.mem.set_u32(0x5010, 0x7020);
+        stub(e, 0x7000, 0x100);
+        stub(e, 0x7010, 1);
+        stub(e, 0x7020, 0);
+        stub(e, 0x008d_6f30, 0x3000);
+        stub(e, 0x0045_11e0, 1);
+        e.map(0x011d_ea10, 4);
+        e.mem.set_u32(0x011d_ea10, 0x4000);
+        this
+    }
+
+    #[test]
+    fn level_one_transition_checks_cell_and_deletes_zero_process() {
+        let mut e = Engine::new();
+        let this = process_level_fixture(&mut e);
+        stub(&mut e, 0x0045_cd60, 0);
+        e.call_log = Some(vec![]);
+        assert!(!fn_00931880(&mut e, this));
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().map(|call| call.0).collect::<Vec<_>>(),
+            vec![0x7000, 0x008d_6f30, 0x0045_11e0, 0x0045_cd60, 0x7020]
+        );
+        assert_eq!(log[1].1, vec![0x1000]);
+        assert_eq!(log[2].1, vec![0x4000, 0x3000, 1]);
+        assert_eq!(log[4].1, vec![0x1000, 1]);
+    }
+
+    #[test]
+    fn change_process_level_passes_requested_byte_and_enters_high_process() {
+        let mut e = Engine::new();
+        let this = process_level_fixture(&mut e);
+        stub(&mut e, 0x0045_cd60, 2);
+        e.call_log = Some(vec![]);
+        assert!(mobile_object_change_process_level(&mut e, this, 3));
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().map(|call| call.0).collect::<Vec<_>>(),
+            vec![0x7000, 0x008d_6f30, 0x0045_11e0, 0x0045_cd60, 0x7010]
+        );
+        assert_eq!(log[1].1, vec![0x1000]);
+        assert_eq!(log[2].1, vec![0x4000, 0x3000, 3]);
+    }
+
+    #[test]
+    fn change_process_owner_removes_old_process_and_clears_pointer() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0, 0x7000);
+        stub(&mut e, 0x0040_fbf0, 0);
+        stub(&mut e, 0x0040_fba0, 0);
+        stub(&mut e, 0x0045_cd60, 2);
+        stub(&mut e, 0x0096_d470, 0);
+        e.call_log = Some(vec![]);
+        assert!(fn_009319c0(&mut e, this, -1));
+        assert_eq!(e.mem.u32(0x1068), 0);
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().map(|call| call.0).collect::<Vec<_>>(),
+            vec![0x0040_fbf0, 0x0045_cd60, 0x0096_d470, 0x7000, 0x0040_fba0]
+        );
+        assert_eq!(log[2].1, vec![0x011e_0e80, 0x1000, 2]);
+    }
+
+    #[test]
+    fn set_heading_respects_busy_state_without_clamping() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x1000, 0x5000, 0x230, 0x7000);
+        stub(&mut e, 0x7000, 1);
+        e.call_log = Some(vec![]);
+        mobile_object_set_heading(&mut e, this, 1.2);
+        assert_eq!(
+            e.call_log
+                .unwrap()
+                .iter()
+                .map(|call| call.0)
+                .collect::<Vec<_>>(),
+            vec![0x7000]
+        );
+    }
+
+    #[test]
+    fn set_heading_toward_other_uses_other_minus_self_position() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x3000, 0x1000);
+        e.map(0x5000, 0x3000);
+        e.mem.set_u32(0x1000, 0x5000);
+        e.mem.set_u32(0x3000, 0x6000);
+        e.mem.set_u32(0x51f4, 0x7000);
+        e.mem.set_u32(0x52c4, 0x7010);
+        e.mem.set_u32(0x61f4, 0x7020);
+        stub(&mut e, 0x7000, 0x1100);
+        stub(&mut e, 0x7020, 0x3100);
+        stub(&mut e, 0x7010, 0);
+        e.register_double(0x004b_13c0, |_, _| 0.0f64.into_ret());
+        e.register_double(0x0043_9ef0, |e, args| {
+            assert_eq!(args[0], 0x3100);
+            assert_eq!(args[2], 0x1100);
+            e.mem.set_f32(args[1], 2.0);
+            e.mem.set_f32(args[1] + 4, 3.0);
+            e.mem.set_f32(args[1] + 8, 0.0);
+            args[1].into_ret()
+        });
+        fn_00931cc0(&mut e, this, Ptr::new(0x3000));
+    }
+
+    #[test]
+    fn add_heading_rounds_before_virtual_setter() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        virtual_slot(&mut e, 0x1000, 0x5000, 0x2bc, 0x7000);
+        e.mem.set_u32(0x52c4, 0x7010);
+        e.register_double(0x7000, |_, args| {
+            assert_eq!(args, &[0x1000, 0]);
+            1.25f64.into_ret()
+        });
+        stub(&mut e, 0x7010, 0);
+        e.call_log = Some(vec![]);
+        fn_00931d30(&mut e, this, 0.5);
+        assert_eq!(
+            e.call_log.unwrap().last().unwrap().1,
+            vec![0x1000, 1.75f32.to_bits()]
+        );
+    }
+
+    #[test]
+    fn get_looking_reads_float_at_returned_pointer() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_f32(0x1800, -0.75);
+        stub(&mut e, 0x0043_0830, 0x1800);
+        assert_eq!(mobile_object_get_looking(&mut e, this), -0.75);
+        e.mem.set_u32(0x1800, 0x7f81_2345);
+        let expected = 0x7ff0_0000_0000_0000u64 | (0x012345u64 << 29) | (1u64 << 51);
+        assert_eq!(mobile_object_get_looking(&mut e, this).to_bits(), expected);
+    }
+
+    #[test]
+    fn set_heading_quiets_signaling_nan_before_clamper() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        virtual_slot(&mut e, 0x1000, 0x5000, 0x100, 0x7000);
+        stub(&mut e, 0x7000, 0);
+        stub(&mut e, 0x0057_57d0, 0);
+        e.register_double(0x004b_1480, |_, args| {
+            assert_eq!(args, &[0x7fc1_2345]);
+            0.0f64.into_ret()
+        });
+        mobile_object_set_heading(&mut e, this, f32::from_bits(0x7f81_2345));
+    }
+
+    #[test]
+    fn set_looking_uses_actor_limit_and_passes_clamped_angle() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        virtual_slot(&mut e, 0x1000, 0x5000, 0x100, 0x7000);
+        e.mem.set_u32(0x5214, 0x7010);
+        stub(&mut e, 0x7000, 1);
+        stub(&mut e, 0x7010, 3);
+        stub(&mut e, 0x0040_3e20, 0x1800);
+        stub(&mut e, 0x0057_5770, 0);
+        e.mem.set_f32(0x1800, 45.0);
+        e.map(0x0102_3128, 8);
+        e.mem.set_f64(0x0102_3128, std::f64::consts::PI / 180.0);
+        e.map(0x0108_a7e0, 0x20);
+        e.mem.set_f32(0x0108_a7f8, 1.553343);
+        e.mem.set_f64(0x0108_a7f0, -1.553343);
+        e.mem.set_f32(0x0108_a7ec, -1.553343);
+        e.call_log = Some(vec![]);
+        mobile_object_set_looking(&mut e, this, 1.2);
+        assert_eq!(
+            e.call_log.unwrap().last().unwrap().1,
+            vec![
+                0x1000,
+                ((45.0f64 * std::f64::consts::PI / 180.0) as f32).to_bits()
+            ]
+        );
+    }
+
+    #[test]
+    fn add_looking_uses_getter_then_setter() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_f32(0x1800, 0.5);
+        stub(&mut e, 0x0043_0830, 0x1800);
+        virtual_slot(&mut e, 0x1000, 0x5000, 0x100, 0x7000);
+        stub(&mut e, 0x7000, 0);
+        stub(&mut e, 0x0057_5770, 0);
+        e.map(0x0108_a7e0, 0x20);
+        e.mem.set_f32(0x0108_a7f8, 1.55);
+        e.mem.set_f64(0x0108_a7f0, -1.55);
+        e.call_log = Some(vec![]);
+        fn_00931e50(&mut e, this, 0.25);
+        assert_eq!(
+            e.call_log.unwrap().last().unwrap().1,
+            vec![0x1000, 0.75f32.to_bits()]
+        );
+    }
+
+    #[test]
+    fn clear_process_destroys_then_zeroes_pointer() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0, 0x7000);
+        e.call_log = Some(vec![]);
+        fn_00931e80(&mut e, this);
+        assert_eq!(e.mem.u32(0x1068), 0);
+        assert_eq!(e.call_log.unwrap()[0].1, vec![0x2000, 1]);
+    }
+
+    #[test]
+    fn controller_word_uses_default_constructor_without_controller() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.register_double(0x008c_71b0, |e, args| {
+            e.mem.set_u32(args[0], 0x1234);
+            args[0].into_ret()
+        });
+        assert_eq!(fn_00931ed0(&mut e, this, Ptr::new(0x1800)).addr(), 0x1800);
+        assert_eq!(e.mem.u32(0x1800), 0x1234);
+    }
+
+    #[test]
+    fn controller_velocity_uses_global_fallback() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x011f_426c, 12);
+        for i in 0..3 {
+            e.mem.set_u32(0x011f_426c + i * 4, i + 4);
+        }
+        fn_00931f30(&mut e, this, Ptr::new(0x1800));
+        assert_eq!(
+            (0..3)
+                .map(|i| e.mem.u32(0x1800 + i * 4))
+                .collect::<Vec<_>>(),
+            vec![4, 5, 6]
+        );
+    }
+
+    #[test]
+    fn controller_size_forwards_single_float() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x28c, 0x7000);
+        stub(&mut e, 0x7000, 0x3000);
+        stub(&mut e, 0x00c7_08a0, 0);
+        e.call_log = Some(vec![]);
+        fn_00931f80(&mut e, this, 2.5);
+        assert_eq!(
+            e.call_log.take().unwrap().last().unwrap().1,
+            vec![0x3000, 2.5f32.to_bits()]
+        );
+        e.call_log = Some(vec![]);
+        fn_00931f80(&mut e, this, f32::from_bits(0x7f81_2345));
+        assert_eq!(
+            e.call_log.take().unwrap().last().unwrap().1,
+            vec![0x3000, 0x7fc1_2345]
+        );
+    }
+
+    #[test]
+    fn chase_bip_passes_offset_flag_and_boolean() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x28c, 0x7000);
+        stub(&mut e, 0x7000, 0x3000);
+        stub(&mut e, 0x0062_9670, 0);
+        e.call_log = Some(vec![]);
+        mobile_object_set_chase_bip(&mut e, this, 1);
+        assert_eq!(
+            e.call_log.unwrap().last().unwrap().1,
+            vec![0x3410, 0x800, 1]
+        );
+    }
+
+    #[test]
+    fn save_size_wraps_at_sixteen_bits() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x548, 0x7000);
+        stub(&mut e, 0x0055_e730, 0xffff);
+        stub(&mut e, 0x7000, 2);
+        assert_eq!(fn_00931ff0(&mut e, this, Ptr::new(0x1800)), 2);
+    }
+
+    #[test]
+    fn save_game_writes_process_type_before_reference_and_process() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x550, 0x7000);
+        stub(&mut e, 0x0045_cd60, 2);
+        stub(&mut e, 0x0048_4ce0, 0);
+        stub(&mut e, 0x0055_e940, 0);
+        e.call_log = Some(vec![]);
+        mobile_object_save_game(&mut e, this, Ptr::new(0x1800));
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().map(|call| call.0).collect::<Vec<_>>(),
+            vec![0x0045_cd60, 0x0048_4ce0, 0x0055_e940, 0x7000]
+        );
+        assert_eq!(log[1].1[2], 1);
+        assert_eq!(log[3].1, vec![0x2000, 0x1800, 0x1000]);
+    }
+
+    #[test]
+    fn load_game_checks_full_node_word_and_keeps_level_for_cell_test() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        virtual_slot(&mut e, 0x1000, 0x5000, 0x1d0, 0x7000);
+        e.mem.set_u32(0x51cc, 0x7010);
+        stub(&mut e, 0x7000, 0x100);
+        stub(&mut e, 0x7010, 0);
+        e.register_double(0x0048_4d00, |e, args| {
+            assert_eq!(args[0], 0x1000);
+            assert_eq!(args[2], 1);
+            e.mem.set_u8(args[1], -1i8 as u8);
+            0u32.into_ret()
+        });
+        stub(&mut e, 0x008d_6f30, 0x3000);
+        stub(&mut e, 0x0045_11e0, 1);
+        stub(&mut e, 0x0055_ec40, 0);
+        e.map(0x011d_ea10, 4);
+        e.mem.set_u32(0x011d_ea10, 0x4000);
+        e.call_log = Some(vec![]);
+        mobile_object_load_game(&mut e, this, Ptr::new(0x1800), Ptr::new(0x1900));
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().map(|call| call.0).collect::<Vec<_>>(),
+            vec![
+                0x0048_4d00,
+                0x7000,
+                0x008d_6f30,
+                0x0045_11e0,
+                0x7010,
+                0x0055_ec40
+            ]
+        );
+        assert_eq!(log[2].1, vec![0x1000]);
+        assert_eq!(log[3].1, vec![0x4000, 0x3000, 0]);
+        assert_eq!(log[4].1, vec![0x1000, 0, 1]);
+    }
+
+    #[test]
+    fn init_load_game_calls_process_after_reference() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x560, 0x7000);
+        stub(&mut e, 0x0055_f5f0, 0);
+        e.call_log = Some(vec![]);
+        mobile_object_init_load_game(&mut e, this, Ptr::new(0x1800), Ptr::new(0x1900));
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().map(|call| call.0).collect::<Vec<_>>(),
+            vec![0x0055_f5f0, 0x7000]
+        );
+        assert_eq!(log[1].1, vec![0x2000, 0x1800, 0x1900, 0x1000]);
+    }
+
+    #[test]
+    fn finish_init_load_game_discards_deleted_process_before_callback() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0, 0x7000);
+        stub(&mut e, 0x0055_f780, 0);
+        stub(&mut e, 0x00ec_43fb, 0);
+        stub(&mut e, 0x0040_fbf0, 0);
+        stub(&mut e, 0x0044_0d80, 1);
+        stub(&mut e, 0x0045_cd60, 2);
+        stub(&mut e, 0x0096_d470, 0);
+        stub(&mut e, 0x0040_fba0, 0);
+        e.call_log = Some(vec![]);
+        mobile_object_finish_init_load_game(&mut e, this, 0, Ptr::new(0x1800));
+        assert_eq!(e.mem.u32(0x1068), 0);
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().map(|call| call.0).collect::<Vec<_>>(),
+            vec![
+                0x0055_f780,
+                0x00ec_43fb,
+                0x0040_fbf0,
+                0x0044_0d80,
+                0x0045_cd60,
+                0x0096_d470,
+                0x7000,
+                0x0040_fba0
+            ]
+        );
+        assert_eq!(log[1].1, vec![0x1000, 0, 0x0118_4920, 0x0118_46d4, 0]);
+    }
+
+    #[test]
+    fn post_load_flag_twenty_removes_weapon_before_process_callback() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x56c, 0x7000);
+        for addr in [
+            0x0057_1b50,
+            0x0048_3710,
+            0x0045_34f0,
+            0x0055_f240,
+            0x0055_f5b0,
+        ] {
+            stub(&mut e, addr, 0);
+        }
+        e.map(0x011d_e45c, 4);
+        e.mem.set_u32(0x011d_e45c, 0x3000);
+        e.call_log = Some(vec![]);
+        fn_00932750(&mut e, this, 0x20);
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().map(|call| call.0).collect::<Vec<_>>(),
+            vec![
+                0x0057_1b50,
+                0x0048_3710,
+                0x0045_34f0,
+                0x0048_3710,
+                0x0055_f240,
+                0x7000,
+                0x0055_f5b0
+            ]
+        );
+        assert_eq!(log[5].1, vec![0x2000, 0x20, 0x1000]);
+    }
+
+    #[test]
+    fn save_game_ov2_reads_form_fields_and_process_after_callbacks() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        e.mem.set_u32(0x106c, 0x3000);
+        e.mem.set_u32(0x1070, 0x3100);
+        stub(&mut e, 0x0045_cd60, 1);
+        stub(&mut e, 0x0056_2230, 0);
+        stub(&mut e, 0x0086_5df0, 0);
+        e.register_double(0x0086_5e50, |e, args| {
+            if args[1] == 0x1083 {
+                e.mem.set_u32(0x1070, 0x3200);
+                e.mem.set_u32(0x1068, 0);
+            }
+            0u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        mobile_object_save_game_ov2(&mut e, this, Ptr::new(0x1800));
+        let log = e.call_log.unwrap();
+        let forms = log
+            .iter()
+            .filter(|call| call.0 == 0x0086_5df0)
+            .map(|call| call.1.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            forms,
+            vec![vec![0x1800, 0x3000, 0], vec![0x1800, 0x3200, 0]]
+        );
+        assert!(!log.iter().any(|call| call.0 == 0x7000));
+        assert_eq!(log.iter().filter(|call| call.0 == 0x0086_5e50).count(), 13);
+    }
+
+    #[test]
+    fn load_game_ov2_reads_new_flag_only_at_version_eight() {
+        for (version, reads) in [(7u32, 12usize), (8, 13)] {
+            let mut e = Engine::new();
+            let this = mapped(&mut e);
+            virtual_slot(&mut e, 0x1800, 0x5000, 0, 0x7000);
+            stub(&mut e, 0x7000, version);
+            stub(&mut e, 0x0040_fbf0, 0);
+            stub(&mut e, 0x0040_fba0, 0);
+            stub(&mut e, 0x0056_23d0, 0);
+            stub(&mut e, 0x0086_48e0, 0);
+            e.register_double(0x0086_4980, |e, args| {
+                if args[2] == 1
+                    && args[1] != 0x1083
+                    && args[1] != 0x1084
+                    && args[1] != 0x1085
+                    && args[1] < 0x1000
+                {
+                    e.mem.set_u8(args[1], 0xff);
+                }
+                0u32.into_ret()
+            });
+            e.call_log = Some(vec![]);
+            mobile_object_load_game_ov2(&mut e, this, Ptr::new(0x1800));
+            let log = e.call_log.unwrap();
+            assert_eq!(
+                log.iter().filter(|call| call.0 == 0x0086_4980).count(),
+                reads
+            );
+            assert_eq!(log.iter().filter(|call| call.0 == 0x0086_48e0).count(), 2);
+        }
+    }
+
+    #[test]
+    fn resolve_loaded_form_fields_before_process_callback() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        e.mem.set_u32(0x106c, 0x3000);
+        e.mem.set_u32(0x1070, 0x3100);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x55c, 0x7000);
+        virtual_slot(&mut e, 0x1000, 0x6000, 0x1d0, 0x7010);
+        stub(&mut e, 0x0056_2660, 0);
+        e.register_double(0x0048_39c0, |_, args| (args[0] + 0x100).into_ret());
+        e.register_double(0x00ec_43fb, |_, args| args[0].into_ret());
+        e.register_double(0x7000, |e, _| {
+            assert_eq!(e.mem.u32(0x106c), 0x3100);
+            assert_eq!(e.mem.u32(0x1070), 0x3200);
+            e.mem.set_u32(0x1068, 0);
+            0u32.into_ret()
+        });
+        stub(&mut e, 0x7010, 0);
+        stub(&mut e, 0x0043_7b90, 1);
+        stub(&mut e, 0x0043_fcd0, 0);
+        fn_00932b70(&mut e, this, Ptr::new(0x1800));
+        assert_eq!(e.mem.u32(0x1068), 0);
+    }
+
+    #[test]
+    fn finish_loaded_process_reloads_after_its_callback() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        e.mem.set_u8(0x1080, 1);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x570, 0x7000);
+        stub(&mut e, 0x0056_27c0, 0);
+        e.register_double(0x7000, |e, _| {
+            e.mem.set_u32(0x1068, 0);
+            0u32.into_ret()
+        });
+        stub(&mut e, 0x0043_7b90, 0);
+        stub(&mut e, 0x0043_fcd0, 1);
+        stub(&mut e, 0x0042_ce10, 0);
+        e.map(0x011d_df38, 4);
+        e.mem.set_u32(0x011d_df38, 0x3000);
+        e.call_log = Some(vec![]);
+        fn_00932d60(&mut e, this, Ptr::new(0x1800));
+        assert_eq!(e.mem.u32(0x1068), 0);
+        assert_eq!(
+            e.call_log
+                .unwrap()
+                .iter()
+                .map(|call| call.0)
+                .collect::<Vec<_>>(),
+            vec![0x0056_27c0, 0x7000, 0x0043_7b90, 0x0043_fcd0, 0x0042_ce10]
+        );
+    }
+
+    fn sound_fixture(e: &mut Engine) -> Ptr<MobileObject> {
+        let this = mapped(e);
+        virtual_slot(e, 0x1000, 0x5000, 0x1d0, 0x7000);
+        e.map(0x011f_6d98, 4);
+        e.mem.set_u32(0x011f_6d98, 0x6000);
+        for addr in [0x0041_a250, 0x0041_8900, 0x0048_3710, 0x00ad_8830] {
+            stub(e, addr, 0);
+        }
+        this
+    }
+
+    #[test]
+    fn filename_sound_keeps_qinstance_pending_arguments_for_handle_getter() {
+        let mut e = Engine::new();
+        let this = sound_fixture(&mut e);
+        e.register_double(0x00ad_7480, |_, args| {
+            assert_eq!(args.len(), 5);
+            assert_eq!(args[0], 0x6000);
+            assert_eq!(&args[2..], &[0x3000, 0x10, 0]);
+            0x5000u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            fn_00933010(&mut e, this, Ptr::new(0x1800), Ptr::new(0x3000), 1, 0x10).addr(),
+            0x1800
+        );
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().find(|call| call.0 == 0x0045_3a70).unwrap().1,
+            Vec::<u32>::new()
+        );
+        assert_eq!(
+            log.iter().map(|call| call.0).collect::<Vec<_>>(),
+            vec![
+                0x0041_a250,
+                0x0045_3a70,
+                0x00ad_7480,
+                0x0041_8900,
+                0x0048_3710,
+                0x7000,
+                0x00ad_8830,
+                0x0041_8900,
+                0x0048_3710
+            ]
+        );
+    }
+
+    #[test]
+    fn filename_sound_reloads_follow_object_after_position_callback() {
+        let mut e = Engine::new();
+        let this = sound_fixture(&mut e);
+        e.mem.set_u32(0x51f4, 0x7010);
+        e.mem.set_u32(0x1b00, 0);
+        e.register_double(0x7000, |e, _| {
+            if e.mem.u32(0x1b00) == 0 {
+                0x100u32.into_ret()
+            } else {
+                0x200u32.into_ret()
+            }
+        });
+        stub(&mut e, 0x7010, 0x1a00);
+        for index in 0..3 {
+            e.mem.set_f32(0x1a00 + index * 4, index as f32);
+        }
+        stub(&mut e, 0x00ad_7480, 0x5000);
+        stub(&mut e, 0x00ad_8f20, 0);
+        e.register_double(0x00ad_8b60, |e, args| {
+            assert_eq!(
+                args[1..],
+                [0.0f32.to_bits(), 1.0f32.to_bits(), 2.0f32.to_bits()]
+            );
+            e.mem.set_u32(0x1b00, 1);
+            0u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        fn_00933010(&mut e, this, Ptr::new(0x1800), Ptr::new(0x3000), 1, 2);
+        let log = e.call_log.unwrap();
+        let position_index = log.iter().position(|call| call.0 == 0x00ad_8b60).unwrap();
+        assert_eq!(log[position_index + 1].0, 0x7000);
+        assert_eq!(log[position_index + 2].1[1], 0x200);
+    }
+
+    #[test]
+    fn numeric_sound_uses_three_pending_words_and_unread_fifth() {
+        let mut e = Engine::new();
+        let this = sound_fixture(&mut e);
+        stub(&mut e, 0x0043_fcd0, 0);
+        e.register_double(0x00ad_73b0, |_, args| {
+            assert_eq!(args.len(), 4);
+            assert_eq!(args[0], 0x6000);
+            assert_eq!(&args[2..], &[0x42, 0x20]);
+            0x5000u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            fn_00933150(&mut e, this, Ptr::new(0x1800), 0x42, 1, 0x20, 0xdead_beef).addr(),
+            0x1800
+        );
+        assert_eq!(
+            e.call_log
+                .unwrap()
+                .iter()
+                .find(|call| call.0 == 0x0045_3a70)
+                .unwrap()
+                .1,
+            Vec::<u32>::new()
+        );
+    }
+
+    #[test]
+    fn editor_sound_uses_record_id_after_node_and_lookup() {
+        let mut e = Engine::new();
+        let this = sound_fixture(&mut e);
+        stub(&mut e, 0x7000, 0x100);
+        stub(&mut e, 0x0046_16c0, 0x4000);
+        stub(&mut e, 0x0084_e3a0, 0x55);
+        stub(&mut e, 0x00ad_89e0, 0);
+        e.register_double(0x00ad_73b0, |_, args| {
+            assert_eq!(args.len(), 4);
+            assert_eq!(args[0], 0x6000);
+            assert_eq!(&args[2..], &[0x55, 0x10]);
+            0x5000u32.into_ret()
+        });
+        e.map(0x011c_3f2c, 4);
+        e.mem.set_u32(0x011c_3f2c, 0x8000);
+        e.call_log = Some(vec![]);
+        mobile_object_play_sound_by_editor_name(
+            &mut e,
+            this,
+            Ptr::new(0x1800),
+            Ptr::new(0x3000),
+            1,
+            0x10,
+            0,
+        );
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().find(|call| call.0 == 0x0045_3a70).unwrap().1,
+            Vec::<u32>::new()
+        );
+        assert_eq!(
+            log.iter().find(|call| call.0 == 0x0046_16c0).unwrap().1,
+            vec![0x8000, 0x3000]
+        );
+    }
+
+    #[test]
+    fn load_finish_resets_mobile_voice_fields() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        stub(&mut e, 0x0056_29a0, 0);
+        for offset in [0x7c, 0x7f, 0x80, 0x86] {
+            e.mem.set_u8(0x1000 + offset, 0);
+        }
+        fn_00932f60(&mut e, this, Ptr::new(0x1800));
+        for offset in [0x7c, 0x7f, 0x80, 0x86] {
+            assert_eq!(e.mem.u8(0x1000 + offset), 1);
+        }
+        assert_eq!(e.mem.u8(0x1084), 0xff);
+        assert_eq!(e.mem.u32(0x1074), 0);
+        assert_eq!(e.mem.u32(0x1078), 0);
+    }
+
+    #[test]
+    fn delete_false_still_updates_temp_list() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        stub(&mut e, 0x0056_4930, 0);
+        stub(&mut e, 0x0096_e870, 0);
+        e.call_log = Some(vec![]);
+        mobile_object_set_delete(&mut e, this, 0);
+        assert_eq!(
+            e.call_log
+                .unwrap()
+                .iter()
+                .map(|call| call.0)
+                .collect::<Vec<_>>(),
+            vec![0x0056_4930, 0x0096_e870]
+        );
+    }
+
+    #[test]
+    fn secondary_class_cast_reports_nonnull() {
+        let mut e = Engine::new();
+        e.register_double(0x00ec_43fb, |_, args| {
+            assert_eq!(args, &[0x1000, 0, 0x0118_3028, 0x0118_a690, 0]);
+            0x2000u32.into_ret()
+        });
+        assert!(fn_00933480(&mut e, Ptr::new(0x1000)));
+    }
+
+    #[test]
+    fn desired_process_level_uses_second_cell_test() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.map(0x011d_ea10, 4);
+        e.map(0x011d_df38, 4);
+        e.map(0x011d_e45c, 4);
+        e.mem.set_u32(0x011d_ea10, 0x5000);
+        e.mem.set_u32(0x011d_df38, 0x6000);
+        e.mem.set_u32(0x011d_e45c, 0x7000);
+        stub(&mut e, 0x0047_c850, 1);
+        stub(&mut e, 0x008d_6f30, 0x3000);
+        stub(&mut e, 0x0042_ce10, 1);
+        e.register_double(0x0045_11e0, |_, args| {
+            assert_eq!(&args[..2], &[0x5000, 0x3000]);
+            (args[2] == 0).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(mobile_object_get_desired_process_level(&mut e, this), 1);
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter()
+                .filter(|call| call.0 == 0x0045_11e0)
+                .map(|call| call.1[2])
+                .collect::<Vec<_>>(),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn load_3d_passes_extra_data_to_process_when_found() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x5f4, 0x7000);
+        stub(&mut e, 0x0056_b2d0, 0x3000);
+        stub(&mut e, 0x0093_6f50, 0);
+        stub(&mut e, 0x0050_ea90, 0x4000);
+        stub(&mut e, 0x00a5_bdd0, 0x5000);
+        e.call_log = Some(vec![]);
+        assert_eq!(mobile_object_load_3d(&mut e, this, 1).addr(), 0x3000);
+        assert_eq!(e.call_log.unwrap().last().unwrap().1, vec![0x2000, 0x5000]);
+    }
+
+    fn process_vector_fixture(e: &mut Engine) -> Ptr<MobileObject> {
+        let this = mapped(e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(e, 0x2000, 0x5000, 0x5f0, 0x7000);
+        stub(e, 0x7000, 0x3000);
+        this
+    }
+
+    #[test]
+    fn first_process_vector_uses_second_getter_and_global_copy() {
+        let mut e = Engine::new();
+        let this = process_vector_fixture(&mut e);
+        e.map(0x011e_05d0, 12);
+        e.register_double(0x0050_ea10, |e, args| {
+            assert_eq!(args, &[0x3000, 0x011e_05d0]);
+            for index in 0..3 {
+                e.mem.set_u32(0x011e_05d0 + index * 4, index + 1);
+            }
+            0u32.into_ret()
+        });
+        assert_eq!(fn_00933630(&mut e, this, Ptr::new(0x1800)).addr(), 0x1800);
+        assert_eq!(
+            (0..3)
+                .map(|index| e.mem.u32(0x1800 + index * 4))
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn dialogue_package_requires_type_twenty_eight() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        stub(&mut e, 0x0093_44a0, 0x2000);
+        stub(&mut e, 0x0041_ca90, 0x1c);
+        assert!(mobile_object_is_in_dialogue(&mut e, this));
+        stub(&mut e, 0x0041_ca90, 0x1d);
+        assert!(!mobile_object_is_in_dialogue(&mut e, this));
+    }
+
+    #[test]
+    fn second_process_vector_uses_its_own_getter() {
+        let mut e = Engine::new();
+        let this = process_vector_fixture(&mut e);
+        e.map(0x011e_05e0, 12);
+        e.register_double(0x0050_ea50, |e, args| {
+            assert_eq!(args, &[0x3000, 0x011e_05e0]);
+            e.mem.set_u32(0x011e_05e0, 0xaabb_ccdd);
+            e.mem.set_u32(0x011e_05e4, 0);
+            e.mem.set_u32(0x011e_05e8, 0);
+            0u32.into_ret()
+        });
+        fn_00933700(&mut e, this, Ptr::new(0x1800));
+        assert_eq!(e.mem.u32(0x1800), 0xaabb_ccdd);
+    }
+
+    #[test]
+    fn zero_helper_ignores_its_stack_word() {
+        let mut e = Engine::new();
+        assert_eq!(fn_00933790(&mut e, Ptr::new(0x1000), 0xdead_beef), 0);
+    }
+
+    #[test]
+    fn character_state_getter_passes_controller_members() {
+        let mut e = Engine::new();
+        e.map(0x3000, 0x1000);
+        e.mem.set_u32(0x33ec, 0x4000);
+        e.mem.set_u32(0x33f0, 0x5000);
+        e.register_double(0x00cb_c510, |_, args| {
+            assert_eq!(args, &[0x4000, 0x5000]);
+            0x6000u32.into_ret()
+        });
+        assert_eq!(fn_00933810(&mut e, Ptr::new(0x3000)).addr(), 0x6000);
+    }
+
+    #[test]
+    fn controller_state_two_requires_two_getters() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x28c, 0x7000);
+        stub(&mut e, 0x7000, 0x3000);
+        e.map(0x3000, 0x1000);
+        e.mem.set_u32(0x33ec, 0x4000);
+        e.mem.set_u32(0x33f0, 0x5000);
+        e.register_double(0x00cb_c510, |_, _| 0x6000u32.into_ret());
+        e.map(0x6000, 0x1000);
+        virtual_slot(&mut e, 0x6000, 0x8000, 0xc, 0x7010);
+        stub(&mut e, 0x7010, 2);
+        e.call_log = Some(vec![]);
+        assert!(fn_009337b0(&mut e, this));
+        assert_eq!(
+            e.call_log
+                .unwrap()
+                .iter()
+                .filter(|call| call.0 == 0x00cb_c510)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn dialogue_with_player_requires_interface_and_process() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x2d8, 0x7000);
+        stub(&mut e, 0x0070_50d0, 1);
+        stub(&mut e, 0x7000, 1);
+        assert!(mobile_object_is_in_dialogue_with_player(&mut e, this));
+    }
+
+    #[test]
+    fn dialogue_change_calls_process_slots_in_order() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e);
+        e.mem.set_u32(0x1068, 0x2000);
+        virtual_slot(&mut e, 0x2000, 0x5000, 0x2dc, 0x7000);
+        for (slot, address) in [
+            (0x790, 0x7010),
+            (0x798, 0x7020),
+            (0x7a0, 0x7030),
+            (0x660, 0x7040),
+            (0x634, 0x7050),
+        ] {
+            e.mem.set_u32(0x5000 + slot, address);
+            stub(&mut e, address, 0);
+        }
+        e.map(0x011d_ea3c, 4);
+        e.mem.set_u32(0x011d_ea3c, 0x3000);
+        e.call_log = Some(vec![]);
+        fn_00933890(&mut e, this, 1);
+        let log = e.call_log.unwrap();
+        assert_eq!(
+            log.iter().map(|call| call.0).collect::<Vec<_>>(),
+            vec![0x7000, 0x7010, 0x7020, 0x7030, 0x7040, 0x7050]
+        );
+        assert_eq!(log.last().unwrap().1, vec![0x2000, 0x3000]);
     }
 }

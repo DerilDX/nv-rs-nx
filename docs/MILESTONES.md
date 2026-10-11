@@ -33,6 +33,25 @@ reading do not establish them.
 
 ## Active work: M1
 
+Persistence dependency #132 is published at `6513c26`; all 15,781 workspace
+tests, strict lint, formatting and release/debug builds pass. The normal
+engine registry preserves 10,201 original count/health-only item payloads
+from eight saves byte-for-byte, including eighteen multi-stack entries;
+three full-record decode failures remain excluded. Whole-save and playable
+inventory acceptance are still pending. Build 40 remains current without
+a confirmed next-build date. Next action: validate script-local construction
+and supply script forms and mappings for the broader inventory probe.
+
+Movement collection `757af70` passes 14,051 combined engine tests and
+strict checks; a fresh worker starts its remaining normal bodies. Reader
+#130 merged after both CI checks; rolling #131 has fresh CI after rebasing.
+The draft inventory probe preserves 10,201 original count/condition item
+payloads from eight saves byte-for-byte, including eighteen multi-stack
+entries. Three records that fail full decoding are explicitly excluded.
+Final engine validation runs now; no whole-save round trip or playable
+consumer is established. Next action: finish these checks and publish the
+three dependency helpers, then investigate script-extra loading.
+
 HUD collection `5c12df2` passes combined engine tests, strict lint and
 formatting, including its audio correction. A fresh worker continues the
 next large HUD function. The accumulated movement/HUD/explosion batch can
