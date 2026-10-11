@@ -10,15 +10,13 @@
 //! is the mesh) or of its embedded search grid at `NavMesh + 0xA8`
 //! ([`NavMeshGrid`], `this` is the grid).
 //!
-//! Earlier batches fully translated 110 of the 113 entries. This batch closes
-//! the door-record, neighboring-portal, and undo-operation initialization
-//! paths, fixes the append helper's buffer reload after construction, and adds
-//! normal-path translations for two larger geometry routines. One topology-
-//! repair routine remains unregistered; exception-unwind cleanup is partial in
-//! the two new translations.
+//! Earlier batches fully translated 110 of the 113 entries. The remaining
+//! three now have normal-path translations; compiler exception-unwind cleanup
+//! is still partial in each. The PC disassembly also fixes the temporary map
+//! constructor's immediate vtable address used by the topology repair.
 //!
 // translated: 006987d0 - normal-path obstacle-footprint scan; exception unwind omitted.
-// open: 00699b60 - edge-pair map rebuild, winding/proximity repair, allocation ownership, and nearest-vertex selection; exception unwind omitted.
+// translated: 00699b60 - normal-path edge-pair repair and nearest-vertex selection; exception unwind omitted.
 // translated: 006bd040 - normal-path body; exception unwind omitted.
 //
 //! Conventions in this file:
@@ -47,6 +45,15 @@ pub(crate) const MESH_GRID_OFFSET: u32 = 0xa8;
 const MESH_TRIANGLES_OFFSET: u32 = 0x38;
 /// Offset of the `ExtraEdgeInfo` array inside a `NavMesh`.
 const MESH_EXTRA_EDGE_INFO_OFFSET: u32 = 0x48;
+/// PC `00699b60`: the map of vertex index to packed edge pair and the array
+/// of chosen vertex indices. The Xbox PDB labels at these offsets disagree
+/// with the PC container operations, so these roles follow the PC body.
+const MESH_EDGE_PAIR_MAP_OFFSET: u32 = 0x88;
+const MESH_PREFERRED_VERTEX_ARRAY_OFFSET: u32 = 0x98;
+/// `POVVertexData` (Xbox PDB), 0x28 bytes: ordinary and portal edge arrays.
+/// PC `00699d20` and `00699f07` append through these offsets.
+const POV_EDGES_OFFSET: u32 = 8;
+const POV_PORTAL_EDGES_OFFSET: u32 = 0x18;
 /// `NavMeshInfo::AdjacentNavMeshes` and `PreferredAdjacentNavMeshes`
 /// (`BSSimpleArray<NavMeshInfo*>`, Xbox PDB) inside a `NavMeshInfo`.
 const INFO_ADJACENT_NAV_MESHES: u32 = 0x24;
@@ -309,6 +316,37 @@ fn mesh_grid(mesh: Ptr<NavMesh>) -> Ptr<NavMeshGrid> {
 /// The `Triangles` array embedded in the mesh.
 fn mesh_triangles(mesh: Ptr<NavMesh>) -> Ptr {
     mesh.byte_add(MESH_TRIANGLES_OFFSET)
+}
+
+/// Adds one triangle-edge handle to the temporary record keyed by a vertex.
+/// The map owns its nodes; the record pointer is destroyed after the repair
+/// scan, before the map itself is destroyed.
+fn append_vertex_edge(
+    e: &mut Engine,
+    map: Ptr,
+    mesh: Ptr<NavMesh>,
+    vertex: u16,
+    edge_handle: Ptr,
+    portal: bool,
+) {
+    e.with_stack(4, |e, found| {
+        let mut record = Ptr::<()>::new(0);
+        if fn_0069b4d0(e, map, mesh.addr(), vertex as u32, found) {
+            record = Ptr::new(e.mem.u32(found.addr()));
+        } else {
+            let allocated = e.call(0x0040_1000, &args![0x28u32]).u32();
+            if allocated != 0 {
+                record = fn_0069a730(e, Ptr::new(allocated));
+            }
+            fn_0069b3d0(e, map, mesh.addr(), vertex as u32, record.addr());
+        }
+        let offset = if portal {
+            POV_PORTAL_EDGES_OFFSET
+        } else {
+            POV_EDGES_OFFSET
+        };
+        fn_0069b310(e, record.byte_add(offset), edge_handle);
+    });
 }
 
 /// The condition `FCOMP` leaves for `TEST AH, mask`: bit C0 (`st0 < operand`),
@@ -2518,11 +2556,12 @@ pub fn fn_0069ad00(e: &mut Engine, this: Ptr, reference: Ptr) -> bool {
 }
 
 // Translated from 0069ad40 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Constructs the base map at `this`, sets its vtable, and returns `this`.
-pub fn fn_0069ad40(e: &mut Engine, this: Ptr, argument: Ptr) -> Ptr {
-    e.call(0x0069_b360, &args![this, argument]);
-    let vtable = e.mem.u32(0x0106_b184);
-    e.mem.set_u32(this.addr(), vtable);
+/// Constructs the base map at `this` with `bucket_count` buckets, sets its
+/// vtable, and returns `this`.
+pub fn fn_0069ad40(e: &mut Engine, this: Ptr, bucket_count: u32) -> Ptr {
+    e.call(0x0069_b360, &args![this, bucket_count]);
+    // 0069ad56: MOV dword ptr [ECX], 0x0106b184 (an immediate address).
+    e.mem.set_u32(this.addr(), 0x0106_b184);
     this
 }
 
@@ -3568,6 +3607,229 @@ pub fn fn_006987d0(
     });
 }
 
+// Translated from 00699b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Rebuilds the mesh's boundary-edge map and its preferred-vertex array.
+/// The temporary map groups ordinary and portal edges by endpoint. When a
+/// vertex has exactly two edges, the PC code tests their winding and writes
+/// the packed edge pair at that vertex into the member map at `+0x88`.
+/// Each triangle then chooses a candidate vertex from that map, subject to
+/// the planar-distance and vertical-distance limits.
+///
+/// Compiler SEH unwinding is omitted; normal-path record and map destruction
+/// follows the PC disassembly.
+// Translation incomplete: 00699b60 - compiler SEH unwind cleanup for allocated records and the temporary map.
+pub fn fn_00699b60(e: &mut Engine, this: Ptr<NavMesh>) {
+    let edge_pairs = this.byte_add(MESH_EDGE_PAIR_MAP_OFFSET);
+    let preferred_vertices = this.byte_add(MESH_PREFERRED_VERTEX_ARRAY_OFFSET);
+    e.call(0x0043_8af0, &args![edge_pairs]);
+    e.call(0x0084_54f0, &args![preferred_vertices, 1u32]);
+    e.with_stack(0x20, |e, vertex_map| {
+        fn_0069ad40(e, vertex_map, 0x25);
+        let triangle_count = e.call(TRIANGLE_COUNT, &args![this]).u32();
+        for triangle_index in 0..triangle_count {
+            let triangle = triangle_of(e, this, triangle_index);
+            for edge in 0..3u32 {
+                let slot = e.call(EDGE_SLOT, &args![triangle, edge]).u16();
+                let portal = if slot == NO_TRIANGLE {
+                    false
+                } else if e.call(EDGE_HAS_INFO, &args![triangle, edge]).bool() {
+                    true
+                } else {
+                    continue;
+                };
+                e.with_stack(24, |e, handles| {
+                    let edge_handle = handles;
+                    let vertex_handle = handles.byte_add(12);
+                    fn_0069a6c0(e, edge_handle, this.addr(), triangle_index as u16, edge);
+                    for corner in [edge, (edge + 1) % 3] {
+                        let vertex = corner_vertex_index(e, triangle, corner);
+                        fn_0069a660(e, vertex_handle, this.addr(), vertex);
+                        append_vertex_edge(e, vertex_map, this, vertex, edge_handle, portal);
+                    }
+                });
+            }
+        }
+
+        // The first iterator scan may add a packed pair to the member map.
+        // A second scan destroys the separately allocated POV vertex records.
+        let mut iterator = e.call(0x004b_9ba0, &args![vertex_map]).u32();
+        while iterator != 0 {
+            e.with_stack(0x90, |e, scratch| {
+                let iterator_slot = scratch;
+                let key = scratch.byte_add(4);
+                let record_slot = scratch.byte_add(12);
+                let first = scratch.byte_add(16);
+                let second = scratch.byte_add(28);
+                let first_vertices = scratch.byte_add(40);
+                let second_vertices = scratch.byte_add(48);
+                let first_vector = scratch.byte_add(56);
+                let second_vector = scratch.byte_add(68);
+                let cross = scratch.byte_add(80);
+                let pair = scratch.byte_add(92);
+                e.mem.set_u32(iterator_slot.addr(), iterator);
+                fn_0069b560(e, vertex_map, iterator_slot, key, record_slot);
+                iterator = e.mem.u32(iterator_slot.addr());
+                let record = Ptr::<()>::new(e.mem.u32(record_slot.addr()));
+                let edges = record.byte_add(POV_EDGES_OFFSET);
+                let portal_edges = record.byte_add(POV_PORTAL_EDGES_OFFSET);
+                let ordinary_count = array_size(e, edges);
+                let portal_count = array_size(e, portal_edges);
+                if ordinary_count.wrapping_add(portal_count) != 2 || ordinary_count == 0 {
+                    return;
+                }
+                let first_element = e.call(0x006a_1440, &args![edges, 0u32]).ptr::<()>();
+                e.call(0x006b_c870, &args![first, first_element]);
+                let second_element = if ordinary_count == 2 {
+                    e.call(0x006a_1440, &args![edges, 1u32]).ptr::<()>()
+                } else {
+                    e.call(0x006a_1440, &args![portal_edges, 0u32]).ptr::<()>()
+                };
+                e.call(0x006b_c870, &args![second, second_element]);
+                e.call(
+                    GET_EDGE_VERTICES,
+                    &args![
+                        this,
+                        first_vertices,
+                        e.mem.u16(first.addr() + 4),
+                        e.mem.u32(first.addr() + 8)
+                    ],
+                );
+                e.call(
+                    GET_EDGE_VERTICES,
+                    &args![
+                        this,
+                        second_vertices,
+                        e.mem.u16(second.addr() + 4),
+                        e.mem.u32(second.addr() + 8)
+                    ],
+                );
+                let first_start = e.mem.u32(first_vertices.addr());
+                let first_end = e.mem.u32(first_vertices.addr() + 4);
+                let second_start = e.mem.u32(second_vertices.addr());
+                let second_end = e.mem.u32(second_vertices.addr() + 4);
+                let (common, outer_first, outer_second, packed_first, packed_second) =
+                    if first_start == second_end {
+                        (first_start, first_end, second_start, first, second)
+                    } else if first_end == second_start {
+                        (first_end, second_end, first_start, second, first)
+                    } else {
+                        return;
+                    };
+                e.call(POINT3_SUBTRACT, &args![outer_first, first_vector, common]);
+                e.call(POINT3_SUBTRACT, &args![outer_second, second_vector, common]);
+                e.mem.set_f32(first_vector.addr() + 8, 0.0);
+                e.mem.set_f32(second_vector.addr() + 8, 0.0);
+                e.call(POINT3_NORMALIZE, &args![first_vector]);
+                e.call(POINT3_NORMALIZE, &args![second_vector]);
+                e.call(POINT3_CROSS, &args![first_vector, cross, second_vector]);
+                let dot = e
+                    .call(0x004b_6190, &args![first_vector, second_vector])
+                    .f32();
+                let cross_z = e.mem.f32(cross.addr() + 8);
+                let mut accept = false;
+                if compare_flags(dot as f64, e.global::<f64>(ZERO)) & 0x41 == 0 {
+                    let positive_limit: f64 = e.global(0x0101_ffa0);
+                    if !parity_even(compare_flags(cross_z as f64, positive_limit), 0x05) {
+                        accept = true;
+                        // 0069a2f2-0069a35e can swap the two local vectors,
+                        // but neither vector is read after this decision.
+                    }
+                } else {
+                    let negative_limit: f64 = e.global(0x0106_b170);
+                    accept = !parity_even(compare_flags(cross_z as f64, negative_limit), 0x05);
+                }
+                if accept || ordinary_count == 1 {
+                    fn_0069a700(e, pair, packed_first);
+                    fn_0069a700(e, pair.byte_add(2), packed_second);
+                    e.call(
+                        0x0069_4c50,
+                        &args![
+                            edge_pairs,
+                            e.mem.u16(key.addr() + 4),
+                            e.mem.u32(pair.addr())
+                        ],
+                    );
+                }
+            });
+        }
+
+        iterator = e.call(0x004b_9ba0, &args![vertex_map]).u32();
+        while iterator != 0 {
+            e.with_stack(16, |e, scratch| {
+                let iterator_slot = scratch;
+                let key = scratch.byte_add(4);
+                let record_slot = scratch.byte_add(12);
+                e.mem.set_u32(iterator_slot.addr(), iterator);
+                fn_0069b560(e, vertex_map, iterator_slot, key, record_slot);
+                iterator = e.mem.u32(iterator_slot.addr());
+                let record = Ptr::<()>::new(e.mem.u32(record_slot.addr()));
+                if !record.is_null() {
+                    fn_0069a7a0(e, record, 1);
+                }
+            });
+        }
+
+        let radius: f32 = e.global(0x0101_e704);
+        for triangle_index in 0..triangle_count {
+            e.with_stack(80, |e, scratch| {
+                let center = scratch;
+                let vertex_copy = scratch.byte_add(12);
+                let difference = scratch.byte_add(24);
+                let candidate_difference = scratch.byte_add(36);
+                let iterator_slot = scratch.byte_add(48);
+                let candidate_key = scratch.byte_add(52);
+                let candidate_value = scratch.byte_add(60);
+                fn_00697290(e, this, center, triangle_index as u16);
+                let triangle = triangle_of(e, this, triangle_index);
+                let first_vertex = corner_vertex_index(e, triangle, 0);
+                let first_point = vertex_pointer(e, this, first_vertex);
+                write_point(e, vertex_copy.addr(), read_point(e, first_point.addr()));
+                let planar_difference = e
+                    .call(POINT3_SUBTRACT, &args![vertex_copy, difference, center])
+                    .ptr::<()>();
+                let planar_distance = e.call(0x0058_9850, &args![planar_difference]).f32();
+                let widened = (planar_distance as f64 + radius as f64) as f32;
+                let squared = (widened as f64 * widened as f64) as f32;
+                let mut threshold = (squared as f64 * squared as f64) as f32;
+                let mut best = NO_TRIANGLE;
+                let mut candidate = e.call(0x004b_9ba0, &args![edge_pairs]).u32();
+                while candidate != 0 {
+                    e.mem.set_u32(iterator_slot.addr(), candidate);
+                    e.call(
+                        0x0069_4d30,
+                        &args![edge_pairs, iterator_slot, candidate_key, candidate_value],
+                    );
+                    candidate = e.mem.u32(iterator_slot.addr());
+                    let vertex = e.mem.u16(candidate_key.addr());
+                    let point = vertex_pointer(e, this, vertex);
+                    e.call(POINT3_SUBTRACT, &args![point, candidate_difference, center]);
+                    let distance = e
+                        .call(POINT3_SQUARED_LENGTH_2D, &args![candidate_difference])
+                        .f32();
+                    if compare_flags(threshold as f64, distance as f64) & 0x41 != 0 {
+                        continue;
+                    }
+                    let vertical = e
+                        .call(
+                            FLOAT_ABS,
+                            &args![e.mem.f32(candidate_difference.addr() + 8)],
+                        )
+                        .f32();
+                    let height_limit: f64 = e.global(ONE_EIGHTY);
+                    if parity_even(compare_flags(vertical as f64, height_limit), 0x05) {
+                        continue;
+                    }
+                    threshold = distance;
+                    best = vertex;
+                }
+                e.mem.set_u16(candidate_key.addr(), best);
+                e.call(ARRAY_ADD_WORD, &args![preferred_vertices, candidate_key]);
+            });
+        }
+        fn_0069b6d0(e, vertex_map);
+    });
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0069aa20, fn_0069aa20(Ptr<NavMesh>) -> bool),
@@ -3575,6 +3837,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006bc8e0, fn_006bc8e0(Ptr, Ptr, Ptr) -> bool),
         entry!(0x006bd040, fn_006bd040(Ptr)),
         entry!(0x006987d0, fn_006987d0(Ptr<NavMesh>, Ptr, Ptr, Ptr)),
+        entry!(0x00699b60, fn_00699b60(Ptr<NavMesh>)),
         entry!(0x006953b0, nav_mesh_fix_portals_from_nav_mesh_deletion(Ptr)),
         entry!(0x00695660, fn_00695660(Ptr<NavMesh>, u16)),
         entry!(0x006957d0, fn_006957d0(Ptr<NavMeshTriangle>) -> bool),
@@ -3680,7 +3943,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069a940, fn_0069a940(Ptr<NavMesh>, u16, Ptr) -> u32),
         entry!(0x0069a9d0, fn_0069a9d0(Ptr, u16, Ptr)),
         entry!(0x0069ad00, fn_0069ad00(Ptr, Ptr) -> bool),
-        entry!(0x0069ad40, fn_0069ad40(Ptr, Ptr) -> Ptr),
+        entry!(0x0069ad40, fn_0069ad40(Ptr, u32) -> Ptr),
         entry!(0x0069ad70, fn_0069ad70(Ptr, u32) -> Ptr),
         entry!(0x0069ada0, fn_0069ada0(Ptr, Ptr, u32) -> Ptr),
         entry!(0x0069add0, fn_0069add0(Ptr, u32, u32)),
@@ -3749,6 +4012,272 @@ mod tests {
             st0: value as f64,
             ..Ret::default()
         }
+    }
+
+    #[test]
+    fn rebuild_edge_pairs_runs_triangle_preferred_vertex_pass() {
+        let mut e = Engine::new();
+        e.map(0x0101_1000, 0x1000);
+        e.map(0x0101_e000, 0x1000);
+        e.map(0x0106_b000, 0x1000);
+        e.mem.set_f64(DOUBLE_HALF, 0.5);
+        e.mem.set_f32(0x0101_e704, 128.0);
+        let mesh = e.new_object::<NavMesh>();
+        let triangle = e.new_object::<NavMeshTriangle>();
+        let points = [e.mem.alloc(12), e.mem.alloc(12), e.mem.alloc(12)];
+        write_point(&mut e, points[0], [0.0, 0.0, 0.0]);
+        write_point(&mut e, points[1], [10.0, 0.0, 0.0]);
+        write_point(&mut e, points[2], [0.0, 10.0, 0.0]);
+        e.register_double(0x0043_8af0, |_, _| ret(0));
+        e.register_double(0x0084_54f0, |_, _| ret(0));
+        e.register_double(0x0069_b360, |e, a| {
+            let map = a[0];
+            let buckets = e.mem.alloc(a[1] * 4);
+            for bucket in 0..a[1] {
+                e.mem.set_u32(buckets + bucket * 4, 0);
+            }
+            e.mem.set_u32(map + 4, a[1]);
+            e.mem.set_u32(map + 8, buckets);
+            e.mem.set_u32(map + 12, 0);
+            ret(map)
+        });
+        e.register_double(0x00aa_10f0, |_, _| ret(0));
+        e.register_double(TRIANGLE_COUNT, |_, _| ret(1));
+        e.register_double(GET_TRIANGLE, move |_, _| ret(triangle.addr()));
+        e.register_double(EDGE_SLOT, |_, _| ret(0));
+        e.register_double(EDGE_HAS_INFO, |_, _| ret(0));
+        e.register_double(TRIANGLE_VERTEX, |_, a| ret(a[1]));
+        e.register_double(VERTEX_POINTER, move |_, a| ret(points[a[1] as usize]));
+        e.register_double(POINT3_CONSTRUCT, |e, a| {
+            for axis in 0..3 {
+                e.mem
+                    .set_f32(a[0] + axis * 4, f32::from_bits(a[axis as usize + 1]));
+            }
+            ret(a[0])
+        });
+        let returned_difference = Rc::new(RefCell::new(0u32));
+        let captured_difference = returned_difference.clone();
+        e.register_double(POINT3_SUBTRACT, move |e, a| {
+            let result = e.mem.alloc(12);
+            for axis in 0..3 {
+                let value = e.mem.f32(a[0] + axis * 4) - e.mem.f32(a[2] + axis * 4);
+                e.mem.set_f32(a[1] + axis * 4, value);
+                e.mem.set_f32(result + axis * 4, value);
+            }
+            *captured_difference.borrow_mut() = result;
+            ret(result)
+        });
+        e.register_double(0x0058_9850, move |e, a| {
+            assert_eq!(a[0], *returned_difference.borrow());
+            let x = e.mem.f32(a[0]);
+            let y = e.mem.f32(a[0] + 4);
+            ret_float((x * x + y * y).sqrt())
+        });
+        e.register_double(0x004b_9ba0, |_, _| ret(0));
+        let appended = Rc::new(RefCell::new(Vec::new()));
+        let recorded = appended.clone();
+        e.register_double(ARRAY_ADD_WORD, move |e, a| {
+            recorded.borrow_mut().push(e.mem.u16(a[1]));
+            ret(0)
+        });
+        e.call(0x0069_9b60, &args![mesh]);
+        assert_eq!(*appended.borrow(), vec![NO_TRIANGLE]);
+    }
+
+    #[test]
+    fn rebuild_edge_pairs_repairs_boundary_portal_pairs_and_selects_vertex() {
+        let mut e = Engine::new();
+        e.map(0x0101_1000, 0x1000);
+        e.map(0x0101_2000, 0x1000);
+        e.map(0x0101_e000, 0x1000);
+        e.map(0x0101_f000, 0x1000);
+        e.map(0x0104_e000, 0x1000);
+        e.map(0x0106_b000, 0x1000);
+        e.mem.set_f64(DOUBLE_HALF, 0.5);
+        e.mem.set_f64(ZERO, 0.0);
+        e.mem.set_f64(0x0101_ffa0, 0.1);
+        e.mem.set_f64(0x0106_b170, -0.1);
+        e.mem.set_f64(ONE_EIGHTY, 180.0);
+        e.mem.set_f32(0x0101_e704, 128.0);
+        let mesh = e.new_object::<NavMesh>();
+        let triangle = e.new_object::<NavMeshTriangle>();
+        let points = [e.mem.alloc(12), e.mem.alloc(12), e.mem.alloc(12)];
+        write_point(&mut e, points[0], [0.0, 0.0, 0.0]);
+        write_point(&mut e, points[1], [0.0, 10.0, 0.0]);
+        write_point(&mut e, points[2], [10.0, 0.0, 0.0]);
+        let pair_map = mesh.byte_add(0x88);
+        let pair_buckets = e.mem.alloc(0x25 * 4);
+        for bucket in 0..0x25 {
+            e.mem.set_u32(pair_buckets + bucket * 4, 0);
+        }
+        e.mem.set_u32(pair_map.addr() + 4, 0x25);
+        e.mem.set_u32(pair_map.addr() + 8, pair_buckets);
+        let hash = 0x00ab_2000;
+        let equal = 0x00ab_2010;
+        let allocate = 0x00ab_2020;
+        e.mem.set_u32(0x0106_b184 + 4, hash);
+        e.mem.set_u32(0x0106_b184 + 8, equal);
+        e.mem.set_u32(0x0106_b184 + 0xc, 0x0069_b6a0);
+        e.mem.set_u32(0x0106_b184 + 0x14, allocate);
+        e.register(hash, |_, a| ret((a[2] & 0xffff) % 0x25));
+        e.register(equal, |_, a| {
+            ret((a[1] == a[3] && (a[2] & 0xffff) == (a[4] & 0xffff)) as u32)
+        });
+        e.register_double(allocate, |e, _| ret(e.mem.alloc(16)));
+        e.register_double(0x0069_b360, |e, a| {
+            let buckets = e.mem.alloc(a[1] * 4);
+            for bucket in 0..a[1] {
+                e.mem.set_u32(buckets + bucket * 4, 0);
+            }
+            e.mem.set_u32(a[0] + 4, a[1]);
+            e.mem.set_u32(a[0] + 8, buckets);
+            e.mem.set_u32(a[0] + 12, 0);
+            ret(a[0])
+        });
+        e.register_double(0x0043_8af0, |_, _| ret(0));
+        e.register_double(0x0084_54f0, |_, _| ret(0));
+        e.register_double(0x00aa_10f0, |_, _| ret(0));
+        e.register_double(0x0040_1000, |e, a| ret(e.mem.alloc(a[0])));
+        let deleted = Rc::new(RefCell::new(Vec::new()));
+        let captured_deletes = deleted.clone();
+        e.register_double(0x0040_1030, move |_, a| {
+            captured_deletes.borrow_mut().push(a[0]);
+            ret(0)
+        });
+        e.register_double(0x0069_ba70, |e, a| {
+            let buffer = e.mem.alloc(8 * 12);
+            e.mem.set_u32(a[0] + 4, buffer);
+            e.mem.set_u32(a[0] + 8, 0);
+            e.mem.set_u32(a[0] + 12, 8);
+            ret(a[0])
+        });
+        e.register_double(0x0097_8bc0, |e, a| {
+            let size = e.mem.u32(a[0] + 8);
+            e.mem.set_u32(a[0] + 8, size + 1);
+            ret(size)
+        });
+        e.register_double(0x0069_b9d0, |_, _| ret(0));
+        e.register_double(0x006b_c870, |e, a| {
+            for word in 0..3 {
+                e.mem.set_u32(a[0] + word * 4, e.mem.u32(a[1] + word * 4));
+            }
+            ret(a[0])
+        });
+        e.register_double(ARRAY_SIZE, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register_double(0x006a_1440, |e, a| ret(e.mem.u32(a[0] + 4) + a[1] * 12));
+        e.register_double(0x004b_9ba0, |e, a| {
+            let map = a[0];
+            let buckets = e.mem.u32(map + 8);
+            for bucket in 0..e.mem.u32(map + 4) {
+                let node = e.mem.u32(buckets + bucket * 4);
+                if node != 0 {
+                    return ret(node);
+                }
+            }
+            ret(0)
+        });
+        e.register_double(0x0069_4c50, |e, a| {
+            let buckets = e.mem.u32(a[0] + 8);
+            let slot = buckets + (a[1] % 0x25) * 4;
+            let node = e.mem.alloc(10);
+            e.mem.set_u32(node, e.mem.u32(slot));
+            e.mem.set_u16(node + 4, a[1] as u16);
+            e.mem.set_u32(node + 6, a[2]);
+            e.mem.set_u32(slot, node);
+            ret(0)
+        });
+        e.register_double(0x0069_4d30, |e, a| {
+            let node = e.mem.u32(a[1]);
+            let key = e.mem.u16(node + 4);
+            e.mem.set_u16(a[2], key);
+            e.mem.set_u32(a[3], e.mem.u32(node + 6));
+            let mut next = e.mem.u32(node);
+            if next == 0 {
+                let buckets = e.mem.u32(a[0] + 8);
+                for bucket in (u32::from(key) + 1)..e.mem.u32(a[0] + 4) {
+                    next = e.mem.u32(buckets + bucket * 4);
+                    if next != 0 {
+                        break;
+                    }
+                }
+            }
+            e.mem.set_u32(a[1], next);
+            ret(0)
+        });
+        e.register_double(TRIANGLE_COUNT, |_, _| ret(1));
+        e.register_double(GET_TRIANGLE, move |_, _| ret(triangle.addr()));
+        e.register_double(EDGE_SLOT, |_, a| {
+            ret(if a[1] == 1 { 0 } else { NO_TRIANGLE as u32 })
+        });
+        e.register_double(EDGE_HAS_INFO, |_, a| ret((a[1] == 1) as u32));
+        e.register_double(TRIANGLE_VERTEX, |_, a| ret(a[1]));
+        e.register_double(VERTEX_POINTER, move |_, a| ret(points[a[1] as usize]));
+        e.register_double(GET_EDGE_VERTICES, move |e, a| {
+            let edge = a[3] as usize;
+            e.mem.set_u32(a[1], points[edge]);
+            e.mem.set_u32(a[1] + 4, points[(edge + 1) % 3]);
+            ret(a[1])
+        });
+        e.register_double(POINT3_CONSTRUCT, |e, a| {
+            for axis in 0..3 {
+                e.mem
+                    .set_f32(a[0] + axis * 4, f32::from_bits(a[axis as usize + 1]));
+            }
+            ret(a[0])
+        });
+        e.register_double(POINT3_SUBTRACT, |e, a| {
+            for axis in 0..3 {
+                e.mem.set_f32(
+                    a[1] + axis * 4,
+                    e.mem.f32(a[0] + axis * 4) - e.mem.f32(a[2] + axis * 4),
+                );
+            }
+            ret(a[1])
+        });
+        e.register_double(POINT3_NORMALIZE, |e, a| {
+            let x = e.mem.f32(a[0]);
+            let y = e.mem.f32(a[0] + 4);
+            let length = (x * x + y * y).sqrt();
+            e.mem.set_f32(a[0], x / length);
+            e.mem.set_f32(a[0] + 4, y / length);
+            ret(a[0])
+        });
+        e.register_double(POINT3_CROSS, |e, a| {
+            let x = e.mem.f32(a[0]);
+            let y = e.mem.f32(a[0] + 4);
+            let other_x = e.mem.f32(a[2]);
+            let other_y = e.mem.f32(a[2] + 4);
+            e.mem.set_f32(a[1], 0.0);
+            e.mem.set_f32(a[1] + 4, 0.0);
+            e.mem.set_f32(a[1] + 8, x * other_y - y * other_x);
+            ret(a[1])
+        });
+        e.register_double(0x004b_6190, |e, a| {
+            ret_float(e.mem.f32(a[0]) * e.mem.f32(a[1]) + e.mem.f32(a[0] + 4) * e.mem.f32(a[1] + 4))
+        });
+        e.register_double(0x0058_9850, |e, a| {
+            let x = e.mem.f32(a[0]);
+            let y = e.mem.f32(a[0] + 4);
+            ret_float((x * x + y * y).sqrt())
+        });
+        e.register_double(POINT3_SQUARED_LENGTH_2D, |e, a| {
+            let x = e.mem.f32(a[0]);
+            let y = e.mem.f32(a[0] + 4);
+            ret_float(x * x + y * y)
+        });
+        e.register_double(FLOAT_ABS, |_, a| ret_float(f32::from_bits(a[0]).abs()));
+        let appended = Rc::new(RefCell::new(Vec::new()));
+        let recorded = appended.clone();
+        e.register_double(ARRAY_ADD_WORD, move |e, a| {
+            recorded.borrow_mut().push(e.mem.u16(a[1]));
+            ret(0)
+        });
+        e.call(0x0069_9b60, &args![mesh]);
+        assert_eq!(*appended.borrow(), vec![0]);
+        assert_ne!(e.mem.u32(pair_buckets), 0);
+        assert_ne!(e.mem.u32(pair_buckets + 4), 0);
+        assert_ne!(e.mem.u32(pair_buckets + 8), 0);
+        assert_eq!(deleted.borrow().len(), 3);
     }
 
     #[test]
@@ -4390,11 +4919,12 @@ mod tests {
         let this = Ptr::<()>::new(0x3300);
         e.map(this.addr(), 0x1000);
         e.map(0x0106_b000, 0x1000);
+        // Distinct first vtable entry catches a mistaken dereference.
         e.mem.set_u32(0x0106_b184, 0x7788);
         let base = recorder(&mut e, 0x0069_b360, 0);
-        assert_eq!(fn_0069ad40(&mut e, this, Ptr::new(0x4400)), this);
+        assert_eq!(fn_0069ad40(&mut e, this, 0x4400), this);
         assert_eq!(&*base.borrow(), &[vec![this.addr(), 0x4400]]);
-        assert_eq!(e.mem.u32(this.addr()), 0x7788);
+        assert_eq!(e.mem.u32(this.addr()), 0x0106_b184);
     }
 
     #[test]

@@ -1,29 +1,27 @@
 //! `fallout/ai/combat/explosion.cpp` (Xbox PDB source unit), subsystem `fallout/ai`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 
-// Continuation audit (2026-10-10, round 6): repaired 009b0f80's callback
-// reload and added a regression test. Eight older functions remain partial for
-// SEH cleanup. The translated normal paths 009ac5a0, 009ac9c0 and 009b22c0 also
-// remain partial for SEH cleanup; 009ae5d0 is complete.
-// Seven entries remain unimplemented or skipped; resume at 009ae6e0.
-// 009acd60 skipped: the 0x178 compiler-generated local passed through
-//   00404eb0/00404ee0 and its SEH state transitions are not yet identified.
+// Continuation audit (2026-10-10, round 8): translated the normal paths of
+// 009ae280 and 009b2940; both remain partial for compiler SEH cleanup.
+// Their normal-path regressions are prepared but remain unvalidated pending
+// compiler authorization and checks.
+// Thirteen functions remain partial solely for compiler SEH cleanup; resume
+// at 009acd60. Five entries remain unimplemented or skipped.
+// 009acd60 skipped: the 00404eb0/00404ee0 calls only scope TLS debug metadata;
+//   Initialize's broad effect, damage, 3D, sound and UI paths still need
+//   verified helper semantics and the untranslated 009ad670 dependency.
 // 009ad670 skipped: Init3D's per-iteration 0xe0 Havok cinfo/temporary layout
 //   and nested shape/action cleanup are not verified against PC field offsets.
-// 009ae280 skipped: the local cinfo passed to 0056e2d0 and its stack lifetime
-//   overlap with the temporary string object are not resolved.
 // 009ae6e0 skipped: large effect/damage flow; exception-state reconstruction,
 //   its 0x938-byte frame, aligned collector/UI temporaries and callback state
 //   are not fully established against the PC stack slots.
 // 009b00a0 skipped: its 0x110-byte frame mixes LOS hits, HitData, multiple
 //   virtual actor callbacks and several magic/form resolution branches; exact
 //   callback reloads and hit-record lifetime remain unaudited.
-// 009b1810 skipped: RunLOSPick's 0x908-byte frame has 800-byte and 812-byte
-//   collector buffers plus seven bound-probe points; helper layouts and SEH
-//   cleanup transitions are not sufficiently verified.
-// 009b2940 skipped: its 0x4cc-byte frame contains a 1040-byte collector and
-//   nested temporary vectors; collector iteration and compiler SEH cleanup are
-//   not fully verified against PC stack slots.
+// 009b1810 skipped: RunLOSPick's four-word ABI, 0x320-byte collector layout,
+//   0x60-byte hit rows, and the two PC collector slots are now verified;
+//   the ray-input helper's callback state and nested probe cleanup remain
+//   unaudited (see the private a04 round-9 research handoff).
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -87,6 +85,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009b2770, fn_009b2770(Ptr, u32)),
         entry!(0x009b2790, fn_009b2790(Ptr, u32)),
         entry!(0x009b28a0, fn_009b28a0(Ptr, Ptr)),
+        entry!(0x009b2940, fn_009b2940(Ptr) -> bool),
         entry!(0x009b2c90, fn_009b2c90(Ptr) -> Ptr),
         entry!(0x009b2cb0, fn_009b2cb0(Ptr, u32) -> Ptr),
         entry!(0x009b2d30, fn_009b2d30(Ptr)),
@@ -138,6 +137,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009ae0f0, fn_009ae0f0(Ptr)),
         entry!(0x009ae240, fn_009ae240(Ptr) -> Ptr),
         entry!(0x009ae250, fn_009ae250(Ptr, u32) -> Ptr),
+        entry!(0x009ae280, fn_009ae280(Ptr)),
         entry!(0x009ae540, fn_009ae540(Ptr, Ptr) -> Ptr),
         entry!(0x009ae580, fn_009ae580(Ptr, f32)),
         entry!(0x009ae5d0, fn_009ae5d0(Ptr, u32)),
@@ -516,6 +516,75 @@ pub fn fn_009ae250(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
         e.call(0x00aa_1460, &args![this, 0x40u32]);
     }
     this
+}
+
+// Translated from 009ae280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds the reference's Havok phantom from a 0x60-byte creation record,
+/// then attaches it to the reference's current Havok world. PC stack slots put
+/// the CString object at `cinfo-0x14`, its pointer at cinfo+0, the resolved
+/// shape at cinfo+4, and the matrix at cinfo+0x20. The C++ SEH cleanup path is
+/// not translated.
+// open: compiler SEH cleanup for the temporary CString and creation record.
+// Translation incomplete: 009ae280 - compiler SEH cleanup for stack temporaries
+pub fn fn_009ae280(e: &mut Engine, this: Ptr) {
+    if !e.call(0x0082_2510, &args![this.addr() + 0xa0, 0u32]).bool() {
+        return;
+    }
+    if e.call(0x008d_6f30, &args![this]).ptr::<()>().is_null() {
+        return;
+    }
+    let parent = e.call(0x008d_6f30, &args![this]).ptr::<()>();
+    if e.call(0x0045_43c0, &args![parent]).ptr::<()>().is_null() {
+        return;
+    }
+
+    e.with_stack(0xb0, |e, frame| {
+        let cinfo = Ptr::<()>::new(frame.addr() + 0x30);
+        let text_object = Ptr::<()>::new(frame.addr() + 0x1c);
+        e.call(0x0056_e090, &args![cinfo]);
+
+        let sphere = e.call(0x00aa_13e0, &args![0x14u32]).ptr::<()>();
+        let sphere_shape = if sphere.is_null() {
+            Ptr::NULL
+        } else {
+            let radius = e.call(0x0064_4930, &args![this]).f32();
+            e.call(0x0056_e950, &args![sphere, radius, 1u32])
+                .ptr::<()>()
+        };
+        // Native calls operatorP even when the sphere allocation returned null.
+        let shape = e.call(0x004a_e750, &args![sphere_shape]).ptr::<()>();
+        e.mem.set_u32(cinfo.addr() + 4, shape.addr());
+
+        let text_seed = e.call(0x005d_be10, &args![]).ptr::<()>();
+        let text = e
+            .call(0x0062_2290, &args![text_object, 0x29u32, text_seed, 0u32])
+            .ptr::<()>();
+        let text = e.call(0x0055_9450, &args![text]).ptr::<()>();
+        e.mem.set_u32(cinfo.addr(), text.addr());
+
+        if !e.vcall(this.addr(), 0x1d0, &args![]).ptr::<()>().is_null() {
+            // The original reloads the virtual target and invokes it again.
+            let node = e.vcall(this.addr(), 0x1d0, &args![]).ptr::<()>();
+            let rotation = e.call(0x0046_1130, &args![node]).ptr::<()>();
+            fn_009ae4a0(e, Ptr::<()>::new(cinfo.addr() + 0x20), rotation);
+        } else {
+            e.call(0x0056_e120, &args![cinfo.addr() + 0x20]);
+        }
+
+        let allocation = e.call(0x00aa_13e0, &args![0x18u32]).ptr::<()>();
+        let phantom = if allocation.is_null() {
+            Ptr::NULL
+        } else {
+            e.call(0x0056_e2d0, &args![allocation, cinfo]).ptr::<()>()
+        };
+        e.call(0x0066_b0d0, &args![this.addr() + 0xa0, phantom]);
+        let phantom = e.call(0x0055_9450, &args![this.addr() + 0xa0]).ptr::<()>();
+        let parent = e.call(0x008d_6f30, &args![this]).ptr::<()>();
+        let world = e.call(0x0045_43c0, &args![parent]).ptr::<()>();
+        e.vcall(phantom.addr(), 0x9c, &args![world]);
+
+        e.call(0x0056_ea90, &args![cinfo]);
+    });
 }
 
 // Translated from 009ae540 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1818,6 +1887,122 @@ pub fn fn_009b28a0(e: &mut Engine, this: Ptr, reference: Ptr) {
     }
 }
 
+// Translated from 009b2940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Tests whether the explosion overlaps a water surface or a water reference,
+/// then ORs that result into `Explosion::bUnderWater` (Xbox PDB, PC `+0xD9`).
+/// The embedded array descriptor at EBP-0x4B0, its 0x400-byte storage at
+/// EBP-0x4A4 and the neighboring vector locals retain their native locations
+/// in one raw stack region; only compiler SEH cleanup is omitted.
+// open: compiler SEH cleanup for the stack contact collector.
+// Translation incomplete: 009b2940 - compiler SEH cleanup for contact collector
+pub fn fn_009b2940(e: &mut Engine, this: Ptr) -> bool {
+    let mut underwater = false;
+    let setting = e.call(0x0040_3e20, &args![0x011d_0e34u32]).ptr::<()>();
+    let margin = e.mem.f32(setting.addr());
+    let cell = e.call(0x008d_6f30, &args![this]).ptr::<()>();
+
+    if !fn_009ad5f0(e, this) && !cell.is_null() {
+        let bounds = e.vcall(this.addr(), 0x1f4, &args![]).ptr::<()>();
+        let radius = e.call(0x0064_4930, &args![this]).f32();
+        let top_z = radius as f64 * margin as f64 + e.mem.f32(bounds.addr() + 8) as f64;
+        let water_height = e.call(0x0054_71e0, &args![cell]).f32();
+
+        if water_height as f64 > top_z {
+            underwater = true;
+        } else {
+            let world = e.call(0x0045_43c0, &args![cell]).ptr::<()>();
+            let low_process = if world.is_null() {
+                Ptr::NULL
+            } else {
+                e.call(0x0054_1c80, &args![world]).ptr::<()>()
+            };
+            let contact_collector = if low_process.is_null() {
+                Ptr::NULL
+            } else {
+                e.call(0x0062_86d0, &args![low_process]).ptr::<()>()
+            };
+
+            if !contact_collector.is_null() {
+                e.with_stack(0x4d0, |e, stack| {
+                    // Native locals reach EBP-0x4d0 for the final double.
+                    // Keep the collector's established frame base at EBP-4cc.
+                    let frame = Ptr::<()>::new(stack.addr() + 4);
+                    // EBP-0x4b0 is the 12-byte array object. Its backing
+                    // storage starts at EBP-0x4a4 and spans 0x400 bytes.
+                    let collector = Ptr::<()>::new(frame.addr() + 0x1c);
+                    let first_scaled = Ptr::<()>::new(frame.addr() + 0x478);
+                    let first_vector = Ptr::<()>::new(frame.addr() + 0x46c);
+                    let second_scaled = Ptr::<()>::new(frame.addr() + 0x460);
+                    let second_vector = Ptr::<()>::new(frame.addr() + 0x454);
+                    let first_collector_vector = Ptr::<()>::new(frame.addr() + 0x42c);
+                    let second_collector_vector = Ptr::<()>::new(frame.addr() + 0x43c);
+
+                    let first = e.call(0x004a_3760, &args![first_scaled, 1.0f32, 0x011a_9490u32]);
+                    let position = e.vcall(this.addr(), 0x1f4, &args![]).ptr::<()>();
+                    e.call(
+                        0x0043_9ef0,
+                        &args![position, first_vector, first.ptr::<()>()],
+                    );
+
+                    let second = e.call(0x004a_3760, &args![second_scaled, 1.0f32, 0x011a_9490u32]);
+                    let position = e.vcall(this.addr(), 0x1f4, &args![]).ptr::<()>();
+                    e.call(
+                        0x0043_9e90,
+                        &args![position, second_vector, second.ptr::<()>()],
+                    );
+                    e.call(0x0043_7c10, &args![first_collector_vector]);
+                    e.call(0x004a_3e00, &args![first_collector_vector, first_vector]);
+                    e.call(0x004a_3e00, &args![second_collector_vector, second_vector]);
+
+                    fn_009b2e30(e, collector, 0);
+                    e.vcall(
+                        contact_collector.addr(),
+                        0x44,
+                        &args![first_collector_vector, collector],
+                    );
+
+                    let mut index = 0u32;
+                    while !underwater {
+                        let count = e.call(0x0072_6070, &args![collector]).i32();
+                        if (index as i32) >= count {
+                            break;
+                        }
+                        let entry = e.call(0x0062_6660, &args![collector, index]).ptr::<()>();
+                        let collidable_slot = Ptr::<()>::new(entry.addr() + 4);
+                        let collidable_source = Ptr::<()>::new(e.mem.u32(collidable_slot.addr()));
+                        let collidable = fn_009b2c90(e, collidable_source);
+                        let av_object = e.call(0x004b_5820, &args![collidable]).ptr::<()>();
+                        let reference = e.call(0x0056_f930, &args![av_object]).ptr::<()>();
+                        if !reference.is_null() {
+                            let form = e.call(0x007a_f430, &args![reference]).ptr::<()>();
+                            if e.call(0x0040_1170, &args![form]).u32() == 0x23 {
+                                let explosion_position =
+                                    e.vcall(this.addr(), 0x1f4, &args![]).ptr::<()>();
+                                let explosion_top = e.call(0x0064_4930, &args![this]).f32() as f64
+                                    * margin as f64
+                                    + e.mem.f32(explosion_position.addr() + 8) as f64;
+                                e.mem.set_f64(frame.addr() - 4, explosion_top);
+                                let water_position =
+                                    e.vcall(reference.addr(), 0x1f4, &args![]).ptr::<()>();
+                                if e.mem.f32(water_position.addr() + 8) as f64 > explosion_top {
+                                    underwater = true;
+                                }
+                            }
+                        }
+                        index = index.wrapping_add(1);
+                    }
+                    fn_009b2db0(e, collector);
+                });
+            }
+        }
+    }
+
+    let underwater_byte = u8::from(underwater);
+    let stored = e.mem.u8(this.addr() + 0xd9) | underwater_byte;
+    e.mem.set_u8(this.addr() + 0xd9, stored);
+    underwater
+}
+
 // Translated from 009b2c90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Returns this plus the signed byte at +5, with 32-bit wrapping.
 pub fn fn_009b2c90(e: &mut Engine, this: Ptr) -> Ptr {
@@ -1971,6 +2156,8 @@ pub fn fn_009b3080(e: &mut Engine, _this: Ptr, left: Ptr, right: Ptr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     fn engine_with(addrs: &[u32]) -> Engine {
         let mut e = Engine::new();
@@ -2543,6 +2730,389 @@ mod tests {
         e.register(0x0062_d2f0, |_, a| (a[0] + 0x160).into_ret());
         assert_eq!(e.call(0x009a_fed0, &args![0x1000u32]).u32(), 0x2160);
         assert_eq!(e.call_log.unwrap().last().unwrap().1, vec![0x2000]);
+    }
+
+    #[test]
+    fn phantom_initialization_keeps_distinct_stack_temporaries_and_order() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x5000);
+        let mut reference_vtable = vec![0; 0x1d0 / 4 + 1];
+        reference_vtable[0x1d0 / 4] = 0xa100;
+        e.put_vtable(0x2000, &reference_vtable);
+        e.mem.set_u32(this.addr(), 0x2000);
+        let mut phantom_vtable = vec![0; 0x9c / 4 + 1];
+        phantom_vtable[0x9c / 4] = 0xa200;
+        e.put_vtable(0x2100, &phantom_vtable);
+
+        let cinfo_address = Rc::new(Cell::new(0));
+        let cinfo_for_ctor = Rc::clone(&cinfo_address);
+        let cinfo_for_string = Rc::clone(&cinfo_address);
+        e.register_double(0x0056_e090, move |e, a| {
+            let cinfo = a[0];
+            cinfo_for_ctor.set(cinfo);
+            e.mem.set_u32(cinfo, 0);
+            e.mem.set_u32(cinfo + 4, 0x44);
+            for offset in (0x20..0x60).step_by(4) {
+                e.mem.set_u32(cinfo + offset, 0xdead_beef);
+            }
+            cinfo.into_ret()
+        });
+        e.register_double(0x0062_2290, move |e, a| {
+            assert_eq!(a, &[cinfo_for_string.get() - 0x14, 0x29, 0x8000, 0]);
+            // PC places the CStringT object immediately below, but outside, cinfo.
+            e.mem.set_u32(a[0], 0x9000);
+            a[0].into_ret()
+        });
+        let cinfo_for_init = Rc::clone(&cinfo_address);
+        e.register_double(0x0056_e2d0, move |e, a| {
+            let cinfo = cinfo_for_init.get();
+            assert_eq!(a[1], cinfo);
+            assert!(a[0] == 0x5000 || a[0] == 0x5001);
+            assert_eq!(e.mem.u32(cinfo), 0x9000);
+            assert_eq!(
+                e.mem.u32(cinfo + 4),
+                if a[0] == 0x5000 { 0xa000 } else { 0 }
+            );
+            assert_eq!(e.mem.f32(cinfo + 0x20), 1.0);
+            assert_eq!(e.mem.f32(cinfo + 0x34), 1.0);
+            assert_eq!(e.mem.f32(cinfo + 0x48), 1.0);
+            assert_eq!(e.mem.f32(cinfo + 0x5c), 0.0);
+            e.mem.set_u32(a[0], 0x2100);
+            a[0].into_ret()
+        });
+        e.register(0x0082_2510, |_, _| true.into_ret());
+        e.register(0x008d_6f30, |_, _| 0x6000u32.into_ret());
+        e.register(0x0045_43c0, |_, _| 0x7000u32.into_ret());
+        mapped(&mut e, 0x5001);
+        let mut allocations = [0x4000u32, 0x5000, 0, 0x5001].into_iter();
+        e.register_double(0x00aa_13e0, move |_, a| {
+            assert!(a[0] == 0x14 || a[0] == 0x18);
+            allocations.next().unwrap().into_ret()
+        });
+        e.register(0x0064_4930, |_, a| {
+            assert_eq!(a, &[0x1000]);
+            2.5f32.into_ret()
+        });
+        e.register(0x0056_e950, |_, a| {
+            assert_eq!(a, &[0x4000, 2.5f32.to_bits(), 1]);
+            0xb000u32.into_ret()
+        });
+        let mut operator_calls = 0;
+        e.register_double(0x004a_e750, move |_, a| {
+            if operator_calls == 0 {
+                assert_eq!(a, &[0xb000]);
+                operator_calls += 1;
+                0xa000u32.into_ret()
+            } else {
+                assert_eq!(a, &[0]);
+                operator_calls += 1;
+                0u32.into_ret()
+            }
+        });
+        e.register(0x005d_be10, |_, a| {
+            assert!(a.is_empty());
+            0x8000u32.into_ret()
+        });
+        e.register(0x0055_9450, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(0x0000_a100, |_, _| 0u32.into_ret());
+        e.register(0x004b_4fc0, |e, a| {
+            for offset in (0..0x10).step_by(4) {
+                e.mem.set_u32(a[0] + offset, 0);
+            }
+            Ret::default()
+        });
+        e.register(0x0066_b0d0, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(0x0000_a200, |_, a| {
+            assert!(a[0] == 0x5000 || a[0] == 0x5001);
+            assert_eq!(a[1], 0x7000);
+            Ret::default()
+        });
+        let cinfo_for_dtor = Rc::clone(&cinfo_address);
+        e.register_double(0x0056_ea90, move |_, a| {
+            assert_eq!(a[0], cinfo_for_dtor.get());
+            Ret::default()
+        });
+
+        fn_009ae280(&mut e, this);
+        assert_eq!(e.mem.u32(this.addr() + 0xa0), 0x5000);
+        let log = e.call_log.as_ref().unwrap().clone();
+        assert_eq!(
+            log.iter()
+                .filter(|(address, _)| *address == 0x00aa_13e0)
+                .map(|(_, words)| words[0])
+                .collect::<Vec<_>>(),
+            vec![0x14, 0x18]
+        );
+        assert_eq!(
+            log.iter()
+                .filter(|(address, _)| *address == 0x0000_a100)
+                .count(),
+            1
+        );
+        let text_constructor = log
+            .iter()
+            .position(|(address, _)| *address == 0x0062_2290)
+            .unwrap();
+        let matrix_zeroes: Vec<_> = log
+            .iter()
+            .enumerate()
+            .filter(|(_, (address, _))| *address == 0x004b_4fc0)
+            .map(|(index, _)| index)
+            .collect();
+        let phantom_init = log
+            .iter()
+            .position(|(address, _)| *address == 0x0056_e2d0)
+            .unwrap();
+        assert_eq!(matrix_zeroes.len(), 4);
+        assert!(text_constructor < matrix_zeroes[0]);
+        assert!(matrix_zeroes[3] < phantom_init);
+
+        // With a null sphere allocation, native still calls operatorP with
+        // the null constructor result before writing the cinfo shape field.
+        fn_009ae280(&mut e, this);
+        assert_eq!(e.mem.u32(this.addr() + 0xa0), 0x5001);
+        let complete_log = e.call_log.as_ref().unwrap();
+        assert_eq!(
+            complete_log
+                .iter()
+                .filter(|(address, _)| *address == 0x0056_e950)
+                .count(),
+            1
+        );
+        assert_eq!(
+            complete_log
+                .iter()
+                .filter(|(address, _)| *address == 0x004a_e750)
+                .map(|(_, args)| args[0])
+                .collect::<Vec<_>>(),
+            vec![0xb000, 0]
+        );
+    }
+
+    #[test]
+    fn phantom_initialization_returns_when_havok_is_disabled() {
+        let mut e = engine_with(&[0x0082_2510]);
+        fn_009ae280(&mut e, Ptr::new(0x1000));
+        assert_eq!(e.call_log.unwrap(), vec![(0x0082_2510, vec![0x10a0, 0])]);
+    }
+
+    #[test]
+    fn underwater_test_uses_cell_water_height_and_preserves_the_existing_bit() {
+        let mut e = Engine::new();
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x3000);
+        mapped(&mut e, 0x5000);
+        e.mem.set_f32(0x3000, 0.5);
+        e.mem.set_f32(0x5008, 3.0);
+        let mut slots = vec![0; 0x1f4 / 4 + 1];
+        slots[0x1f4 / 4] = 0xa100;
+        e.put_vtable(0x2100, &slots);
+        e.mem.set_u32(this.addr(), 0x2100);
+        e.register(0x0040_3e20, |_, _| 0x3000u32.into_ret());
+        e.register(0x008d_6f30, |_, _| 0x4000u32.into_ret());
+        e.register(0x0000_a100, |_, _| 0x5000u32.into_ret());
+        e.register(0x0064_4930, |_, _| 4.0f32.into_ret());
+        e.register(0x0054_71e0, |_, _| 6.0f32.into_ret());
+
+        e.mem.set_u8(this.addr() + 0xd9, 0x80);
+        assert!(fn_009b2940(&mut e, this));
+        assert_eq!(e.mem.u8(this.addr() + 0xd9), 0x81);
+
+        e.register(0x008d_6f30, |_, _| 0u32.into_ret());
+        e.mem.set_u8(this.addr() + 0xd9, 0x40);
+        assert!(!fn_009b2940(&mut e, this));
+        assert_eq!(e.mem.u8(this.addr() + 0xd9), 0x40);
+    }
+
+    #[test]
+    fn underwater_test_skips_low_process_lookup_for_null_world() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x3000);
+        mapped(&mut e, 0x5000);
+        let mut slots = vec![0; 0x1f4 / 4 + 1];
+        slots[0x1f4 / 4] = 0xa100;
+        e.put_vtable(0x2100, &slots);
+        e.mem.set_u32(this.addr(), 0x2100);
+        e.mem.set_f32(0x3000, 1.0);
+        e.mem.set_f32(0x5008, 3.0);
+        e.register(0x0040_3e20, |_, _| 0x3000u32.into_ret());
+        e.register(0x008d_6f30, |_, _| 0x4000u32.into_ret());
+        e.register(0x009a_d5f0, |_, _| false.into_ret());
+        e.register(0x0000_a100, |_, _| 0x5000u32.into_ret());
+        e.register(0x0064_4930, |_, _| 1.0f32.into_ret());
+        e.register(0x0054_71e0, |_, _| 0.0f32.into_ret());
+        e.register(0x0045_43c0, |_, _| 0u32.into_ret());
+        e.register(0x0054_1c80, |_, _| {
+            panic!("null world must bypass low-process lookup")
+        });
+
+        assert!(!fn_009b2940(&mut e, this));
+        let log = e.call_log.unwrap();
+        assert!(!log.iter().any(|(address, _)| *address == 0x0054_1c80));
+    }
+
+    #[test]
+    fn underwater_contact_path_uses_native_stack_slots_and_signed_count() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let this = mapped(&mut e, 0x1000);
+        mapped(&mut e, 0x3000);
+        mapped(&mut e, 0x4000);
+        mapped(&mut e, 0x5000);
+        mapped(&mut e, 0x6000);
+        mapped(&mut e, 0x7000);
+        mapped(&mut e, 0x8000);
+        mapped(&mut e, 0x8100);
+        mapped(&mut e, 0x9000);
+        mapped(&mut e, 0x9100);
+        mapped(&mut e, 0x9200);
+        mapped(&mut e, 0x9300);
+        mapped(&mut e, 0xa000);
+        mapped(&mut e, 0xb000);
+        mapped(&mut e, 0xc000);
+        mapped(&mut e, 0xd000);
+        mapped(&mut e, 0xe000);
+        mapped(&mut e, 0xf000);
+
+        let mut explosion_vtable = vec![0; 0x1f4 / 4 + 1];
+        explosion_vtable[0x1f4 / 4] = 0xa100;
+        e.put_vtable(0x2000, &explosion_vtable);
+        e.mem.set_u32(this.addr(), 0x2000);
+        let mut positions = [
+            0x9000u32, 0x9100, 0x9200, // mismatched form type
+            0x9000, 0x9100, 0x9200, // negative contact count
+            0x9000, 0x9100, 0x9200, 0x9000, 0x9300, // matched form type
+        ]
+        .into_iter();
+        e.register_double(0x0000_a100, move |_, _| {
+            positions.next().unwrap().into_ret()
+        });
+        e.mem.set_f32(0x9008, 0.0);
+        e.mem.set_f32(0x9108, 0.0);
+        e.mem.set_f32(0x9208, 0.0);
+        e.mem.set_f32(0x9308, 5.0);
+        e.mem.set_f32(0x3000, 1.0);
+        e.mem.set_f32(0x4008, 0.0);
+        e.register(0x0040_3e20, |_, _| 0x3000u32.into_ret());
+        e.register(0x008d_6f30, |_, _| 0x4000u32.into_ret());
+        e.register(0x009a_d5f0, |_, _| false.into_ret());
+        e.register(0x0064_4930, |_, _| 2.0f32.into_ret());
+        e.register(0x0054_71e0, |_, _| 0.0f32.into_ret());
+        e.register(0x0045_43c0, |_, _| 0x5000u32.into_ret());
+        e.register(0x0054_1c80, |_, _| 0x6000u32.into_ret());
+        e.register(0x0062_86d0, |_, _| 0x7000u32.into_ret());
+        let mut contact_vtable = vec![0; 0x44 / 4 + 1];
+        contact_vtable[0x44 / 4] = 0xa200;
+        e.put_vtable(0x8100, &contact_vtable);
+        e.mem.set_u32(0x7000, 0x8100);
+        e.put_vtable(0x8200, &explosion_vtable);
+        e.mem.set_u32(0xe000, 0x8200);
+        let collector_address = Rc::new(Cell::new(0));
+        let collector_address_for_contact = Rc::clone(&collector_address);
+        let collector_address_for_entry = Rc::clone(&collector_address);
+        let array_for_init = Rc::clone(&collector_address);
+        e.register_double(0x0062_e230, move |e, a| {
+            assert_eq!(a[1], a[0] + 12);
+            assert_eq!(a[2], 0);
+            assert_eq!(a[3], 0x80);
+            array_for_init.set(a[0]);
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u32(a[0] + 4, 0);
+            e.mem.set_u32(a[0] + 8, 0x80);
+            e.mem.set_u32(a[0] + 12, a[1]);
+            Ret::default()
+        });
+        let first_vec_from_call = Rc::new(Cell::new(0));
+        let vec_for_contact = Rc::clone(&first_vec_from_call);
+        e.register_double(0x0000_a200, move |_, a| {
+            assert_eq!(a[0], 0x7000);
+            assert_eq!(a[2], collector_address_for_contact.get());
+            vec_for_contact.set(a[1]);
+            Ret::default()
+        });
+        e.register_double(0x004a_3760, |_, a| {
+            assert_eq!(a[1], 1.0f32.to_bits());
+            assert_eq!(a[2], 0x011a_9490);
+            a[0].into_ret()
+        });
+        e.register(0x0043_9ef0, |_, a| {
+            assert_eq!(a[0], 0x9100);
+            Ret::default()
+        });
+        e.register(0x0043_9e90, |_, a| {
+            assert_eq!(a[0], 0x9200);
+            Ret::default()
+        });
+        e.register(0x0043_7c10, |_, _| Ret::default());
+        e.register(0x004a_3e00, |_, _| Ret::default());
+        e.register(0x0072_6070, |_, _| 1i32.into_ret());
+        e.register_double(0x0062_6660, move |_, a| {
+            assert_eq!(a, &[collector_address_for_entry.get(), 0]);
+            0xb000u32.into_ret()
+        });
+        e.mem.set_u32(0xb004, 0xc000);
+        e.mem.set_u8(0xc005, 2);
+        e.register(0x004b_5820, |_, a| {
+            assert_eq!(a, &[0xc002]);
+            0xd000u32.into_ret()
+        });
+        e.register(0x0056_f930, |_, a| {
+            assert_eq!(a, &[0xd000]);
+            0xe000u32.into_ret()
+        });
+        e.register(0x007a_f430, |_, a| {
+            assert_eq!(a, &[0xe000]);
+            0xf000u32.into_ret()
+        });
+        e.register(0x0040_1170, |_, a| {
+            assert_eq!(a, &[0xf000]);
+            // The native compares the full return value, not its low byte.
+            0x123u32.into_ret()
+        });
+        e.register(0x0057_c530, |_, _| Ret::default());
+
+        assert!(!fn_009b2940(&mut e, this));
+        let first_calls = e.call_log.as_ref().unwrap().clone();
+        let collector = collector_address.get();
+        assert_ne!(collector, 0);
+        let contact_call = first_calls
+            .iter()
+            .find(|(address, _)| *address == 0x0000_a200)
+            .unwrap();
+        assert_eq!(contact_call.1[1], first_vec_from_call.get());
+        assert_eq!(first_vec_from_call.get(), collector + 0x410);
+        assert_eq!(e.mem.u8(this.addr() + 0xd9), 0);
+
+        // A negative signed count exits before querying element zero.
+        e.call_log = Some(vec![]);
+        e.register(0x0072_6070, |_, _| (-1i32).into_ret());
+        assert!(!fn_009b2940(&mut e, this));
+        assert!(!e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|(address, _)| *address == 0x0062_6660));
+
+        // A water form compares its own height with the explosion's top.
+        e.call_log = Some(vec![]);
+        e.register(0x0072_6070, |_, _| 1i32.into_ret());
+        e.register(0x0040_1170, |_, _| 0x23u32.into_ret());
+        assert!(fn_009b2940(&mut e, this));
+        assert_eq!(e.mem.u8(this.addr() + 0xd9), 1);
+        assert!(e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|(address, args)| *address == 0x0000_a100 && args.as_slice() == [0xe000]));
     }
 
     #[test]

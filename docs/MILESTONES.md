@@ -33,6 +33,28 @@ reading do not establish them.
 
 ## Active work: M1
 
+Navigation collection `a902f84` passes 13,724 combined engine tests, lint
+and formatting, including the immediate-vtable correction. Its three
+exception-cleanup partials remain explicit; the fresh slot advances to
+loaded-area bounds. Multibound validation is running, with eight generated
+native cases available as regression expectations. Next action: collect
+multibound, then validate the reference adapter and bootstrap probe.
+
+Explosion collection `d781c3b` passes 13,722 combined engine tests, lint
+and formatting. Both added normal paths retain exception-cleanup partials;
+the fresh agent owns the five untouched bodies. Navigation now validates.
+Multibound review corrections are prepared but uncompiled. Rolling #120
+passes core CI and awaits viewer CI. Next action: collect navigation and
+finish the reference adapter after the queued multibound checks.
+
+Reference bootstrap now passes through the real translated registry:
+construction, embedded list access, count/health changes and count removal
+preserving health. Dependencies pass 13,716 engine tests, lint, formatting
+and debug build. An existing-reference handle and isolation test are
+prepared but uncompiled. Explosion's focused suite passes 98 tests;
+full validation is active. Next action: collect Explosion and validate the
+reference adapter after the queued slot checks.
+
 Resumed after the usage reset. Rolling #119 passed both checks and merged
 as `951c0c7`; the checked pathfinding follow-on is being published next.
 The allocator test failure was an incorrect backing-size expectation:
