@@ -19,6 +19,10 @@ layout! {
         0x05 bInitialized: u8,
         0x06 bMultiThread: u8,
         0x10 pListener: Ptr,
+        /// `SynchTimer.iFlags` (Xbox PDB), timer at +0x14.
+        0x1c synchTimerFlags: u32,
+        0x30 pfnSynchPausedCallback: u32,
+        0x34 pfnSynchUnPausedCallback: u32,
     }
 }
 
@@ -51,10 +55,23 @@ fn set_volume(e: &mut Engine, offset: u32, value: f32) {
     e.call(MANAGER_VOLUME_CHANGED, &args![p]);
 }
 
+// Both dialogue wrappers pass the null smart pointer and point by value.
+// The point is captured before the singleton getter, as the PC pushes show.
+fn dialogue_command(e: &mut Engine, enabled: u32) {
+    let x = e.global::<u32>(DEFAULT_LISTENER_POSITION);
+    let y = e.global::<u32>(DEFAULT_LISTENER_POSITION + 4);
+    let z = e.global::<u32>(DEFAULT_LISTENER_POSITION + 8);
+    let p = manager(e);
+    e.call(
+        0x00ad_b1a0,
+        &args![p, 13u32, enabled, 0u32, 0u32, 0u32, x, y, z],
+    );
+}
+
 // Translated from 0070bbc0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSAudio::UnPauseAllOfType` (Xbox PDB): unpauses mask 0x40000000.
 pub fn bs_audio_un_pause_all_of_type(e: &mut Engine, this: Ptr<BSAudio>) {
-    e.call(0x00ad_8540, &args![this, 0x4000_0000u32, 1u32]);
+    fn_00ad8540(e, this, 0x4000_0000, 1);
 }
 
 // Translated from 00ad7020 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -443,6 +460,207 @@ pub fn fn_00ad7e60(e: &mut Engine, _this: Ptr<BSAudio>, value: f32) {
     set_volume(e, 0x168, value);
 }
 
+// Translated from 00ad7e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the PC manager secondary radio volume and signals the change.
+pub fn fn_00ad7e90(e: &mut Engine, _this: Ptr<BSAudio>, value: f32) {
+    set_volume(e, 0x16c, value);
+}
+
+// Translated from 00ad7ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets all six secondary manager volumes.
+pub fn fn_00ad7ec0(e: &mut Engine, _this: Ptr<BSAudio>) {
+    let p = manager(e);
+    fn_00ad87d0(e, Ptr::new(p));
+}
+
+// Translated from 00ad7ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::GetDebugString` (Xbox PDB): returns the manager list for a page.
+// Translation incomplete: 00ad7ee0 - SEH exception unwinding is unsupported.
+pub fn bs_audio_get_debug_string(e: &mut Engine, _this: Ptr<BSAudio>, page: u32) -> Ptr {
+    in_audio_context(e, |e| {
+        let p = manager(e);
+        e.call(0x00ae5ff0, &args![p, page]).ptr()
+    })
+}
+
+// Translated from 00ad7fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::Precache` (Xbox PDB): named precache request.
+// Translation incomplete: 00ad7fa0 - SEH exception unwinding is unsupported.
+pub fn bs_audio_precache(e: &mut Engine, _this: Ptr<BSAudio>, name: Ptr, flags: u32) {
+    in_audio_context(e, |e| {
+        let p = manager(e);
+        e.call(0x00add570, &args![p, name, flags]);
+    });
+}
+
+// Translated from 00ad8050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::Precache_ov2` (Xbox PDB): numeric precache request.
+// Translation incomplete: 00ad8050 - SEH exception unwinding is unsupported.
+pub fn bs_audio_precache_ov2(e: &mut Engine, _this: Ptr<BSAudio>, numeric_id: u32, flags: u32) {
+    in_audio_context(e, |e| {
+        let p = manager(e);
+        e.call(0x00add630, &args![p, numeric_id, flags]);
+    });
+}
+
+// Translated from 00ad8100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::Precache_ov3` (Xbox PDB): filename precache request.
+// Translation incomplete: 00ad8100 - SEH exception unwinding is unsupported.
+pub fn bs_audio_precache_ov3(
+    e: &mut Engine,
+    _this: Ptr<BSAudio>,
+    filename: Ptr,
+    flags: u32,
+    extra: u32,
+) {
+    in_audio_context(e, |e| {
+        let p = manager(e);
+        e.call(0x00add6f0, &args![p, filename, flags, extra]);
+    });
+}
+
+// Translated from 00ad81c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::SetAudioCacheSizeInK` (Xbox PDB): manager forwarding.
+// Translation incomplete: 00ad81c0 - SEH exception unwinding is unsupported.
+pub fn bs_audio_set_audio_cache_size_in_k(e: &mut Engine, _this: Ptr<BSAudio>, size: u32) {
+    in_audio_context(e, |e| {
+        let p = manager(e);
+        e.call(0x00ae6bf0, &args![p, size]);
+    });
+}
+
+// Translated from 00ad8270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the manager cache-size word.
+// Translation incomplete: 00ad8270 - SEH exception unwinding is unsupported.
+pub fn fn_00ad8270(e: &mut Engine, _this: Ptr<BSAudio>) -> u32 {
+    in_audio_context(e, |e| {
+        let p = manager(e);
+        e.call(0x00ae6c60, &args![p]).u32()
+    })
+}
+
+// Translated from 00ad8320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards the low argument byte to the manager.
+// Translation incomplete: 00ad8320 - SEH exception unwinding is unsupported.
+pub fn fn_00ad8320(e: &mut Engine, _this: Ptr<BSAudio>, enabled: u8) {
+    in_audio_context(e, |e| {
+        let p = manager(e);
+        e.call(0x00ae6ca0, &args![p, enabled]);
+    });
+}
+
+// Translated from 00ad83d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the manager byte without boolean normalization.
+// Translation incomplete: 00ad83d0 - SEH exception unwinding is unsupported.
+pub fn fn_00ad83d0(e: &mut Engine, _this: Ptr<BSAudio>) -> u8 {
+    in_audio_context(e, |e| {
+        let p = manager(e);
+        e.call(0x00ae6cf0, &args![p]).u32() as u8
+    })
+}
+
+// Translated from 00ad8480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::MuteType` (Xbox PDB): forwards all three words.
+pub fn bs_audio_mute_type(e: &mut Engine, _this: Ptr<BSAudio>, mask: u32, value: u32, extra: u32) {
+    let p = manager(e);
+    e.call(0x00adca20, &args![p, mask, value, extra]);
+}
+
+// Translated from 00ad84b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards both words to the manager.
+pub fn fn_00ad84b0(e: &mut Engine, _this: Ptr<BSAudio>, mask: u32, value: u32) {
+    let p = manager(e);
+    e.call(0x00adcaa0, &args![p, mask, value]);
+}
+
+// Translated from 00ad84e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::KillAllOfType` (Xbox PDB): manager forwarding.
+pub fn bs_audio_kill_all_of_type(e: &mut Engine, _this: Ptr<BSAudio>, mask: u32, value: u32) {
+    let p = manager(e);
+    e.call(0x00adcd00, &args![p, mask, value]);
+}
+
+// Translated from 00ad8510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards the mask and zero-extended low byte.
+pub fn fn_00ad8510(e: &mut Engine, _this: Ptr<BSAudio>, mask: u32, enabled: u8) {
+    let p = manager(e);
+    e.call(0x00adcb20, &args![p, mask, enabled]);
+}
+
+// Translated from 00ad8540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards the mask and zero-extended low byte.
+pub fn fn_00ad8540(e: &mut Engine, _this: Ptr<BSAudio>, mask: u32, enabled: u8) {
+    let p = manager(e);
+    e.call(0x00adcc10, &args![p, mask, enabled]);
+}
+
+// Translated from 00ad8570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::StopMovingSounds` (Xbox PDB): manager forwarding.
+pub fn bs_audio_stop_moving_sounds(
+    e: &mut Engine,
+    _this: Ptr<BSAudio>,
+    source: u32,
+    value: f32,
+    flags: u32,
+) {
+    let p = manager(e);
+    e.call(0x00adb690, &args![p, source, value, flags]);
+}
+
+// Translated from 00ad85a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::EnterDialogue` (Xbox PDB): queues command 13.
+// Translation incomplete: 00ad85a0 - SEH exception unwinding is unsupported.
+pub fn bs_audio_enter_dialogue(e: &mut Engine, _this: Ptr<BSAudio>) {
+    dialogue_command(e, 1);
+}
+
+// Translated from 00ad8650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::ExitDialogue` (Xbox PDB): queues command 13.
+// Translation incomplete: 00ad8650 - SEH exception unwinding is unsupported.
+pub fn bs_audio_exit_dialogue(e: &mut Engine, _this: Ptr<BSAudio>) {
+    dialogue_command(e, 0);
+}
+
+// Translated from 00ad8700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls the optional synchronization callback, then updates timer flag bit 0.
+pub fn fn_00ad8700(e: &mut Engine, this: Ptr<BSAudio>) {
+    let callback = e.get(this, BSAudio::pfnSynchPausedCallback);
+    if callback != 0 {
+        e.call(callback, &[]);
+    }
+    // The callback can change the flags; the PC reloads them afterwards.
+    let flags = e.get(this, BSAudio::synchTimerFlags);
+    e.set(this, BSAudio::synchTimerFlags, flags | 1);
+}
+
+// Translated from 00ad8740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls the optional synchronization callback, then updates timer flag bit 0.
+pub fn fn_00ad8740(e: &mut Engine, this: Ptr<BSAudio>) {
+    let callback = e.get(this, BSAudio::pfnSynchUnPausedCallback);
+    if callback != 0 {
+        e.call(callback, &[]);
+    }
+    // The callback can change the flags; the PC reloads them afterwards.
+    let flags = e.get(this, BSAudio::synchTimerFlags);
+    e.set(this, BSAudio::synchTimerFlags, flags & !1);
+}
+
+// Translated from 00ad8780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::EndAllSoundsOfType` (Xbox PDB): empty PC body, RET 4.
+pub fn bs_audio_end_all_sounds_of_type(e: &mut Engine, _this: Ptr<BSAudio>, _unused_1: u32) {
+    let _ = e;
+}
+
+// Translated from 00ad87d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the six secondary volumes on a manager receiver.
+pub fn fn_00ad87d0(e: &mut Engine, this: Ptr) {
+    for offset in [0x158, 0x15c, 0x160, 0x164, 0x168, 0x16c] {
+        // FLD1 is an instruction constant, not an executable data read.
+        e.mem.set_f32(this.addr() + offset, 1.0);
+    }
+    e.call(MANAGER_VOLUME_CHANGED, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -510,6 +728,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ad7e00, fn_00ad7e00(Ptr<BSAudio>, f32)),
         entry!(0x00ad7e30, fn_00ad7e30(Ptr<BSAudio>, f32)),
         entry!(0x00ad7e60, fn_00ad7e60(Ptr<BSAudio>, f32)),
+        entry!(0x00ad7e90, fn_00ad7e90(Ptr<BSAudio>, f32)),
+        entry!(0x00ad7ec0, fn_00ad7ec0(Ptr<BSAudio>)),
+        entry!(
+            0x00ad7ee0,
+            bs_audio_get_debug_string(Ptr<BSAudio>, u32) -> Ptr
+        ),
+        entry!(0x00ad7fa0, bs_audio_precache(Ptr<BSAudio>, Ptr, u32)),
+        entry!(0x00ad8050, bs_audio_precache_ov2(Ptr<BSAudio>, u32, u32)),
+        entry!(
+            0x00ad8100,
+            bs_audio_precache_ov3(Ptr<BSAudio>, Ptr, u32, u32)
+        ),
+        entry!(
+            0x00ad81c0,
+            bs_audio_set_audio_cache_size_in_k(Ptr<BSAudio>, u32)
+        ),
+        entry!(0x00ad8270, fn_00ad8270(Ptr<BSAudio>) -> u32),
+        entry!(0x00ad8320, fn_00ad8320(Ptr<BSAudio>, u8)),
+        entry!(0x00ad83d0, fn_00ad83d0(Ptr<BSAudio>) -> u8),
+        entry!(0x00ad8480, bs_audio_mute_type(Ptr<BSAudio>, u32, u32, u32)),
+        entry!(0x00ad84b0, fn_00ad84b0(Ptr<BSAudio>, u32, u32)),
+        entry!(
+            0x00ad84e0,
+            bs_audio_kill_all_of_type(Ptr<BSAudio>, u32, u32)
+        ),
+        entry!(0x00ad8510, fn_00ad8510(Ptr<BSAudio>, u32, u8)),
+        entry!(0x00ad8540, fn_00ad8540(Ptr<BSAudio>, u32, u8)),
+        entry!(
+            0x00ad8570,
+            bs_audio_stop_moving_sounds(Ptr<BSAudio>, u32, f32, u32)
+        ),
+        entry!(0x00ad85a0, bs_audio_enter_dialogue(Ptr<BSAudio>)),
+        entry!(0x00ad8650, bs_audio_exit_dialogue(Ptr<BSAudio>)),
+        entry!(0x00ad8700, fn_00ad8700(Ptr<BSAudio>)),
+        entry!(0x00ad8740, fn_00ad8740(Ptr<BSAudio>)),
+        entry!(
+            0x00ad8780,
+            bs_audio_end_all_sounds_of_type(Ptr<BSAudio>, u32)
+        ),
+        entry!(0x00ad87d0, fn_00ad87d0(Ptr)),
     ]
 }
 
@@ -537,12 +795,15 @@ mod tests {
     #[test]
     fn unpause_all_of_type_passes_mask_and_enable_word() {
         let (mut e, audio) = setup();
-        e.register(0x00ad_8540, noop);
+        e.register(0x00ad_cc10, noop);
         e.call_log = Some(vec![]);
         bs_audio_un_pause_all_of_type(&mut e, audio);
         assert_eq!(
             e.call_log.unwrap(),
-            vec![(0x00ad_8540, args![audio, 0x4000_0000u32, 1u32])]
+            vec![
+                (MANAGER_INSTANCE, vec![]),
+                (0x00ad_cc10, args![MANAGER, 0x4000_0000u32, 1u32])
+            ]
         );
     }
 
@@ -966,4 +1227,326 @@ mod tests {
     setter_case!(set_voice_secondary_volume, 0x00ad_7e00, 0x160);
     setter_case!(set_effects_secondary_volume, 0x00ad_7e30, 0x164);
     setter_case!(set_music_secondary_volume, 0x00ad_7e60, 0x168);
+
+    setter_case!(set_radio_secondary_volume, 0x00ad_7e90, 0x16c);
+
+    fn check_secondary_reset(entry: u32, receiver: u32) {
+        let (mut e, _) = setup();
+        for offset in (0x140..=0x174).step_by(4) {
+            e.mem.set_u32(MANAGER + offset, 0xaabb_ccdd);
+        }
+        e.register_double(MANAGER_VOLUME_CHANGED, |e, a| {
+            assert_eq!(a, &[MANAGER]);
+            for offset in (0x158..=0x16c).step_by(4) {
+                assert_eq!(e.mem.f32(MANAGER + offset), 1.0);
+            }
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(entry, &[receiver]);
+        for offset in [0x140, 0x144, 0x148, 0x14c, 0x150, 0x154, 0x170, 0x174] {
+            assert_eq!(e.mem.u32(MANAGER + offset), 0xaabb_ccdd);
+        }
+        let mut expected = vec![(entry, vec![receiver])];
+        if entry == 0x00ad_7ec0 {
+            expected.push((MANAGER_INSTANCE, vec![]));
+        }
+        expected.push((MANAGER_VOLUME_CHANGED, vec![MANAGER]));
+        assert_eq!(e.call_log.unwrap(), expected);
+    }
+
+    #[test]
+    fn reset_secondary_volumes_obtains_manager() {
+        check_secondary_reset(0x00ad_7ec0, 0);
+    }
+
+    #[test]
+    fn reset_secondary_volumes_uses_manager_receiver_and_preserves_neighbors() {
+        check_secondary_reset(0x00ad_87d0, MANAGER);
+    }
+
+    fn check_forward(
+        entry: u32,
+        callee: u32,
+        input: &[u32],
+        output: &[u32],
+        tls: bool,
+        result: u32,
+    ) {
+        let (mut e, audio) = setup();
+        let context = e.tls() + AUDIO_TLS_CONTEXT;
+        e.mem.set_u32(context, 0x1234_5678);
+        e.register_double(MANAGER_INSTANCE, move |e, a| {
+            assert!(a.is_empty()); // Pending stack arguments belong to the manager method.
+            assert_eq!(
+                e.mem.u32(context),
+                if tls {
+                    AUDIO_CONTEXT_VALUE
+                } else {
+                    0x1234_5678
+                }
+            );
+            MANAGER.into_ret()
+        });
+        let expected = [&[MANAGER], output].concat();
+        e.register_double(callee, move |e, a| {
+            assert_eq!(a, expected);
+            assert_eq!(
+                e.mem.u32(context),
+                if tls {
+                    AUDIO_CONTEXT_VALUE
+                } else {
+                    0x1234_5678
+                }
+            );
+            if tls {
+                e.mem.set_u32(context, 0x8765_4321);
+            }
+            0xfeed_be80u32.into_ret()
+        });
+        let arguments = [&[audio.addr()], input].concat();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(entry, &arguments).u32(), result);
+        assert_eq!(e.mem.u32(context), 0x1234_5678);
+        assert_eq!(
+            e.call_log.unwrap(),
+            vec![
+                (entry, arguments),
+                (MANAGER_INSTANCE, vec![]),
+                (callee, [&[MANAGER], output].concat()),
+            ]
+        );
+    }
+
+    macro_rules! forward_case {
+        ($name:ident, $entry:expr, $callee:expr, $input:expr, $output:expr, $tls:expr, $result:expr) => {
+            #[test]
+            fn $name() {
+                check_forward($entry, $callee, $input, $output, $tls, $result);
+            }
+        };
+    }
+
+    forward_case!(
+        debug_string_returns_manager_pointer_and_restores_tls,
+        0x00ad7ee0,
+        0x00ae5ff0,
+        &[0x1234],
+        &[0x1234],
+        true,
+        0xfeed_be80
+    );
+    forward_case!(
+        precache_name_forwards_two_words_and_restores_tls,
+        0x00ad7fa0,
+        0x00add570,
+        &[0x1234, 0x89ab_cdef],
+        &[0x1234, 0x89ab_cdef],
+        true,
+        0
+    );
+    forward_case!(
+        precache_numeric_forwards_two_words_and_restores_tls,
+        0x00ad8050,
+        0x00add630,
+        &[0x1234, 0x89ab_cdef],
+        &[0x1234, 0x89ab_cdef],
+        true,
+        0
+    );
+    forward_case!(
+        precache_filename_forwards_three_words_and_restores_tls,
+        0x00ad8100,
+        0x00add6f0,
+        &[0x1234, 0x89ab_cdef, 0x4567],
+        &[0x1234, 0x89ab_cdef, 0x4567],
+        true,
+        0
+    );
+    forward_case!(
+        cache_size_setter_forwards_word_and_restores_tls,
+        0x00ad81c0,
+        0x00ae6bf0,
+        &[0xffff_ffff],
+        &[0xffff_ffff],
+        true,
+        0
+    );
+    forward_case!(
+        cache_size_getter_returns_word_and_restores_tls,
+        0x00ad8270,
+        0x00ae6c60,
+        &[],
+        &[],
+        true,
+        0xfeed_be80
+    );
+    forward_case!(
+        manager_byte_setter_narrows_before_forwarding_and_restores_tls,
+        0x00ad8320,
+        0x00ae6ca0,
+        &[0xaabb_cc80],
+        &[0x80],
+        true,
+        0
+    );
+    forward_case!(
+        manager_byte_getter_preserves_non_boolean_low_byte,
+        0x00ad83d0,
+        0x00ae6cf0,
+        &[],
+        &[],
+        true,
+        0x80
+    );
+    forward_case!(
+        mute_type_forwards_three_words,
+        0x00ad8480,
+        0x00adca20,
+        &[0x1234, 0x89ab_cdef, 0x4567],
+        &[0x1234, 0x89ab_cdef, 0x4567],
+        false,
+        0
+    );
+    forward_case!(
+        manager_type_action_forwards_two_words,
+        0x00ad84b0,
+        0x00adcaa0,
+        &[0x1234, 0x89ab_cdef],
+        &[0x1234, 0x89ab_cdef],
+        false,
+        0
+    );
+    forward_case!(
+        kill_type_forwards_two_words,
+        0x00ad84e0,
+        0x00adcd00,
+        &[0x1234, 0x89ab_cdef],
+        &[0x1234, 0x89ab_cdef],
+        false,
+        0
+    );
+    forward_case!(
+        pause_type_narrows_second_word,
+        0x00ad8510,
+        0x00adcb20,
+        &[0x1234, 0x89ab_cd80],
+        &[0x1234, 0x80],
+        false,
+        0
+    );
+    forward_case!(
+        unpause_type_narrows_second_word,
+        0x00ad8540,
+        0x00adcc10,
+        &[0x1234, 0x89ab_cd80],
+        &[0x1234, 0x80],
+        false,
+        0
+    );
+    forward_case!(
+        stop_moving_sounds_passes_float_bits_and_other_words,
+        0x00ad8570,
+        0x00adb690,
+        &[0x1234, (-1.25f32).to_bits(), 0x4567],
+        &[0x1234, (-1.25f32).to_bits(), 0x4567],
+        false,
+        0
+    );
+
+    fn check_dialogue(entry: u32, enabled: u32) {
+        let (mut e, audio) = setup();
+        let context = e.tls() + AUDIO_TLS_CONTEXT;
+        e.mem.set_u32(context, 0x37);
+        e.map(DEFAULT_LISTENER_POSITION, 12);
+        for (offset, bits) in [(0, 0x8000_0000u32), (4, 0x7fc1_2345), (8, 0x4321_1234)] {
+            e.set_global(DEFAULT_LISTENER_POSITION + offset, bits);
+        }
+        e.register_double(MANAGER_INSTANCE, move |e, a| {
+            assert!(a.is_empty());
+            assert_eq!(e.mem.u32(context), 0x37); // No TLS guard in these two wrappers.
+            e.set_global(DEFAULT_LISTENER_POSITION, 0x1111_2222u32);
+            e.set_global(DEFAULT_LISTENER_POSITION + 4, 0x3333_4444u32);
+            e.set_global(DEFAULT_LISTENER_POSITION + 8, 0x5555_6666u32);
+            MANAGER.into_ret()
+        });
+        e.register_double(0x00ad_b1a0, move |e, a| {
+            assert_eq!(
+                a,
+                &[
+                    MANAGER,
+                    13,
+                    enabled,
+                    0,
+                    0,
+                    0,
+                    0x8000_0000,
+                    0x7fc1_2345,
+                    0x4321_1234
+                ]
+            );
+            assert_eq!(e.mem.u32(context), 0x37);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(entry, &args![audio]);
+        assert_eq!(e.call_log.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn enter_dialogue_captures_point_before_manager_and_passes_all_eight_stack_words() {
+        check_dialogue(0x00ad_85a0, 1);
+    }
+
+    #[test]
+    fn exit_dialogue_captures_point_before_manager_and_passes_all_eight_stack_words() {
+        check_dialogue(0x00ad_8650, 0);
+    }
+
+    fn check_timer_callback(entry: u32, callback_offset: u32, mask: u32, bit: u32) {
+        let (mut e, audio) = setup();
+        // These null-callback cases also match the native PC body, including
+        // guarded object bytes and RET cleanup (2026-10-11, retail 1.4.0.525).
+        for flags in [0, 1, 2, 3, 0x8000_0000, u32::MAX, 0x1234_5678, 0x8765_4321] {
+            e.set(audio, BSAudio::synchTimerFlags, flags);
+            e.call_log = Some(vec![]);
+            e.call(entry, &args![audio]);
+            assert_eq!(e.get(audio, BSAudio::synchTimerFlags), (flags & mask) | bit);
+            assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        }
+        e.mem
+            .set_u32(audio.addr() + callback_offset, VIRTUAL_RETURN);
+        e.register_double(VIRTUAL_RETURN, move |e, a| {
+            assert!(a.is_empty());
+            e.set(audio, BSAudio::synchTimerFlags, 0x8765_4321);
+            Ret::default()
+        });
+        e.call(entry, &args![audio]);
+        assert_eq!(
+            e.get(audio, BSAudio::synchTimerFlags),
+            (0x8765_4321 & mask) | bit
+        );
+        assert_eq!(e.call_log.unwrap().last(), Some(&(VIRTUAL_RETURN, vec![])));
+    }
+
+    #[test]
+    fn pause_timer_calls_optional_callback_before_reading_flags() {
+        check_timer_callback(0x00ad_8700, 0x30, u32::MAX, 1);
+    }
+
+    #[test]
+    fn unpause_timer_calls_optional_callback_before_reading_flags() {
+        check_timer_callback(0x00ad_8740, 0x34, !1, 0);
+    }
+
+    #[test]
+    fn end_all_sounds_is_noop_with_unmapped_receiver_and_unused_word() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00ad_8780, &[0, 0xdead_beef]);
+        assert_eq!(
+            e.call_log.unwrap(),
+            vec![(0x00ad_8780, vec![0, 0xdead_beef])]
+        );
+    }
 }

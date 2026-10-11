@@ -34,7 +34,8 @@ reading do not establish them.
 ## Active work: M1
 
 Resumed continuous translation on 2026-10-11 after the usage reset.
-#134 through #139 merged after both CI checks; rolling #141 awaits checks.
+#134 through #141 merged after both CI checks; rolling #142 now publishes
+the validated HUD batch at `ed11d75` and awaits fresh checks.
 The 34-body effect-item batch passed all checks and collection (`ddeecbd`);
 a fresh worker immediately began I/O management. HUD also passed collection
 (`82e56ee` after rebase, 14,177 combined engine tests) and restarted. Movement

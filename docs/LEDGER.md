@@ -30,14 +30,14 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 11264 | 17.0% |
-| traced | 4282 | 6.5% |
+| translated | 11286 | 17.0% |
+| traced | 4292 | 6.5% |
 | platform | 3416 | 5.2% |
 | library | 21912 | 33.1% |
-| open | 25385 | 38.3% |
+| open | 25353 | 38.3% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **136** engine functions
+Translation totals count markers, not complete behavior. **146** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -151,15 +151,25 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `009b2940` | `crates/engine/src/units/fallout_ai/explosion.rs:2443` |
 | `009b2cb0` | `crates/engine/src/units/fallout_ai/explosion.rs:2565` |
 | `009b2d30` | `crates/engine/src/units/fallout_ai/explosion.rs:2579` |
-| `00ad7020` | `crates/engine/src/units/bsaudio/bsaudio.rs:63` |
-| `00ad7150` | `crates/engine/src/units/bsaudio/bsaudio.rs:83` |
-| `00ad7230` | `crates/engine/src/units/bsaudio/bsaudio.rs:101` |
-| `00ad73b0` | `crates/engine/src/units/bsaudio/bsaudio.rs:124` |
-| `00ad7480` | `crates/engine/src/units/bsaudio/bsaudio.rs:141` |
-| `00ad7550` | `crates/engine/src/units/bsaudio/bsaudio.rs:159` |
-| `00ad7620` | `crates/engine/src/units/bsaudio/bsaudio.rs:177` |
-| `00ad7740` | `crates/engine/src/units/bsaudio/bsaudio.rs:207` |
-| `00ad77f0` | `crates/engine/src/units/bsaudio/bsaudio.rs:217` |
+| `00ad7020` | `crates/engine/src/units/bsaudio/bsaudio.rs:80` |
+| `00ad7150` | `crates/engine/src/units/bsaudio/bsaudio.rs:100` |
+| `00ad7230` | `crates/engine/src/units/bsaudio/bsaudio.rs:118` |
+| `00ad73b0` | `crates/engine/src/units/bsaudio/bsaudio.rs:141` |
+| `00ad7480` | `crates/engine/src/units/bsaudio/bsaudio.rs:158` |
+| `00ad7550` | `crates/engine/src/units/bsaudio/bsaudio.rs:176` |
+| `00ad7620` | `crates/engine/src/units/bsaudio/bsaudio.rs:194` |
+| `00ad7740` | `crates/engine/src/units/bsaudio/bsaudio.rs:224` |
+| `00ad77f0` | `crates/engine/src/units/bsaudio/bsaudio.rs:234` |
+| `00ad7ee0` | `crates/engine/src/units/bsaudio/bsaudio.rs:478` |
+| `00ad7fa0` | `crates/engine/src/units/bsaudio/bsaudio.rs:488` |
+| `00ad8050` | `crates/engine/src/units/bsaudio/bsaudio.rs:498` |
+| `00ad8100` | `crates/engine/src/units/bsaudio/bsaudio.rs:508` |
+| `00ad81c0` | `crates/engine/src/units/bsaudio/bsaudio.rs:524` |
+| `00ad8270` | `crates/engine/src/units/bsaudio/bsaudio.rs:534` |
+| `00ad8320` | `crates/engine/src/units/bsaudio/bsaudio.rs:544` |
+| `00ad83d0` | `crates/engine/src/units/bsaudio/bsaudio.rs:554` |
+| `00ad85a0` | `crates/engine/src/units/bsaudio/bsaudio.rs:612` |
+| `00ad8650` | `crates/engine/src/units/bsaudio/bsaudio.rs:619` |
 | `00c3db60` | `crates/engine/src/units/bsmain/iomanager.rs:65` |
 | `00c3e1b0` | `crates/engine/src/units/bsmain/iomanager.rs:134` |
 | `00c3e4f0` | `crates/engine/src/units/bsmain/iomanager.rs:349` |
@@ -179,9 +189,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00c41330` | `crates/engine/src/units/bsmain/iomanager.rs:1430` |
 | `00c41ac0` | `crates/engine/src/units/bsmain/iomanager.rs:1489` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 15135 (37.3%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 15167 (37.4%) are translated or traced.
 
-Rust cites 16221 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 16253 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -233,7 +243,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | FaceGen | 474 | 164 | 51 | 0 | 10 | 0 | 0 | 464 | 2.1% |
 | fallout shared/facegen | 433 | 63 | 91 | 0 | 55 | 0 | 0 | 378 | 12.7% |
 | BSMenu | 361 | 136 | 221 | 165 | 39 | 0 | 0 | 157 | 56.5% |
-| BSAudio | 304 | 75 | 141 | 40 | 29 | 0 | 0 | 235 | 22.7% |
+| BSAudio | 304 | 75 | 141 | 62 | 39 | 0 | 0 | 203 | 33.2% |
 | fallout shared/magic | 296 | 43 | 83 | 82 | 45 | 0 | 0 | 169 | 42.9% |
 | BSSystem | 275 | 54 | 36 | 1 | 37 | 237 | 0 | 0 | - |
 | NiCollision | 215 | 104 | 115 | 0 | 4 | 0 | 0 | 211 | 1.9% |
@@ -271,8 +281,8 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 101 | 30 | 3 | 0 | 9 |
-| 2 | 1575 | 583 | 1137 | 318 | 24 | 4 | 92 |
-| 3 | 4973 | 1303 | 3633 | 870 | 148 | 26 | 296 |
+| 2 | 1575 | 583 | 1138 | 317 | 24 | 4 | 92 |
+| 3 | 4973 | 1303 | 3635 | 868 | 148 | 26 | 296 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
