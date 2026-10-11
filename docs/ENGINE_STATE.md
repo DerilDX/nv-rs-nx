@@ -7,6 +7,35 @@ by `world` or the viewer. Current save-reader evidence and limitations are
 in [FOS_SAVES.md](FOS_SAVES.md); overall priority stays in
 [MILESTONES.md](MILESTONES.md) and [HANDOFF.md](HANDOFF.md).
 
+## Script-extra follow-on
+
+The script-extra follow-on is implemented and locally validated: `ScriptLocals`
+constructor `005a8b80`, `ScriptRunner` constructor `005e0c60`, its busy
+predicate `005e2850`, and `ScriptRunManager` instance/action-list dispatch
+`005e24d0` / `005e2730` (class names from Xbox PDB). PC disassembly checks
+the 0x14, 0xa4 and eight-byte layouts. Six guarded native constructor cases
+pass, including untouched padding. Four further native cases confirm the
+busy predicate and cached-runner/null-script manager result, including its
+twelve-byte stack cleanup. Ten Rust regressions pass; the focused script
+selection passes 1,320 tests and the full workspace passes 15,876 tests
+including doctests (14,023 engine unit tests). Strict lint, formatting and
+release/debug builds pass on Windows. These are core checks; viewer CI
+remains a separate merge gate. The
+compiler exception cleanup on the two manager entries remains partial.
+
+This does not establish script-extra preservation. The actual interpreter
+entry `005e1160` remains untranslated, and the broader private inventory
+fixture still lacks script forms and their complete save-ID mappings.
+The first script found in the user's original payloads has 234 compiled
+bytes and four references in its installed master record; an empty generated
+script would not represent it. The eight-save metadata scan finds 93 unique
+inventory script IDs, including IDs requiring DLC/mod load-order resolution.
+Next action: supply the real script record and continue through the
+interpreter's action-list loading path. Six generated native cases already
+confirm parser `005e13a0` sign-extends opcode/length words, clears the
+reference for ordinary opcodes, preserves it for skipped reference prefixes,
+and consumes 24 bytes of stack arguments; that parser remains untranslated.
+
 ## List boundary
 
 The handle delegates construction, count, bitmap lookup, cached lookup,

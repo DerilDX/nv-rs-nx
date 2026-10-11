@@ -5,10 +5,10 @@
 //! running script instance, the engine's event list), the `Script` form, and
 //! the static lists of references whose enable/disable/delete is delayed.
 //!
-//! Progress: all 77 functions, `005a8bc0` to `005ae2e0`, are translated:
+//! Progress: the 77 mapped functions, `005a8bc0` to `005ae2e0`, are translated:
 //! the first 40 (`005a8bc0` to `005aa930`) in an earlier session and the
 //! last 37 (`005aaaf0` to `005ae2e0`) in the next, so there is nothing left
-//! in this unit.
+//! in that mapped range. The unplaced `005a8b80` constructor is also translated.
 //!
 //! Notes for whoever continues:
 //! - The engine map names `005a8bc0` `ScriptLocals::ScriptLocals`, but the
@@ -674,6 +674,16 @@ fn free_item_list(e: &mut Engine, this: Ptr<ScriptLocals>, field: Field<ScriptLo
         e.call(LIST_DELETE, &args![list, 1u32]);
     }
     e.set(this, field, Ptr::NULL);
+}
+
+// Translated from 005a8b80 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Constructs `ScriptLocals` (Xbox PDB): clears its twenty bytes through the
+/// game's memset, then explicitly clears the master script and effect data.
+pub fn script_locals_construct(e: &mut Engine, this: Ptr<ScriptLocals>) -> Ptr<ScriptLocals> {
+    e.call(MEMSET, &args![this, 0u32, 0x14u32]);
+    e.set(this, ScriptLocals::m_pMasterScript, Ptr::NULL);
+    e.set(this, ScriptLocals::m_pScriptEffectData, Ptr::NULL);
+    this
 }
 
 // Translated from 005a8bc0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3510,6 +3520,10 @@ pub fn fn_005ae2e0(e: &mut Engine, this: Ptr<Script>) {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x005a8b80,
+            script_locals_construct(Ptr<ScriptLocals>) -> Ptr<ScriptLocals>
+        ),
         entry!(0x005a8bc0, fn_005a8bc0(Ptr<ScriptLocals>)),
         entry!(0x005a8c00, fn_005a8c00(Ptr<ScriptLocals>)),
         entry!(0x005a8c90, fn_005a8c90(Ptr<ScriptLocals>)),
@@ -3673,6 +3687,38 @@ mod tests {
             eax: value,
             ..Ret::default()
         }
+    }
+
+    #[test]
+    fn locals_constructor_matches_native_guarded_vectors() {
+        // PC 005a8b80, unpacked exe SHA-256
+        // 19406942e48724d797300c4ea6be9ac69a32f670b8c35db09279a2258422739f.
+        // Three nv-call vectors agree: twenty cleared bytes, unchanged guards,
+        // original receiver returned. No function doubles in this test.
+        for fill in [0xa5, 0xcc, 0xff] {
+            let mut e = Engine::new();
+            let block = e.mem.alloc(28);
+            e.mem.write(block, &[fill; 28]);
+            assert_eq!(e.call(0x005a8b80, &[block + 4]).u32(), block + 4);
+            assert_eq!(e.mem.bytes(block, 4), vec![fill; 4]);
+            assert_eq!(e.mem.bytes(block + 4, 20), vec![0; 20]);
+            assert_eq!(e.mem.bytes(block + 24, 4), vec![fill; 4]);
+        }
+    }
+
+    #[test]
+    fn locals_constructor_keeps_post_memset_stores_and_receiver() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(20);
+        e.register_double(MEMSET, move |e, a| {
+            assert_eq!(a, &[block, 0, 20]);
+            e.mem.write(block, &[0xa5; 20]);
+            0xdeadbeefu32.into_ret()
+        });
+        assert_eq!(e.call(0x005a8b80, &[block]).u32(), block);
+        assert_eq!(e.mem.u32(block), 0);
+        assert_eq!(e.mem.bytes(block + 4, 12), vec![0xa5; 12]);
+        assert_eq!(e.mem.u32(block + 16), 0);
     }
 
     /// The pages holding the globals this unit reads (the pending lists and
