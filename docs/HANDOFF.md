@@ -7,6 +7,112 @@ machinery runs.
 
 ## Resume here
 
+### Stopped at the requested 98% usage limit, 2026-10-11 05:40 local
+
+Translation is stopped for handoff. All three agents were interrupted;
+no cargo/rustc process remains. Preserve their uncommitted files: do not
+run `task.sh`, reset a slot, or cycle it before finishing its checks and
+committing its owned file. On an authorized resume, restart the agents on
+their existing task files with these continuation notes, then resume the
+continuous collect/cycle/fresh-agent loop and ship passing rolling PRs.
+
+1. Check attached rolling #134 at `a762d6f91915812c2dc8f31a71a54d57e51001fa`
+   and persistence #135 at `86d19a0b2f8343a28afd9c334fdde36ed7b9aa69`.
+   Both core/viewer CI checks were still running at 05:38; neither merged.
+   Ship #134 through `ship.sh 134` once both current-head checks pass.
+   Merge #135 only after both checks, using its exact head. #132 merged
+   `4ba17e6` and #133 merged `c975484`, both verified after passing checks.
+   Lead has later local documentation commits; the ship script preserves
+   them during rebase. Do not push them over the in-flight PR unnecessarily.
+2. a04, batch b0677: only `fallout_shared_magic/effectitem.rs` is dirty.
+   All 34 remaining normal bodies are drafted through `00405400`.
+   Focused tests 78/78, full engine 14,129/14,129, doctest, strict clippy and
+   formatting passed. The hygiene test was interrupted without a result;
+   rerun it, inspect the diff, then commit and cycle04 exactly once.
+   No active session remains (70580/91380/28464 finished). Ten explicit
+   SEH-only partials remain; partial-only advancement is reviewed/allowed.
+   Immediately start a fresh agent on the new task after collection.
+3. a03, batch b0236: only `fallout_interface/hudmainmenu.rs` is dirty.
+   The remaining normal body of `00775a00` is drafted through `0077886d`,
+   with reviewed callback reloads, float storage, signed comparison,
+   constructor-return and NaN fixes plus regressions. Direct rustfmt,
+   diff and name scans pass; cargo checks have NOT run. Validate, commit,
+   cycle03 and immediately start the fresh continuation. SEH stays partial.
+4. a01, batch b0155: only `fallout_ai/mobileobject.rs` is dirty. Nine normal
+   bodies are drafted from `00935f60` through `00cbc510`; seventeen total
+   SEH-only partials remain. Reviewed mode reloads and face/activator call
+   argument fixes have regressions. Source-only checks pass; cargo checks
+   have NOT run. Validate before commit/cycle01, and review the remaining
+   queue before opting into partial-only advancement.
+5. Root's managed checkout `%USERPROFILE%\.codex\worktrees\phase2-extra-data\wt-phase0`
+   is clean on `codex/phase2-inventory-script-locals`, commit `86d19a0`.
+   #135 contains five helpers/ten regressions; all 15,876 workspace tests,
+   strict lint/fmt, release/debug builds and ten native cases passed.
+   Applied retained stash `c11039c` must never be applied again. Next work
+   is the real Script form/save-ID fixture and interpreter action-list
+   path, starting `005e1160`/`005e13a0`/`005e1550`. Six generated native
+   parser cases pass; private `codex-audit/inventory-script-next.md` has
+   the details. a04 owns its required TLS guards; do not duplicate them.
+
+Build 40 remains the current play copy. Item payload evidence (10,201
+count/health entries, eighteen multi-stack entries, three full-record decode
+failures excluded) does not establish a whole-save round trip or playable
+integration. No confirmed next-build date or feature list. Prior automatic
+approval review blocked idle p3 target cleanup with only "blocked by policy";
+no deletion was performed for that rejected action. Do not retry/bypass it.
+
+Latest, 05:35 local: root's five script-loading helpers are committed and
+pushed as `86d19a0` on `codex/phase2-inventory-script-locals`; attached
+PR #135 is open with fresh core/viewer CI. The checkout is clean. All local
+checks passed: 1,320 focused tests, 15,876 workspace tests including doctests
+(14,023 engine unit tests), strict lint, formatting, release and debug builds.
+Session `33662` is complete. Native evidence and the next parser's six cases
+are recorded in `ENGINE_STATE.md` and private `inventory-script-next.md`.
+
+`/root/a04_round15` now owns the compiler for its frozen 34-body batch.
+After a clean commit, cycle04 once with reviewed `ADVANCE_PARTIAL_ONLY=1`
+if only its ten verified SEH-only partials remain; immediately start a fresh
+worker, compiler-held. Then grant `/root/a03_round17` its remaining normal
+HUD body, followed by `/root/a01_round16`'s nine remaining normal movement
+bodies. Those two drafts are uncompiled and restricted to their own unit
+files. a01 now has seventeen total SEH-only partials; the earlier estimate
+of six remaining normal bodies was incorrect, superseded by the ledger.
+Its callback mode reloads and pending argument corrections are drafted
+with regressions. The source-only formatting/hygiene scans pass.
+
+Rolling #134 remains open at `a762d6f`, both CI checks still running.
+Ship with `ship.sh 134` when both current-head checks pass. #135 also needs
+both checks before merging. Usage is 97%; stop and hand off at 98%.
+No new play copy is warranted by these unconnected engine dependencies.
+Build 40 remains current, with whole-save/world integration still pending.
+
+Latest, 05:26 local: #132 merged `4ba17e6` and rolling #133 merged
+`c975484`, each after core and viewer CI passed. `ship.sh 133` completed
+and created attached #134 at `a762d6f`, covering actor dialogue and HUD
+target information. Its fresh CI must pass before shipping. Movement source
+`d3269c3` was collected through cycle01; the rebased collection is
+`c95399b`, with 14,126 combined engine tests, doctest, strict lint and
+formatting passing. HUD collection is now `c9a17b4` after that rebase.
+Fresh `/root/a01_round16` immediately continued at `00935f60`; sixteen
+earlier SEH-only partials remain explicit and six normal bodies remain.
+
+Root owns the heavy compiler, session `33662`, running the private
+`codex-audit/check-inventory-locals.ps1`. Focused tests pass; workspace,
+lint, formatting and release/debug builds are still in progress. The root
+checkout is on `codex/phase2-inventory-script-locals`, based on #132's
+merge, with only `tesscript.rs`, `tesscriptrunmanager.rs` and
+`ENGINE_STATE.md` changed. Scoped stash `c11039c` is applied and retained;
+never apply it again. a04's frozen 34-body batch gets the compiler next,
+then a03's remaining HUD body. Both are drafted and uncompiled. The HUD
+review fixes cover callback reloads, float storage, signed target types,
+constructor return pointers and unordered comparisons.
+
+Six further native cases for the next parser `005e13a0` pass, checking
+signed opcode/length words, reference-prefix behavior and RET24; this
+parser is still untranslated. Private `inventory-script-next.md` records
+the evidence. Usage 94%; stop and hand off at 98% as requested. Build 40
+remains current, without a confirmed next-build date or feature list.
+
 Latest, 05:19 local: HUD source `6c4df88` was collected as `0eb6b3c`
 through cycle03, passing 14,100 combined engine tests, doctest, strict lint
 and formatting. Fresh `/root/a03_round17` immediately continued and has

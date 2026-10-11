@@ -33,6 +33,32 @@ reading do not establish them.
 
 ## Active work: M1
 
+Stopped at the user's 98% usage threshold on 2026-10-11, 05:40 local.
+#132/#133 merged after passing CI; #134/#135 remain open awaiting CI.
+The script dependency batch is validated and published. Effect-item tests,
+lint and formatting pass but its hygiene check was interrupted; the HUD
+and movement follow-ons remain uncompiled drafts. All files are preserved
+and no compiler process remains. [HANDOFF.md](HANDOFF.md) records exact
+resume steps. Next action on resume: finish effect hygiene, collect it and
+restart its slot, then validate HUD and movement. Build 40 stays current.
+
+Script-loading dependency #135 is published at `86d19a0`: 15,876 workspace
+tests including doctests, strict lint, formatting and release/debug builds
+pass. It adds five helpers and ten regressions, with ten matching native
+cases; interpreter/script-form integration remains open. The effect batch
+now validates, followed by the ready HUD and movement drafts. #134/#135
+await both CI checks. Next action: collect those validated slots and continue
+the real script-loading path. Build 40 remains current without a new ETA.
+
+#132 and #133 merged after both CI checks; rolling #134 now publishes
+the next actor dialogue/HUD collection with fresh CI. Collection passes
+14,126 combined engine tests, strict lint and formatting. A fresh movement
+worker immediately continues; root's five script dependencies pass focused
+tests and now run full checks. Six native cases establish the next parser's
+signed fields and reference-prefix behavior, but it is still untranslated.
+Build 40 remains current. Next action: publish the validated script helpers,
+then collect the queued effect/HUD batches and continue script loading.
+
 HUD collection `0eb6b3c` passes 14,100 combined engine tests, doctest,
 strict lint and formatting; its fresh worker has drafted the remaining
 item prompts, details and layout, now under review. Movement validates its

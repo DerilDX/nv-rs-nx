@@ -30,14 +30,14 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 11067 | 16.7% |
-| traced | 4320 | 6.5% |
+| translated | 11072 | 16.7% |
+| traced | 4319 | 6.5% |
 | platform | 3416 | 5.2% |
-| library | 21913 | 33.1% |
-| open | 25543 | 38.6% |
+| library | 21912 | 33.1% |
+| open | 25540 | 38.5% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **84** engine functions
+Translation totals count markers, not complete behavior. **86** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -50,6 +50,8 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00483370` | `crates/engine/src/units/fallout_shared/tesform.rs:446` |
 | `00483a50` | `crates/engine/src/units/fallout_shared/tesform.rs:663` |
 | `0055a2f0` | `crates/engine/src/units/fallout_shared/tesobjectrefr.rs:803` |
+| `005e24d0` | `crates/engine/src/units/fallout_shared/tesscriptrunmanager.rs:41` |
+| `005e2730` | `crates/engine/src/units/fallout_shared/tesscriptrunmanager.rs:53` |
 | `005f21c0` | `crates/engine/src/units/fallout_shared/tesanimgroup.rs:108` |
 | `005f22d0` | `crates/engine/src/units/fallout_shared/tesanimgroup.rs:132` |
 | `005f3a20` | `crates/engine/src/units/fallout_shared/tesanimgroup.rs:1045` |
@@ -127,9 +129,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `009b2cb0` | `crates/engine/src/units/fallout_ai/explosion.rs:2565` |
 | `009b2d30` | `crates/engine/src/units/fallout_ai/explosion.rs:2579` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14977 (37.0%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 14980 (37.0%) are translated or traced.
 
-Rust cites 16056 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 16060 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -159,12 +161,12 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| compiler: static init/exit | 21335 | 529 | 102 | 1 | 65 | 0 | 21269 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6380 | 956 | 0 | 0 | 3134 | 70.1% |
+| compiler: static init/exit | 21335 | 529 | 102 | 1 | 66 | 0 | 21268 | 0 | - |
+| fallout shared | 10470 | 2065 | 3149 | 6384 | 955 | 0 | 0 | 3131 | 70.1% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 78 | 0 | 0 | 6460 | 2.0% |
 | fallout/ai | 4849 | 1475 | 1888 | 2334 | 562 | 0 | 0 | 1953 | 59.7% |
 | fallout/interface | 2645 | 991 | 1247 | 631 | 723 | 0 | 0 | 1291 | 51.2% |
-| (unplaced) | 2353 | 470 | 0 | 40 | 408 | 1 | 0 | 1904 | 19.0% |
+| (unplaced) | 2353 | 470 | 0 | 41 | 407 | 1 | 0 | 1904 | 19.0% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 711 | 173 | 0 | 0 | 904 | 49.4% |
 | NiMain | 1619 | 261 | 1134 | 3 | 76 | 0 | 0 | 1540 | 4.9% |
 | BSHavok | 1615 | 316 | 1134 | 59 | 134 | 0 | 0 | 1422 | 12.0% |
