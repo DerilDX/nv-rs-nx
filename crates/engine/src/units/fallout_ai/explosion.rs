@@ -1,19 +1,18 @@
 //! `fallout/ai/combat/explosion.cpp` (Xbox PDB source unit), subsystem `fallout/ai`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 
-// Continuation audit (2026-10-11, round 11): normal paths of 009ae280,
-// 009b2940, 009acd60 and 009ad670 have regression coverage; all remain
-// partial for compiler SEH cleanup.
-// Fifteen functions retain explicit SEH partial markers; resume
-// at 009ae6e0. Three entries remain unimplemented or skipped.
+// Continuation audit (2026-10-11, round 12): normal paths of 009ae280,
+// 009b2940, 009acd60, 009ad670 and 009ae6e0 have regression coverage; all
+// remain partial for compiler SEH cleanup. Sixteen functions retain explicit
+// SEH partial markers; resume at 009b00a0. Two entries remain skipped.
 // 009acd60 has a normal-path translation; it remains partial for compiler SEH
 //   cleanup and calls the now-translated 009ad670 Init3D path.
 // 009ad670 has its normal Init3D path translated, with a per-iteration 0xe0
 //   Havok cinfo and stack-backed clone/transform temporaries. Compiler SEH
 //   cleanup remains partial.
-// 009ae6e0 skipped: large effect/damage flow; exception-state reconstruction,
-//   its 0x938-byte frame, aligned collector/UI temporaries and callback state
-//   are not fully established against the PC stack slots.
+// 009ae6e0 has its normal effect/contact/decal/sound flow translated with
+//   PC EBP slots and callback reloads. Compiler SEH cleanup remains partial;
+//   its 009b00a0 damage/target callee remains unimplemented in this unit.
 // 009b00a0 skipped: its 0x110-byte frame mixes LOS hits, HitData, multiple
 //   virtual actor callbacks and several magic/form resolution branches; exact
 //   callback reloads and hit-record lifetime remain unaudited.
@@ -142,6 +141,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009ae540, fn_009ae540(Ptr, Ptr) -> Ptr),
         entry!(0x009ae580, fn_009ae580(Ptr, f32)),
         entry!(0x009ae5d0, fn_009ae5d0(Ptr, u32)),
+        entry!(0x009ae6e0, explosion_apply_effects(Ptr)),
         entry!(0x009afbb0, fn_009afbb0(Ptr, u32) -> Ptr),
         entry!(0x009afc10, fn_009afc10(Ptr)),
         entry!(0x009afc30, fn_009afc30(Ptr) -> Ptr),
@@ -2700,11 +2700,1018 @@ pub fn fn_009b3080(e: &mut Engine, _this: Ptr, left: Ptr, right: Ptr) -> bool {
     })
 }
 
+// The 009ae6e0 frame is 16-byte aligned and its live locals span
+// EBP-0x928..EBP-0x14. Keep all collector and callback temporaries at
+// their PC offsets: several callees retain pointers into this frame.
+#[allow(dead_code)]
+struct ExplosionEffectFrame {
+    ebp: u32,
+}
+
+#[allow(dead_code)]
+impl ExplosionEffectFrame {
+    fn at(&self, offset: u32) -> u32 {
+        self.ebp - offset
+    }
+
+    fn point(&self, offset: u32) -> Ptr {
+        Ptr::new(self.at(offset))
+    }
+}
+
+#[allow(dead_code)]
+fn copy_explosion_point(e: &mut Engine, destination: u32, source: u32) {
+    for offset in [0, 4, 8] {
+        e.mem
+            .set_u32(destination + offset, e.mem.u32(source + offset));
+    }
+}
+
+#[allow(dead_code)]
+fn explosion_debug_contact(e: &mut Engine, frame: &ExplosionEffectFrame) {
+    let colour = quiet_f32(e.global::<f32>(0x0102_3934));
+    e.call(
+        0x0041_4430,
+        &args![frame.point(0xe8), 1.0f32, 0.0f32, 0.0f32, colour],
+    );
+    let radius = quiet_f32(e.global::<f32>(0x0101_6088));
+    let marker = e
+        .call(0x004b_29b0, &args![radius, frame.point(0xe8), 1u32])
+        .u32();
+    e.call(0x00a5_a040, &args![marker]);
+    e.call(0x0044_0460, &args![marker, frame.point(0xcc)]);
+    let duration = quiet_f32(e.global::<f32>(0x0101_7b78));
+    let world: u32 = e.global(0x011d_ea10);
+    e.call(0x0045_8e20, &args![world, marker, duration]);
+
+    let duration = quiet_f32(e.global::<f32>(0x0101_7b78));
+    let scaled = e
+        .call(
+            0x0045_bb20,
+            &args![frame.point(0xd8), frame.point(0xf8), duration],
+        )
+        .u32();
+    let endpoint = e
+        .call(
+            0x0043_9e90,
+            &args![frame.point(0xcc), frame.point(0x104), scaled],
+        )
+        .u32();
+    let marker = e
+        .call(
+            0x004b_3890,
+            &args![
+                frame.point(0xcc),
+                frame.point(0xe8),
+                endpoint,
+                frame.point(0xe8),
+                1u32
+            ],
+        )
+        .u32();
+    let world: u32 = e.global(0x011d_ea10);
+    let duration = quiet_f32(e.global::<f32>(0x0101_7b78));
+    e.call(0x0045_8e20, &args![world, marker, duration]);
+}
+
+#[allow(dead_code)]
+fn explosion_scan_contact(
+    e: &mut Engine,
+    this: Ptr,
+    frame: &ExplosionEffectFrame,
+    object_3d: u32,
+    found: &mut bool,
+) {
+    e.call(0x0068_15c0, &args![frame.point(0x194)]);
+    let source = e.call(0x0068_15c0, &args![frame.point(0x180)]).u32();
+    e.call(0x0045_8620, &args![frame.point(0x194), source]);
+    e.call(0x0068_15c0, &args![frame.point(0x1a0)]);
+    let source = e.call(0x0046_0140, &args![frame.point(0x180)]).u32();
+    e.call(0x004a_3970, &args![frame.point(0x1a0), source]);
+    e.call(0x004a_3a70, &args![frame.point(0x4c0)]);
+    e.call(0x004a_3c20, &args![frame.point(0x570)]);
+
+    let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+    copy_explosion_point(e, frame.at(0x57c), position);
+    let endpoint = e
+        .call(
+            0x0043_9ef0,
+            &args![frame.point(0x194), frame.point(0x588), frame.point(0x57c)],
+        )
+        .u32();
+    let two = quiet_f32(e.global::<f32>(0x0101_62c0));
+    e.call(0x004a_3760, &args![frame.point(0x594), two, endpoint]);
+    let length = e.call(0x0045_7990, &args![frame.point(0x594)]).f64();
+    let one: f64 = e.global(0x0101_2070);
+    if length < one {
+        let scale = quiet_f32(e.global::<f32>(0x0101_e57c));
+        let scaled = e
+            .call(
+                0x0045_bb20,
+                &args![frame.point(0x1a0), frame.point(0x5a0), scale],
+            )
+            .u32();
+        e.call(0x0045_78c0, &args![frame.point(0x57c), scaled]);
+        let scale = quiet_f32(e.global::<f32>(0x0101_e340));
+        let scaled = e
+            .call(
+                0x0045_bb20,
+                &args![frame.point(0x1a0), frame.point(0x5ac), scale],
+            )
+            .u32();
+        copy_explosion_point(e, frame.at(0x594), scaled);
+    }
+    e.call(0x004a_3da0, &args![frame.point(0x570), frame.point(0x57c)]);
+    e.call(0x007f_68a0, &args![frame.point(0x570), frame.point(0x594)]);
+    let phantom = e.call(0x0055_9450, &args![this.addr() + 0xa0]).u32();
+    let data = e
+        .call(0x0043_b4f0, &args![phantom, frame.point(0x5b0)])
+        .u32();
+    e.call(0x004a_3f70, &args![frame.point(0x570), e.mem.u32(data)]);
+    e.call(0x004a_3fb0, &args![frame.point(0x570), frame.point(0x4c0)]);
+    e.mem.set_u32(frame.at(0x5b4), 0x24);
+    e.mem.set_u8(frame.at(0x5b5), 0);
+
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    let world = e.call(0x0045_43c0, &args![cell]).u32();
+    if world != 0 {
+        let cell = e.call(0x008d_6f30, &args![this]).u32();
+        let world = e.call(0x0045_43c0, &args![cell]).u32();
+        if e.vcall(world, 0xc8, &args![frame.point(0x570)]).bool() {
+            let mut ray_index = 0i32;
+            let mut stop = false;
+            let mut ray_found = false;
+            while !stop && !ray_found {
+                let ray_hits = e.call(0x008c_dd90, &args![frame.point(0x570)]).u32();
+                let hits = e.call(0x0046_0140, &args![ray_hits]).u32();
+                let count = e.call(0x0072_6070, &args![hits]).i32();
+                if ray_index >= count {
+                    break;
+                }
+                let ray_hits = e.call(0x008c_dd90, &args![frame.point(0x570)]).u32();
+                let hits = e.call(0x0046_0140, &args![ray_hits]).u32();
+                let row = e.call(0x004a_46b0, &args![hits, ray_index]).u32();
+                e.call(0x0069_6c30, &args![frame.point(0x630), row]);
+                let collidable = e.mem.u32(frame.at(0x5e0));
+                let hit_object = e.call(0x004b_5820, &args![collidable]).u32();
+                let reference = e.call(0x0056_f930, &args![hit_object]).u32();
+                if hit_object == object_3d {
+                    ray_found = true;
+                    let mut last_part = -1i32;
+                    for part_index in 0..8 {
+                        let part = e.mem.i32(frame.at(0x610) + part_index * 4);
+                        if part == -1 {
+                            break;
+                        }
+                        last_part = part;
+                    }
+                    let shape = e.call(0x0043_b540, &args![collidable]).u32();
+                    let probe = e.call(0x008c_71b0, &args![frame.point(0x644), shape]).u32();
+                    let shape_kind = e.call(0x004a_3a20, &args![probe]).i32();
+                    if shape_kind == 1 {
+                        let world: u32 = e.global(0x011d_ea10);
+                        let part = e.call(0x0045_7880, &args![world, frame.point(0x194)]).u32();
+                        e.mem.set_u32(frame.at(0x5b4), part);
+                    } else {
+                        let container = e.call(0x0055_9450, &args![collidable]).u32();
+                        let shape = e.call(0x004a_3a40, &args![container]).u32();
+                        if shape != 0 {
+                            let part = e.call(0x00c8_4f10, &args![shape, last_part]).u32();
+                            e.mem.set_u32(frame.at(0x5b4), part);
+                        }
+                    }
+                } else if reference == 0 || !e.vcall(reference, 0x100, &args![]).bool() {
+                    stop = true;
+                }
+                ray_index += 1;
+            }
+            if ray_found {
+                explosion_hit_effect(e, this, frame, found);
+            }
+        }
+    }
+    e.call(0x004a_3bc0, &args![frame.point(0x4c0)]);
+}
+
+#[allow(dead_code)]
+fn explosion_debug_hit(e: &mut Engine, this: Ptr, frame: &ExplosionEffectFrame) {
+    let colour = quiet_f32(e.global::<f32>(0x0102_3934));
+    e.call(
+        0x0041_4430,
+        &args![frame.point(0x65c), 0.0f32, 1.0f32, 0.0f32, colour],
+    );
+    let radius = quiet_f32(e.global::<f32>(0x0101_712c));
+    let marker = e
+        .call(0x004b_29b0, &args![radius, frame.point(0x65c), 1u32])
+        .u32();
+    e.call(0x00a5_a040, &args![marker]);
+    e.call(0x0044_0460, &args![marker, this.addr() + 0xe8]);
+    let duration = quiet_f32(e.global::<f32>(0x0101_7b78));
+    let world: u32 = e.global(0x011d_ea10);
+    e.call(0x0045_8e20, &args![world, marker, duration]);
+
+    let scale = quiet_f32(e.global::<f32>(0x0101_7868));
+    let scaled = e
+        .call(
+            0x0045_bb20,
+            &args![this.addr() + 0xf4, frame.point(0x66c), scale],
+        )
+        .u32();
+    let endpoint = e
+        .call(
+            0x0043_9e90,
+            &args![this.addr() + 0xe8, frame.point(0x678), scaled],
+        )
+        .u32();
+    let marker = e
+        .call(
+            0x004b_3890,
+            &args![
+                this.addr() + 0xe8,
+                frame.point(0x65c),
+                endpoint,
+                frame.point(0x65c),
+                1u32
+            ],
+        )
+        .u32();
+    let world: u32 = e.global(0x011d_ea10);
+    let duration = quiet_f32(e.global::<f32>(0x0101_7b78));
+    e.call(0x0045_8e20, &args![world, marker, duration]);
+}
+
+#[allow(dead_code)]
+fn explosion_hit_effect(e: &mut Engine, this: Ptr, frame: &ExplosionEffectFrame, found: &mut bool) {
+    copy_explosion_point(e, this.addr() + 0xe8, frame.at(0x194));
+    if e.call(0x0043_90c0, &args![this.addr() + 0xf4, 0x011f_426cu32])
+        .bool()
+    {
+        copy_explosion_point(e, this.addr() + 0xf4, frame.at(0x1a0));
+    }
+    let debug_level_slot = e.call(0x0043_d4d0, &args![0x011d_0a78u32]).u32();
+    if e.mem.i32(debug_level_slot) > 1 {
+        explosion_debug_hit(e, this, frame);
+    }
+    *found = true;
+
+    let part = e.mem.u32(frame.at(0x5b4));
+    let attack = e.call(0x0041_81e0, &args![this]).u32();
+    let effect = e.call(0x004f_b7d0, &args![attack, part]).u32();
+    if effect == 0 {
+        return;
+    }
+    let mut allow_hit_sound = true;
+    let lighting = e.call(0x0052_4c90, &args![]).u32();
+    let vector = e.call(0x0045_bb80, &args![lighting]).u32();
+    e.call(
+        0x0043_9ef0,
+        &args![frame.point(0x194), frame.point(0x68c), vector],
+    );
+    if !e.call(0x0052_5420, &args![]).bool() {
+        let distance = e.call(0x0045_7990, &args![frame.point(0x68c)]).f64();
+        let limit_pointer = e.call(0x0040_3e20, &args![0x011c_e26cu32]).u32();
+        let limit = e.mem.f32(limit_pointer);
+        if !matches!(
+            (limit as f64).partial_cmp(&distance),
+            Some(std::cmp::Ordering::Less)
+        ) {
+            let forty = quiet_f32(e.global::<f32>(0x0101_e340));
+            let lighting = e.call(0x0052_4c90, &args![]).u32();
+            let p = frame.at(0x194);
+            let point = [e.mem.u32(p), e.mem.u32(p + 4), e.mem.u32(p + 8)];
+            if !e
+                .call(
+                    0x004b_61d0,
+                    &args![point[0], point[1], point[2], lighting, forty],
+                )
+                .bool()
+            {
+                allow_hit_sound = false;
+            }
+        } else {
+            allow_hit_sound = false;
+        }
+    } else {
+        allow_hit_sound = false;
+    }
+    let location = e.call(0x0067_33e0, &args![effect]).u32();
+    if location != 0 {
+        explosion_emit_decals(e, this, frame, effect, location);
+    }
+    if allow_hit_sound && e.mem.u8(this.addr() + 0xd9) == 0 {
+        explosion_play_hit_sound(e, this, frame, effect);
+    }
+    explosion_play_effect_sounds(e, this, frame, effect);
+}
+
+#[allow(dead_code)]
+fn explosion_emit_decals(
+    e: &mut Engine,
+    this: Ptr,
+    frame: &ExplosionEffectFrame,
+    effect: u32,
+    location: u32,
+) {
+    let minimum = quiet_f32(e.call(0x004a_40c0, &args![effect]).f32());
+    let maximum = quiet_f32(e.call(0x004a_40a0, &args![effect]).f32());
+    let magnitude = quiet_f32(e.call(0x0047_6b70, &args![maximum, minimum]).f32());
+    let caster = e.call(0x0062_2a70, &args![magnitude, 1u32]).u32();
+    e.call(0x0062_33c0, &args![caster, 0u32]);
+    e.call(0x004a_1a10, &args![caster, 8u32, 0u32]);
+    e.call(0x004a_1a10, &args![caster, 0x1du32, 0u32]);
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    let world = if cell == 0 {
+        0
+    } else {
+        e.call(0x0045_43c0, &args![cell]).u32()
+    };
+    if world == 0 {
+        return;
+    }
+    e.call(0x0062_31a0, &args![caster, world]);
+    e.call(0x008a_ff30, &args![frame.point(0x7c8)]);
+    e.call(
+        0x0062_3090,
+        &args![caster, frame.point(0x194), frame.point(0x7c8)],
+    );
+    let iterator = e.call(0x0041_3f40, &args![frame.point(0x7c8)]).u32();
+    let count = e.call(0x0072_6070, &args![iterator]).i32();
+    let heading = quiet_f32(e.call(0x004a_4240, &args![]).f32());
+    let random_maximum = quiet_f32(e.global::<f32>(0x0101_e570));
+    let random = quiet_f32(e.call(0x0047_6b70, &args![0.0f32, random_maximum]).f32());
+    let random = e.call(0x0040_6cc0, &args![random]).f64();
+    let random_mode = e.call(0x00ec_62c0, &args![random]).u32() as u8;
+    for index in 0..count {
+        explosion_decal_for_hit(
+            e,
+            this,
+            frame,
+            effect,
+            location,
+            magnitude,
+            heading,
+            random_mode,
+            index,
+        );
+    }
+    e.call(0x00cb_9900, &args![frame.point(0x7c8)]);
+}
+
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+fn explosion_decal_for_hit(
+    e: &mut Engine,
+    this: Ptr,
+    frame: &ExplosionEffectFrame,
+    effect: u32,
+    location: u32,
+    magnitude: f32,
+    heading: f32,
+    random_mode: u8,
+    index: i32,
+) {
+    let iterator = e.call(0x0041_3f40, &args![frame.point(0x7c8)]).u32();
+    let hit = e.call(0x0062_e150, &args![iterator, index]).u32();
+    let object = e.mem.u32(hit + 8);
+    if object == 0 {
+        return;
+    }
+    let mut part = e.mem.u32(frame.at(0x5b4));
+    let iterator = e.call(0x0041_3f40, &args![frame.point(0x7c8)]).u32();
+    let hit = e.call(0x0062_e150, &args![iterator, index]).u32();
+    let material = e.mem.u32(hit + 12);
+    if material == u32::MAX {
+        let pointer = e.call(0x0055_9450, &args![object]).u32();
+        let shape = e.call(0x004a_3a40, &args![pointer]).u32();
+        if shape == 0 {
+            return;
+        }
+        part = e.call(0x0062_05a0, &args![shape]).u32();
+    } else {
+        let pointer = e.call(0x0055_9450, &args![object]).u32();
+        let shape = e.call(0x004a_3a40, &args![pointer]).u32();
+        if shape == 0 {
+            return;
+        }
+        let body = e.vcall(shape, 0xcc, &args![]).u32();
+        if body != 0 {
+            part = e.vcall(body, 0xe0, &args![material]).u32();
+        }
+    }
+    if part != e.mem.u32(frame.at(0x5b4)) {
+        return;
+    }
+
+    let shape = e.call(0x0043_b540, &args![object]).u32();
+    let probe = e.call(0x008c_71b0, &args![frame.point(0x7f4), shape]).u32();
+    let kind = e.call(0x004a_3a20, &args![probe]).i32();
+    let dynamic_shape = kind == 1;
+    let node = if dynamic_shape {
+        let body = e.call(0x004b_59f0, &args![object]).u32();
+        if body == 0 {
+            0
+        } else {
+            let property = e
+                .call(
+                    0x00c8_5ef0,
+                    &args![frame.point(0x808), body, 0x011f_4a20u32],
+                )
+                .u32();
+            let node = e.call(0x0055_9450, &args![property]).u32();
+            if node != 0 && e.call(0x0096_11e0, &args![node]).u32() != 0 {
+                e.call(0x0096_11e0, &args![node]).u32()
+            } else {
+                node
+            }
+        }
+    } else {
+        e.call(0x00c7_fa90, &args![object]).u32()
+    };
+    let reference = e.call(0x0056_f930, &args![node]).u32();
+    if !dynamic_shape && (reference == 0 || !e.call(0x004a_1060, &args![reference, 1u32]).bool()) {
+        return;
+    }
+
+    let p = frame.at(0x194);
+    let position = [e.mem.u32(p), e.mem.u32(p + 4), e.mem.u32(p + 8)];
+    let world: u32 = e.global(0x011d_ea10);
+    let marker = e
+        .call(
+            0x0045_19d0,
+            &args![world, position[0], position[1], position[2]],
+        )
+        .u32();
+    e.call(0x004a_37b0, &args![frame.point(0x890)]);
+    copy_explosion_point(e, frame.at(0x890), this.addr() + 0xe8);
+    copy_explosion_point(e, frame.at(0x884), this.addr() + 0xf4);
+    e.mem.set_f32(frame.at(0x858), quiet_f32(magnitude));
+    e.mem.set_f32(frame.at(0x854), quiet_f32(magnitude));
+    let opacity = quiet_f32(e.call(0x008a_ff10, &args![effect]).f32());
+    e.mem.set_f32(frame.at(0x850), opacity);
+    e.mem.set_u32(frame.at(0x868), node);
+    e.mem.set_u32(frame.at(0x860), location);
+    e.mem.set_f32(frame.at(0x84c), quiet_f32(heading));
+    e.mem.set_u8(frame.at(0x820), random_mode);
+    let red = e.call(0x004a_4140, &args![effect]).u32() as u8;
+    e.mem.set_u8(frame.at(0x81b), red);
+    let green = e.call(0x004a_4180, &args![effect]).u32() as u8;
+    e.mem.set_u8(frame.at(0x81c), green);
+    let blue = e.call(0x004a_4100, &args![effect]).u32() as u8;
+    e.mem.set_u8(frame.at(0x81d), blue);
+    let scale = quiet_f32(e.call(0x004a_41c0, &args![effect]).f32());
+    e.mem.set_f32(frame.at(0x844), scale);
+    let flag = e.call(0x004a_41e0, &args![effect]).u32() as u8;
+    e.mem.set_u8(frame.at(0x81a), flag);
+    let offset = quiet_f32(e.call(0x004a_40e0, &args![effect]).f32());
+    e.mem.set_f32(frame.at(0x83c), offset);
+    let lifetime = quiet_f32(e.call(0x009a_9350, &args![effect]).f32());
+    e.mem.set_f32(frame.at(0x838), lifetime);
+    let packed = e.call(0x004a_4220, &args![effect]).u32();
+    let divisor: f64 = e.global(0x0101_e568);
+    let r = quiet_f32(((packed >> 16 & 0xff) as f64 / divisor) as f32);
+    let packed = e.call(0x004a_4220, &args![effect]).u32();
+    let divisor: f64 = e.global(0x0101_e568);
+    let g = quiet_f32(((packed >> 8 & 0xff) as f64 / divisor) as f32);
+    let packed = e.call(0x004a_4220, &args![effect]).u32();
+    let divisor: f64 = e.global(0x0101_e568);
+    let b = quiet_f32(((packed & 0xff) as f64 / divisor) as f32);
+    let colour = e
+        .call(0x0041_6870, &args![frame.point(0x8b4), b, g, r])
+        .u32();
+    copy_explosion_point(e, frame.at(0x830), colour);
+    e.call(0x004a_3fe0, &args![marker, frame.point(0x890), 1u32, 0u32]);
+}
+
+#[allow(dead_code)]
+fn explosion_play_hit_sound(e: &mut Engine, this: Ptr, frame: &ExplosionEffectFrame, effect: u32) {
+    let filename = e.vcall(effect + 0x18, 0x14, &args![]).u32();
+    if filename == 0 || e.mem.u8(filename) == 0 {
+        return;
+    }
+    e.call(0x0068_15c0, &args![frame.point(0x8c4)]);
+    let mode = e.call(0x005f_36f0, &args![effect]).u32();
+    match mode {
+        1 => {
+            let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+            let point = e
+                .call(
+                    0x0043_9ef0,
+                    &args![position, frame.point(0x8d4), frame.point(0x194)],
+                )
+                .u32();
+            copy_explosion_point(e, frame.at(0x8c4), point);
+            e.call(0x004a_0c10, &args![frame.point(0x8c4)]);
+        }
+        2 => {
+            let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+            e.call(
+                0x0043_9ef0,
+                &args![position, frame.point(0x8e0), frame.point(0x194)],
+            );
+            e.call(0x004a_0c10, &args![frame.point(0x8e0)]);
+            copy_explosion_point(e, frame.at(0x8ec), frame.at(0x1a0));
+            e.call(0x004a_0c10, &args![frame.point(0x8ec)]);
+            let dot = e
+                .call(0x004b_6190, &args![frame.point(0x8ec), frame.point(0x8e0)])
+                .f32();
+            let two: f64 = e.global(0x0101_1590);
+            let projection = quiet_f32((dot as f64 * two) as f32);
+            let scaled = e
+                .call(
+                    0x004a_3760,
+                    &args![frame.point(0x908), projection, frame.point(0x8ec)],
+                )
+                .u32();
+            let reflected = e
+                .call(
+                    0x0043_9ef0,
+                    &args![scaled, frame.point(0x8f8), frame.point(0x8e0)],
+                )
+                .u32();
+            copy_explosion_point(e, frame.at(0x8c4), reflected);
+        }
+        _ => {
+            copy_explosion_point(e, frame.at(0x8c4), frame.at(0x1a0));
+            e.call(0x004a_0c10, &args![frame.point(0x8c4)]);
+        }
+    }
+    let first = frame.at(0x8c4);
+    let second = frame.at(0x194);
+    let first = [e.mem.u32(first), e.mem.u32(first + 4), e.mem.u32(first + 8)];
+    let second = [
+        e.mem.u32(second),
+        e.mem.u32(second + 4),
+        e.mem.u32(second + 8),
+    ];
+    let volume = quiet_f32(e.call(0x0050_8100, &args![effect]).f32());
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    e.call(
+        0x0068_90b0,
+        &args![
+            cell, volume, filename, first[0], first[1], first[2], second[0], second[1], second[2],
+            1.0f32, 7u32, 0u32
+        ],
+    );
+}
+
+#[allow(dead_code)]
+fn explosion_play_effect_sounds(
+    e: &mut Engine,
+    _this: Ptr,
+    frame: &ExplosionEffectFrame,
+    effect: u32,
+) {
+    for (getter, handle_offset) in [(0x0068_a810, 0x918), (0x0068_a830, 0x928)] {
+        let filename = e.call(getter, &args![effect]).u32();
+        if filename == 0 {
+            continue;
+        }
+        let file = e.call(0x0051_1840, &args![filename]).u32();
+        let audio = e.call(0x0045_3a70, &args![]).u32();
+        e.call(
+            0x00ad_7480,
+            &args![audio, frame.point(handle_offset), file, 0x4102u32, filename],
+        );
+        let position = frame.at(0x194);
+        let xyz = [0, 4, 8]
+            .map(|offset| quiet_f32(f32::from_bits(e.mem.u32(position + offset))).to_bits());
+        e.call(
+            0x00ad_8b60,
+            &args![frame.point(handle_offset), xyz[0], xyz[1], xyz[2]],
+        );
+        e.call(0x00ad_8830, &args![frame.point(handle_offset), 0u32]);
+        e.call(0x0048_3710, &args![frame.point(handle_offset)]);
+    }
+}
+
+// Translated from 009ae6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Applies contact, hit, decal and sound effects through the PC stack frame.
+// open: compiler SEH cleanup after temporary construction/callback failure is not modeled.
+// Translation incomplete: 009ae6e0 - compiler SEH cleanup after temporary construction/callback failure
+pub fn explosion_apply_effects(e: &mut Engine, this: Ptr) {
+    let object = this.addr();
+    if e.call(0x0055_9450, &args![object + 0xa0]).u32() == 0 {
+        return;
+    }
+    if e.mem.i32(object + 0xe4) > 0 && e.mem.u8(object + 0xd6) != 0 && e.mem.u8(object + 0xd7) == 0
+    {
+        fn_009afef0(e, this);
+    }
+    if e.mem.u8(object + 0xd5) == 0 || e.mem.u8(object + 0xd4) != 0 {
+        return;
+    }
+    e.mem.set_u8(object + 0xd4, 1);
+
+    e.with_stack(0x948, |e, block| {
+        let frame = ExplosionEffectFrame {
+            ebp: (block.addr() + 0x938 + 15) & !15,
+        };
+        let collider_capacity_slot = e.call(0x0043_d4d0, &args![0x011d_10a4u32]).u32();
+        let collider_capacity = e.mem.u32(collider_capacity_slot);
+        fn_009b2cb0(e, frame.point(0x28), collider_capacity);
+        let collider_capacity_slot = e.call(0x0043_d4d0, &args![0x011d_10a4u32]).u32();
+        let collider_capacity = e.mem.u32(collider_capacity_slot);
+        let collider_buffer = e.call(0x0055_9450, &args![frame.point(0x28)]).u32();
+        fn_009afaf0(e, frame.point(0x40), collider_buffer, collider_capacity);
+        e.call(0x00cb_d960, &args![]);
+        let phantom = e.call(0x0055_9450, &args![object + 0xa0]).u32();
+        e.call(0x00c9_f1e0, &args![phantom, frame.point(0x40)]);
+        let has_contacts = fn_009afc70(e, frame.point(0x40), frame.at(0x41));
+        if e.call(0x0056_09f0, &args![has_contacts]).bool() {
+            let count = e.call(0x009a_fc50, &args![frame.point(0x40)]).i32();
+            let records: Ptr = e.call(0x0055_9450, &args![frame.point(0x28)]).ptr();
+            e.call(0x009b_2e00, &args![records, count]);
+        }
+
+        let debug_level_slot = e.call(0x0043_d4d0, &args![0x011d_0a78u32]).u32();
+        if e.mem.i32(debug_level_slot) > 1 {
+            let mut index = 0;
+            while index < fn_009afc50(e, frame.point(0x40)) as i32 {
+                let records = fn_009afc30(e, frame.point(0x40));
+                let row = records
+                    .addr()
+                    .wrapping_add((index as u32).wrapping_mul(0x70));
+                e.call(0x0063_2d40, &args![frame.point(0xc0), row]);
+                e.call(0x0068_15c0, &args![frame.point(0xcc)]);
+                let source = e.call(0x0068_15c0, &args![frame.point(0xc0)]).u32();
+                e.call(0x0045_8620, &args![frame.point(0xcc), source]);
+                e.call(0x0068_15c0, &args![frame.point(0xd8)]);
+                let source = e.call(0x0046_0140, &args![frame.point(0xc0)]).u32();
+                e.call(0x004a_3970, &args![frame.point(0xd8), source]);
+                explosion_debug_contact(e, &frame);
+                index += 1;
+            }
+        }
+
+        let mut found = false;
+        let mut index = 0;
+        while !found && index < fn_009afc50(e, frame.point(0x40)) as i32 {
+            let records = fn_009afc30(e, frame.point(0x40));
+            let row = records
+                .addr()
+                .wrapping_add((index as u32).wrapping_mul(0x70));
+            e.call(0x0063_2d40, &args![frame.point(0x180), row]);
+            let collidable = e.mem.u32(frame.at(0x138));
+            if collidable != 0 {
+                let object_3d = e.call(0x004b_5820, &args![collidable]).u32();
+                let reference = e.call(0x0056_f930, &args![object_3d]).u32();
+                if reference == 0 || !e.vcall(reference, 0x100, &args![]).bool() {
+                    explosion_scan_contact(e, this, &frame, object_3d, &mut found);
+                }
+            }
+            index += 1;
+        }
+        if e.mem.u8(object + 0xd5) != 0 && e.mem.u8(object + 0xd6) == 0 {
+            // 009b00a0 has not yet been translated in this unit.
+            e.call(0x009b_00a0, &args![this]);
+        }
+        fn_009afc10(e, frame.point(0x40));
+        fn_009b2d30(e, frame.point(0x28));
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::Cell;
     use std::rc::Rc;
+
+    #[test]
+    fn effect_flow_early_gates_and_empty_contact_cleanup() {
+        let mut e = Engine::new();
+        e.map(0x1000, 0x1000);
+        e.map(0x7000, 0x1000);
+        e.map(0x8000, 0x1000);
+        e.call_log = Some(vec![]);
+        e.register(0x0055_9450, |e, a| e.mem.u32(a[0]).into_ret());
+        let this = Ptr::new(0x1000);
+        explosion_apply_effects(&mut e, this);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        e.mem.set_u32(0x10a0, 0x6000);
+        explosion_apply_effects(&mut e, this);
+        assert_eq!(e.mem.u8(0x10d4), 0);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+
+        for address in [
+            0x0062_99a0,
+            0x00c8_5750,
+            0x0068_15c0,
+            0x0062_1060,
+            0x00cb_d960,
+            0x00c9_f1e0,
+            0x009b_00a0,
+            0x0062_1100,
+            0x0062_6870,
+            0x005e_0b60,
+            0x0062_1b60,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(0x0043_d4d0, |_, a| {
+            match a[0] {
+                0x011d_10a4 => 0x8000u32,
+                0x011d_0a78 => 0x8004u32,
+                _ => panic!("setting address"),
+            }
+            .into_ret()
+        });
+        e.register(0x005e_0ad0, |_, _| 0x7000u32.into_ret());
+        e.register(0x0053_7e90, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(0x0045_8b50, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(0x0062_2570, |e, a| {
+            e.mem.set_u8(a[0], u8::from(a[1] != 0));
+            a[0].into_ret()
+        });
+        e.register(0x0056_09f0, |e, a| e.mem.u8(a[0]).into_ret());
+        e.mem.set_u8(0x10d5, 1);
+        explosion_apply_effects(&mut e, this);
+        assert_eq!(e.mem.u8(0x10d4), 1);
+        let calls = e.call_log.as_ref().unwrap();
+        let targets = calls.iter().position(|call| call.0 == 0x009b_00a0).unwrap();
+        let collector_cleanup = calls.iter().position(|call| call.0 == 0x0062_1100).unwrap();
+        let storage_cleanup = calls.iter().position(|call| call.0 == 0x005e_0b60).unwrap();
+        assert!(targets < collector_cleanup && collector_cleanup < storage_cleanup);
+        let calls_before = calls.len();
+        explosion_apply_effects(&mut e, this);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), calls_before + 1);
+    }
+
+    #[test]
+    fn effect_flow_sorts_returned_contact_storage() {
+        let mut e = Engine::new();
+        e.map(0x1000, 0x1000);
+        e.map(0x7000, 0x1000);
+        e.map(0x8000, 0x1000);
+        e.mem.set_u32(0x10a0, 0x6000);
+        e.mem.set_u8(0x10d5, 1);
+        e.mem.set_u8(0x10d6, 1);
+        e.register(0x0055_9450, |e, a| e.mem.u32(a[0]).into_ret());
+        for address in [
+            0x0062_99a0,
+            0x00c8_5750,
+            0x0068_15c0,
+            0x0062_1060,
+            0x00cb_d960,
+            0x0063_2d40,
+            0x0062_1100,
+            0x0062_6870,
+            0x005e_0b60,
+            0x0062_1b60,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(0x0043_d4d0, |_, a| {
+            match a[0] {
+                0x011d_10a4 => 0x8000u32,
+                0x011d_0a78 => 0x8004u32,
+                _ => panic!("setting address"),
+            }
+            .into_ret()
+        });
+        e.register(0x005e_0ad0, |_, _| 0x7000u32.into_ret());
+        e.register(0x0053_7e90, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(0x00c9_f1e0, |e, a| {
+            e.mem.set_u32(a[1] + 0x14, 1);
+            Ret::default()
+        });
+        e.register(0x0045_8b50, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(0x0062_2570, |e, a| {
+            e.mem.set_u8(a[0], u8::from(a[1] != 0));
+            a[0].into_ret()
+        });
+        e.register(0x0056_09f0, |e, a| e.mem.u8(a[0]).into_ret());
+        let count_calls = Rc::new(Cell::new(0));
+        let count_calls_for_double = count_calls.clone();
+        e.register_double(0x009a_fc50, move |_, _| {
+            let calls = count_calls_for_double.get();
+            count_calls_for_double.set(calls + 1);
+            u32::from(calls == 0).into_ret()
+        });
+        e.register(0x009b_2e00, |_, a| {
+            assert_eq!(a, &[0x7000, 1]);
+            Ret::default()
+        });
+        explosion_apply_effects(&mut e, Ptr::new(0x1000));
+        assert_eq!(count_calls.get(), 1);
+        assert_eq!(e.mem.u8(0x10d4), 1);
+    }
+
+    #[test]
+    fn effect_distance_gate_includes_equal_greater_and_unordered() {
+        for (distance, expect_probe) in
+            [(2.0f64, false), (1.0, true), (0.5, true), (f64::NAN, true)]
+        {
+            let mut e = Engine::new();
+            e.map(0x1000, 0x1000);
+            e.map(0x8000, 0x2000);
+            e.map(0x0101_e000, 0x1000);
+            e.mem.set_f32(0x9000, 1.0);
+            e.mem.set_f32(0x0101_e340, 40.0);
+            e.mem.set_u8(0x10d9, 1);
+            e.call_log = Some(vec![]);
+            e.register(0x0043_90c0, |_, _| false.into_ret());
+            e.register(0x0043_d4d0, |_, _| 0x8000u32.into_ret());
+            e.register(0x0041_81e0, |_, _| 0x6000u32.into_ret());
+            e.register(0x004f_b7d0, |_, _| 0x6100u32.into_ret());
+            e.register(0x0052_4c90, |_, _| 0x6200u32.into_ret());
+            e.register(0x0045_bb80, |_, _| 0x6300u32.into_ret());
+            e.register(0x0043_9ef0, |_, _| 0x6400u32.into_ret());
+            e.register(0x0052_5420, |_, _| false.into_ret());
+            e.register_double(0x0045_7990, move |_, _| Ret {
+                st0: distance,
+                ..Ret::default()
+            });
+            e.register(0x0040_3e20, |_, _| 0x9000u32.into_ret());
+            e.register(0x004b_61d0, |_, _| true.into_ret());
+            e.register(0x0067_33e0, |_, _| 0u32.into_ret());
+            e.register(0x0068_a810, |_, _| 0u32.into_ret());
+            e.register(0x0068_a830, |_, _| 0u32.into_ret());
+            let mut found = false;
+            e.with_stack(0x948, |e, block| {
+                let frame = ExplosionEffectFrame {
+                    ebp: (block.addr() + 0x938 + 15) & !15,
+                };
+                explosion_hit_effect(e, Ptr::new(0x1000), &frame, &mut found);
+            });
+            assert!(found);
+            let probed = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|call| call.0 == 0x004b_61d0);
+            assert_eq!(probed, expect_probe, "distance {distance}");
+        }
+    }
+
+    #[test]
+    fn hit_sound_snapshots_both_vectors_before_callbacks() {
+        let mut e = Engine::new();
+        e.map(0x5000, 0x1000);
+        e.map(0x6000, 0x1000);
+        e.mem.set_u8(0x5000, b'h');
+        let mut slots = vec![0; 0x14 / 4 + 1];
+        slots[0x14 / 4] = 0x7000;
+        e.put_vtable(0x3000, &slots);
+        e.mem.set_u32(0x6118, 0x3000);
+        e.register(0x7000, |_, _| 0x5000u32.into_ret());
+        e.register(0x0068_15c0, |_, _| Ret::default());
+        e.register(0x005f_36f0, |_, _| 0u32.into_ret());
+        e.register(0x004a_0c10, |_, _| Ret::default());
+        e.register(0x008d_6f30, |_, _| 0x7777u32.into_ret());
+        e.register(0x0068_90b0, |_, a| {
+            assert_eq!(
+                a,
+                &[
+                    0x7777,
+                    0.5f32.to_bits(),
+                    0x5000,
+                    4.0f32.to_bits(),
+                    5.0f32.to_bits(),
+                    6.0f32.to_bits(),
+                    1.0f32.to_bits(),
+                    2.0f32.to_bits(),
+                    3.0f32.to_bits(),
+                    1.0f32.to_bits(),
+                    7,
+                    0,
+                ]
+            );
+            Ret::default()
+        });
+        e.with_stack(0x948, |e, block| {
+            let frame = ExplosionEffectFrame {
+                ebp: (block.addr() + 0x938 + 15) & !15,
+            };
+            for (offset, values) in [(0x194, [1.0f32, 2.0, 3.0]), (0x1a0, [4.0f32, 5.0, 6.0])] {
+                for (index, value) in values.into_iter().enumerate() {
+                    e.mem.set_f32(frame.at(offset) + index as u32 * 4, value);
+                }
+            }
+            let first = frame.at(0x8c4);
+            let second = frame.at(0x194);
+            e.register_double(0x0050_8100, move |e, _| {
+                e.mem.set_f32(first, 99.0);
+                e.mem.set_f32(second, 98.0);
+                Ret {
+                    st0: 0.5,
+                    ..Ret::default()
+                }
+            });
+            explosion_play_hit_sound(e, Ptr::new(0x1000), &frame, 0x6100);
+        });
+    }
+
+    #[test]
+    fn decal_iterator_getter_leaves_index_for_entry_lookup() {
+        let mut e = Engine::new();
+        e.map(0x6000, 0x1000);
+        e.call_log = Some(vec![]);
+        e.register(0x0041_3f40, |_, _| 0x5000u32.into_ret());
+        e.register(0x0062_e150, |_, _| 0x6000u32.into_ret());
+        e.with_stack(0x948, |e, block| {
+            let frame = ExplosionEffectFrame {
+                ebp: (block.addr() + 0x938 + 15) & !15,
+            };
+            explosion_decal_for_hit(e, Ptr::new(0x1000), &frame, 0, 0, 0.0, 0.0, 0, 3);
+            assert_eq!(
+                e.call_log.as_ref().unwrap(),
+                &vec![
+                    (0x0041_3f40, vec![frame.at(0x7c8)]),
+                    (0x0062_e150, vec![0x5000, 3]),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn decal_record_stores_colour_between_callbacks_and_reloads_divisor() {
+        let mut e = Engine::new();
+        e.map(0x1000, 0x1000);
+        e.map(0x5000, 0x4000);
+        e.map(0x0101_e000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_u32(0x6008, 0x7000);
+        e.mem.set_u32(0x600c, u32::MAX);
+        for (address, result) in [
+            (0x0041_3f40, 0x5000u32),
+            (0x0062_e150, 0x6000),
+            (0x0055_9450, 0x7100),
+            (0x004a_3a40, 0x7200),
+            (0x0062_05a0, 0x44),
+            (0x0043_b540, 0x7200),
+            (0x008c_71b0, 0x7300),
+            (0x004a_3a20, 0),
+            (0x00c7_fa90, 0x7400),
+            (0x0056_f930, 0x7500),
+            (0x004a_1060, 1),
+            (0x0045_19d0, 0x7600),
+        ] {
+            e.register_double(address, move |_, _| result.into_ret());
+        }
+        e.register(0x004a_37b0, |_, _| Ret::default());
+        e.register(0x008a_ff10, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        e.register(0x004a_4140, |_, _| 0x11u32.into_ret());
+        for address in [0x004a_41c0, 0x004a_40e0, 0x009a_9350] {
+            e.register(address, |_, _| Ret {
+                st0: 0.25,
+                ..Ret::default()
+            });
+        }
+        e.register(0x004a_41e0, |_, _| 0u32.into_ret());
+        e.with_stack(0x948, |e, block| {
+            let frame = ExplosionEffectFrame {
+                ebp: (block.addr() + 0x938 + 15) & !15,
+            };
+            e.mem.set_u32(frame.at(0x5b4), 0x44);
+            let red = frame.at(0x81b);
+            let green = frame.at(0x81c);
+            e.register_double(0x004a_4180, move |e, _| {
+                assert_eq!(e.mem.u8(red), 0x11);
+                0x22u32.into_ret()
+            });
+            e.register_double(0x004a_4100, move |e, _| {
+                assert_eq!(e.mem.u8(green), 0x22);
+                0x33u32.into_ret()
+            });
+            let getter_count = Rc::new(Cell::new(0));
+            let getter_count_for_double = getter_count.clone();
+            e.register_double(0x004a_4220, move |e, _| {
+                let count = getter_count_for_double.get();
+                getter_count_for_double.set(count + 1);
+                e.mem.set_f64(0x0101_e568, [255.0, 127.5, 85.0][count]);
+                0x00ff_ffffu32.into_ret()
+            });
+            let output = frame.at(0x830);
+            e.register_double(0x0041_6870, move |e, args| {
+                assert_eq!(
+                    &args[1..],
+                    &[3.0f32.to_bits(), 2.0f32.to_bits(), 1.0f32.to_bits()]
+                );
+                for (index, value) in [3.0f32, 2.0, 1.0].into_iter().enumerate() {
+                    e.mem.set_f32(0x7800 + index as u32 * 4, value);
+                }
+                0x7800u32.into_ret()
+            });
+            e.register(0x004a_3fe0, |_, args| {
+                assert_eq!(args[0], 0x7600);
+                assert_eq!(&args[2..], &[1, 0]);
+                Ret::default()
+            });
+            explosion_decal_for_hit(e, Ptr::new(0x1000), &frame, 0x9000, 0x9100, 0.5, 0.0, 0, 0);
+            assert_eq!(getter_count.get(), 3);
+            assert_eq!(e.mem.f32(output), 3.0);
+        });
+    }
 
     fn engine_with(addrs: &[u32]) -> Engine {
         let mut e = Engine::new();

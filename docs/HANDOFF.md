@@ -7,15 +7,52 @@ machinery runs.
 
 ## Resume here
 
+Rolling #126 passed both checks and merged as `97e7572` at 02:47 local.
+`ship.sh 126` completed; attached rolling #127 is at `cb42c4d` with fresh
+CI, containing MobileObject collection now `7a1f056` and loader collection
+now `43a8ee1`. Save-buffer #125 passed both checks and merged `68387b4`
+at 03:04 local. Inventory writer follow-on is open/attached as #128 at
+`4b68ea0`, with fresh CI after rebasing onto #125. Its branch is
+`codex/phase2-inventory-payload`. Final session `30664` passed 15,691 core tests (13,838
+engine), strict lint, formatting and release/debug builds. Seventeen
+dependencies now let the real-registry writer produce a 41-byte payload
+with delta -2 and two separate count/condition stacks (2/42.5 and 7/17.5).
+The payload decoder consumes it fully and the save-ID map resolves the
+item correctly. No FOS file, native load round trip or world consumer yet.
+Private evidence: `codex-audit/inventory-buffer-*` and
+`inventory-next-native*`; ten generated native vectors pass.
+The managed phase2-extra-data checkout now uses `codex/phase2-inventory-load`,
+based on #128. Its two dirty unit files are `bgsloadgamebuffer.rs` and
+`bgsloadformbuffer.rs`: eleven reader helpers and eight tests, uncompiled.
+Peer review is clean and ten generated native reader vectors pass.
+`inventory-load-probe.rs` and its runner are prepared, unrun. The fuller
+`inventory-item-load-probe.rs` also exercises the ItemChange loader through
+the real form map and installed RTTI, with a generated TESBoundObject header;
+it is prepared but unrun. `check-inventory-load.ps1` serializes root checks.
+Scoped stash
+`9e0dd23` has been applied and retained; do not apply it again.
+
 Latest batch: animation loader source `99fb056` collected as `6c569b7`;
 13,879 combined engine tests, strict lint and formatting pass. All 44
 unit entries have normal behavior; only SEH cleanup at `005f21c0`,
 `005f22d0`, `005f3a20` remains partial. Reviewed partial-only advancement
 retains these gaps. Fresh `/root/a03_hudmainmenu` immediately started b0236,
-HUDMainMenu, compiler held. Root now owns the compiler: session `34376`,
-private `codex-audit/check-inventory-buffer.ps1`, then the prepared
-`run-inventory-buffer-probe.ps1`. a04's six-test effect batch waits next;
-a01 continues the full movement body, then has its compiler turn.
+HUDMainMenu, compiler held. Explosion `009ae6e0` source `64750e3` was
+collected as `b9871e9` at 03:13 local: 113 focused, 13,830 source engine,
+49 hygiene and 13,885 combined engine tests plus doc, lint and fmt pass.
+Only compiler SEH cleanup is partial. Fresh `/root/a04_round13` immediately
+started `009b00a0`, then `009b1810`, compiler held. a01 now owns the compiler;
+then a03 and root. All six larger movement bodies have drafts and tests;
+Move is now registered after the vector/control-flow review and 65 focused
+tests pass; full engine checks are underway. a03 now has 40 registered HUD
+bodies and 45 tests, Create and DoIdle SEH-only partials, and awaits its
+compiler grant. Both remaining explosion bodies are drafted and under review.
+ProcessTargets has no PC exception frame; its mistaken SEH partial marker
+is being removed. RunLOSPick retains its actual compiler-cleanup partial.
+Review corrections include vector
+receiver/output argument order, post-callback globals and x87 boundaries.
+Root reader validation waits after the slots. Build 40 remains
+current; no reliable next-build date or confirmed feature list exists yet.
 
 User resumed after the usage reset on 2026-10-11. Continuous translation
 is active: collect each finished, committed slot with `cycle.sh NN 0 0`,

@@ -33,6 +33,20 @@ reading do not establish them.
 
 ## Active work: M1
 
+Rolling #126 merged `97e7572` after both CI checks; #127 publishes the
+collected movement helpers and animation loader with fresh CI. Inventory
+follow-on #128 (`4b68ea0`) passes 15,691 core tests, strict lint, formatting and
+release/debug builds. Its real-registry probe preserves two separate
+count/condition stacks in a 41-byte payload. Native loading and a world
+consumer remain unfinished. Build 40 remains current.
+Save-buffer #125 merged `68387b4` after both CI checks. Eleven reader
+helpers are peer-reviewed with ten matching native vectors, uncompiled.
+Next action: validate loading and the two-stack native reader probe;
+Explosion effects collected as `b9871e9`: 13,885 combined engine tests,
+strict lint and formatting pass; compiler SEH cleanup stays partial.
+A fresh worker immediately started the next explosion body. Movement now
+validates, then HUD and the inventory reader.
+
 Animation loader collected as `6c569b7`: 13,879 combined engine tests,
 strict lint and formatting pass. Three compiler-cleanup partials remain
 explicit; a fresh worker immediately started HUDMainMenu. Root now validates
