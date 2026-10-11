@@ -70,7 +70,7 @@ verify the private probes. CI still gates merging the PR.
 
 ## Open boundary
 
-Payload conversion, reference/form adapters, arena lifetime, viewer state
+Payload conversion, reference creation/ownership, arena lifetime, viewer state
 ownership and save serialization are not implemented by this step. The
 save reader's `Extra::Other` representation discards payloads, so successful
 decoding cannot prove preservation of unsupported data. Do not replace the
@@ -149,3 +149,44 @@ base, all 15,315 core tests (13,462 engine), formatting, workspace clippy
 with warnings denied and the release build pass. This also validates the
 unchanged count source in the health follow-on. CI still gates merging.
 No world/viewer consumer or save writer is added.
+
+## Existing-reference boundary, 2026-10-11
+
+`engine::reference::Reference` adapts an initialized `TESObjectREFR`
+(Xbox PDB) in an explicitly supplied engine. Its `extra_data` accessor
+dispatches to PC `005d43c0`, which returns the embedded list at +0x44.
+Copies alias the same reference. Null is rejected; address validity,
+object type and lifetime remain the caller's responsibility. No public
+constructor or automatic destructor is added.
+
+The PC reference constructor `0055a2f0` reaches form-header, map, array,
+allocator and counter dependencies. The added translations retain their
+individual PC addresses. Native generated vectors check five header
+cases, two zero-capacity arrays and three allocator-header cases. Generated
+tests check allocation requests separately from platform backing size:
+requests of 4 and 13 bytes have 8- and 16-byte backing blocks. Callback
+regressions verify reloading the form data-handler pointer and map bucket
+count after calls that can change them. Compiler exception cleanup remains
+explicitly partial in the affected form/reference constructors.
+
+The private installed-executable probe initialized the allocator sequence
+from PC `00866690` through `00aa2020`, then ran reference construction,
+embedded-list access, count/health updates and count removal through the
+real registry. No game-function doubles or game-file writes were used.
+This covers that allocator sequence only: the later system-utility startup
+has not been reproduced. `Engine::with_exe` maps executable data; it does
+not perform that startup by itself.
+
+On the merged #120 base, all 15,587 core tests pass (13,734 engine),
+including the new reference alias/isolation regression. Workspace clippy
+with warnings denied, formatting, release and debug builds also pass.
+The updated installed-executable probe uses the new handle and passes
+construction, embedded-list access, count/health changes and count removal
+while preserving health. An independent source review found no concrete
+issues in the adapter; it did not independently run the private probe.
+No world/viewer integration or save round trip is established.
+
+Next action: exercise count and health through the translated buffered
+save path (`00426a30`). Its `BGSSaveGameBuffer` / `BGSSaveFormBuffer`
+(Xbox PDB) dependencies are still scaffolds; begin with their PC
+constructors and buffer-writing methods before exposing save operations.

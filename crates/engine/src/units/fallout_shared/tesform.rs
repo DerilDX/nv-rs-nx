@@ -443,6 +443,7 @@ fn find_in_form_list(e: &mut Engine, form: Ptr<TESForm>) -> Option<u32> {
 /// string table once, gives the form flags 8 and, when the data handler
 /// exists and its flag byte is clear, takes the next form ID (and the
 /// handler's current file), then registers the form in the form map.
+// Translation incomplete: 00483370 - compiler exception-unwind cleanup remains omitted.
 pub fn tes_form_tes_form(e: &mut Engine, this: Ptr<TESForm>) -> Ptr<TESForm> {
     e.call(BASE_CONSTRUCT, &args![this]);
     e.mem.set_u32(this.addr(), TES_FORM_VTABLE);
@@ -465,9 +466,14 @@ pub fn tes_form_tes_form(e: &mut Engine, this: Ptr<TESForm>) -> Ptr<TESForm> {
 
     let handler = e.global::<u32>(DATA_HANDLER);
     if handler != 0 && !e.call(DATA_HANDLER_FLAG, &args![handler]).bool() {
+        // PC 00483555 reloads the singleton after the flag callback.
+        let handler = e.global::<u32>(DATA_HANDLER);
         let id = e.call(DATA_HANDLER_GET_NEXT_ID, &args![handler]).u32();
         e.set(this, TESForm::iFormID, id);
+        // PC 00483566 reloads again after GetNextID.
+        let handler = e.global::<u32>(DATA_HANDLER);
         if fn_004835e0(e, handler) != 0 {
+            let handler = e.global::<u32>(DATA_HANDLER);
             let file = fn_004835e0(e, handler);
             e.call(SET_FILE, &args![this, file]);
         }
@@ -654,6 +660,7 @@ pub fn tes_form_get_form_by_editor_id(e: &mut Engine, editor_id: Ptr) -> Ptr<TES
 // Translated from 00483a50 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Creates the form map (0x2008d buckets), the editor ID map (0xfa1 buckets)
 /// and the form array (capacity 0x20), each only if it does not exist yet.
+// Translation incomplete: 00483a50 - compiler exception-unwind cleanup remains omitted.
 pub fn fn_00483a50(e: &mut Engine) {
     if e.global::<u32>(FORM_MAP) == 0 {
         let block = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
@@ -2288,7 +2295,9 @@ pub fn fn_00486990(e: &mut Engine, this: Ptr, buckets: u32) -> Ptr {
     e.mem.set_u32(base + 0xc, 0);
     let array = e.call(ALLOCATE_BUCKETS, &args![buckets << 2]).u32();
     e.mem.set_u32(base + 8, array);
-    e.call(MEMSET, &args![array, 0u32, buckets << 2]);
+    // PC 004869d6 reloads the count after the allocation callback.
+    let bytes = e.mem.u32(base + 4).wrapping_shl(2);
+    e.call(MEMSET, &args![array, 0u32, bytes]);
     this
 }
 
@@ -2713,6 +2722,41 @@ mod tests {
         assert_eq!(e.get(other, TESForm::iFormID), 0);
         assert!(calls_to(&log, SET_FILE).is_empty());
         assert!(calls_to(&log, MAP_SET_AT).is_empty());
+    }
+
+    #[test]
+    fn constructor_reloads_data_handler_after_flag_and_id_callbacks() {
+        let mut e = constructor_engine();
+        e.set_global(FORM_TABLE_CHECKED, 1u8);
+        e.set_global(FORM_COUNT, 1u32);
+        e.set_global(FORM_MAP, 0x7700_0000u32);
+        let first = e.mem.alloc(0x640);
+        let second = e.mem.alloc(0x640);
+        let third = e.mem.alloc(0x640);
+        e.mem.set_u32(first + 0x20c, 0x1111);
+        e.mem.set_u32(second + 0x20c, 0x2222);
+        e.mem.set_u32(third + 0x20c, 0x3333);
+        e.set_global(DATA_HANDLER, first);
+        e.register_double(DATA_HANDLER_FLAG, move |e, args| {
+            assert_eq!(args, &[first]);
+            e.set_global(DATA_HANDLER, second);
+            ret(0)
+        });
+        e.register_double(DATA_HANDLER_GET_NEXT_ID, move |e, args| {
+            assert_eq!(args, &[second]);
+            e.set_global(DATA_HANDLER, third);
+            ret(0x1000)
+        });
+        let form: Ptr<TESForm> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x00483370, &args![form]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.get(form, TESForm::iFormID), 0x1000);
+        assert_eq!(calls_to(&log, SET_FILE), vec![vec![form.addr(), 0x3333]]);
+        assert_eq!(
+            calls_to(&log, MAP_SET_AT),
+            vec![vec![0x77000000, 0x1000, form.addr()]]
+        );
     }
 
     #[test]
@@ -5290,6 +5334,23 @@ mod tests {
         let buckets = e.mem.u32(map + 8);
         assert_eq!(calls_to(&log, ALLOCATE_BUCKETS), vec![vec![20]]);
         assert_eq!(calls_to(&log, MEMSET), vec![vec![buckets, 0, 20]]);
+    }
+
+    #[test]
+    fn map_base_constructor_reloads_count_after_allocation() {
+        let mut e = Engine::new();
+        let map = e.mem.alloc(0x14);
+        let buffer = e.mem.alloc(16);
+        e.mem.write(buffer, &[0xcc; 16]);
+        e.register_double(ALLOCATE_BUCKETS, move |e, args| {
+            assert_eq!(args, &[4]); // Native 32-bit SHL wraps.
+            e.mem.set_u32(map + 4, 3);
+            ret(buffer)
+        });
+        assert_eq!(e.call(0x00486990, &[map, 0x40000001]).u32(), map);
+        assert_eq!(e.mem.u32(map + 8), buffer);
+        assert_eq!(e.mem.bytes(buffer, 12), [0; 12]);
+        assert_eq!(e.mem.bytes(buffer + 12, 4), [0xcc; 4]);
     }
 
     #[test]

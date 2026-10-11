@@ -800,6 +800,7 @@ pub fn ni_t_pointer_map_tes_object_refr_p_bool_delete_item(e: &mut Engine, this:
 /// cell and random sound.
 ///
 /// The compiler's exception-unwinding frame is not translated.
+// Translation incomplete: 0055a2f0 - compiler exception-unwind cleanup remains omitted.
 pub fn tes_object_refr_tes_object_refr(
     e: &mut Engine,
     this: Ptr<TESObjectREFR>,
@@ -1169,8 +1170,7 @@ pub fn fn_0055ac80(e: &mut Engine) {
 /// Resets the reference's `OBJ_REFR` data (all but the base object pointer
 /// is zeroed), its scale to 1.0 and, if it has loaded data, the water object
 /// and water height; then, unless the loading object says the game is
-/// loading (`004121b0`), restores the leveled creature's original base
-/// (`0057c300`).
+/// loading (`004121b0`), destroys the loaded-data object (`0057c300`).
 pub fn fn_0055ac90(e: &mut Engine, this: Ptr<TESObjectREFR>) {
     let data = this.at(TESObjectREFR::data);
     let base = e.get(data, OBJ_REFR::pObjectReference);

@@ -83,6 +83,7 @@ pub mod extradatalist_p5;
 pub mod extradataobjects;
 pub mod extradataobjects_p2;
 pub mod extradataobjects_p3;
+pub mod form_support;
 pub mod formcomponentcollection;
 pub mod foscriptfunctions;
 pub mod gameplayformulas;
@@ -580,6 +581,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(extradataobjects::funcs());
     out.extend(extradataobjects_p2::funcs());
     out.extend(extradataobjects_p3::funcs());
+    out.extend(form_support::funcs());
     out.extend(formcomponentcollection::funcs());
     out.extend(foscriptfunctions::funcs());
     out.extend(gameplayformulas::funcs());
