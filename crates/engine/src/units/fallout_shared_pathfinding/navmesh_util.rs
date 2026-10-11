@@ -10,8 +10,12 @@
 //! is the mesh) or of its embedded search grid at `NavMesh + 0xA8`
 //! ([`NavMeshGrid`], `this` is the grid).
 //!
-//! Translated so far (address order): everything up to and including
-//! `00698620` (40 functions); the next session continues at `00698680`.
+//! This continuation covers the next 40 queue entries after `00698620`:
+//! 36 functions are translated below; `006987d0`, `006997e0`, `00699b60`,
+//! and `0069aa20` are skipped because their large geometry/edge mutation
+//! bodies remain unresolved. A continuation must resume at `006987d0`; if
+//! those four are completed, the next queue entry after this window is
+//! `0069af10`.
 //!
 //! Conventions in this file:
 //! - Methods the engine map leaves unnamed are `fn_<address>`, named by what
@@ -2005,6 +2009,568 @@ pub fn fn_00698620(e: &mut Engine, this: Ptr, result: Ptr, other: Ptr) -> Ptr {
     result
 }
 
+// Translated from 00698680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the quadrant code of a 2D point: x-negative toggles bit 0 and
+/// y-negative sets bits 0 and 1. The comparisons are strict, so zero is
+/// treated as nonnegative.
+pub fn fn_00698680(e: &mut Engine, this: Ptr) -> u32 {
+    let mut result = 0;
+    if e.mem.f32(this.addr() + 4) < 0.0 {
+        result ^= 3;
+    }
+    if e.mem.f32(this.addr()) < 0.0 {
+        result ^= 1;
+    }
+    result
+}
+
+// Translated from 006986d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ensures a navmesh info entry exists for `this`. It asks the navmesh map
+/// to add one only when the mesh has no info yet, then pauses the map.
+pub fn fn_006986d0(e: &mut Engine, this: Ptr) -> bool {
+    let allocator_state = e.call(0x0084_e3a0, &args![this]).u32();
+    let tes = e.global::<Ptr>(TES_INSTANCE);
+    let map = e.call(0x0045_af00, &args![tes]).ptr::<Ptr>();
+    let info = e
+        .call(0x0069_3d70, &args![map, allocator_state])
+        .ptr::<Ptr>();
+    if !e.call(0x0068_efb0, &args![this]).bool() {
+        let allocation = e.call(0x0040_1000, &args![0x5cu32]).u32();
+        let created = if allocation == 0 {
+            Ptr::NULL
+        } else {
+            e.call(0x006b_46a0, &args![allocation]).ptr::<Ptr>()
+        };
+        e.call(0x006b_5560, &args![created, this]);
+        e.call(0x006d_3100, &args![this, created]);
+        e.call(0x005a_8040, &args![created, this]);
+        let tes = e.global::<Ptr>(TES_INSTANCE);
+        let map = e.call(0x0045_af00, &args![tes]).ptr::<Ptr>();
+        e.call(0x006b_6940, &args![map, created]);
+        true
+    } else {
+        e.call(0x006b_5560, &args![info, this]);
+        false
+    }
+}
+
+// Translated from 00698f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the obstacle cutter for this mesh and destroys its 0x4c-byte local
+/// cutter object afterward.
+pub fn nav_mesh_add_obstacle(e: &mut Engine, this: Ptr<NavMesh>, obstacle: Ptr, data: Ptr) -> bool {
+    e.with_stack(0x4c, |e, cutter| {
+        e.call(0x006b_bb80, &args![cutter]);
+        let result = e
+            .call(0x006b_bd30, &args![cutter, this, obstacle, data])
+            .bool();
+        e.call(0x006b_bc50, &args![cutter]);
+        result
+    })
+}
+
+// Translated from 00699000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the indexed obstacle undo record. If it is the newest entry, it
+/// is undone when its state is 1, then deleted and removed. Older entries
+/// are left in place when their referenced triangle range is empty; otherwise
+/// later records are undone and replayed in index order.
+pub fn fn_00699000(e: &mut Engine, this: Ptr<NavMesh>, index: u32, context: Ptr) -> u32 {
+    let array = this.byte_add(0xd0);
+    let record_at = |e: &mut Engine, index| {
+        let entry = e.call(ARRAY_ELEMENT_4, &args![array, index]).u32();
+        e.call(POINTER_GET, &args![entry]).ptr::<Ptr>()
+    };
+    let size = e.call(ARRAY_SIZE, &args![array]).u32();
+    let record = record_at(e, index);
+    if index == size.wrapping_sub(1) {
+        e.with_stack(0x4c, |e, cutter| {
+            e.call(0x006b_bb80, &args![cutter]);
+            if e.mem.u32(record.addr() + 8) == 1 {
+                e.call(0x006b_c3e0, &args![cutter, this, record, context]);
+            }
+            e.call(0x006b_c8e0, &args![cutter, this, record]);
+            fn_00699590(e, this, index);
+            e.call(0x006b_bc50, &args![cutter]);
+        });
+    } else if fn_00699690(e, this, record.cast()) == 0 {
+        e.with_stack(0x4c, |e, cutter| {
+            e.call(0x006b_bb80, &args![cutter]);
+            if e.mem.u32(record.addr() + 8) == 1 {
+                e.call(0x006b_c3e0, &args![cutter, this, record, context]);
+            }
+            e.call(0x006b_bc50, &args![cutter]);
+        });
+    } else {
+        e.with_stack(400, |e, captured| {
+            e.call(
+                0x00ec_782f,
+                &args![captured, 4u32, 100u32, 0x0066_94e0u32, 0x0045_cec0u32],
+            );
+            let mut captured_count = 0;
+            e.with_stack(0x4c, |e, cutter| {
+                e.call(0x006b_bb80, &args![cutter]);
+                let mut cursor = size.wrapping_sub(1);
+                while cursor != index.wrapping_sub(1) {
+                    let undo = record_at(e, cursor);
+                    if e.mem.u32(undo.addr() + 8) == 1 {
+                        e.call(0x006b_c3e0, &args![cutter, this, undo, context]);
+                        if index < cursor {
+                            let source = undo.byte_add(0x0c);
+                            e.call(
+                                0x006e_5cc0,
+                                &args![captured.byte_add(captured_count * 4), source],
+                            );
+                            captured_count += 1;
+                        }
+                    }
+                    e.call(0x006b_c8e0, &args![cutter, this, undo]);
+                    fn_00699590(e, this, cursor);
+                    cursor = cursor.wrapping_sub(1);
+                }
+                while cursor != u32::MAX {
+                    let undo = record_at(e, cursor);
+                    if e.mem.u32(undo.addr() + 8) != 3 {
+                        break;
+                    }
+                    e.call(0x006b_c8e0, &args![cutter, this, undo]);
+                    fn_00699590(e, this, cursor);
+                    cursor = cursor.wrapping_sub(1);
+                }
+                for item in 0..captured_count {
+                    e.call(
+                        0x006b_bd30,
+                        &args![cutter, this, captured.byte_add(item * 4), context],
+                    );
+                }
+                e.call(0x006b_bc50, &args![cutter]);
+            });
+            e.call(0x00ec_5fce, &args![captured, 4u32, 100u32, 0x0045_cec0u32]);
+        });
+    }
+    1
+}
+
+// Translated from 00699690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the greatest triangle type referenced by the two 16-bit triangle
+/// arrays in the obstacle record at +0x20 and +0x30.
+pub fn fn_00699690(e: &mut Engine, this: Ptr<NavMesh>, obstacle: Ptr) -> u32 {
+    let mut largest = 0;
+    for offset in [0x20, 0x30] {
+        let array = obstacle.byte_add(offset);
+        let size = e.call(ARRAY_SIZE, &args![array]).u32();
+        for index in 0..size {
+            let element = e.call(0x005e_eda0, &args![array, index]).u32();
+            let triangle_index = e.mem.u16(element) as u32;
+            let triangle = e
+                .call(GET_TRIANGLE, &args![this, triangle_index])
+                .ptr::<NavMeshTriangle>();
+            let triangle_type = fn_00699790(e, triangle.cast()) as u16;
+            largest = fn_00699760(e, largest, triangle_type);
+        }
+    }
+    largest
+}
+
+// Translated from 006997b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Looks up a 16-bit key in the embedded map at `this + 0xe0`, writing the
+/// mapped value to `out`.
+pub fn fn_006997b0(e: &mut Engine, this: Ptr, key: u16, out: Ptr) {
+    e.call(0x0069_afb0, &args![this.byte_add(0xe0), key, out]);
+}
+
+// Translated from 00699af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the first closed-door edge record at `NavMesh + 0x68` whose
+/// triangle index matches `triangle`, or null if no entry matches.
+pub fn nav_mesh_get_closed_door_info_for_triangle(
+    e: &mut Engine,
+    this: Ptr<NavMesh>,
+    triangle: u16,
+) -> Ptr {
+    let records = this.byte_add(0x68);
+    let count = e.call(ARRAY_SIZE, &args![records]).u32();
+    for index in 0..count {
+        let record = e.call(0x0069_50d0, &args![records, index]).ptr::<()>();
+        if e.mem.u16(record.addr() + 4) == triangle {
+            return record;
+        }
+    }
+    Ptr::NULL
+}
+
+// Translated from 00699a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes records at `NavMesh + 0x68` whose first word matches `form_id`.
+/// Before each removal, the record's triangle flag at bit 0x1000 is cleared
+/// when its triangle index remains within the mesh's triangle count.
+pub fn fn_00699a30(e: &mut Engine, this: Ptr<NavMesh>, form_id: u32) -> bool {
+    let records = this.byte_add(0x68);
+    let mut index = 0;
+    while index < e.call(ARRAY_SIZE, &args![records]).u32() {
+        let record = e.call(0x0069_50d0, &args![records, index]).ptr::<()>();
+        if e.mem.u32(record.addr()) == form_id {
+            let triangle = e.mem.u16(record.addr() + 4) as u32;
+            if triangle < e.call(0x0055_8200, &args![this]).u32() {
+                let triangle = e.call(0x0055_82f0, &args![this, triangle]).ptr::<()>();
+                e.call(0x0051_9270, &args![triangle, 0x1000u32]);
+            }
+            e.call(0x0098_3720, &args![records, index, 1u32]);
+            index = index.wrapping_sub(1);
+        }
+        index = index.wrapping_add(1);
+    }
+    true
+}
+
+// Translated from 0069a830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds the unique neighboring edges around a triangle, plus its stored
+/// extra-edge entry when present, to the supplied edge list.
+pub fn fn_0069a830(e: &mut Engine, this: Ptr<NavMesh>, triangle: u16, edge_list: Ptr) -> u32 {
+    let edge_map = this.byte_add(0x88);
+    if e.call(0x0069_b080, &args![edge_map]).bool() {
+        e.call(0x0069_9b60, &args![this]);
+    }
+    e.call(0x0084_54f0, &args![edge_list, 0u32]);
+    let triangle_data = e.call(0x0055_82f0, &args![this, triangle]).ptr::<()>();
+    let mut added = 0;
+    for edge_index in 0..3 {
+        let edge = e.call(0x0055_82d0, &args![triangle_data, edge_index]).u16();
+        let exists = e.with_stack(8, |e, edge_storage| {
+            e.mem.set_u16(edge_storage.addr(), edge);
+            e.call(
+                0x0069_b0a0,
+                &args![edge_map, edge, edge_storage.byte_add(4)],
+            )
+            .bool()
+        });
+        if exists {
+            e.with_stack(2, |e, edge_storage| {
+                e.mem.set_u16(edge_storage.addr(), edge);
+                e.call(0x0069_1820, &args![edge_list, edge_storage]);
+            });
+            added += 1;
+        }
+    }
+    let extras = this.byte_add(0x98);
+    if (triangle as u32) < e.call(ARRAY_SIZE, &args![extras]).u32() {
+        let extra = e.call(0x005e_eda0, &args![extras, triangle]).ptr::<()>();
+        if e.mem.u16(extra.addr()) != u16::MAX {
+            e.call(0x0069_1820, &args![edge_list, extra]);
+            added += 1;
+        }
+    }
+    added
+}
+
+// Translated from 0069a940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds neighboring triangle edges that already exist in the map at
+/// `NavMesh + 0xe4` to the supplied edge list, returning the number added.
+pub fn fn_0069a940(e: &mut Engine, this: Ptr<NavMesh>, triangle: u16, edge_list: Ptr) -> u32 {
+    e.call(0x0084_54f0, &args![edge_list, 0u32]);
+    let triangle_data = e.call(0x0055_82f0, &args![this, triangle]).ptr::<()>();
+    let mut added = 0;
+    for edge_index in 0..3 {
+        let edge = e.call(0x0055_82d0, &args![triangle_data, edge_index]).u16();
+        let found = e.with_stack(2, |e, edge_storage| {
+            e.mem.set_u16(edge_storage.addr(), edge);
+            e.call(
+                0x0069_b240,
+                &args![this.byte_add(0xe4), edge_storage, 0u32, 0x0069_b1b0u32],
+            )
+            .u32()
+        });
+        if found != u32::MAX {
+            e.with_stack(2, |e, edge_storage| {
+                e.mem.set_u16(edge_storage.addr(), edge);
+                e.call(0x0069_1820, &args![edge_list, edge_storage]);
+            });
+            added += 1;
+        }
+    }
+    added
+}
+
+// Translated from 0069a9d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ensures the obstacle map at `this + 0x88` is not at end, then forwards
+/// the key and value to its insertion helper.
+pub fn fn_0069a9d0(e: &mut Engine, this: Ptr, key: u16, value: Ptr) {
+    let map = this.byte_add(0x88);
+    if e.call(0x0069_b080, &args![map]).bool() {
+        e.call(0x0069_9b60, &args![]);
+    }
+    e.call(0x0069_b0a0, &args![map, key, value]);
+}
+
+// Translated from 0069a730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs embedded list members at `this + 8` and `this + 0x18`. The
+/// empty `NiPoint3` constructor has no effects.
+pub fn fn_0069a730(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0069_b2c0, &args![this.byte_add(8)]);
+    e.call(0x0069_b2c0, &args![this.byte_add(0x18)]);
+    this
+}
+
+// Translated from 0069a7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the object destructor and deletes `this` when bit zero of `flags`
+/// is set.
+pub fn fn_0069a7a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0069_a7d0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0069a7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the embedded list members at `this + 0x18` and `this + 8`.
+pub fn fn_0069a7d0(e: &mut Engine, this: Ptr) {
+    e.call(0x0069_b2f0, &args![this.byte_add(0x18)]);
+    e.call(0x0069_b2f0, &args![this.byte_add(8)]);
+}
+
+// Translated from 0069ad00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns false when the reference is in the prohibited state; otherwise
+/// calls the add-reference helper and reports whether it returned non-null.
+pub fn fn_0069ad00(e: &mut Engine, this: Ptr, reference: Ptr) -> bool {
+    if e.call(0x0068_f320, &args![this]).bool() {
+        return false;
+    }
+    e.call(
+        0x0069_0890,
+        &args![reference, Ptr::<()>::new(e.mem.u32(this.addr() + 0x54))],
+    );
+    let held = e.call(POINTER_GET, &args![reference]).u32();
+    held != 0
+}
+
+// Translated from 0069ad40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs the base map at `this`, sets its vtable, and returns `this`.
+pub fn fn_0069ad40(e: &mut Engine, this: Ptr, argument: Ptr) -> Ptr {
+    e.call(0x0069_b360, &args![this, argument]);
+    let vtable = e.mem.u32(0x0106_b184);
+    e.mem.set_u32(this.addr(), vtable);
+    this
+}
+
+// Translated from 0069ad70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls the contained map destructor and optionally frees the object.
+pub fn fn_0069ad70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0069_b6d0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0069ada0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the deleting-destructor vtable and forwards `count` to the embedded
+/// array's vector-deleting destructor.
+pub fn fn_0069ada0(e: &mut Engine, this: Ptr, array: Ptr, count: u32) -> Ptr {
+    let vtable = e.mem.u32(0x0106_abe4);
+    e.mem.set_u32(this.addr(), vtable);
+    e.call(0x0069_2290, &args![this, array, count]);
+    this
+}
+
+// Translated from 0069add0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes `count` 16-bit elements starting at `index`, shifting the tail
+/// down and reducing the array size.
+pub fn fn_0069add0(e: &mut Engine, this: Ptr, index: u32, count: u32) {
+    let size = e.mem.u32(this.addr() + 8);
+    let moved = e
+        .call(0x0042_f5a0, &args![size - index - count, count])
+        .u32();
+    let buffer = e.mem.u32(this.addr() + 4);
+    let destination = buffer + index * 2;
+    e.call(0x0072_ba80, &args![Ptr::<()>::new(destination), count]);
+    e.call(
+        0x005e_fdd0,
+        &args![
+            Ptr::<()>::new(destination),
+            Ptr::<()>::new(buffer + size * 2 - moved * 2),
+            moved,
+        ],
+    );
+    e.mem.set_u32(this.addr() + 8, size - count);
+}
+
+// Translated from 0069aeb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sorts the 16-bit elements of a `BSSimpleArray` using the supplied C
+/// comparison function.
+pub fn fn_0069aeb0(e: &mut Engine, this: Ptr, comparator: Ptr) {
+    let buffer = e.mem.u32(this.addr() + 4);
+    let count = e.mem.u32(this.addr() + 8);
+    e.call(
+        0x00ec_6f20,
+        &args![Ptr::<()>::new(buffer), count, 2u32, comparator],
+    );
+}
+
+// Translated from 0069aee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs the embedded 16-bit array with vtable `0106b1a4`.
+pub fn fn_0069aee0(e: &mut Engine, this: Ptr) -> Ptr {
+    let vtable = e.mem.u32(0x0106_b1a4);
+    e.mem.set_u32(this.addr(), vtable);
+    e.call(0x006b_3eb0, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 006993c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Processes undo records from newest to oldest using one local memory-DC
+/// object, then destroys that object.
+pub fn fn_006993c0(e: &mut Engine, this: Ptr<NavMesh>) {
+    e.with_stack(0x20, |e, context| {
+        fn_00699450(e, context);
+        let array = this.byte_add(0xd0);
+        let count = e.call(ARRAY_SIZE, &args![array]).u32();
+        for index in (0..count).rev() {
+            fn_00699000(e, this, index, context);
+        }
+        fn_006994b0(e, context);
+    });
+}
+
+// Translated from 00699450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs the two embedded map members at offsets zero and 0x10.
+pub fn fn_00699450(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0069_af30, &args![this]);
+    e.call(0x0069_af30, &args![this.byte_add(0x10)]);
+    this
+}
+
+// Translated from 006994b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the two embedded map members at offsets zero and 0x10.
+pub fn fn_006994b0(e: &mut Engine, this: Ptr) {
+    e.call(0x0069_af60, &args![this]);
+    e.call(0x0069_af60, &args![this.byte_add(0x10)]);
+}
+
+// Translated from 00699510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the supplied operation while a cancellation-token source is alive,
+/// returning the source's result after destroying it.
+pub fn fn_00699510(e: &mut Engine, this: Ptr, operation: Ptr) -> u32 {
+    e.with_stack(4, |e, token| {
+        e.call(0x0063_3c90, &args![token, operation]);
+        let result = e
+            .call(0x006c_61b0, &args![this.byte_add(0xd0), token])
+            .u32();
+        e.call(0x0045_cec0, &args![token]);
+        result
+    })
+}
+
+// Translated from 00698fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds the obstacle record for a mesh index and applies the undo at that
+/// index. Returns the native `0xffffff00` sentinel when the mesh has no
+/// matching record.
+pub fn fn_00698fc0(e: &mut Engine, this: Ptr<NavMesh>, key: Ptr, context: Ptr) -> u32 {
+    let found = e.with_stack(4, |e, out| fn_00699630(e, this, key, out));
+    if found == u32::MAX {
+        0xffff_ff00
+    } else {
+        fn_00699000(e, this, found, context)
+    }
+}
+
+// Translated from 00699590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes one item from the obstacle undo array at `index`.
+pub fn fn_00699590(e: &mut Engine, this: Ptr<NavMesh>, index: u32) {
+    e.call(0x0069_b120, &args![this.byte_add(0xd0), index, 1]);
+}
+
+// Translated from 006995c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the first obstacle undo entry whose held form pointer matches
+/// `form`, or -1 when no entry matches.
+pub fn fn_006995c0(e: &mut Engine, this: Ptr<NavMesh>, form: Ptr) -> u32 {
+    let array = this.byte_add(0xd0);
+    let size = e.call(ARRAY_SIZE, &args![array]).u32();
+    for index in 0..size {
+        let element = e.call(ARRAY_ELEMENT_4, &args![array, index]).u32();
+        let pointer = e.call(POINTER_GET, &args![element]).u32();
+        if e.call(0x004b_0460, &args![Ptr::<()>::new(pointer + 0x0c), form])
+            .bool()
+        {
+            return index;
+        }
+    }
+    u32::MAX
+}
+
+// Translated from 00699630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds the obstacle record containing the mesh. On failure writes null
+/// to `out_record` and returns -1; on success writes the record pointer.
+pub fn fn_00699630(e: &mut Engine, this: Ptr<NavMesh>, key: Ptr, out_record: Ptr) -> u32 {
+    let index = fn_006995c0(e, this, key);
+    if index == u32::MAX {
+        e.mem.set_u32(out_record.addr(), 0);
+        u32::MAX
+    } else {
+        let element = e
+            .call(ARRAY_ELEMENT_4, &args![this.byte_add(0xd0), index])
+            .u32();
+        let record = e.call(0x0055_9450, &args![element]).u32();
+        e.mem.set_u32(out_record.addr(), record);
+        index
+    }
+}
+
+// Translated from 00699760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the greater of an unsigned word and an unsigned 32-bit value.
+pub fn fn_00699760(_e: &mut Engine, value: u32, candidate: u16) -> u32 {
+    value.max(candidate as u32)
+}
+
+// Translated from 00699790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the three-bit type encoded in bits 13 through 15 of the word at
+/// `this + 0xC`.
+pub fn fn_00699790(e: &mut Engine, this: Ptr) -> u32 {
+    (e.mem.u32(this.addr() + 0x0c) & 0xe000) >> 13
+}
+
+// Translated from 0069a660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs a 6-byte edge record: 32-bit first value, then 16-bit edge.
+pub fn fn_0069a660(e: &mut Engine, this: Ptr, value: u32, edge: u16) -> Ptr {
+    e.mem.set_u32(this.addr(), value);
+    e.mem.set_u16(this.addr() + 4, edge);
+    this
+}
+
+// Translated from 0069a690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the 6-byte edge record at `other` to `this`.
+pub fn fn_0069a690(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    let value = e.mem.u32(other.addr());
+    let edge = e.mem.u16(other.addr() + 4);
+    e.mem.set_u32(this.addr(), value);
+    e.mem.set_u16(this.addr() + 4, edge);
+    this
+}
+
+// Translated from 0069a6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs an edge record with a 32-bit value at +0, a word at +4,
+/// and another 32-bit value at +8.
+pub fn fn_0069a6c0(e: &mut Engine, this: Ptr, value: u32, edge: u16, extra: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), value);
+    e.mem.set_u16(this.addr() + 4, edge);
+    e.mem.set_u32(this.addr() + 8, extra);
+    this
+}
+
+// Translated from 0069a700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Packs the low 14 bits of the word at `record + 4` and the low two bits
+/// of the signed word at `record + 8` into one edge descriptor.
+pub fn fn_0069a700(_e: &mut Engine, out: Ptr, record: Ptr) {
+    let low = _e.mem.u16(record.addr() + 4) & 0x3fff;
+    let high = (_e.mem.u16(record.addr() + 8) & 3) << 14;
+    _e.mem.set_u16(out.addr(), low | high);
+}
+
+// Translated from 0069ae60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compares two unsigned 16-bit keys, returning 1, -1, or 0 by ordering.
+pub fn fn_0069ae60(e: &mut Engine, first: Ptr, second: Ptr) -> u32 {
+    match e.mem.u16(first.addr()).cmp(&e.mem.u16(second.addr())) {
+        std::cmp::Ordering::Less => 1,
+        std::cmp::Ordering::Greater => u32::MAX,
+        std::cmp::Ordering::Equal => 0,
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2078,6 +2644,48 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006985c0, fn_006985c0(Ptr) -> Ptr),
         entry!(0x006985f0, fn_006985f0(Ptr, Ptr) -> Ptr),
         entry!(0x00698620, fn_00698620(Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x00698680, fn_00698680(Ptr) -> u32),
+        entry!(0x006986d0, fn_006986d0(Ptr) -> bool),
+        entry!(
+            0x00698f40,
+            nav_mesh_add_obstacle(Ptr<NavMesh>, Ptr, Ptr) -> bool
+        ),
+        entry!(0x00698fc0, fn_00698fc0(Ptr<NavMesh>, Ptr, Ptr) -> u32),
+        entry!(0x00699000, fn_00699000(Ptr<NavMesh>, u32, Ptr) -> u32),
+        entry!(0x006993c0, fn_006993c0(Ptr<NavMesh>)),
+        entry!(0x00699450, fn_00699450(Ptr) -> Ptr),
+        entry!(0x006994b0, fn_006994b0(Ptr)),
+        entry!(0x00699510, fn_00699510(Ptr, Ptr) -> u32),
+        entry!(0x00699590, fn_00699590(Ptr<NavMesh>, u32)),
+        entry!(0x006995c0, fn_006995c0(Ptr<NavMesh>, Ptr) -> u32),
+        entry!(0x00699630, fn_00699630(Ptr<NavMesh>, Ptr, Ptr) -> u32),
+        entry!(0x00699690, fn_00699690(Ptr<NavMesh>, Ptr) -> u32),
+        entry!(0x00699760, fn_00699760(u32, u16) -> u32),
+        entry!(0x00699790, fn_00699790(Ptr) -> u32),
+        entry!(0x006997b0, fn_006997b0(Ptr, u16, Ptr)),
+        entry!(0x00699a30, fn_00699a30(Ptr<NavMesh>, u32) -> bool),
+        entry!(
+            0x00699af0,
+            nav_mesh_get_closed_door_info_for_triangle(Ptr<NavMesh>, u16) -> Ptr
+        ),
+        entry!(0x0069a660, fn_0069a660(Ptr, u32, u16) -> Ptr),
+        entry!(0x0069a690, fn_0069a690(Ptr, Ptr) -> Ptr),
+        entry!(0x0069a6c0, fn_0069a6c0(Ptr, u32, u16, u32) -> Ptr),
+        entry!(0x0069a700, fn_0069a700(Ptr, Ptr)),
+        entry!(0x0069a730, fn_0069a730(Ptr) -> Ptr),
+        entry!(0x0069a7a0, fn_0069a7a0(Ptr, u32) -> Ptr),
+        entry!(0x0069a7d0, fn_0069a7d0(Ptr)),
+        entry!(0x0069a830, fn_0069a830(Ptr<NavMesh>, u16, Ptr) -> u32),
+        entry!(0x0069a940, fn_0069a940(Ptr<NavMesh>, u16, Ptr) -> u32),
+        entry!(0x0069a9d0, fn_0069a9d0(Ptr, u16, Ptr)),
+        entry!(0x0069ad00, fn_0069ad00(Ptr, Ptr) -> bool),
+        entry!(0x0069ad40, fn_0069ad40(Ptr, Ptr) -> Ptr),
+        entry!(0x0069ad70, fn_0069ad70(Ptr, u32) -> Ptr),
+        entry!(0x0069ada0, fn_0069ada0(Ptr, Ptr, u32) -> Ptr),
+        entry!(0x0069add0, fn_0069add0(Ptr, u32, u32)),
+        entry!(0x0069ae60, fn_0069ae60(Ptr, Ptr) -> u32),
+        entry!(0x0069aeb0, fn_0069aeb0(Ptr, Ptr)),
+        entry!(0x0069aee0, fn_0069aee0(Ptr) -> Ptr),
     ]
 }
 
@@ -2101,6 +2709,679 @@ mod tests {
             st0: value as f64,
             ..Ret::default()
         }
+    }
+
+    #[test]
+    fn point_quadrant_sets_sign_bits_in_game_order() {
+        let mut e = Engine::new();
+        let point = e.new_object::<NavMesh>().cast::<()>();
+        for (x, y, expected) in [
+            (1.0, 1.0, 0),
+            (-1.0, 1.0, 1),
+            (-1.0, -1.0, 2),
+            (1.0, -1.0, 3),
+            (0.0, -0.0, 0),
+        ] {
+            e.mem.set_f32(point.addr(), x);
+            e.mem.set_f32(point.addr() + 4, y);
+            assert_eq!(fn_00698680(&mut e, point), expected);
+        }
+    }
+
+    #[test]
+    fn get_or_add_navmesh_info_updates_an_existing_info_without_allocating() {
+        let mut e = Engine::new();
+        let this = Ptr::new(0x1100);
+        let tes = Ptr::<()>::new(0x2200);
+        let map = Ptr::<()>::new(0x3300);
+        let info = Ptr::<()>::new(0x4400);
+        e.map(TES_INSTANCE & !0xfff, 0x1000);
+        e.mem.set_u32(TES_INSTANCE, tes.addr());
+        let _allocator = recorder(&mut e, 0x0084_e3a0, 0x5500);
+        let maps = recorder(&mut e, GET_NAV_MESH_INFO_MAP, map.addr());
+        let lookup = recorder(&mut e, 0x0069_3d70, info.addr());
+        let exists = recorder(&mut e, 0x0068_efb0, 1);
+        let update = recorder(&mut e, 0x006b_5560, 0);
+        assert!(!fn_006986d0(&mut e, this));
+        assert_eq!(&*maps.borrow(), &[vec![tes.addr()]]);
+        assert_eq!(&*lookup.borrow(), &[vec![map.addr(), 0x5500]]);
+        assert_eq!(&*exists.borrow(), &[vec![this.addr()]]);
+        assert_eq!(&*update.borrow(), &[vec![info.addr(), this.addr()]]);
+    }
+
+    #[test]
+    fn get_or_add_navmesh_info_creates_and_registers_when_missing() {
+        let mut e = Engine::new();
+        let this = Ptr::new(0x1100);
+        let tes = Ptr::<()>::new(0x2200);
+        let map = Ptr::<()>::new(0x3300);
+        e.map(TES_INSTANCE & !0xfff, 0x1000);
+        e.mem.set_u32(TES_INSTANCE, tes.addr());
+        recorder(&mut e, 0x0084_e3a0, 0x5500);
+        recorder(&mut e, GET_NAV_MESH_INFO_MAP, map.addr());
+        recorder(&mut e, 0x0069_3d70, 0);
+        recorder(&mut e, 0x0068_efb0, 0);
+        recorder(&mut e, 0x0040_1000, 0);
+        let update = recorder(&mut e, 0x006b_5560, 0);
+        let link = recorder(&mut e, 0x006d_3100, 0);
+        let pause = recorder(&mut e, 0x005a_8040, 0);
+        let add = recorder(&mut e, 0x006b_6940, 0);
+        assert!(fn_006986d0(&mut e, this));
+        assert_eq!(&*update.borrow(), &[vec![0, this.addr()]]);
+        assert_eq!(&*link.borrow(), &[vec![this.addr(), 0]]);
+        assert_eq!(&*pause.borrow(), &[vec![0, this.addr()]]);
+        assert_eq!(&*add.borrow(), &[vec![map.addr(), 0]]);
+    }
+
+    #[test]
+    fn obstacle_record_removal_passes_the_embedded_array_and_one_item() {
+        let mut e = Engine::new();
+        let this = Ptr::new(0x1100);
+        let index = 7;
+        let removed = recorder(&mut e, 0x0069_b120, 0);
+        fn_00699590(&mut e, this, index);
+        assert_eq!(&*removed.borrow(), &[vec![this.addr() + 0xd0, index, 1]]);
+    }
+
+    #[test]
+    fn obstacle_record_lookup_for_triangle_returns_the_first_match() {
+        let mut e = Engine::new();
+        let mesh = Ptr::<NavMesh>::new(0x200000);
+        let records = mesh.byte_add(0x68);
+        let first = Ptr::<()>::new(0x3300);
+        e.map(mesh.addr(), 0x1000);
+        e.map(first.addr(), 0x1000);
+        e.mem.set_u16(first.addr() + 4, 7);
+        recorder(&mut e, ARRAY_SIZE, 1);
+        recorder(&mut e, 0x0069_50d0, first.addr());
+        assert_eq!(
+            nav_mesh_get_closed_door_info_for_triangle(&mut e, mesh, 7),
+            first
+        );
+        assert_ne!(records.addr(), 0);
+    }
+
+    #[test]
+    fn closed_door_triangle_lookup_returns_null_when_no_record_matches() {
+        let mut e = Engine::new();
+        let mesh = Ptr::<NavMesh>::new(0x200000);
+        let first = Ptr::<()>::new(0x3300);
+        e.map(mesh.addr(), 0x1000);
+        e.map(first.addr(), 0x1000);
+        e.mem.set_u16(first.addr() + 4, 3);
+        let size = recorder(&mut e, ARRAY_SIZE, 1);
+        recorder(&mut e, 0x0069_50d0, first.addr());
+        assert_eq!(
+            nav_mesh_get_closed_door_info_for_triangle(&mut e, mesh, 8),
+            Ptr::NULL
+        );
+        assert_eq!(size.borrow().len(), 1);
+    }
+
+    #[test]
+    fn closed_door_triangle_lookup_scans_past_nonmatching_records() {
+        let mut e = Engine::new();
+        let mesh = Ptr::<NavMesh>::new(0x200000);
+        let first = Ptr::<()>::new(0x3300);
+        let second = Ptr::<()>::new(0x4400);
+        e.map(mesh.addr(), 0x1000);
+        e.map(first.addr(), 0x1000);
+        e.map(second.addr(), 0x1000);
+        e.mem.set_u16(first.addr() + 4, 3);
+        e.mem.set_u16(second.addr() + 4, 9);
+        recorder(&mut e, ARRAY_SIZE, 2);
+        let records = Rc::new(RefCell::new(vec![first.addr(), second.addr()]));
+        let records_copy = records.clone();
+        e.register_double(0x0069_50d0, move |_, _| {
+            ret(records_copy.borrow_mut().remove(0))
+        });
+        assert_eq!(
+            nav_mesh_get_closed_door_info_for_triangle(&mut e, mesh, 9),
+            second
+        );
+    }
+
+    #[test]
+    fn word_array_remove_shifts_elements_and_reduces_count() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        e.map(this.addr(), 0x1000);
+        e.mem.set_u32(this.addr() + 4, 0x4400);
+        e.mem.set_u32(this.addr() + 8, 6);
+        let move_count = recorder(&mut e, 0x0042_f5a0, 4);
+        let clear = recorder(&mut e, 0x0072_ba80, 0);
+        let moved = recorder(&mut e, 0x005e_fdd0, 0);
+        fn_0069add0(&mut e, this, 2, 1);
+        assert_eq!(&*move_count.borrow(), &[vec![3, 1]]);
+        assert_eq!(&*clear.borrow(), &[vec![0x4404, 1]]);
+        assert_eq!(&*moved.borrow(), &[vec![0x4404, 0x4404, 4]]);
+        assert_eq!(e.mem.u32(this.addr() + 8), 5);
+    }
+
+    #[test]
+    fn obstacle_map_insertion_resets_an_end_iterator_before_insert() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        let end = recorder(&mut e, 0x0069_b080, 1);
+        let reset = recorder(&mut e, 0x0069_9b60, 0);
+        let insert = recorder(&mut e, 0x0069_b0a0, 0);
+        fn_0069a9d0(&mut e, this, 0x1234, Ptr::new(0x4400));
+        assert_eq!(&*end.borrow(), &[vec![this.addr() + 0x88]]);
+        assert_eq!(&*reset.borrow(), &[vec![]]);
+        assert_eq!(
+            &*insert.borrow(),
+            &[vec![this.addr() + 0x88, 0x1234, 0x4400]]
+        );
+    }
+
+    #[test]
+    fn two_embedded_lists_are_constructed_in_member_order() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        let init = recorder(&mut e, 0x0069_b2c0, 0);
+        assert_eq!(fn_0069a730(&mut e, this), this);
+        assert_eq!(
+            &*init.borrow(),
+            &[vec![this.addr() + 8], vec![this.addr() + 0x18]]
+        );
+    }
+
+    #[test]
+    fn list_deleting_destructor_frees_only_when_flag_bit_zero_is_set() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        let destroy = recorder(&mut e, 0x0069_a7d0, 0);
+        let free = recorder(&mut e, 0x0040_1030, 0);
+        assert_eq!(fn_0069a7a0(&mut e, this, 2), this);
+        assert_eq!(&*destroy.borrow(), &[vec![this.addr()]]);
+        assert!(free.borrow().is_empty());
+        assert_eq!(fn_0069a7a0(&mut e, this, 3), this);
+        assert_eq!(&*free.borrow(), &[vec![this.addr()]]);
+    }
+
+    #[test]
+    fn two_embedded_list_destructors_run_at_their_offsets() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        let destroy = recorder(&mut e, 0x0069_b2f0, 0);
+        fn_0069a7d0(&mut e, this);
+        assert_eq!(
+            &*destroy.borrow(),
+            &[vec![this.addr() + 0x18], vec![this.addr() + 8]]
+        );
+    }
+
+    #[test]
+    fn add_reference_stops_on_the_prohibited_state() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        let reference = Ptr::<()>::new(0x4400);
+        e.map(this.addr(), 0x1000);
+        e.mem.set_u32(this.addr() + 0x54, 0x5500);
+        recorder(&mut e, 0x0068_f320, 1);
+        let add = recorder(&mut e, 0x0069_0890, 0);
+        assert!(!fn_0069ad00(&mut e, this, reference));
+        assert!(add.borrow().is_empty());
+    }
+
+    #[test]
+    fn map_constructor_sets_its_vtable_after_base_initialization() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        e.map(this.addr(), 0x1000);
+        e.map(0x0106_b000, 0x1000);
+        e.mem.set_u32(0x0106_b184, 0x7788);
+        let base = recorder(&mut e, 0x0069_b360, 0);
+        assert_eq!(fn_0069ad40(&mut e, this, Ptr::new(0x4400)), this);
+        assert_eq!(&*base.borrow(), &[vec![this.addr(), 0x4400]]);
+        assert_eq!(e.mem.u32(this.addr()), 0x7788);
+    }
+
+    #[test]
+    fn map_deleting_destructor_forwards_flags_and_returns_this() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        let destroy = recorder(&mut e, 0x0069_b6d0, 0);
+        let free = recorder(&mut e, 0x0040_1030, 0);
+        assert_eq!(fn_0069ad70(&mut e, this, 1), this);
+        assert_eq!(&*destroy.borrow(), &[vec![this.addr()]]);
+        assert_eq!(&*free.borrow(), &[vec![this.addr()]]);
+    }
+
+    #[test]
+    fn array_deleting_destructor_sets_vtable_and_forwards_array_count() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        e.map(this.addr(), 0x1000);
+        e.map(0x0106_a000, 0x1000);
+        e.mem.set_u32(0x0106_abe4, 0x7788);
+        let destroy = recorder(&mut e, 0x0069_2290, 0);
+        assert_eq!(fn_0069ada0(&mut e, this, Ptr::new(0x4400), 5), this);
+        assert_eq!(e.mem.u32(this.addr()), 0x7788);
+        assert_eq!(&*destroy.borrow(), &[vec![this.addr(), 0x4400, 5]]);
+    }
+
+    #[test]
+    fn sorted_array_wrapper_passes_two_byte_element_size() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        e.map(this.addr(), 0x1000);
+        e.mem.set_u32(this.addr() + 4, 0x4400);
+        e.mem.set_u32(this.addr() + 8, 7);
+        let sort = recorder(&mut e, 0x00ec_6f20, 0);
+        fn_0069aeb0(&mut e, this, Ptr::new(0x5500));
+        assert_eq!(&*sort.borrow(), &[vec![0x4400, 7, 2, 0x5500]]);
+    }
+
+    #[test]
+    fn word_array_constructor_sets_vtable_and_initializes_empty_storage() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        e.map(this.addr(), 0x1000);
+        e.map(0x0106_b000, 0x1000);
+        e.mem.set_u32(0x0106_b1a4, 0x7788);
+        let initialize = recorder(&mut e, 0x006b_3eb0, 0);
+        assert_eq!(fn_0069aee0(&mut e, this), this);
+        assert_eq!(e.mem.u32(this.addr()), 0x7788);
+        assert_eq!(&*initialize.borrow(), &[vec![this.addr(), 0, 0]]);
+    }
+
+    #[test]
+    fn obstacle_lookup_scans_held_forms_and_returns_the_matching_index() {
+        let mut e = engine();
+        let this = Ptr::new(0x200000);
+        let key = Ptr::new(0x7777);
+        let array = this.byte_add(0xd0);
+        e.map(0x200000, 0x1000);
+        let elements = Ptr::<()>::new(0x310000);
+        let first_holder = Ptr::<()>::new(0x320000);
+        let second_holder = Ptr::<()>::new(0x330000);
+        e.map(elements.addr(), 0x1000);
+        e.map(first_holder.addr(), 0x1000);
+        e.map(second_holder.addr(), 0x1000);
+        e.mem.set_u32(array.addr() + 4, elements.addr());
+        e.mem.set_u32(array.addr() + 8, 2);
+        e.mem.set_u32(elements.addr(), first_holder.addr());
+        e.mem.set_u32(elements.addr() + 4, second_holder.addr());
+        e.mem.set_u32(first_holder.addr(), 0x8800);
+        e.mem.set_u32(second_holder.addr(), 0x9900);
+        let compared = Rc::new(RefCell::new(Vec::new()));
+        let captured = compared.clone();
+        e.register_double(0x004b_0460, move |_, a| {
+            captured.borrow_mut().push(a.to_vec());
+            ret((a[0] == 0x33000c && a[1] == key.addr()) as u32)
+        });
+        let index = fn_006995c0(&mut e, this, key);
+        assert_eq!(
+            &*compared.borrow(),
+            &[vec![0x32000c, key.addr()], vec![0x33000c, key.addr()]]
+        );
+        assert_eq!(index, 1);
+    }
+
+    #[test]
+    fn obstacle_lookup_writes_the_record_pointer_and_returns_its_index() {
+        let mut e = engine();
+        let this = Ptr::new(0x200000);
+        let key = Ptr::new(0x7777);
+        let out = Ptr::new(0x300000);
+        let array = this.byte_add(0xd0);
+        e.map(0x200000, 0x1000);
+        e.map(0x300000, 0x1000);
+        let elements = Ptr::<()>::new(0x310000);
+        let holder = Ptr::<()>::new(0x320000);
+        e.map(elements.addr(), 0x1000);
+        e.map(holder.addr(), 0x1000);
+        let held_form = holder.addr();
+        e.mem.set_u32(array.addr() + 4, elements.addr());
+        e.mem.set_u32(array.addr() + 8, 1);
+        e.mem.set_u32(elements.addr(), holder.addr());
+        e.mem.set_u32(holder.addr(), held_form);
+        e.register_double(0x004b_0460, move |_, a| {
+            ret((a[0] == held_form + 0xc && a[1] == key.addr()) as u32)
+        });
+        assert_eq!(fn_006995c0(&mut e, this, key), 0);
+        assert_eq!(fn_00699630(&mut e, this, key, out), 0);
+        assert_eq!(e.mem.u32(out.addr()), held_form);
+    }
+
+    #[test]
+    fn obstacle_undo_removal_destroys_and_erases_the_newest_record() {
+        let mut e = Engine::new();
+        let mesh = Ptr::<NavMesh>::new(0x200000);
+        let holder = Ptr::<()>::new(0x3300);
+        let record = Ptr::<()>::new(0x4400);
+        let context = Ptr::<()>::new(0x5500);
+        e.map(mesh.addr(), 0x1000);
+        e.map(holder.addr(), 4);
+        e.map(record.addr(), 0x1000);
+        recorder(&mut e, ARRAY_SIZE, 1);
+        recorder(&mut e, ARRAY_ELEMENT_4, holder.addr());
+        recorder(&mut e, POINTER_GET, record.addr());
+        let construct = recorder(&mut e, 0x006b_bb80, 0);
+        let undo = recorder(&mut e, 0x006b_c3e0, 0);
+        let erase = recorder(&mut e, 0x006b_c8e0, 0);
+        let remove = recorder(&mut e, 0x0069_b120, 0);
+        let destroy = recorder(&mut e, 0x006b_bc50, 0);
+        e.mem.set_u32(record.addr() + 8, 0);
+        assert_eq!(fn_00699000(&mut e, mesh, 0, context), 1);
+        let cutter = construct.borrow()[0][0];
+        assert!(undo.borrow().is_empty());
+        assert_eq!(
+            &*erase.borrow(),
+            &[vec![cutter, mesh.addr(), record.addr()]]
+        );
+        assert_eq!(&*remove.borrow(), &[vec![mesh.addr() + 0xd0, 0, 1]]);
+        assert_eq!(&*destroy.borrow(), &[vec![cutter]]);
+    }
+
+    #[test]
+    fn undo_processing_constructs_context_and_visits_nonempty_array() {
+        let mut e = Engine::new();
+        let mesh = Ptr::<NavMesh>::new(0x200000);
+        let holder = Ptr::<()>::new(0x3300);
+        let record = Ptr::<()>::new(0x4400);
+        e.map(mesh.addr(), 0x1000);
+        e.map(holder.addr(), 4);
+        e.map(record.addr(), 0x1000);
+        let sizes = Rc::new(RefCell::new(vec![1, 1]));
+        let sizes_copy = sizes.clone();
+        e.register_double(ARRAY_SIZE, move |_, _| {
+            ret(sizes_copy.borrow_mut().remove(0))
+        });
+        recorder(&mut e, ARRAY_ELEMENT_4, holder.addr());
+        recorder(&mut e, POINTER_GET, record.addr());
+        let context_init = recorder(&mut e, 0x0069_af30, 0);
+        let cutter_init = recorder(&mut e, 0x006b_bb80, 0);
+        let erase = recorder(&mut e, 0x006b_c8e0, 0);
+        let remove = recorder(&mut e, 0x0069_b120, 0);
+        let context_destroy = recorder(&mut e, 0x0069_af60, 0);
+        recorder(&mut e, 0x006b_bc50, 0);
+        e.mem.set_u32(record.addr() + 8, 0);
+        fn_006993c0(&mut e, mesh);
+        assert_eq!(context_init.borrow().len(), 2);
+        assert_eq!(context_destroy.borrow().len(), 2);
+        assert_eq!(cutter_init.borrow().len(), 1);
+        assert_eq!(
+            &*erase.borrow(),
+            &[vec![cutter_init.borrow()[0][0], mesh.addr(), record.addr()]]
+        );
+        assert_eq!(&*remove.borrow(), &[vec![mesh.addr() + 0xd0, 0, 1]]);
+    }
+
+    #[test]
+    fn obstacle_type_scan_returns_greatest_triangle_type() {
+        let mut e = Engine::new();
+        let mesh = Ptr::<NavMesh>::new(0x200000);
+        let obstacle = Ptr::<()>::new(0x3300);
+        let item = Ptr::<()>::new(0x4400);
+        let triangle = Ptr::<()>::new(0x5500);
+        e.map(mesh.addr(), 0x1000);
+        e.map(obstacle.addr(), 0x1000);
+        e.map(item.addr(), 4);
+        e.map(triangle.addr(), 0x1000);
+        let size_calls = Rc::new(RefCell::new(0));
+        let size_calls_copy = size_calls.clone();
+        e.register_double(ARRAY_SIZE, move |_, _| {
+            *size_calls_copy.borrow_mut() += 1;
+            ret(1)
+        });
+        recorder(&mut e, 0x005e_eda0, item.addr());
+        recorder(&mut e, GET_TRIANGLE, triangle.addr());
+        e.mem.set_u16(item.addr(), 0);
+        e.mem.set_u32(triangle.addr() + 0xc, 0xa000);
+        assert_eq!(fn_00699690(&mut e, mesh, obstacle), 5);
+        assert_eq!(*size_calls.borrow(), 2);
+    }
+
+    #[test]
+    fn obstacle_map_lookup_forwards_key_and_output_pointer() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        let out = Ptr::<()>::new(0x4400);
+        let lookup = recorder(&mut e, 0x0069_afb0, 1);
+        fn_006997b0(&mut e, this, 7, out);
+        assert_eq!(
+            &*lookup.borrow(),
+            &[vec![this.addr() + 0xe0, 7, out.addr()]]
+        );
+    }
+
+    #[test]
+    fn missing_obstacle_map_record_returns_native_failure_sentinel() {
+        let mut e = Engine::new();
+        let mesh = Ptr::<NavMesh>::new(0x200000);
+        e.map(mesh.addr() + 0xd0, 0x1000);
+        recorder(&mut e, ARRAY_SIZE, 0);
+        let key = Ptr::<()>::new(0x3300);
+        assert_eq!(fn_00698fc0(&mut e, mesh, key, Ptr::NULL), 0xffff_ff00);
+    }
+
+    #[test]
+    fn unsigned_max_helper_keeps_the_larger_value() {
+        let mut e = Engine::new();
+        assert_eq!(fn_00699760(&mut e, 4, 9), 9);
+        assert_eq!(fn_00699760(&mut e, 10, 9), 10);
+        assert_eq!(fn_00699760(&mut e, 65_536, u16::MAX), 65_536);
+    }
+
+    #[test]
+    fn add_obstacle_constructs_cuts_and_destroys_the_cutter_in_order() {
+        let mut e = Engine::new();
+        let mesh = Ptr::new(0x1100);
+        let obstacle = Ptr::new(0x2200);
+        let data = Ptr::new(0x3300);
+        let ctor = recorder(&mut e, 0x006b_bb80, 0);
+        let split = recorder(&mut e, 0x006b_bd30, 1);
+        let dtor = recorder(&mut e, 0x006b_bc50, 0);
+        assert!(nav_mesh_add_obstacle(&mut e, mesh, obstacle, data));
+        let cutter = ctor.borrow()[0][0];
+        assert_eq!(&*ctor.borrow(), &[vec![cutter]]);
+        assert_eq!(
+            &*split.borrow(),
+            &[vec![cutter, mesh.addr(), obstacle.addr(), data.addr()]]
+        );
+        assert_eq!(&*dtor.borrow(), &[vec![cutter]]);
+    }
+
+    #[test]
+    fn embedded_map_constructor_and_destructor_visit_members_in_order() {
+        let mut e = Engine::new();
+        let this = Ptr::new(0x2200);
+        let first_init = recorder(&mut e, 0x0069_af30, 0);
+        assert_eq!(fn_00699450(&mut e, this), this);
+        assert_eq!(
+            &*first_init.borrow(),
+            &[vec![this.addr()], vec![this.addr() + 0x10]]
+        );
+        let destroyed = recorder(&mut e, 0x0069_af60, 0);
+        fn_006994b0(&mut e, this);
+        assert_eq!(
+            &*destroyed.borrow(),
+            &[vec![this.addr()], vec![this.addr() + 0x10]]
+        );
+    }
+
+    #[test]
+    fn cancellation_scoped_operation_runs_then_destroys_its_token() {
+        let mut e = Engine::new();
+        let this = Ptr::new(0x3300);
+        let operation = Ptr::new(0x4400);
+        let call = recorder(&mut e, 0x0063_3c90, 0);
+        let source = recorder(&mut e, 0x006c_61b0, 0x1234);
+        let drop = recorder(&mut e, 0x0045_cec0, 0);
+        assert_eq!(fn_00699510(&mut e, this, operation), 0x1234);
+        let token = call.borrow()[0][0];
+        assert_eq!(&*call.borrow(), &[vec![token, operation.addr()]]);
+        assert_eq!(&*source.borrow(), &[vec![this.addr() + 0xd0, token]]);
+        assert_eq!(&*drop.borrow(), &[vec![token]]);
+    }
+
+    #[test]
+    fn obstacle_type_extracts_three_high_bits() {
+        let mut e = Engine::new();
+        let data = e.new_object::<NavMesh>().cast::<()>();
+        for (bits, expected) in [(0, 0), (0x2000, 1), (0xa000, 5), (0xe000, 7)] {
+            e.mem.set_u32(data.addr() + 0x0c, bits);
+            assert_eq!(fn_00699790(&mut e, data), expected);
+        }
+    }
+
+    #[test]
+    fn edge_record_constructor_and_copy_touch_only_six_bytes() {
+        let mut e = Engine::new();
+        let source = e.new_object::<NavMesh>().cast::<()>();
+        let copy = e.new_object::<NavMesh>().cast::<()>();
+        e.mem.set_u32(source.addr() + 8, 0xfeed_beef);
+        assert_eq!(fn_0069a660(&mut e, source, 0x1234_5678, 0x9abc), source);
+        e.mem.set_u32(copy.addr(), 0xaaaa_aaaa);
+        e.mem.set_u32(copy.addr() + 4, 0xbbbb_bbbb);
+        e.mem.set_u32(copy.addr() + 8, 0xcccc_cccc);
+        fn_0069a690(&mut e, copy, source);
+        assert_eq!(e.mem.u32(copy.addr()), 0x1234_5678);
+        assert_eq!(e.mem.u16(copy.addr() + 4), 0x9abc);
+        assert_eq!(e.mem.u16(copy.addr() + 6), 0xbbbb);
+        assert_eq!(e.mem.u32(copy.addr() + 8), 0xcccc_cccc);
+    }
+
+    #[test]
+    fn edge_record_three_word_constructor_writes_fields_in_order() {
+        let mut e = Engine::new();
+        let object = e.new_object::<NavMesh>().cast::<()>();
+        assert_eq!(fn_0069a6c0(&mut e, object, 0x1234, 0xabcd, 0x5678), object);
+        assert_eq!(e.mem.u32(object.addr()), 0x1234);
+        assert_eq!(e.mem.u16(object.addr() + 4), 0xabcd);
+        assert_eq!(e.mem.u32(object.addr() + 8), 0x5678);
+    }
+
+    #[test]
+    fn edge_descriptor_packs_only_the_defined_bits() {
+        let mut e = Engine::new();
+        let record = e.new_object::<NavMesh>().cast::<()>();
+        let out = e.new_object::<NavMesh>().cast::<()>();
+        e.mem.set_u16(record.addr() + 4, 0xffff);
+        e.mem.set_u16(record.addr() + 8, 0xfffe);
+        fn_0069a700(&mut e, out, record);
+        assert_eq!(e.mem.u16(out.addr()), 0xbfff);
+    }
+
+    #[test]
+    fn unsigned_word_comparator_orders_equal_and_unequal_keys() {
+        let mut e = Engine::new();
+        let a = e.new_object::<NavMesh>().cast::<()>();
+        let b = e.new_object::<NavMesh>().cast::<()>();
+        for (first, second, expected) in [(1, 2, 1), (2, 1, u32::MAX), (4, 4, 0)] {
+            e.mem.set_u16(a.addr(), first);
+            e.mem.set_u16(b.addr(), second);
+            assert_eq!(fn_0069ae60(&mut e, a, b), expected);
+        }
+    }
+
+    #[test]
+    fn closed_door_removal_clears_the_triangle_flag_then_erases_record() {
+        let mut e = Engine::new();
+        let mesh = Ptr::<NavMesh>::new(0x200000);
+        let records = mesh.byte_add(0x68);
+        let record = Ptr::<()>::new(0x3300);
+        e.map(mesh.addr(), 0x1000);
+        e.map(record.addr(), 0x1000);
+        e.mem.set_u32(record.addr(), 0xabc);
+        e.mem.set_u16(record.addr() + 4, 3);
+        let sizes = Rc::new(RefCell::new(vec![1, 0]));
+        let size_values = sizes.clone();
+        e.register_double(ARRAY_SIZE, move |_, _| {
+            ret(size_values.borrow_mut().remove(0))
+        });
+        e.register_double(0x0069_50d0, move |_, _| ret(record.addr()));
+        let count = recorder(&mut e, 0x0055_8200, 4);
+        let triangle = recorder(&mut e, 0x0055_82f0, 0x4400);
+        let clear = recorder(&mut e, 0x0051_9270, 0);
+        let remove = recorder(&mut e, 0x0098_3720, 0);
+        assert!(fn_00699a30(&mut e, mesh, 0xabc));
+        assert_eq!(&*count.borrow(), &[vec![mesh.addr()]]);
+        assert_eq!(&*triangle.borrow(), &[vec![mesh.addr(), 3]]);
+        assert_eq!(&*clear.borrow(), &[vec![0x4400, 0x1000]]);
+        assert_eq!(&*remove.borrow(), &[vec![records.addr(), 0, 1]]);
+    }
+
+    #[test]
+    fn triangle_edge_collection_adds_unique_edges_and_the_extra_entry() {
+        let mut e = Engine::new();
+        let mesh = Ptr::<NavMesh>::new(0x200000);
+        let manager = Ptr::<()>::new(0x3300);
+        let triangle_data = Ptr::<()>::new(0x4400);
+        let extra = Ptr::<()>::new(0x5500);
+        e.map(mesh.addr(), 0x1000);
+        e.map(manager.addr(), 0x1000);
+        e.map(triangle_data.addr(), 0x1000);
+        e.map(extra.addr(), 0x1000);
+        e.mem.set_u16(extra.addr(), 8);
+        recorder(&mut e, 0x0069_b080, 0);
+        recorder(&mut e, 0x0084_54f0, 0);
+        recorder(&mut e, 0x0055_82f0, triangle_data.addr());
+        let edge_indices = Rc::new(RefCell::new(0u32));
+        let edge_indices_for_double = edge_indices.clone();
+        e.register_double(0x0055_82d0, move |_, _| {
+            let i = *edge_indices_for_double.borrow();
+            *edge_indices_for_double.borrow_mut() += 1;
+            ret([4u32, 5, 6][i as usize])
+        });
+        e.register_double(0x0069_b0a0, move |_, a| {
+            let edge = a[1] as u16;
+            ret((edge != 5) as u32)
+        });
+        let array_size = recorder(&mut e, ARRAY_SIZE, 1);
+        recorder(&mut e, 0x005e_eda0, extra.addr());
+        let added_values = Rc::new(RefCell::new(Vec::new()));
+        let captured_values = added_values.clone();
+        e.register_double(0x0069_1820, move |e, a| {
+            captured_values.borrow_mut().push(e.mem.u16(a[1]));
+            ret(0)
+        });
+        assert_eq!(fn_0069a830(&mut e, mesh, 0, manager), 3);
+        assert_eq!(&*added_values.borrow(), &[4, 6, 8]);
+        assert_eq!(&*array_size.borrow(), &[vec![mesh.addr() + 0x98]]);
+    }
+
+    #[test]
+    fn triangle_edge_filter_appends_only_edges_found_in_the_map() {
+        let mut e = Engine::new();
+        let mesh = Ptr::<NavMesh>::new(0x200000);
+        let manager = Ptr::<()>::new(0x3300);
+        let triangle_data = Ptr::<()>::new(0x4400);
+        e.map(mesh.addr(), 0x1000);
+        e.map(manager.addr(), 0x1000);
+        e.map(triangle_data.addr(), 0x1000);
+        recorder(&mut e, 0x0084_54f0, 0);
+        recorder(&mut e, 0x0055_82f0, triangle_data.addr());
+        let edge_index = Rc::new(RefCell::new(0u32));
+        let edge_index_copy = edge_index.clone();
+        e.register_double(0x0055_82d0, move |_, _| {
+            let i = *edge_index_copy.borrow();
+            *edge_index_copy.borrow_mut() += 1;
+            ret([9u32, 10, 11][i as usize])
+        });
+        let query = Rc::new(RefCell::new(Vec::new()));
+        let query_copy = query.clone();
+        let query_edges = Rc::new(RefCell::new(Vec::new()));
+        let query_edges_copy = query_edges.clone();
+        e.register_double(0x0069_b240, move |e, a| {
+            query_copy.borrow_mut().push(a.to_vec());
+            let edge = e.mem.u16(a[1]);
+            query_edges_copy.borrow_mut().push(edge);
+            ret(if edge == 10 { u32::MAX } else { 0 })
+        });
+        let values = Rc::new(RefCell::new(Vec::new()));
+        let values_copy = values.clone();
+        e.register_double(0x0069_1820, move |e, a| {
+            values_copy.borrow_mut().push(e.mem.u16(a[1]));
+            ret(0)
+        });
+        assert_eq!(fn_0069a940(&mut e, mesh, 2, manager), 2);
+        assert_eq!(&*values.borrow(), &[9, 11]);
+        assert_eq!(query.borrow().len(), 3);
+        assert_eq!(&*query_edges.borrow(), &[9, 10, 11]);
+        assert_eq!(query.borrow()[0][0], mesh.addr() + 0xe4);
     }
 
     fn arg_f32(word: u32) -> f32 {

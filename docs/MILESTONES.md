@@ -33,6 +33,35 @@ reading do not establish them.
 
 ## Active work: M1
 
+Review corrections collected, 2026-10-10: a04 adds 24 further functions
+and fixes the reviewed point-copy/accessor ABIs and x87 NaN stores;
+13,541 combined engine tests, lint and formatting pass. The ledger now
+keeps 12 documented AI partials in the task queue, with five tool tests
+passing. Fresh a04 research continues while a01 validates in the single
+compile window. Next action: ship updated #116 after both CI checks pass.
+
+Rolling PR #114 passed both CI checks and merged as `89e1a0b` on
+2026-10-10 local time. #116 now holds the subsequent navigation/explosion
+batch, with review corrections required before merge. #115 is rebased
+onto new main with unchanged adapter source and fresh CI. Next action:
+collect corrected slots and finish the count-payload follow-on checks.
+
+Explosion collection, 2026-10-10: 24 functions added, 16 skipped;
+13,511 combined engine tests plus formatting/lint pass. Native review
+found a return-value/NaN copy correction and accessor-description issues;
+the next a04 task owns those fixes and missing branch tests before this
+batch merges. Other slots continue. Next action: collect the corrections
+and ship rolling PR #114 when its viewer check passes (it excludes this
+new explosion batch).
+
+Continuous batch update, 2026-10-10: build 40 from merged #113 passed
+Doc Mitchell (63 s), Back in the Saddle (410 s) and Ghost Town Gunfight
+(339 s) scripted acceptance routes. Navigation continuation adds 36
+complete translations with four explicit skips; 13,487 combined engine
+tests, lint and formatting pass. Phase 2 list adapter PR #115 passed local
+core checks and awaits CI. Next action: continue the prepared translation
+slots and validate the count-payload dependency (see ENGINE_STATE.md).
+
 Engine-port takeover, 2026-10-10 evening: rolling translation PR #109
 passed both CI checks and merged as `b995218`; these translations are
 unit-tested engine code, not new playable behavior. Interrupted a01/a04
@@ -98,6 +127,12 @@ onto merged PR #113. No world consumer
 or save round trip is established. Evidence, ownership and the next count
 destructor dependency: [ENGINE_STATE.md](ENGINE_STATE.md). Next action:
 merge after CI, then close that dependency for a count adapter.
+
+Build 40 published from merged main `f917219` at 19:47 local. Release
+build and the fresh Doc Mitchell route passed (63 s); startup loaded
+417 objects and 406 meshes in 3.8 s. App executable hash matches the
+built source binary, and WHATS-NEW uses LF. The two longer routes are
+rerunning. Next action: finish those checks and the Phase 2 adapter PR.
 
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
 [TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).

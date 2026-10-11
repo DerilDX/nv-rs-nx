@@ -145,7 +145,12 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
 
 7. **Report** per function: translated / partial / skipped, and why.
    Partial translations keep the marker only if the missing part is named
-   in a comment (`// open: ...`).
+   in a comment (`// open: ...`). Also add `// Translation incomplete:
+   <address> - <missing behavior>` on one line. The ledger keeps such
+   addresses `partial` in the engine queue instead of `done`; remove that
+   incomplete marker only when the documented gap is closed and tested.
+   A panic-only placeholder has no translated branch: leave it skipped,
+   without a translation marker or a new registry entry.
 
 ## Checking against the real exe
 

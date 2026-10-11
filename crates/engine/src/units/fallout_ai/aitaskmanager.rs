@@ -1404,6 +1404,7 @@ pub fn movement_task_data_handle_end_message(
 }
 
 // Translated from 008c9330 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008c9330 - compiler exception cleanup path
 /// Constructs the six embedded tasklet data objects and the thread manager.
 // open: compiler SEH cleanup path.
 pub fn ai_task_manager_constructor(e: &mut Engine, this: Ptr) -> Ptr {
@@ -1419,6 +1420,7 @@ pub fn ai_task_manager_constructor(e: &mut Engine, this: Ptr) -> Ptr {
 }
 
 // Translated from 008c9430 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008c9430 - compiler exception cleanup path
 /// Destroys the embedded message pool and tasklets in reverse construction
 /// order.
 // open: compiler SEH cleanup path.
@@ -1433,6 +1435,7 @@ pub fn ai_task_manager_destructor(e: &mut Engine, this: Ptr) {
 }
 
 // Translated from 008c94e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008c94e0 - actor-package scheduling body
 /// Runs the manager's frame of package work, creates its worker threads
 /// once, queues task records in executable order, and either drains the
 /// tasklets synchronously or wakes the workers according to the globals.
@@ -1503,6 +1506,7 @@ pub fn ai_task_queue_enqueue(e: &mut Engine, this: Ptr, value: u32) {
 }
 
 // Translated from 008c9c70 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008c9c70 - depends on open worker startup
 /// Runs the worker loop: wait on its start semaphore, drain the global task
 /// ring through `RunToCompletion`, release the completion semaphore, and
 /// stop when the kill byte is set.
@@ -1529,6 +1533,7 @@ pub fn ai_task_thread_thread_proc(e: &mut Engine, this: Ptr) -> u32 {
 }
 
 // Translated from 008c9d70 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008c9d70 - worker startup protocol
 /// Worker startup setup is left open because its Havok memory-router and
 /// thread-local procedure-index protocol has not yet been translated.
 // open: thread-local allocator setup, thread-safe file registration, and
@@ -1538,6 +1543,7 @@ pub fn ai_task_thread_on_startup(_e: &mut Engine, _this: Ptr) {
 }
 
 // Translated from 008c9e40 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008c9e40 - worker shutdown protocol
 /// Worker shutdown setup is left open because its Havok memory-router and
 /// thread-local procedure-index protocol has not yet been translated.
 // open: thread-local allocator teardown and procedure-index restoration.
@@ -1553,6 +1559,7 @@ fn ai_task_manager_process_body(_e: &mut Engine, _this: Ptr) {
 }
 
 // Translated from 008ca070 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008ca070 - parallel task scheduling body
 /// The parallel actor-package scheduling path.
 // open: translation of its task-record gates, process-list traversal, and
 // worker wake/finish protocol.
@@ -1561,6 +1568,7 @@ pub fn ai_task_manager_process_parallel(_e: &mut Engine, _this: Ptr) {
 }
 
 // Translated from 008ca350 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008ca350 - compiler exception cleanup path
 /// Destroys the message array and restores its own base vtable.
 // open: compiler exception cleanup around the generated array destructor.
 pub fn ai_task_message_pool_destructor(e: &mut Engine, this: Ptr) {
@@ -1579,6 +1587,7 @@ pub fn ai_task_message_pool_base_destructor(e: &mut Engine, this: Ptr) {
 }
 
 // Translated from 008c9ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008c9ae0 - compiler exception cleanup path
 /// Adds a thread while the manager has fewer than three workers. A thread
 /// is constructed only when `operator new` returns a non-null address.
 // open: compiler SEH cleanup path.
@@ -1603,6 +1612,7 @@ pub fn ai_task_thread_manager_add_thread(e: &mut Engine, this: Ptr, processor: u
 }
 
 // Translated from 008c9bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008c9bd0 - compiler exception cleanup path
 /// Constructs a worker's `BSThread` base, two semaphores, memory router,
 /// worker index and clear kill flag.
 // open: compiler SEH cleanup path.
@@ -1650,6 +1660,7 @@ pub fn thread_context_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flag
 }
 
 // Translated from 008c9ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008c9ef0 - compiler exception cleanup path
 /// Destroys the memory router and both semaphores, then the `BSThread`
 /// base.
 // open: compiler SEH unwind chain.
@@ -1768,6 +1779,7 @@ pub fn common_message_queue_constructor(e: &mut Engine, this: Ptr, allocator: Pt
 }
 
 // Translated from 008ca480 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008ca480 - compiler exception cleanup path
 /// Drains messages with the queue's `TryPop` helper, then destroys the
 /// message queue base.
 // open: compiler SEH cleanup path.

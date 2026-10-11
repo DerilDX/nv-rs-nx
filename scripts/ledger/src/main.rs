@@ -85,6 +85,7 @@ struct Func {
     translated: BTreeSet<String>,
     replaced: BTreeSet<String>,
     traced: BTreeSet<String>,
+    incomplete: BTreeSet<String>,
 }
 
 impl Func {
@@ -92,10 +93,30 @@ impl Func {
     /// translation elsewhere (an older marker in `crates/world`) still
     /// needs its engine version.
     fn in_engine(&self) -> bool {
-        self.translated
+        !self.partial_in_engine()
+            && self
+                .translated
+                .iter()
+                .chain(&self.replaced)
+                .any(|l| l.starts_with("crates/engine/"))
+    }
+
+    fn partial_in_engine(&self) -> bool {
+        self.incomplete
             .iter()
-            .chain(&self.replaced)
             .any(|l| l.starts_with("crates/engine/"))
+    }
+
+    fn queue_status(&self) -> &'static str {
+        if self.partial_in_engine() {
+            "partial"
+        } else if self.in_engine() {
+            "done"
+        } else if base_status(&self.subsystem) != "open" {
+            base_status(&self.subsystem)
+        } else {
+            self.status()
+        }
     }
 
     fn status(&self) -> &'static str {
@@ -143,6 +164,8 @@ fn addresses(line: &str) -> Vec<u32> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Cite {
     Traced,
+    /// An explicit gap, kept in the engine task queue even with a marker.
+    Incomplete,
     /// On a translation marker (ADR-0003).
     Translated,
     /// On a `Platform: replaces <addr>` marker: Rust platform code stands in
@@ -151,7 +174,9 @@ enum Cite {
 }
 
 fn marker(line: &str) -> Option<Cite> {
-    if line.contains("Translated from") || line.contains("decompiled, FalloutNV") {
+    if line.contains("Translation incomplete:") {
+        Some(Cite::Incomplete)
+    } else if line.contains("Translated from") || line.contains("decompiled, FalloutNV") {
         Some(Cite::Translated)
     } else if line.contains("Platform: replaces") {
         Some(Cite::Replaced)
@@ -233,6 +258,7 @@ fn load_map(path: &Path) -> Result<(Vec<Func>, Vec<String>), String> {
             translated: BTreeSet::new(),
             replaced: BTreeSet::new(),
             traced: BTreeSet::new(),
+            incomplete: BTreeSet::new(),
         });
     }
     funcs.sort_by_key(|f| f.addr);
@@ -349,6 +375,23 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
         );
     }
     let _ = writeln!(s, "| **all** | **{}** | |", total.n);
+    let partials: Vec<_> = funcs.iter().filter(|f| f.partial_in_engine()).collect();
+    let _ = writeln!(
+        s,
+        "\nTranslation totals count markers, not complete behavior. **{}** engine functions\n\
+         have explicit incomplete markers and remain `partial` in the task queue.\n",
+        partials.len()
+    );
+    if !partials.is_empty() {
+        let _ = writeln!(
+            s,
+            "| Partial engine function | Gap location |\n| --- | --- |"
+        );
+        for f in partials {
+            let locations = f.incomplete.iter().cloned().collect::<Vec<_>>().join(", ");
+            let _ = writeln!(s, "| `{:08x}` | `{locations}` |", f.addr);
+        }
+    }
     let _ = writeln!(
         s,
         "\nGame code (functions in subsystems that are neither platform nor library): \
@@ -591,6 +634,7 @@ fn main() {
                 Cite::Translated => f.translated.insert(loc),
                 Cite::Replaced => f.replaced.insert(loc),
                 Cite::Traced => f.traced.insert(loc),
+                Cite::Incomplete => f.incomplete.insert(loc),
             };
         }
     }
@@ -681,6 +725,7 @@ fn main() {
                 .iter()
                 .chain(&f.replaced)
                 .chain(&f.traced)
+                .chain(&f.incomplete)
                 .collect();
             let _ = writeln!(
                 s,
@@ -725,13 +770,7 @@ fn queue(funcs: &[Func], args: &[String]) {
         {
             // Compiler and runtime code placed in a unit (static
             // initializers) is not translation work even when cited.
-            let st = if f.in_engine() {
-                "done"
-            } else if base_status(&f.subsystem) != "open" {
-                base_status(&f.subsystem)
-            } else {
-                f.status()
-            };
+            let st = f.queue_status();
             println!("{:08x}\t{}\t{}\t{}", f.addr, f.size, st, f.name);
         }
         return;
@@ -784,6 +823,31 @@ mod tests {
             .any(|&(a, t, _)| a == 0x00afe220 && t == Cite::Translated));
     }
 
+    #[test]
+    fn explicit_engine_gaps_stay_in_the_queue_until_closed() {
+        let mut f = func(0x008c94e0, "fallout/ai");
+        f.translated.insert("crates/engine/src/ai.rs:1".into());
+        assert_eq!(f.queue_status(), "done");
+        let markers = scan("// Translation incomplete: 008c94e0 - actor scheduling\n");
+        assert_eq!(markers, vec![(0x008c94e0, Cite::Incomplete, 1)]);
+        // A gap in a different adapter does not reopen a complete engine body.
+        f.incomplete.insert("crates/world/src/ai.rs:1".into());
+        assert_eq!(f.queue_status(), "done");
+        f.incomplete.insert("crates/engine/src/ai.rs:2".into());
+        assert!(!f.in_engine());
+        assert_eq!(f.queue_status(), "partial");
+        assert_eq!(f.status(), "translated", "totals still count markers");
+        let report = render(&[f], &[], 0, 1);
+        assert!(report.contains("**1** engine functions"));
+        assert!(report.contains("| `008c94e0` |"));
+
+        let mut f = func(0x008c94e0, "fallout/ai");
+        f.incomplete.insert("crates/engine/src/ai.rs:2".into());
+        assert_eq!(f.queue_status(), "partial", "a gap needs no fake body");
+        f.incomplete.clear();
+        assert_eq!(f.queue_status(), "open");
+    }
+
     fn func(addr: u32, subsystem: &str) -> Func {
         Func {
             addr,
@@ -796,6 +860,7 @@ mod tests {
             translated: BTreeSet::new(),
             replaced: BTreeSet::new(),
             traced: BTreeSet::new(),
+            incomplete: BTreeSet::new(),
         }
     }
 
