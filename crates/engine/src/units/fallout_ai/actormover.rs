@@ -380,6 +380,154 @@ const GLOBAL_TEST: u32 = 0x008c_7aa0;
 /// `ActorMover::SetPathingFailed`.
 const SET_PATHING_FAILED: u32 = 0x009d_e490;
 
+// Callees of the last functions (`009de3e0` and after). Names that the
+// Xbox PDB gives are marked; the others describe what the code shows.
+
+/// The `TES` pointer (`011dea10`), the receiver of `0045af00` and
+/// `0045cbc0`.
+const TES_POINTER: u32 = 0x011d_ea10;
+/// `TES::GetNavMeshInfoMap` (`0045af00`, receiver only).
+const NAV_MESH_INFO_MAP: u32 = 0x0045_af00;
+/// Packs two 16-bit grid coordinates into one word (`00587410`, cdecl: x, y).
+const PACK_GRID_COORDS: u32 = 0x0058_7410;
+/// Looks a pair up in the nav mesh info map (`006b7850`: map, first,
+/// second).
+const NAV_MESH_INFO_FIND: u32 = 0x006b_7850;
+/// `0045cbc0` on the `TES` pointer: the water height at a position in a
+/// cell (position, cell); the float comes back in ST0.
+const WATER_HEIGHT_AT: u32 = 0x0045_cbc0;
+/// `008ad1c0` (receiver: the actor; position, float, two words taken from
+/// the destination location, 0, 1).
+const ACTOR_PLACE: u32 = 0x008a_d1c0;
+/// The dword at +0x18 of `ECX` (`009611e0`).
+const DWORD_AT_18: u32 = 0x0096_11e0;
+/// A location method called on the failed destination when the failure is
+/// cleared (`006d2c00`; name unconfirmed).
+const LOCATION_RESET: u32 = 0x006d_2c00;
+/// The time in milliseconds (`00825c00`, receiver `011f6394`).
+const TIMER_NOW: u32 = 0x0082_5c00;
+/// Time-out of a failure when the actor passes `IsVisible(7)` (`0109222c`,
+/// a float).
+const FAILURE_TIMEOUT_VISIBLE: u32 = 0x0109_222c;
+/// Time-out of a failure otherwise (`01092230`, a float).
+const FAILURE_TIMEOUT_HIDDEN: u32 = 0x0109_2230;
+/// Time-out when the request's ends lie on different sides of the water
+/// (`01092234`, a float).
+const FAILURE_TIMEOUT_WATER: u32 = 0x0109_2234;
+/// `0.001` (`double`, `01016978`): milliseconds to seconds.
+const MILLISECONDS_TO_SECONDS: u32 = 0x0101_6978;
+/// The flag mask the code passes to `Actor::IsVisible` (`008b0190`).
+const IS_VISIBLE_MASK: u32 = 7;
+
+/// `Actor::IsFollowing_ov2` (Xbox PDB name, `008bc7f0`: actor, other).
+const IS_FOLLOWING: u32 = 0x008b_c7f0;
+/// `008985d0` (receiver: the actor).
+const ACTOR_FOLLOW_FALLBACK: u32 = 0x0089_85d0;
+/// A point's length in ST0 (`00589850`).
+const DIFFERENCE_LENGTH: u32 = 0x0058_9850;
+/// `PathingLocation::PathingLocation_ov3` (Xbox PDB, `006dcd70`): builds a
+/// location at an actor.
+const LOCATION_FROM_ACTOR: u32 = 0x006d_cd70;
+/// `PathingLocation::ResolveNavMeshInfo` (Xbox PDB, `006dd6f0`).
+const LOCATION_RESOLVE_NAV_MESH: u32 = 0x006d_d6f0;
+/// A test of a location (`006dd6a0`).
+const LOCATION_IS_RESOLVED: u32 = 0x006d_d6a0;
+/// A test of a location (`006dd540`).
+const LOCATION_NAV_MESH_TEST: u32 = 0x006d_d540;
+/// A request method taking a location (`006d3ac0`).
+const REQUEST_SET_LOCATION: u32 = 0x006d_3ac0;
+/// A request method taking a float (`006d3ae0`).
+const REQUEST_SET_SECOND_FLOAT: u32 = 0x006d_3ae0;
+/// A float of the actor in ST0 (`008be280`).
+const ACTOR_FLOAT: u32 = 0x008b_e280;
+/// A request method taking a byte (`008ad8f0`).
+const REQUEST_SET_BYTE_A: u32 = 0x008a_d8f0;
+/// A request method taking a byte (`008df1c0`).
+const REQUEST_SET_BYTE_B: u32 = 0x008d_f1c0;
+/// `NiPoint3::NiPoint3()` (`006815c0`).
+const POINT_CONSTRUCT_DEFAULT: u32 = 0x0068_15c0;
+/// `PathingSolution::PathingSolution()` (`006e7650`).
+const PATH_CONSTRUCT: u32 = 0x006e_7650;
+/// `PathingSolution` destructor (`006e7720`).
+const PATH_DESTRUCT: u32 = 0x006e_7720;
+/// Solves a request into a path object (`006d0900`, cdecl: request, path).
+const SOLVE_REQUEST: u32 = 0x006d_0900;
+/// The path's total length (`006e78d0`, ST0).
+const PATH_LENGTH: u32 = 0x006e_78d0;
+/// A point on the path (`006e8790`: path, result pointer, two floats);
+/// returns the result pointer.
+const PATH_POINT_AT: u32 = 0x006e_8790;
+/// Moves a reference to another cell or world space (`00573800`, cdecl:
+/// reference, cell, world space).
+const MOVE_REF_TO_NEW_SPACE: u32 = 0x0057_3800;
+/// Slot 0x2A8 of the actor takes a position pointer (the actor is placed
+/// there; the Xbox PDB name at the offset does not match the PC slot).
+const ACTOR_SLOT_PLACE: u32 = 0x2a8;
+/// `TESObjectREFR::SetLocationOnReference` (`00575830`, argument the
+/// position).
+const SET_LOCATION_ON_REFERENCE: u32 = 0x0057_5830;
+/// `TESWorldSpace::GetCellFromWorldCoord` (`00587550`, argument the
+/// position).
+const GET_CELL_FROM_WORLD_COORD: u32 = 0x0058_7550;
+/// The second report to the global of [`REPORT_TARGET_OBJECT`] (`0087b190`,
+/// argument: the actor).
+const REPORT_MOVE_DONE: u32 = 0x0087_b190;
+/// The target radius of the replacement request (`01017b78`, a float).
+const FAILURE_TARGET_RADIUS: u32 = 0x0101_7b78;
+/// `0.6` as a double (`010290b8`): scales the actor's float for the
+/// replacement request.
+const ACTOR_FLOAT_SCALE: u32 = 0x0102_90b8;
+/// `128.0` (`0101e704`, a float): how far short of the path's end the actor
+/// is placed.
+const PATH_MARGIN_SHORT: u32 = 0x0101_e704;
+/// `256.0` (`01032adc`, a float): the same for a large actor float.
+const PATH_MARGIN_LONG: u32 = 0x0103_2adc;
+/// `0.5` (`double`, `01011588`).
+const HALF: u32 = 0x0101_1588;
+/// `100.0` (`double`, `01017a40`).
+const HUNDRED: u32 = 0x0101_7a40;
+/// Element `index` of an array of 0x30-byte elements (`006e8f40`:
+/// array, index).
+const ARRAY_ELEMENT_BY_INDEX: u32 = 0x006e_8f40;
+/// A test of a path node (`006ca830`).
+const NODE_TEST_FLAG: u32 = 0x006c_a830;
+
+/// Write of `size` bytes from a pointer to the save buffer (`00865e50`:
+/// buffer, pointer, size, 0).
+const SAVE_BYTES: u32 = 0x0086_5e50;
+/// `BGSSaveGameBuffer::SaveFormID` (Xbox PDB, `00865db0`: buffer, form id,
+/// 0).
+const SAVE_FORM_ID: u32 = 0x0086_5db0;
+/// Read of `size` bytes into a pointer from the load buffer (`00864980`:
+/// buffer, pointer, size).
+const LOAD_BYTES: u32 = 0x0086_4980;
+/// `BGSLoadGameBuffer::LoadFormID_ov2` (Xbox PDB name, `008648e0`: buffer,
+/// pointer for the form id).
+const LOAD_FORM_ID: u32 = 0x0086_48e0;
+/// `PathingSolution::SaveGame` (Xbox PDB, `006e8b10`).
+const PATH_SAVE_GAME: u32 = 0x006e_8b10;
+/// `PathingSolution::LoadGame` (Xbox PDB name, `006e8d50`).
+const PATH_LOAD_GAME: u32 = 0x006e_8d50;
+/// `PathingRequest::CreatePathingRequest` (Xbox PDB name, `006e2f80`, cdecl,
+/// one word: the request type).
+const CREATE_PATHING_REQUEST: u32 = 0x006e_2f80;
+/// A test of the part of the process at +4 (`008c6b00`, one argument 0).
+const PROCESS_PART_TEST: u32 = 0x008c_6b00;
+/// Debug print (`005b5e40`, cdecl: format and arguments).
+const PRINT_LINE: u32 = 0x005b_5e40;
+/// The format string `PATHFINDING: Actor %s (0x%08x) is using a stale path
+/// (the navmesh changed), forcing a failure`.
+const STALE_PATH_FORMAT: u32 = 0x0109_2278;
+/// `00984230` on a request: the address of an `NiPointer` inside it.
+const REQUEST_HOLDER: u32 = 0x0098_4230;
+/// `004fb070` (receiver: the object the actor's slot 0x428 returns).
+const SLOT_OBJECT_HOLDER: u32 = 0x004f_b070;
+/// `009d9f20` (receiver: the result of `004fb070`).
+const SLOT_OBJECT_VALUE: u32 = 0x009d_9f20;
+/// `009d9ec0` (receiver: the request, argument: the address of an
+/// `NiPointer`).
+const REQUEST_ATTACH: u32 = 0x009d_9ec0;
+
 /// `ActorPathingMessage::ActorPathingMessage` (8 bytes: type, `NiPointer`).
 const MESSAGE_CONSTRUCT: u32 = 0x006e_9bd0;
 /// `ActorPathingMessage::~ActorPathingMessage`.
@@ -2353,6 +2501,802 @@ pub fn fn_009de3a0(e: &mut Engine, this: Ptr<ActorMover>, process: Ptr) {
     e.set(this, ActorMover::DetectionDoorID, id);
 }
 
+// Translated from 009de3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorMover::IsPathValid` (Xbox PDB): there is a path and
+/// `fn_009dc530` accepts it.
+pub fn actor_mover_is_path_valid(e: &mut Engine, this: Ptr<ActorMover>) -> bool {
+    if current_path(e, this) == 0 {
+        return false;
+    }
+    let path = current_path(e, this);
+    fn_009dc530(e, path)
+}
+
+// Translated from 009de420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// There is a path and its byte at +0x40 is set (`006b05d0`).
+pub fn fn_009de420(e: &mut Engine, this: Ptr<ActorMover>) -> bool {
+    if current_path(e, this) == 0 {
+        return false;
+    }
+    let path = current_path(e, this);
+    e.call(PATH_FLAG_40, &args![path]).bool()
+}
+
+// Translated from 009de460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorMover::GetFailedPathDestination` (Xbox PDB): the address of the
+/// failed destination location, or 0 when its flag (bit 1 of the byte at
+/// +0x26, tested by `006a9520`) is set.
+pub fn actor_mover_get_failed_path_destination(e: &mut Engine, this: Ptr<ActorMover>) -> u32 {
+    let location = this.addr() + ActorMover::FailedPathDestination.off;
+    if e.call(LOCATION_FLAG_2, &args![location]).bool() {
+        0
+    } else {
+        location
+    }
+}
+
+/// Is a position of the request below the water height `TES` reports for
+/// it? `destination` selects the request's destination (`006a9540`)
+/// instead of its origin (`0048d150`); the position is the one
+/// `005c3420` copies out of that location, the height is asked of `TES`
+/// for the given `cell`. The comparison is `position.z < height` (an x87
+/// compare against a double; a NaN fails it).
+fn request_end_below_water(
+    e: &mut Engine,
+    this: Ptr<ActorMover>,
+    destination: bool,
+    cell: u32,
+) -> bool {
+    let end = if destination {
+        REQUEST_DESTINATION
+    } else {
+        REQUEST_ORIGIN
+    };
+    let first = e.mem.alloc(12);
+    let request = current_request(e, this);
+    let location = e.call(end, &args![request]).u32();
+    let position = e.call(GET_POSITION, &args![location, first]).u32();
+    let tes = e.global::<u32>(TES_POINTER);
+    let height = e.call(WATER_HEIGHT_AT, &args![tes, position, cell]).f64();
+    let second = e.mem.alloc(12);
+    let request = current_request(e, this);
+    let location = e.call(end, &args![request]).u32();
+    let position = e.call(GET_POSITION, &args![location, second]).u32();
+    let z = e.mem.f32(position + 8);
+    e.mem.free(first);
+    e.mem.free(second);
+    (z as f64) < height
+}
+
+/// For the held request: both its origin and its destination have a cell
+/// and exactly one of the two lies below the water height at its position.
+fn request_ends_differ_in_water(e: &mut Engine, this: Ptr<ActorMover>) -> bool {
+    let request = current_request(e, this);
+    let origin = e.call(REQUEST_ORIGIN, &args![request]).u32();
+    let origin_cell = e.call(LOCATION_GET_CELL, &args![origin]).u32();
+    let request = current_request(e, this);
+    let destination = e.call(REQUEST_DESTINATION, &args![request]).u32();
+    let destination_cell = e.call(LOCATION_GET_CELL, &args![destination]).u32();
+    if origin_cell == 0 || destination_cell == 0 {
+        return false;
+    }
+    let origin_below = request_end_below_water(e, this, false, origin_cell);
+    let destination_below = request_end_below_water(e, this, true, destination_cell);
+    origin_below != destination_below
+}
+
+/// The game timer's time (`00825c00` on `011f6394`).
+fn timer_now(e: &mut Engine) -> u32 {
+    e.call(TIMER_NOW, &args![GLOBAL_TIMER_OBJECT]).u32()
+}
+
+/// `(now - stamp)` milliseconds as a `float` number of seconds: the 32-bit
+/// difference is loaded as an unsigned 64-bit integer, multiplied by
+/// `0.001` and rounded once to `float`.
+fn seconds_since(e: &mut Engine, stamp: u32) -> f32 {
+    let now = timer_now(e);
+    let factor: f64 = e.global(MILLISECONDS_TO_SECONDS);
+    (now.wrapping_sub(stamp) as f64 * factor) as f32
+}
+
+// Translated from 009de490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorMover::SetPathingFailed` (Xbox PDB): stores the flag. Clearing it
+/// resets the failed destination (`006d2c00`) and ends. Setting it, a
+/// process-type-3 actor standing in the corner grid cell (0, 0) of an
+/// exterior with no nav mesh info for it is placed at the request's
+/// destination (`008ad1c0`); then the failure time-out (3.0 seconds when
+/// the actor is visible, 1.5 otherwise, 1.0 when the request's ends lie on
+/// different sides of the water) is compared with the seconds since the
+/// last and the first failure: a repeated failure inside the time-out only
+/// counts, a fresh one resets the count, and a third failure after the
+/// time-out of the first runs `fn_009de8b0` first.
+pub fn actor_mover_set_pathing_failed(e: &mut Engine, this: Ptr<ActorMover>, failed: bool) {
+    e.set(this, ActorMover::bPathingFailed, failed);
+    if !failed {
+        e.call(
+            LOCATION_RESET,
+            &args![this.addr() + ActorMover::FailedPathDestination.off],
+        );
+        return;
+    }
+    let actor = e.get(this, ActorMover::pActor).addr();
+    if e.call(GET_PROCESS_TYPE, &args![actor]).i32() == 3 {
+        let cell = e.call(GET_PARENT_CELL, &args![actor]).u32();
+        let skip = cell != 0 && {
+            let cell = e.call(GET_PARENT_CELL, &args![actor]).u32();
+            e.call(CELL_FLAG_0, &args![cell]).bool()
+        };
+        if !skip {
+            let position = e.vcall(actor, 0x1f4, &[]).u32();
+            let x = e.mem.f32(position) as f64;
+            let grid_x = e.call(FTOL, &args![x]).i32() >> 12;
+            let position = e.vcall(actor, 0x1f4, &[]).u32();
+            let y = e.mem.f32(position + 4) as f64;
+            let grid_y = e.call(FTOL, &args![y]).i32() >> 12;
+            if grid_x == 0 && grid_y == 0 {
+                let packed = e
+                    .call(
+                        PACK_GRID_COORDS,
+                        &args![grid_x as u16 as u32, grid_y as u16 as u32],
+                    )
+                    .u32();
+                let world_space = e.call(GET_WORLD_SPACE, &args![actor]).u32();
+                let tes = e.global::<u32>(TES_POINTER);
+                let map = e.call(NAV_MESH_INFO_MAP, &args![tes]).u32();
+                if e.call(NAV_MESH_INFO_FIND, &args![map, world_space, packed])
+                    .u32()
+                    == 0
+                {
+                    let request = current_request(e, this);
+                    let destination = e.call(REQUEST_DESTINATION, &args![request]).u32();
+                    let space = e.call(DWORD_AT_1C, &args![destination]).u32();
+                    let request = current_request(e, this);
+                    let destination = e.call(REQUEST_DESTINATION, &args![request]).u32();
+                    let word_18 = e.call(DWORD_AT_18, &args![destination]).u32();
+                    let scratch = e.mem.alloc(12);
+                    let request = current_request(e, this);
+                    let destination = e.call(REQUEST_DESTINATION, &args![request]).u32();
+                    let position = e.call(GET_POSITION, &args![destination, scratch]).u32();
+                    e.call(
+                        ACTOR_PLACE,
+                        &args![actor, position, 0.0f32, word_18, space, 0u32, 1u32],
+                    );
+                    e.mem.free(scratch);
+                }
+            }
+        }
+    }
+    let visible = e
+        .call(ACTOR_TEST_FLAGS, &args![actor, IS_VISIBLE_MASK])
+        .bool();
+    let mut timeout = fpu_copy(e.global::<f32>(if visible {
+        FAILURE_TIMEOUT_VISIBLE
+    } else {
+        FAILURE_TIMEOUT_HIDDEN
+    }));
+    if current_request(e, this) != 0 && request_ends_differ_in_water(e, this) {
+        timeout = fpu_copy(e.global::<f32>(FAILURE_TIMEOUT_WATER));
+    }
+    let last = e.get(this, ActorMover::iLastFailureTimeStamp);
+    let since_last = seconds_since(e, last);
+    let first = e.get(this, ActorMover::iFirstFailureTimeStamp);
+    let since_first = seconds_since(e, first);
+    if timeout <= since_last {
+        e.set(this, ActorMover::iContinuedFailureCount, 0);
+        let now = timer_now(e);
+        e.set(this, ActorMover::iLastFailureTimeStamp, now);
+        let now = timer_now(e);
+        e.set(this, ActorMover::iFirstFailureTimeStamp, now);
+    } else if timeout <= since_first && e.get(this, ActorMover::iContinuedFailureCount) >= 2 {
+        fn_009de8b0(e, this);
+        e.set(this, ActorMover::iContinuedFailureCount, 0);
+        let now = timer_now(e);
+        e.set(this, ActorMover::iLastFailureTimeStamp, now);
+        let now = timer_now(e);
+        e.set(this, ActorMover::iFirstFailureTimeStamp, now);
+    } else {
+        let count = e.get(this, ActorMover::iContinuedFailureCount);
+        e.set(
+            this,
+            ActorMover::iContinuedFailureCount,
+            count.wrapping_add(1),
+        );
+        let now = timer_now(e);
+        e.set(this, ActorMover::iLastFailureTimeStamp, now);
+    }
+    e.call(DEBUG_STUB, &args![this]);
+}
+
+// Translated from 009de8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009de8b0 - C++ exception unwinding (FS:[0] frame) not translated
+/// Called by `SetPathingFailed` on a third failure (name unconfirmed).
+/// When the path handler can warp to the next node (slot 0x74) and a path
+/// exists, it only does that. Otherwise it decides whether the actor is
+/// stuck: a follower farther from the player than twice the request's
+/// target radius, or an actor of process type 0 whose request ends lie on
+/// different sides of the water or whose own location is not resolved. If
+/// it is, it solves a new request (to the actor's own location, radius
+/// 10, ...) and places the actor at the point 128 or 256 units short of
+/// the path's end (or at the first point of an unsolved path), through
+/// `fn_009df010`, or through the actor's slot 0x2A8 after
+/// `MoveRefToNewSpace` for a follower in another world space.
+pub fn fn_009de8b0(e: &mut Engine, this: Ptr<ActorMover>) {
+    let base = this.addr();
+    let actor = e.get(this, ActorMover::pActor).addr();
+    let handler = e.get(this, ActorMover::pCurrentPathHandler).addr();
+    if handler != 0
+        && ni_pointer_value(e, handler + 0x0c) != 0
+        && e.vcall(handler, 0x74, &[]).bool()
+    {
+        e.call(DEBUG_STUB, &args![this]);
+        return;
+    }
+    let mut stuck = false;
+    if current_request(e, this) == 0 {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    if e.call(IS_FOLLOWING, &args![actor, player]).bool() {
+        let handler = e.get(this, ActorMover::pCurrentPathHandler).addr();
+        if handler != 0
+            && ni_pointer_value(e, base + 0x20) != 0
+            && !e.vcall(handler, 0x34, &[]).bool()
+        {
+            let path = current_path(e, this);
+            if !e.call(PATH_FLAG_40, &args![path]).bool() {
+                e.call(ACTOR_FOLLOW_FALLBACK, &args![actor]);
+                return;
+            }
+        }
+        let player_position = e.vcall(player, 0x1f4, &[]).u32();
+        let actor_position = e.vcall(actor, 0x1f4, &[]).u32();
+        let difference = e.mem.alloc(12);
+        let result = e
+            .call(
+                POINT_SUBTRACT,
+                &args![actor_position, difference, player_position],
+            )
+            .u32();
+        let distance = e.call(DIFFERENCE_LENGTH, &args![result]).f64();
+        let request = current_request(e, this);
+        let radius = e.call(REQUEST_TARGET_RADIUS, &args![request]).f64();
+        e.mem.free(difference);
+        if radius + radius < distance {
+            stuck = true;
+        }
+    }
+    if e.call(GET_PROCESS_TYPE, &args![actor]).i32() == 0 {
+        if request_ends_differ_in_water(e, this) {
+            stuck = true;
+        }
+        let location = e.mem.alloc(0x28);
+        e.call(LOCATION_FROM_ACTOR, &args![location, actor]);
+        e.call(LOCATION_RESOLVE_NAV_MESH, &args![location, 0u32]);
+        if !e.call(LOCATION_IS_RESOLVED, &args![location]).bool() {
+            stuck = true;
+        }
+        e.call(LOCATION_DESTRUCT, &args![location]);
+        e.mem.free(location);
+    }
+    if !stuck {
+        return;
+    }
+
+    let request = e.mem.alloc(0xb0);
+    e.call(REQUEST_CONSTRUCT, &args![request]);
+    let held = current_request(e, this);
+    let destination = e.call(REQUEST_DESTINATION, &args![held]).u32();
+    e.call(REQUEST_SET_LOCATION, &args![request, destination]);
+    let location = e.mem.alloc(0x28);
+    e.call(LOCATION_FROM_ACTOR, &args![location, actor]);
+    e.call(REQUEST_SET_DESTINATION, &args![request, location]);
+    e.call(LOCATION_DESTRUCT, &args![location]);
+    e.mem.free(location);
+    let radius = fpu_copy(e.global::<f32>(FAILURE_TARGET_RADIUS));
+    e.call(REQUEST_SET_TARGET_RADIUS, &args![request, radius]);
+    let actor_float = e.call(ACTOR_FLOAT, &args![actor]).f64();
+    let scale: f64 = e.global(ACTOR_FLOAT_SCALE);
+    let scaled = fpu_copy((actor_float * scale) as f32);
+    e.call(REQUEST_SET_SECOND_FLOAT, &args![request, scaled]);
+    e.call(REQUEST_SET_ACTOR, &args![request, actor]);
+    e.call(REQUEST_SET_BYTE_A, &args![request, 1u32]);
+    fn_009deff0(e, Ptr::new(request), 1);
+    e.call(REQUEST_SET_CANT_OPEN_DOORS, &args![request, 0u32]);
+    let actor_base = e.call(ACTOR_BASE, &args![actor]).u32();
+    let can_swim = e.call(BASE_CAN_SWIM, &args![actor_base]).bool();
+    e.call(REQUEST_SET_CAN_SWIM, &args![request, can_swim]);
+    let actor_base = e.call(ACTOR_BASE, &args![actor]).u32();
+    let can_fly = e.call(BASE_CAN_FLY, &args![actor_base]).bool();
+    e.call(REQUEST_SET_CAN_FLY, &args![request, can_fly]);
+    e.call(REQUEST_SET_BYTE_B, &args![request, 1u32]);
+
+    let target = e.mem.alloc(12);
+    e.call(POINT_CONSTRUCT_DEFAULT, &args![target]);
+    // The parent cell of the player is read and kept in a local the code
+    // never uses again.
+    e.call(GET_PARENT_CELL, &args![player]);
+    let path = e.mem.alloc(0x4c);
+    e.call(PATH_CONSTRUCT, &args![path]);
+    let solved = e.call(SOLVE_REQUEST, &args![request, path]).bool();
+    let mut found = true;
+    if solved {
+        let count = e.call(PATH_COUNT_20, &args![path]).u32();
+        if count < 2 {
+            found = false;
+        } else {
+            let mut margin = fpu_copy(e.global::<f32>(PATH_MARGIN_SHORT));
+            let actor_float = e.call(ACTOR_FLOAT, &args![actor]).f64();
+            let half: f64 = e.global(HALF);
+            let limit: f64 = e.global(HUNDRED);
+            if actor_float * half > limit {
+                margin = fpu_copy(e.global::<f32>(PATH_MARGIN_LONG));
+            }
+            let length = e.call(PATH_LENGTH, &args![path]).f64() as f32;
+            let mut distance = (length as f64 - margin as f64) as f32;
+            let zero: f64 = e.global(ZERO_DOUBLE);
+            if (distance as f64) < zero {
+                distance = (length as f64 * half) as f32;
+            }
+            let out = e.mem.alloc(12);
+            let point = e
+                .call(PATH_POINT_AT, &args![path, out, 0.0f32, fpu_copy(distance)])
+                .u32();
+            copy_point(e, point, target);
+            e.mem.free(out);
+        }
+    } else if e.call(PATH_COUNT_20, &args![path]).u32() == 0 {
+        found = false;
+    } else {
+        let out = e.mem.alloc(12);
+        let element = e.call(PATH_SECOND_ARRAY_ELEMENT, &args![path]).u32();
+        let node_location = e.call(NODE_LOCATION, &args![element]).u32();
+        let point = e.call(GET_POSITION, &args![node_location, out]).u32();
+        copy_point(e, point, target);
+        e.mem.free(out);
+    }
+    if found {
+        e.call(DEBUG_STUB, &args![this]);
+        if e.call(IS_FOLLOWING, &args![actor, player]).bool() {
+            let own_space = e.call(GET_WORLD_SPACE, &args![actor]).u32();
+            let player_space = e.call(GET_WORLD_SPACE, &args![player]).u32();
+            if own_space != player_space {
+                let space = e.call(GET_WORLD_SPACE, &args![player]).u32();
+                let cell = e.call(GET_PARENT_CELL, &args![player]).u32();
+                e.call(MOVE_REF_TO_NEW_SPACE, &args![actor, cell, space]);
+                e.vcall(actor, ACTOR_SLOT_PLACE, &args![target]);
+            } else {
+                actor_mover_move_actor_to_location(e, this, Ptr::new(target));
+            }
+        } else {
+            actor_mover_move_actor_to_location(e, this, Ptr::new(target));
+        }
+    }
+    e.call(PATH_DESTRUCT, &args![path]);
+    e.call(REQUEST_DESTRUCT, &args![request]);
+    e.mem.free(target);
+    e.mem.free(path);
+    e.mem.free(request);
+}
+
+// Translated from 009deff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PathingRequest` method: stores the byte at +0xA3
+/// (`bIgnoreSmoothingIfFails`, Xbox PDB). The receiver is a request.
+pub fn fn_009deff0(e: &mut Engine, this: Ptr, flag: u32) {
+    e.mem.set_u8(this.addr() + 0xa3, flag as u8);
+}
+
+// Translated from 009df010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorMover::MoveActorToLocation` (Xbox PDB): places the actor at the
+/// position. With the global test (`008c7aa0`) set, it reports the move
+/// to the global of `004537b0` (`0087b650`, `0087b190`) instead of using
+/// the actor's slot 0x2A8. Then it sets the location on the reference; in
+/// an actor without a world space that is all (returns true). Otherwise
+/// the actor moves to a new space when the cell at the position is not
+/// its cell. Returns true when the actor's desired process level is not 0
+/// or the player is sleeping or resting.
+pub fn actor_mover_move_actor_to_location(
+    e: &mut Engine,
+    this: Ptr<ActorMover>,
+    position: Ptr,
+) -> bool {
+    let actor = e.get(this, ActorMover::pActor).addr();
+    if e.call(GLOBAL_TEST, &[]).bool() {
+        let target = e.call(REPORT_TARGET_OBJECT, &[]).u32();
+        e.call(REPORT_PATH_END, &args![target, actor, position]);
+        let target = e.call(REPORT_TARGET_OBJECT, &[]).u32();
+        e.call(REPORT_MOVE_DONE, &args![target, actor]);
+    } else {
+        e.vcall(actor, ACTOR_SLOT_PLACE, &args![position]);
+    }
+    e.call(SET_LOCATION_ON_REFERENCE, &args![actor, position]);
+    let world_space = e.call(GET_WORLD_SPACE, &args![actor]).u32();
+    if world_space == 0 {
+        return true;
+    }
+    let cell = e.call(GET_PARENT_CELL, &args![actor]).u32();
+    let cell_at = e
+        .call(GET_CELL_FROM_WORLD_COORD, &args![world_space, position])
+        .u32();
+    if cell != cell_at {
+        e.call(MOVE_REF_TO_NEW_SPACE, &args![actor, 0u32, world_space]);
+    }
+    if e.call(GET_DESIRED_PROCESS_LEVEL, &args![actor]).u32() != 0 {
+        return true;
+    }
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    e.call(PLAYER_IS_SLEEPING, &args![player]).bool()
+}
+
+/// Writes `size` bytes at `address` to the save buffer.
+fn save_bytes(e: &mut Engine, buffer: u32, address: u32, size: u32) {
+    e.call(SAVE_BYTES, &args![buffer, address, size, 0u32]);
+}
+
+// Translated from 009df100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorMover::SaveGame` (Xbox PDB; vtable slot 10): writes the node
+/// indexes, flags, move modes, points, state, the time since the last
+/// failure and the failure count, saves the failed destination through its
+/// vtable (slot 0), writes the detection door's form id, then a flag byte
+/// (bit 0 request, bit 1 path, 4 plain handler or 8 detailed handler) and
+/// the request (type byte, then its slot 0x18), the path (`006e8b10`) and
+/// the handler (slot 0x78).
+pub fn actor_mover_save_game(e: &mut Engine, this: Ptr<ActorMover>, buffer: Ptr) {
+    let base = this.addr();
+    let save = buffer.addr();
+    for (offset, size) in [
+        (0x40, 2),
+        (0x42, 2),
+        (0x70, 1),
+        (0x34, 4),
+        (0x71, 1),
+        (0x38, 4),
+        (0x72, 1),
+        (0x73, 1),
+        (0x04, 12),
+        (0x10, 12),
+        (0x3c, 4),
+        (0x74, 1),
+        (0x75, 1),
+        (0x77, 1),
+        (0x76, 1),
+        (0x78, 1),
+        (0x6c, 4),
+    ] {
+        save_bytes(e, save, base + offset, size);
+    }
+    let local = e.mem.alloc(4);
+    let last = e.get(this, ActorMover::iLastFailureTimeStamp);
+    let now = timer_now(e);
+    e.mem.set_u32(local, now.wrapping_sub(last));
+    save_bytes(e, save, local, 4);
+    save_bytes(e, save, base + 0x84, 4);
+    e.vcall(base + 0x44, 0x00, &args![buffer]);
+    let door = e.get(this, ActorMover::DetectionDoorID);
+    e.call(SAVE_FORM_ID, &args![buffer, door, 0u32]);
+    let mut flags = 0u8;
+    if current_request(e, this) != 0 {
+        flags |= 1;
+    }
+    if current_path(e, this) != 0 {
+        flags |= 2;
+    }
+    let handler = e.get(this, ActorMover::pCurrentPathHandler).addr();
+    if handler != 0 {
+        flags |= if e.vcall(handler, 0x34, &[]).bool() {
+            8
+        } else {
+            4
+        };
+    }
+    e.mem.set_u8(local, flags);
+    save_bytes(e, save, local, 1);
+    if current_request(e, this) != 0 {
+        let request = current_request(e, this);
+        let kind = e.vcall(request, 0x10, &[]).u8();
+        e.mem.set_u8(local, kind);
+        save_bytes(e, save, local, 1);
+        let request = current_request(e, this);
+        e.vcall(request, 0x18, &args![buffer]);
+    }
+    if current_path(e, this) != 0 {
+        let path = current_path(e, this);
+        e.call(PATH_SAVE_GAME, &args![path, buffer]);
+    }
+    let handler = e.get(this, ActorMover::pCurrentPathHandler).addr();
+    if handler != 0 {
+        e.vcall(handler, 0x78, &args![buffer]);
+    }
+    e.mem.free(local);
+}
+
+/// Reads `size` bytes from the load buffer into `address`.
+fn load_bytes(e: &mut Engine, buffer: u32, address: u32, size: u32) {
+    e.call(LOAD_BYTES, &args![buffer, address, size]);
+}
+
+// Translated from 009df3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009df3d0 - C++ exception unwinding (FS:[0] frame) not translated
+/// `ActorMover::LoadGame` (Xbox PDB; vtable slot 11): reads what
+/// `SaveGame` wrote. The save-version byte (the buffer's vtable slot 0)
+/// gates the failure timing (0x0E and later) and the failed destination
+/// (7 and later). It builds the request (`CreatePathingRequest`, then its
+/// slot 0x1C; the actor is set when the process part test says so), the
+/// path (loaded, then each node tested: a node whose test passes and
+/// whose location has no nav mesh makes the mover fail with a printed
+/// message) and the handler (virtual one for bit 4, detailed one for bit
+/// 8, then its slot 0x7C). A stale path clears the current data, sets
+/// the state to 7 and calls `SetPathingFailed(true)`.
+pub fn actor_mover_load_game(e: &mut Engine, this: Ptr<ActorMover>, buffer: Ptr) {
+    let base = this.addr();
+    let load = buffer.addr();
+    for (offset, size) in [
+        (0x40, 2),
+        (0x42, 2),
+        (0x70, 1),
+        (0x34, 4),
+        (0x71, 1),
+        (0x38, 4),
+        (0x72, 1),
+        (0x73, 1),
+        (0x04, 12),
+        (0x10, 12),
+        (0x3c, 4),
+        (0x74, 1),
+        (0x75, 1),
+        (0x77, 1),
+        (0x76, 1),
+        (0x78, 1),
+        (0x6c, 4),
+    ] {
+        load_bytes(e, load, base + offset, size);
+    }
+    let local = e.mem.alloc(4);
+    if e.vcall(load, 0x00, &[]).u8() >= 0x0e {
+        e.mem.set_u32(local, 0);
+        load_bytes(e, load, local, 4);
+        let now = timer_now(e);
+        let stored = e.mem.u32(local);
+        if stored < now {
+            let now = timer_now(e);
+            e.set(
+                this,
+                ActorMover::iLastFailureTimeStamp,
+                now.wrapping_sub(stored),
+            );
+        }
+        load_bytes(e, load, base + 0x84, 4);
+    }
+    if e.vcall(load, 0x00, &[]).u8() >= 7 {
+        e.vcall(base + 0x44, 0x04, &args![buffer]);
+    }
+    e.call(LOAD_FORM_ID, &args![load, base + 0x2c]);
+    e.mem.set_u8(local, 0);
+    load_bytes(e, load, local, 1);
+    let flags = e.mem.u8(local);
+    let actor = e.get(this, ActorMover::pActor).addr();
+    if flags & 1 != 0 {
+        e.mem.set_u8(local, 0);
+        load_bytes(e, load, local, 1);
+        let kind = e.mem.u8(local) as u32;
+        let request = e.call(CREATE_PATHING_REQUEST, &args![kind]).u32();
+        set_ni_pointer(e, base + 0x1c, request);
+        let request = current_request(e, this);
+        e.vcall(request, 0x1c, &args![buffer]);
+        if actor != 0 {
+            let process = e.call(GET_PROCESS, &args![actor]).u32();
+            if process != 0 {
+                let process = e.call(GET_PROCESS, &args![actor]).u32();
+                if !e.call(PROCESS_PART_TEST, &args![process + 4, 0u32]).bool() {
+                    let request = current_request(e, this);
+                    e.call(REQUEST_SET_ACTOR, &args![request, actor]);
+                }
+            }
+        }
+    }
+    let mut stale = false;
+    if flags & 2 != 0 {
+        let block = e.call(ALLOCATE, &args![0x44u32]).u32();
+        let path = if block != 0 {
+            e.call(PATH_CONSTRUCT, &args![block]).u32()
+        } else {
+            0
+        };
+        set_ni_pointer(e, base + 0x20, path);
+        let path = current_path(e, this);
+        e.call(PATH_LOAD_GAME, &args![path, buffer]);
+        let mut index = 0u32;
+        loop {
+            let path = current_path(e, this);
+            let count = e.call(PATH_NODE_COUNT, &args![path]).u32();
+            if index >= count {
+                break;
+            }
+            let path = current_path(e, this);
+            let node = e.call(PATH_NODE_AT, &args![path, index]).u32();
+            if e.call(NODE_TEST_FLAG, &args![node]).bool() {
+                let path = current_path(e, this);
+                let node = e.call(PATH_NODE_AT, &args![path, index]).u32();
+                let location = e.call(NODE_LOCATION, &args![node]).u32();
+                if e.call(LOCATION_NAV_MESH_TEST, &args![location]).u32() == 0 {
+                    let id = e.call(PROCESS_DOOR_ID, &args![actor]).u32();
+                    let name = e.vcall(actor, 0x130, &[]).u32();
+                    e.call(PRINT_LINE, &args![STALE_PATH_FORMAT, name, id]);
+                    stale = true;
+                    break;
+                }
+            }
+            index += 1;
+        }
+    }
+    if flags & 4 != 0 {
+        let block = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+        let handler = if block != 0 {
+            let request = current_request(e, this);
+            e.call(
+                VIRTUAL_HANDLER_CONSTRUCT,
+                &args![block, actor, this, base + 0x20, request],
+            )
+            .u32()
+        } else {
+            0
+        };
+        e.set(this, ActorMover::pCurrentPathHandler, Ptr::new(handler));
+    } else if flags & 8 != 0 {
+        let block = e.call(OPERATOR_NEW, &args![0xe4u32]).u32();
+        let handler = if block != 0 {
+            let request = current_request(e, this);
+            e.call(
+                DETAILED_HANDLER_CONSTRUCT,
+                &args![block, actor, this, base + 0x20, request],
+            )
+            .u32()
+        } else {
+            0
+        };
+        e.set(this, ActorMover::pCurrentPathHandler, Ptr::new(handler));
+    }
+    let handler = e.get(this, ActorMover::pCurrentPathHandler).addr();
+    if handler != 0 {
+        e.vcall(handler, 0x7c, &args![buffer]);
+    }
+    if stale {
+        actor_mover_clear_current_data(e, this);
+        e.set(this, ActorMover::eState, STATE_FAILED);
+        actor_mover_set_pathing_failed(e, this, true);
+    }
+    e.mem.free(local);
+}
+
+// Translated from 009df8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009df8c0 - C++ exception unwinding (FS:[0] frame) not translated
+/// `ActorMover::InitLoadGame` (Xbox PDB; vtable slot 12): passes the load
+/// buffer to the handler (slot 0x80). With a request: when its type is 5
+/// and the actor's slot 0x428 object resolves (`004fb070`, `009d9f20`),
+/// the request is attached to that object through a temporary `NiPointer`
+/// (`009d9ec0`); then the request's slot 0x20 runs and the request is
+/// given the actor.
+pub fn actor_mover_init_load_game(e: &mut Engine, this: Ptr<ActorMover>, buffer: Ptr) {
+    let actor = e.get(this, ActorMover::pActor).addr();
+    let handler = e.get(this, ActorMover::pCurrentPathHandler).addr();
+    if handler != 0 {
+        e.vcall(handler, 0x80, &args![buffer]);
+    }
+    if current_request(e, this) == 0 {
+        return;
+    }
+    let request = current_request(e, this);
+    if e.vcall(request, 0x10, &[]).u32() == 5 {
+        let held = current_request(e, this);
+        let object = e.vcall(actor, 0x428, &[]).u32();
+        if object != 0 && e.call(SLOT_OBJECT_HOLDER, &args![object]).u32() != 0 {
+            let holder = e.call(SLOT_OBJECT_HOLDER, &args![object]).u32();
+            let value = e.call(SLOT_OBJECT_VALUE, &args![holder]).u32();
+            let temporary = e.mem.alloc(4);
+            e.call(NI_POINTER_CONSTRUCT, &args![temporary, value]);
+            e.call(REQUEST_ATTACH, &args![held, temporary]);
+            e.call(NI_POINTER_DESTRUCT, &args![temporary]);
+            e.mem.free(temporary);
+        }
+    }
+    let request = current_request(e, this);
+    e.vcall(request, 0x20, &args![buffer]);
+    let request = current_request(e, this);
+    e.call(REQUEST_SET_ACTOR, &args![request, actor]);
+}
+
+// Translated from 009dfa00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009dfa00 - C++ exception unwinding (FS:[0] frame) not translated
+/// `ActorMover::FinishLoadGame` (Xbox PDB; vtable slot 13; the buffer
+/// word is not read): when the mover was waiting for a path and has a
+/// request, it re-asks `PathManager::BuildPath` (creating the message
+/// queue if needed); a request of type 5 whose holder (`00984230`) is
+/// empty, or a refused `BuildPath`, fails the mover and ends the wait.
+pub fn actor_mover_finish_load_game(e: &mut Engine, this: Ptr<ActorMover>, _unused_1: u32) {
+    let base = this.addr();
+    if !e.get(this, ActorMover::bWaitingForPath) || current_request(e, this) == 0 {
+        return;
+    }
+    let mut rebuild = false;
+    let request = current_request(e, this);
+    if e.vcall(request, 0x10, &[]).u32() == 5 {
+        let held = current_request(e, this);
+        let holder = e.call(REQUEST_HOLDER, &args![held]).u32();
+        if ni_pointer_value(e, holder) == 0 {
+            rebuild = true;
+        }
+    }
+    if ni_pointer_value(e, base + 0x30) == 0 {
+        reset_message_queue(e, this);
+    }
+    if !rebuild {
+        let copies = e.mem.alloc(8);
+        e.call(QUEUE_POINTER_COPY, &args![copies, base + 0x30]);
+        e.call(REQUEST_POINTER_COPY, &args![copies + 4, base + 0x1c]);
+        let manager = e.call(PATH_MANAGER_INSTANCE, &[]).u32();
+        let queue_copy = e.mem.u32(copies);
+        let request_copy = e.mem.u32(copies + 4);
+        let built = e
+            .call(BUILD_PATH, &args![manager, request_copy, queue_copy, true])
+            .bool();
+        e.mem.free(copies);
+        if built {
+            return;
+        }
+    }
+    actor_mover_set_pathing_failed(e, this, true);
+    e.set(this, ActorMover::bWaitingForPath, false);
+}
+
+// Translated from 009dfb80 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009dfb80 - C++ exception unwinding (FS:[0] frame) not translated
+/// `ActorMover::Revert` (Xbox PDB; vtable slot 14; the argument is not
+/// read): the constructor's reset of the state, after releasing what the
+/// mover holds: a message queue replaced when it was waiting for a path,
+/// the request and the path dropped, the handler deleted, then
+/// `SetPathingFailed(false)`.
+pub fn actor_mover_revert(e: &mut Engine, this: Ptr<ActorMover>, _unused_1: u32) {
+    let base = this.addr();
+    if e.get(this, ActorMover::bWaitingForPath) {
+        reset_message_queue(e, this);
+    }
+    e.set(this, ActorMover::eState, 0);
+    set_ni_pointer(e, base + 0x1c, 0);
+    set_ni_pointer(e, base + 0x20, 0);
+    let handler = e.get(this, ActorMover::pCurrentPathHandler).addr();
+    delete_handler(e, handler);
+    e.set(this, ActorMover::pCurrentPathHandler, Ptr::NULL);
+    e.set(this, ActorMover::uiPreferredMoveMode, 0x101);
+    actor_mover_set_pathing_failed(e, this, false);
+    e.set(this, ActorMover::iPreviousNode, 0xffff);
+    e.set(this, ActorMover::iNextNode, 0xffff);
+    e.set(this, ActorMover::bActorChangedProcessLevel, false);
+    e.set(this, ActorMover::bStopMovementNextUpdate, false);
+    e.set(this, ActorMover::bWaitingForPath, false);
+    e.set(this, ActorMover::bInDialog, false);
+    copy_point(e, UNSET_POINT, base + ActorMover::LookAtPoint.off);
+    copy_point(e, UNSET_POINT, base + ActorMover::CachedMoveDelta.off);
+    e.set(this, ActorMover::bFaceTargetPoint, false);
+    e.set(this, ActorMover::bForceMoveMode, false);
+    e.set(this, ActorMover::bStopCurrentMoveAnim, false);
+    e.set(this, ActorMover::bHaveValidDeltaThisFrame, false);
+    e.set(this, ActorMover::uiForcedMoveMode, 0);
+    e.set(this, ActorMover::iCachedLastValidMoveMode, 0);
+    e.set(this, ActorMover::DetectionDoorID, 0);
+    e.set(this, ActorMover::iContinuedFailureCount, 0);
+    e.set(this, ActorMover::iLastFailureTimeStamp, 0);
+    e.set(this, ActorMover::iFirstFailureTimeStamp, 0);
+}
+
+// Translated from 009dfd50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The last element of an array of 0x30-byte elements whose count is at
+/// +8 (the element at `count - 1`, through `006e8f40`); the receiver is
+/// the array.
+pub fn fn_009dfd50(e: &mut Engine, array: u32) -> u32 {
+    let count = e.mem.u32(array + 8);
+    e.call(ARRAY_ELEMENT_BY_INDEX, &args![array, count.wrapping_sub(1)])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2482,12 +3426,42 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009de2b0, fn_009de2b0(Ptr<ActorMover>, Ptr) -> bool),
         entry!(0x009de330, fn_009de330(Ptr<ActorMover>, Ptr) -> bool),
         entry!(0x009de3a0, fn_009de3a0(Ptr<ActorMover>, Ptr)),
+        entry!(
+            0x009de3e0,
+            actor_mover_is_path_valid(Ptr<ActorMover>) -> bool
+        ),
+        entry!(0x009de420, fn_009de420(Ptr<ActorMover>) -> bool),
+        entry!(
+            0x009de460,
+            actor_mover_get_failed_path_destination(Ptr<ActorMover>) -> u32
+        ),
+        entry!(
+            0x009de490,
+            actor_mover_set_pathing_failed(Ptr<ActorMover>, bool)
+        ),
+        entry!(0x009de8b0, fn_009de8b0(Ptr<ActorMover>)),
+        entry!(0x009deff0, fn_009deff0(Ptr, u32)),
+        entry!(
+            0x009df010,
+            actor_mover_move_actor_to_location(Ptr<ActorMover>, Ptr) -> bool
+        ),
+        entry!(0x009df100, actor_mover_save_game(Ptr<ActorMover>, Ptr)),
+        entry!(0x009df3d0, actor_mover_load_game(Ptr<ActorMover>, Ptr)),
+        entry!(0x009df8c0, actor_mover_init_load_game(Ptr<ActorMover>, Ptr)),
+        entry!(
+            0x009dfa00,
+            actor_mover_finish_load_game(Ptr<ActorMover>, u32)
+        ),
+        entry!(0x009dfb80, actor_mover_revert(Ptr<ActorMover>, u32)),
+        entry!(0x009dfd50, fn_009dfd50(u32) -> u32),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
 
     type Call = (u32, Vec<u32>);
 
@@ -2620,6 +3594,51 @@ mod tests {
         REPORT_TARGET_OBJECT,
         GLOBAL_TEST,
         SET_PATHING_FAILED,
+        NAV_MESH_INFO_MAP,
+        PACK_GRID_COORDS,
+        NAV_MESH_INFO_FIND,
+        WATER_HEIGHT_AT,
+        ACTOR_PLACE,
+        DWORD_AT_18,
+        LOCATION_RESET,
+        TIMER_NOW,
+        IS_FOLLOWING,
+        ACTOR_FOLLOW_FALLBACK,
+        DIFFERENCE_LENGTH,
+        LOCATION_FROM_ACTOR,
+        LOCATION_RESOLVE_NAV_MESH,
+        LOCATION_IS_RESOLVED,
+        LOCATION_NAV_MESH_TEST,
+        REQUEST_SET_LOCATION,
+        REQUEST_SET_SECOND_FLOAT,
+        ACTOR_FLOAT,
+        REQUEST_SET_BYTE_A,
+        REQUEST_SET_BYTE_B,
+        POINT_CONSTRUCT_DEFAULT,
+        PATH_CONSTRUCT,
+        PATH_DESTRUCT,
+        SOLVE_REQUEST,
+        PATH_LENGTH,
+        PATH_POINT_AT,
+        MOVE_REF_TO_NEW_SPACE,
+        SET_LOCATION_ON_REFERENCE,
+        GET_CELL_FROM_WORLD_COORD,
+        REPORT_MOVE_DONE,
+        SAVE_BYTES,
+        SAVE_FORM_ID,
+        LOAD_BYTES,
+        LOAD_FORM_ID,
+        PATH_SAVE_GAME,
+        PATH_LOAD_GAME,
+        CREATE_PATHING_REQUEST,
+        PROCESS_PART_TEST,
+        PRINT_LINE,
+        REQUEST_HOLDER,
+        SLOT_OBJECT_HOLDER,
+        SLOT_OBJECT_VALUE,
+        REQUEST_ATTACH,
+        ARRAY_ELEMENT_BY_INDEX,
+        NODE_TEST_FLAG,
         MESSAGE_CONSTRUCT,
         MESSAGE_DESTRUCT,
         0x006e_5400,
@@ -2669,6 +3688,12 @@ mod tests {
             0x011d_d000,
             0x011d_e000,
             0x011f_4000,
+            0x0101_1000,
+            0x0101_6000,
+            0x0101_7000,
+            0x0102_9000,
+            0x0103_2000,
+            0x0109_2000,
             SCRATCH,
             0x0700_0000,
         ] {
@@ -5533,6 +6558,1135 @@ mod tests {
         assert_eq!(r.e.get(r.mover, ActorMover::DetectionDoorID), 0x501);
         assert_eq!(first(&calls(&mut r.e), PROCESS_DOOR_ID).1, vec![0x500]);
     }
+    // The functions from `009de3e0` on.
+
+    const PLAYER_TABLE: u32 = 0x0306_0000;
+    const PLAYER_FAKE: u32 = 0x0506_0000;
+    const BUFFER_TABLE: u32 = 0x0307_0000;
+    const BUFFER_FAKE: u32 = 0x0507_0000;
+    const LOCATION_TABLE: u32 = 0x0308_0000;
+    const LOCATION_FAKE: u32 = 0x0508_0000;
+    /// Two request locations; the position doubles read from +0x100.
+    const END_A: u32 = SCRATCH + 0x400;
+    const END_B: u32 = SCRATCH + 0x500;
+
+    fn clock(e: &mut Engine, start: u32) -> Rc<Cell<u32>> {
+        let now = Rc::new(Cell::new(start));
+        let reading = now.clone();
+        e.register_double(TIMER_NOW, move |_, _| ret(reading.get()));
+        now
+    }
+
+    /// The request's two ends at heights `z_a` and `z_b`, the water at
+    /// `height`, `cell` the cell both ends report.
+    fn water_request(r: &mut Rig, z_a: f32, z_b: f32, height: f64, cell: u32) {
+        attach_request(r);
+        r.e.register(REQUEST_ORIGIN, |_, _| ret(END_A));
+        r.e.register(REQUEST_DESTINATION, |_, _| ret(END_B));
+        put_point(&mut r.e, END_A + 0x100, 1.0, 2.0, z_a);
+        put_point(&mut r.e, END_B + 0x100, 3.0, 4.0, z_b);
+        r.e.register(GET_POSITION, |e, a| {
+            copy_point(e, a[0] + 0x100, a[1]);
+            ret(a[1])
+        });
+        r.e.register_double(LOCATION_GET_CELL, move |_, _| ret(cell));
+        r.e.register_double(WATER_HEIGHT_AT, move |_, _| ret_float(height));
+    }
+
+    /// One failure at `now`; returns the count and the two time stamps.
+    fn failure_step(now: u32, last: u32, first: u32, count: i32, hidden: f32) -> (i32, u32, u32) {
+        let mut r = rig();
+        r.e.set_global(FAILURE_TIMEOUT_HIDDEN, hidden);
+        r.e.set_global(MILLISECONDS_TO_SECONDS, 0.001f64);
+        clock(&mut r.e, now);
+        r.e.set(r.mover, ActorMover::iLastFailureTimeStamp, last);
+        r.e.set(r.mover, ActorMover::iFirstFailureTimeStamp, first);
+        r.e.set(r.mover, ActorMover::iContinuedFailureCount, count);
+        actor_mover_set_pathing_failed(&mut r.e, r.mover, true);
+        assert!(r.e.get(r.mover, ActorMover::bPathingFailed));
+        (
+            r.e.get(r.mover, ActorMover::iContinuedFailureCount),
+            r.e.get(r.mover, ActorMover::iLastFailureTimeStamp),
+            r.e.get(r.mover, ActorMover::iFirstFailureTimeStamp),
+        )
+    }
+
+    #[test]
+    fn path_validity_queries() {
+        let mut r = rig();
+        assert!(!r.e.call(0x009d_e3e0, &args![r.mover]).bool());
+        assert!(!r.e.call(0x009d_e420, &args![r.mover]).bool());
+        let path = attach_path(&mut r);
+        assert!(r.e.call(0x009d_e3e0, &args![r.mover]).bool());
+        r.e.register(PATH_FLAG_40, |e, a| ret(e.mem.u8(a[0] + 0x40) as u32));
+        assert!(!r.e.call(0x009d_e420, &args![r.mover]).bool());
+        r.e.mem.set_u8(path + 0x40, 1);
+        assert!(r.e.call(0x009d_e420, &args![r.mover]).bool());
+        // A path the validity test refuses.
+        r.e.mem.set_u32(path + 0x10, 0);
+        assert!(!r.e.call(0x009d_e3e0, &args![r.mover]).bool());
+    }
+
+    #[test]
+    fn failed_destination_is_hidden_by_its_flag() {
+        let mut r = rig();
+        r.e.register(LOCATION_FLAG_2, |_, _| ret(0));
+        r.e.call_log = Some(vec![]);
+        let location = r.mover.addr() + 0x44;
+        assert_eq!(r.e.call(0x009d_e460, &args![r.mover]).u32(), location);
+        assert_eq!(first(&calls(&mut r.e), LOCATION_FLAG_2).1, vec![location]);
+        r.e.register(LOCATION_FLAG_2, |_, _| ret(1));
+        assert_eq!(r.e.call(0x009d_e460, &args![r.mover]).u32(), 0);
+    }
+
+    #[test]
+    fn clearing_the_failure_only_resets_the_location() {
+        let mut r = rig();
+        r.e.set(r.mover, ActorMover::bPathingFailed, true);
+        r.e.call_log = Some(vec![]);
+        actor_mover_set_pathing_failed(&mut r.e, r.mover, false);
+        let log = calls(&mut r.e);
+        assert!(!r.e.get(r.mover, ActorMover::bPathingFailed));
+        assert_eq!(log, vec![(LOCATION_RESET, vec![r.mover.addr() + 0x44])]);
+    }
+
+    #[test]
+    fn failure_counting_follows_the_time_out() {
+        // Hidden time-out 1.5 s. A failure 2.0 s after the last restarts.
+        assert_eq!(failure_step(3000, 1000, 1000, 1, 1.5), (0, 3000, 3000));
+        // 1.0 s after both: counted, the first stamp stays.
+        assert_eq!(failure_step(2000, 1000, 1000, 1, 1.5), (2, 2000, 1000));
+        // Recent, but the first is older than the time-out and two were
+        // counted: the recovery runs (no request: it returns at once) and
+        // everything restarts.
+        assert_eq!(failure_step(3000, 2900, 1000, 2, 1.5), (0, 3000, 3000));
+        // The same with one counted failure only: counted.
+        assert_eq!(failure_step(3000, 2900, 1000, 1, 1.5), (2, 3000, 1000));
+        // A time-out that is NaN fails every comparison: counted.
+        assert_eq!(failure_step(3000, 1000, 1000, 0, f32::NAN), (1, 3000, 1000));
+        // The 32-bit difference is unsigned and wraps: 0x200 ms.
+        assert_eq!(
+            failure_step(0x100, 0xffff_ff00, 0xffff_ff00, 0, 0.6),
+            (1, 0x100, 0xffff_ff00)
+        );
+        assert_eq!(
+            failure_step(0x100, 0xffff_ff00, 0xffff_ff00, 0, 0.25),
+            (0, 0x100, 0x100)
+        );
+    }
+
+    #[test]
+    fn failure_time_out_depends_on_visibility_and_water() {
+        // Visible: 3.0 s, so 2.0 s after the last only counts.
+        let mut r = rig();
+        r.e.set_global(FAILURE_TIMEOUT_VISIBLE, 3.0f32);
+        r.e.set_global(FAILURE_TIMEOUT_HIDDEN, 1.5f32);
+        r.e.set_global(MILLISECONDS_TO_SECONDS, 0.001f64);
+        r.e.register(ACTOR_TEST_FLAGS, |_, _| ret(1));
+        clock(&mut r.e, 3000);
+        r.e.set(r.mover, ActorMover::iLastFailureTimeStamp, 1000);
+        r.e.set(r.mover, ActorMover::iFirstFailureTimeStamp, 1000);
+        r.e.call_log = Some(vec![]);
+        actor_mover_set_pathing_failed(&mut r.e, r.mover, true);
+        assert_eq!(
+            first(&calls(&mut r.e), ACTOR_TEST_FLAGS).1,
+            vec![r.actor, 7]
+        );
+        assert_eq!(r.e.get(r.mover, ActorMover::iContinuedFailureCount), 1);
+        // A request whose ends lie on different sides of the water: 1.0 s,
+        // so 1.2 s after the last restarts; on the same side it only counts.
+        for (z_b, restarts) in [(5.0f32, true), (0.5, false), (f32::NAN, true)] {
+            let mut r = rig();
+            r.e.set_global(FAILURE_TIMEOUT_HIDDEN, 1.5f32);
+            r.e.set_global(FAILURE_TIMEOUT_WATER, 1.0f32);
+            r.e.set_global(MILLISECONDS_TO_SECONDS, 0.001f64);
+            water_request(&mut r, 0.0, z_b, 2.0, 0x11);
+            clock(&mut r.e, 2200);
+            r.e.set(r.mover, ActorMover::iLastFailureTimeStamp, 1000);
+            r.e.set(r.mover, ActorMover::iFirstFailureTimeStamp, 1000);
+            r.e.call_log = Some(vec![]);
+            actor_mover_set_pathing_failed(&mut r.e, r.mover, true);
+            let log = calls(&mut r.e);
+            let expected_count = if restarts { 0 } else { 1 };
+            assert_eq!(
+                r.e.get(r.mover, ActorMover::iContinuedFailureCount),
+                expected_count,
+                "z {z_b}"
+            );
+            // The height is asked of the TES for the position and the cell.
+            assert_eq!(count(&log, WATER_HEIGHT_AT), 2);
+            assert_eq!(first(&log, WATER_HEIGHT_AT).1[2], 0x11);
+        }
+        // Without a cell on one end the water is not looked at.
+        let mut r = rig();
+        r.e.set_global(FAILURE_TIMEOUT_HIDDEN, 1.5f32);
+        water_request(&mut r, 0.0, 5.0, 2.0, 0);
+        r.e.call_log = Some(vec![]);
+        actor_mover_set_pathing_failed(&mut r.e, r.mover, true);
+        assert_eq!(count(&calls(&mut r.e), WATER_HEIGHT_AT), 0);
+    }
+
+    #[test]
+    fn a_stuck_actor_on_the_grid_origin_is_placed_at_the_destination() {
+        // (process type, cell is flagged, x, y, info map answer, places)
+        for (kind, flagged, x, y, found, places) in [
+            (3u32, false, 0.0f32, 0.0f32, 0u32, true),
+            (3, false, 0.0, 0.0, 9, false),
+            (3, true, 0.0, 0.0, 0, false),
+            (3, false, 4096.0, 0.0, 0, false),
+            (3, false, 0.0, 4096.0, 0, false),
+            (2, false, 0.0, 0.0, 0, false),
+        ] {
+            let mut r = rig();
+            attach_request(&mut r);
+            r.e.register(FTOL, |_, a| {
+                let value = f64::from_bits(a[0] as u64 | (a[1] as u64) << 32);
+                ret(value as i32 as u32)
+            });
+            r.e.register_double(GET_PROCESS_TYPE, move |_, _| ret(kind));
+            r.e.register(GET_PARENT_CELL, |_, _| ret(0x40));
+            r.e.register_double(CELL_FLAG_0, move |_, _| ret(flagged as u32));
+            r.e.register(ACTOR_FAKE + 0x1f4, |_, _| ret(ACTOR_POSITION));
+            put_point(&mut r.e, ACTOR_POSITION, x, y, 7.0);
+            r.e.register(PACK_GRID_COORDS, |_, _| ret(0x77));
+            r.e.register(GET_WORLD_SPACE, |_, _| ret(0x66));
+            r.e.register(NAV_MESH_INFO_MAP, |_, _| ret(0x88));
+            r.e.register_double(NAV_MESH_INFO_FIND, move |_, _| ret(found));
+            r.e.register(REQUEST_DESTINATION, |_, _| ret(END_B));
+            r.e.mem.set_u32(END_B + 0x1c, 0x1234);
+            r.e.register(DWORD_AT_18, |_, _| ret(0x18));
+            r.e.register(GET_POSITION, |_, a| ret(a[1]));
+            r.e.set_global(TES_POINTER, 0x7777u32);
+            r.e.set_global(FAILURE_TIMEOUT_HIDDEN, 1.5f32);
+            r.e.call_log = Some(vec![]);
+            actor_mover_set_pathing_failed(&mut r.e, r.mover, true);
+            let log = calls(&mut r.e);
+            assert_eq!(
+                count(&log, ACTOR_PLACE),
+                places as usize,
+                "{kind} {flagged} {x} {y}"
+            );
+            if places {
+                let place = first(&log, ACTOR_PLACE);
+                assert_eq!(place.1[0], r.actor);
+                assert_eq!(place.1[2..], [0, 0x18, 0x1234, 0, 1]);
+                assert_eq!(first(&log, PACK_GRID_COORDS).1, vec![0, 0]);
+                assert_eq!(first(&log, NAV_MESH_INFO_FIND).1, vec![0x88, 0x66, 0x77]);
+                assert_eq!(first(&log, NAV_MESH_INFO_MAP).1, vec![0x7777]);
+            }
+        }
+    }
+
+    #[test]
+    fn move_actor_to_location_reports_or_places_the_actor() {
+        let position = SCRATCH + 0x300;
+        let player = SCRATCH + 0x700;
+        // The global test passes: the two reports, not the actor's slot.
+        // The actor has no world space: done.
+        let mut r = rig();
+        r.e.register(GLOBAL_TEST, |_, _| ret(1));
+        r.e.register(REPORT_TARGET_OBJECT, |_, _| ret(0x888));
+        r.e.call_log = Some(vec![]);
+        assert!(r.e.call(0x009d_f010, &args![r.mover, p(position)]).bool());
+        let log = calls(&mut r.e);
+        assert_eq!(
+            first(&log, REPORT_PATH_END).1,
+            vec![0x888, r.actor, position]
+        );
+        assert_eq!(first(&log, REPORT_MOVE_DONE).1, vec![0x888, r.actor]);
+        assert_eq!(
+            first(&log, SET_LOCATION_ON_REFERENCE).1,
+            vec![r.actor, position]
+        );
+        assert_eq!(count(&log, GET_PARENT_CELL), 0);
+        // Not the global test: the actor's slot 0x2A8.
+        let mut r = rig();
+        r.e.register(ACTOR_FAKE + 0x2a8, |_, _| Ret::default());
+        r.e.call_log = Some(vec![]);
+        assert!(r.e.call(0x009d_f010, &args![r.mover, p(position)]).bool());
+        let log = calls(&mut r.e);
+        assert_eq!(first(&log, ACTOR_FAKE + 0x2a8).1, vec![r.actor, position]);
+        assert_eq!(count(&log, REPORT_PATH_END), 0);
+        // With a world space: moved only when the cell differs; the result
+        // is true for a nonzero desired level or a sleeping player.
+        for (cell, cell_at, level, sleeping, moves, expected) in [
+            (0x10u32, 0x10u32, 0u32, 0u32, false, false),
+            (0x10, 0x20, 0, 0, true, false),
+            (0x10, 0x10, 2, 0, false, true),
+            (0x10, 0x10, 0, 1, false, true),
+        ] {
+            let mut r = rig();
+            r.e.register(ACTOR_FAKE + 0x2a8, |_, _| Ret::default());
+            r.e.register(GET_WORLD_SPACE, |_, _| ret(0x66));
+            r.e.register_double(GET_PARENT_CELL, move |_, _| ret(cell));
+            r.e.register_double(GET_CELL_FROM_WORLD_COORD, move |_, _| ret(cell_at));
+            r.e.register_double(GET_DESIRED_PROCESS_LEVEL, move |_, _| ret(level));
+            r.e.register_double(PLAYER_IS_SLEEPING, move |_, _| ret(sleeping));
+            r.e.set_global(PLAYER_CHARACTER, player);
+            r.e.call_log = Some(vec![]);
+            let result = r.e.call(0x009d_f010, &args![r.mover, p(position)]).bool();
+            let log = calls(&mut r.e);
+            assert_eq!(result, expected);
+            assert_eq!(count(&log, MOVE_REF_TO_NEW_SPACE), moves as usize);
+            assert_eq!(
+                first(&log, GET_CELL_FROM_WORLD_COORD).1,
+                vec![0x66, position]
+            );
+            if moves {
+                assert_eq!(first(&log, MOVE_REF_TO_NEW_SPACE).1, vec![r.actor, 0, 0x66]);
+            }
+            if sleeping == 1 {
+                assert_eq!(first(&log, PLAYER_IS_SLEEPING).1, vec![player]);
+            }
+        }
+    }
+
+    #[test]
+    fn ignore_smoothing_setter_stores_a_byte() {
+        let mut e = world();
+        let request = e.mem.alloc(0xb0);
+        e.call(0x009d_eff0, &args![request, 1u32]);
+        assert_eq!(e.mem.u8(request + 0xa3), 1);
+        e.call(0x009d_eff0, &args![request, 0x100u32]);
+        assert_eq!(e.mem.u8(request + 0xa3), 0);
+    }
+
+    #[test]
+    fn array_last_element_asks_for_count_minus_one() {
+        let mut e = world();
+        let array = e.mem.alloc(16);
+        e.mem.set_u32(array + 8, 4);
+        e.register(ARRAY_ELEMENT_BY_INDEX, |_, a| ret(0x9000 + a[1]));
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_009dfd50(&mut e, array), 0x9003);
+        assert_eq!(
+            first(&calls(&mut e), ARRAY_ELEMENT_BY_INDEX).1,
+            vec![array, 3]
+        );
+    }
+
+    #[test]
+    fn revert_resets_everything_the_constructor_resets() {
+        let mut r = rig();
+        let handler = attach_handler(&mut r);
+        r.e.register(HANDLER_FAKE, |_, _| Ret::default());
+        r.e.set_global(UNSET_POINT + 8, 0x8000_0000u32);
+        for offset in (4..0x88).step_by(4) {
+            r.e.mem.set_u32(r.mover.addr() + offset, 0xdead_beef);
+        }
+        r.e.mem.set_u32(r.mover.addr() + 0x1c, SCRATCH);
+        r.e.mem.set_u32(r.mover.addr() + 0x20, SCRATCH);
+        r.e.mem.set_u32(r.mover.addr() + 0x24, handler);
+        r.e.set(r.mover, ActorMover::bWaitingForPath, true);
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_fb80, &args![r.mover, 0u32]);
+        let log = calls(&mut r.e);
+        let m = r.mover;
+        assert_eq!(first(&log, HANDLER_FAKE).1, vec![handler, 1]);
+        assert_eq!(count(&log, QUEUE_POINTER_SET), 1);
+        assert_eq!(first(&log, LOCATION_RESET).1, vec![m.addr() + 0x44]);
+        assert_eq!(r.e.mem.u32(m.addr() + 0x1c), 0);
+        assert_eq!(r.e.mem.u32(m.addr() + 0x20), 0);
+        assert_eq!(r.e.mem.u32(m.addr() + 0x24), 0);
+        assert_eq!(r.e.get(m, ActorMover::eState), 0);
+        assert_eq!(r.e.get(m, ActorMover::uiPreferredMoveMode), 0x101);
+        assert_eq!(r.e.get(m, ActorMover::iPreviousNode), 0xffff);
+        assert_eq!(r.e.get(m, ActorMover::iNextNode), 0xffff);
+        assert!(!r.e.get(m, ActorMover::bPathingFailed));
+        for flag in [
+            ActorMover::bActorChangedProcessLevel,
+            ActorMover::bStopMovementNextUpdate,
+            ActorMover::bWaitingForPath,
+            ActorMover::bInDialog,
+            ActorMover::bFaceTargetPoint,
+            ActorMover::bForceMoveMode,
+            ActorMover::bStopCurrentMoveAnim,
+            ActorMover::bHaveValidDeltaThisFrame,
+        ] {
+            assert!(!r.e.get(m, flag));
+        }
+        assert_eq!(r.e.mem.u32(m.addr() + 0x0c), 0x8000_0000);
+        assert_eq!(r.e.mem.u32(m.addr() + 0x18), 0x8000_0000);
+        for field in [0x38, 0x3c, 0x2c, 0x84, 0x7c, 0x80] {
+            assert_eq!(r.e.mem.u32(m.addr() + field), 0, "{field:x}");
+        }
+        // Not waiting for a path: the queue stays, a missing handler is fine.
+        let mut r = rig();
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_fb80, &args![r.mover, 0u32]);
+        assert_eq!(count(&calls(&mut r.e), QUEUE_POINTER_SET), 0);
+    }
+
+    /// A mover whose request ends at `END_B`, whose positions come from
+    /// +0x100 of a location and whose actor's slot 0x2A8 records the
+    /// position it is given.
+    fn stuck_rig(process_type: u32) -> (Rig, Rc<RefCell<Vec<[f32; 3]>>>) {
+        let mut r = rig();
+        attach_request(&mut r);
+        r.e.register_double(GET_PROCESS_TYPE, move |_, _| ret(process_type));
+        r.e.register(REQUEST_DESTINATION, |_, _| ret(END_B));
+        r.e.register(GET_POSITION, |e, a| {
+            copy_point(e, a[0] + 0x100, a[1]);
+            ret(a[1])
+        });
+        let placed = Rc::new(RefCell::new(Vec::new()));
+        let record = placed.clone();
+        r.e.register_double(ACTOR_FAKE + 0x2a8, move |e, a| {
+            record
+                .borrow_mut()
+                .push([e.mem.f32(a[1]), e.mem.f32(a[1] + 4), e.mem.f32(a[1] + 8)]);
+            Ret::default()
+        });
+        r.e.set_global(FAILURE_TARGET_RADIUS, 10.0f32);
+        r.e.set_global(ACTOR_FLOAT_SCALE, 0.6f64);
+        r.e.set_global(PATH_MARGIN_SHORT, 128.0f32);
+        r.e.set_global(PATH_MARGIN_LONG, 256.0f32);
+        r.e.set_global(HALF, 0.5f64);
+        r.e.set_global(HUNDRED, 100.0f64);
+        r.e.register(ACTOR_FLOAT, |_, _| ret_float(30.0));
+        (r, placed)
+    }
+
+    fn built(log: &[Call]) -> bool {
+        count(log, REQUEST_CONSTRUCT) == 1
+    }
+
+    #[test]
+    fn recovery_does_nothing_for_a_warping_handler_or_without_a_request() {
+        // The handler holds a path and warps to its next node.
+        let mut r = rig();
+        let handler = attach_handler(&mut r);
+        r.e.mem.set_u32(handler + 0x0c, 1);
+        attach_request(&mut r);
+        r.e.register(HANDLER_FAKE + 0x74, |_, _| ret(1));
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_e8b0, &args![r.mover]);
+        let log = calls(&mut r.e);
+        assert_eq!(first(&log, DEBUG_STUB).1, vec![r.mover.addr()]);
+        assert!(!built(&log));
+        // The handler cannot warp, and there is no request.
+        let mut r = rig();
+        let handler = attach_handler(&mut r);
+        r.e.mem.set_u32(handler + 0x0c, 1);
+        r.e.register(HANDLER_FAKE + 0x74, |_, _| ret(0));
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_e8b0, &args![r.mover]);
+        let log = calls(&mut r.e);
+        assert_eq!(count(&log, DEBUG_STUB), 0);
+        assert_eq!(count(&log, GET_PROCESS_TYPE), 0);
+    }
+
+    #[test]
+    fn recovery_needs_a_stuck_actor() {
+        // Process type 1, not following: nothing to do.
+        let (mut r, _) = stuck_rig(1);
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_e8b0, &args![r.mover]);
+        assert!(!built(&calls(&mut r.e)));
+        // Process type 0 with a resolved location and the ends on one side
+        // of the water: nothing either.
+        let (mut r, _) = stuck_rig(0);
+        r.e.register(LOCATION_IS_RESOLVED, |_, _| ret(1));
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_e8b0, &args![r.mover]);
+        let log = calls(&mut r.e);
+        assert!(!built(&log));
+        assert_eq!(count(&log, LOCATION_DESTRUCT), 1);
+        assert_eq!(first(&log, LOCATION_FROM_ACTOR).1[1..], [r.actor]);
+        assert_eq!(first(&log, LOCATION_RESOLVE_NAV_MESH).1[1..], [0]);
+        // An unresolved location makes it stuck.
+        let (mut r, _) = stuck_rig(0);
+        r.e.register(LOCATION_IS_RESOLVED, |_, _| ret(0));
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_e8b0, &args![r.mover]);
+        assert!(built(&calls(&mut r.e)));
+        // The ends on different sides of the water make it stuck.
+        let (mut r, _) = stuck_rig(0);
+        water_request(&mut r, 0.0, 5.0, 2.0, 0x11);
+        r.e.register(LOCATION_IS_RESOLVED, |_, _| ret(1));
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_e8b0, &args![r.mover]);
+        assert!(built(&calls(&mut r.e)));
+    }
+
+    #[test]
+    fn recovery_builds_a_request_and_places_the_actor_at_the_first_node() {
+        let (mut r, placed) = stuck_rig(0);
+        let request_bytes = Rc::new(Cell::new(0xffu32));
+        let request_byte = request_bytes.clone();
+        r.e.register_double(REQUEST_DESTRUCT, move |e, a| {
+            request_byte.set(e.mem.u8(a[0] + 0xa3) as u32);
+            Ret::default()
+        });
+        r.e.register(ACTOR_BASE, |_, _| ret(0x5000));
+        r.e.register(BASE_CAN_SWIM, |_, _| ret(1));
+        r.e.register(PATH_COUNT_20, |_, _| ret(3));
+        r.e.register(PATH_SECOND_ARRAY_ELEMENT, |_, _| ret(END_A - 4));
+        r.e.register(NODE_LOCATION, |_, a| ret(a[0] + 4));
+        put_point(&mut r.e, END_A + 0x100, 11.0, 12.0, 13.0);
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_e8b0, &args![r.mover]);
+        let log = calls(&mut r.e);
+        let request = first(&log, REQUEST_CONSTRUCT).1[0];
+        let path = first(&log, PATH_CONSTRUCT).1[0];
+        assert_eq!(
+            order(
+                &log,
+                &[
+                    REQUEST_CONSTRUCT,
+                    REQUEST_SET_LOCATION,
+                    REQUEST_SET_DESTINATION,
+                    REQUEST_SET_TARGET_RADIUS,
+                    REQUEST_SET_SECOND_FLOAT,
+                    REQUEST_SET_ACTOR,
+                    REQUEST_SET_BYTE_A,
+                    REQUEST_SET_CANT_OPEN_DOORS,
+                    REQUEST_SET_CAN_SWIM,
+                    REQUEST_SET_CAN_FLY,
+                    REQUEST_SET_BYTE_B,
+                    POINT_CONSTRUCT_DEFAULT,
+                    PATH_CONSTRUCT,
+                    SOLVE_REQUEST,
+                    DEBUG_STUB,
+                    PATH_DESTRUCT,
+                    REQUEST_DESTRUCT,
+                ]
+            ),
+            vec![
+                REQUEST_CONSTRUCT,
+                REQUEST_SET_LOCATION,
+                REQUEST_SET_DESTINATION,
+                REQUEST_SET_TARGET_RADIUS,
+                REQUEST_SET_SECOND_FLOAT,
+                REQUEST_SET_ACTOR,
+                REQUEST_SET_BYTE_A,
+                REQUEST_SET_CANT_OPEN_DOORS,
+                REQUEST_SET_CAN_SWIM,
+                REQUEST_SET_CAN_FLY,
+                REQUEST_SET_BYTE_B,
+                POINT_CONSTRUCT_DEFAULT,
+                PATH_CONSTRUCT,
+                SOLVE_REQUEST,
+                DEBUG_STUB,
+                PATH_DESTRUCT,
+                REQUEST_DESTRUCT,
+            ]
+        );
+        assert_eq!(first(&log, REQUEST_SET_LOCATION).1, vec![request, END_B]);
+        assert_eq!(
+            first(&log, REQUEST_SET_TARGET_RADIUS).1,
+            vec![request, 10.0f32.to_bits()]
+        );
+        assert_eq!(
+            first(&log, REQUEST_SET_SECOND_FLOAT).1,
+            vec![request, ((30.0f64 * 0.6f64) as f32).to_bits()]
+        );
+        assert_eq!(first(&log, REQUEST_SET_ACTOR).1, vec![request, r.actor]);
+        assert_eq!(first(&log, REQUEST_SET_BYTE_A).1, vec![request, 1]);
+        assert_eq!(first(&log, REQUEST_SET_BYTE_B).1, vec![request, 1]);
+        assert_eq!(first(&log, REQUEST_SET_CANT_OPEN_DOORS).1, vec![request, 0]);
+        assert_eq!(first(&log, REQUEST_SET_CAN_SWIM).1, vec![request, 1]);
+        assert_eq!(first(&log, REQUEST_SET_CAN_FLY).1, vec![request, 0]);
+        assert_eq!(first(&log, BASE_CAN_SWIM).1, vec![0x5000]);
+        assert_eq!(first(&log, SOLVE_REQUEST).1, vec![request, path]);
+        assert_eq!(request_bytes.get(), 1);
+        assert_eq!(*placed.borrow(), vec![[11.0, 12.0, 13.0]]);
+        assert_eq!(count(&log, MOVE_REF_TO_NEW_SPACE), 0);
+        // An unsolved, empty path places nothing.
+        let (mut r, placed) = stuck_rig(0);
+        r.e.register(PATH_COUNT_20, |_, _| ret(0));
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_e8b0, &args![r.mover]);
+        let log = calls(&mut r.e);
+        assert_eq!(count(&log, DEBUG_STUB), 0);
+        assert_eq!(count(&log, PATH_DESTRUCT), 1);
+        assert_eq!(count(&log, REQUEST_DESTRUCT), 1);
+        assert!(placed.borrow().is_empty());
+    }
+
+    #[test]
+    fn recovery_places_the_actor_short_of_a_solved_paths_end() {
+        // (actor float, path length, point asked for)
+        for (actor_float, length, asked) in [
+            (30.0f64, 1000.0f32, 872.0f32),
+            (300.0, 1000.0, 744.0),
+            (30.0, 100.0, 50.0),
+            (202.0, 128.0, 64.0),
+        ] {
+            let (mut r, placed) = stuck_rig(0);
+            r.e.register_double(ACTOR_FLOAT, move |_, _| ret_float(actor_float));
+            r.e.register(SOLVE_REQUEST, |_, _| ret(1));
+            r.e.register(PATH_COUNT_20, |_, _| ret(2));
+            r.e.register_double(PATH_LENGTH, move |_, _| ret_float(length as f64));
+            r.e.register(PATH_POINT_AT, |e, a| {
+                put_point(e, a[1], 4.0, 5.0, 6.0);
+                ret(a[1])
+            });
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_e8b0, &args![r.mover]);
+            let log = calls(&mut r.e);
+            let at = first(&log, PATH_POINT_AT);
+            assert_eq!(at.1[0], first(&log, PATH_CONSTRUCT).1[0]);
+            assert_eq!(at.1[2..], [0, asked.to_bits()], "{actor_float} {length}");
+            assert_eq!(*placed.borrow(), vec![[4.0, 5.0, 6.0]]);
+        }
+        // A solved path of one node only: nothing is placed.
+        let (mut r, placed) = stuck_rig(0);
+        r.e.register(SOLVE_REQUEST, |_, _| ret(1));
+        r.e.register(PATH_COUNT_20, |_, _| ret(1));
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_e8b0, &args![r.mover]);
+        let log = calls(&mut r.e);
+        assert_eq!(count(&log, PATH_POINT_AT), 0);
+        assert_eq!(count(&log, PATH_DESTRUCT), 1);
+        assert!(placed.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_follower_is_stuck_when_far_from_the_player() {
+        // (twice the radius, distance, stuck)
+        for (radius, distance, stuck) in [
+            (30.0f64, 100.0f64, true),
+            (60.0, 100.0, false),
+            (50.0, 100.0, false),
+        ] {
+            let (mut r, _) = stuck_rig(1);
+            let player = object(&mut r.e, PLAYER_TABLE, PLAYER_FAKE);
+            r.e.set_global(PLAYER_CHARACTER, player);
+            r.e.register(IS_FOLLOWING, |_, _| ret(1));
+            r.e.register(PLAYER_FAKE + 0x1f4, |_, _| ret(SCRATCH + 0x900));
+            r.e.register(ACTOR_FAKE + 0x1f4, |_, _| ret(ACTOR_POSITION));
+            r.e.register(POINT_SUBTRACT, |_, a| ret(a[1]));
+            r.e.register_double(DIFFERENCE_LENGTH, move |_, _| ret_float(distance));
+            r.e.register_double(REQUEST_TARGET_RADIUS, move |_, _| ret_float(radius));
+            r.e.register(GET_WORLD_SPACE, |_, a| ret(a[0] & 0xff));
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_e8b0, &args![r.mover]);
+            let log = calls(&mut r.e);
+            assert_eq!(built(&log), stuck, "{radius}");
+            assert_eq!(
+                first(&log, POINT_SUBTRACT).1,
+                vec![
+                    ACTOR_POSITION,
+                    first(&log, POINT_SUBTRACT).1[1],
+                    SCRATCH + 0x900
+                ]
+            );
+            assert_eq!(first(&log, IS_FOLLOWING).1, vec![r.actor, player]);
+        }
+    }
+
+    #[test]
+    fn a_follower_in_another_world_space_is_moved_to_the_players_space() {
+        for same_space in [false, true] {
+            let (mut r, placed) = stuck_rig(1);
+            let player = object(&mut r.e, PLAYER_TABLE, PLAYER_FAKE);
+            r.e.set_global(PLAYER_CHARACTER, player);
+            r.e.register(IS_FOLLOWING, |_, _| ret(1));
+            r.e.register(PLAYER_FAKE + 0x1f4, |_, _| ret(SCRATCH + 0x900));
+            r.e.register(ACTOR_FAKE + 0x1f4, |_, _| ret(ACTOR_POSITION));
+            r.e.register(POINT_SUBTRACT, |_, a| ret(a[1]));
+            r.e.register_double(DIFFERENCE_LENGTH, |_, _| ret_float(1000.0));
+            r.e.register_double(REQUEST_TARGET_RADIUS, |_, _| ret_float(1.0));
+            let actor = r.actor;
+            r.e.register_double(GET_WORLD_SPACE, move |_, a| {
+                ret(if a[0] == actor || same_space {
+                    0x66
+                } else {
+                    0x77
+                })
+            });
+            r.e.register(GET_PARENT_CELL, |_, _| ret(0x44));
+            r.e.register(GET_CELL_FROM_WORLD_COORD, |_, _| ret(0x44));
+            r.e.register(SOLVE_REQUEST, |_, _| ret(1));
+            r.e.register(PATH_COUNT_20, |_, _| ret(2));
+            r.e.register(PATH_LENGTH, |_, _| ret_float(1000.0));
+            r.e.register(PATH_POINT_AT, |e, a| {
+                put_point(e, a[1], 4.0, 5.0, 6.0);
+                ret(a[1])
+            });
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_e8b0, &args![r.mover]);
+            let log = calls(&mut r.e);
+            assert_eq!(*placed.borrow(), vec![[4.0, 5.0, 6.0]]);
+            if same_space {
+                assert_eq!(count(&log, MOVE_REF_TO_NEW_SPACE), 0);
+                assert_eq!(count(&log, SET_LOCATION_ON_REFERENCE), 1);
+            } else {
+                assert_eq!(
+                    first(&log, MOVE_REF_TO_NEW_SPACE).1,
+                    vec![r.actor, 0x44, 0x77]
+                );
+                assert_eq!(count(&log, SET_LOCATION_ON_REFERENCE), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn a_follower_with_a_plain_handler_and_no_flag_falls_back() {
+        for flag in [false, true] {
+            let (mut r, _) = stuck_rig(1);
+            let player = object(&mut r.e, PLAYER_TABLE, PLAYER_FAKE);
+            r.e.set_global(PLAYER_CHARACTER, player);
+            r.e.register(IS_FOLLOWING, |_, _| ret(1));
+            attach_handler(&mut r);
+            attach_path(&mut r);
+            r.e.register(HANDLER_FAKE + 0x34, |_, _| ret(0));
+            r.e.register_double(PATH_FLAG_40, move |_, _| ret(flag as u32));
+            r.e.register(PLAYER_FAKE + 0x1f4, |_, _| ret(SCRATCH + 0x900));
+            r.e.register(ACTOR_FAKE + 0x1f4, |_, _| ret(ACTOR_POSITION));
+            r.e.register(POINT_SUBTRACT, |_, a| ret(a[1]));
+            r.e.register(DIFFERENCE_LENGTH, |_, _| ret_float(0.0));
+            r.e.register(REQUEST_TARGET_RADIUS, |_, _| ret_float(1.0));
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_e8b0, &args![r.mover]);
+            let log = calls(&mut r.e);
+            assert_eq!(count(&log, ACTOR_FOLLOW_FALLBACK), (!flag) as usize);
+            if !flag {
+                assert_eq!(first(&log, ACTOR_FOLLOW_FALLBACK).1, vec![r.actor]);
+                assert_eq!(count(&log, POINT_SUBTRACT), 0);
+            } else {
+                assert_eq!(count(&log, POINT_SUBTRACT), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn save_game_writes_the_fields_in_order() {
+        let sequence = [
+            (0x40, 2),
+            (0x42, 2),
+            (0x70, 1),
+            (0x34, 4),
+            (0x71, 1),
+            (0x38, 4),
+            (0x72, 1),
+            (0x73, 1),
+            (0x04, 12),
+            (0x10, 12),
+            (0x3c, 4),
+            (0x74, 1),
+            (0x75, 1),
+            (0x77, 1),
+            (0x76, 1),
+            (0x78, 1),
+            (0x6c, 4),
+        ];
+        let buffer = SCRATCH + 0xa00;
+        // (request, path, handler: none, plain, detailed)
+        for (with_request, with_path, handler_kind) in [
+            (true, true, 2u32),
+            (false, false, 1),
+            (false, true, 0),
+            (true, false, 0),
+        ] {
+            let mut r = rig();
+            let handler = if handler_kind != 0 {
+                attach_handler(&mut r)
+            } else {
+                0
+            };
+            let request = if with_request {
+                attach_request(&mut r)
+            } else {
+                0
+            };
+            let path = if with_path { attach_path(&mut r) } else { 0 };
+            let _ = (handler, path);
+            r.e.register_double(HANDLER_FAKE + 0x34, move |_, _| {
+                ret((handler_kind == 2) as u32)
+            });
+            r.e.register(HANDLER_FAKE + 0x78, |_, _| Ret::default());
+            r.e.register(REQUEST_FAKE + 0x10, |_, _| ret(5));
+            r.e.register(REQUEST_FAKE + 0x18, |_, _| Ret::default());
+            r.e.map(LOCATION_TABLE, 0x1000);
+            r.e.mem.set_u32(LOCATION_TABLE, LOCATION_FAKE);
+            r.e.mem.set_u32(r.mover.addr() + 0x44, LOCATION_TABLE);
+            r.e.register(LOCATION_FAKE, |_, _| Ret::default());
+            r.e.set(r.mover, ActorMover::DetectionDoorID, 0xd00d);
+            r.e.set(r.mover, ActorMover::iLastFailureTimeStamp, 4000);
+            clock(&mut r.e, 5000);
+            r.e.mem.set_u16(r.mover.addr() + 0x40, 0x1122);
+            type Writes = Rc<RefCell<Vec<(u32, Vec<u8>)>>>;
+            let writes: Writes = Rc::default();
+            let record = writes.clone();
+            r.e.register_double(SAVE_BYTES, move |e, a| {
+                let bytes = (0..a[2]).map(|i| e.mem.u8(a[1] + i)).collect();
+                record.borrow_mut().push((a[1], bytes));
+                Ret::default()
+            });
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_f100, &args![r.mover, p(buffer)]);
+            let log = calls(&mut r.e);
+            let writes = writes.borrow();
+            let base = r.mover.addr();
+            for (index, (offset, size)) in sequence.iter().enumerate() {
+                assert_eq!(writes[index].0, base + offset, "{offset:x}");
+                assert_eq!(writes[index].1.len(), *size);
+            }
+            assert_eq!(writes[0].1, vec![0x22, 0x11]);
+            // The time since the last failure, then the failure count.
+            assert_eq!(writes[17].1, 1000u32.to_le_bytes().to_vec());
+            assert_eq!(writes[18].0, base + 0x84);
+            assert_eq!(first(&log, LOCATION_FAKE).1, vec![base + 0x44, buffer]);
+            assert_eq!(first(&log, SAVE_FORM_ID).1, vec![buffer, 0xd00d, 0]);
+            let flags = with_request as u8
+                | (with_path as u8) << 1
+                | match handler_kind {
+                    0 => 0,
+                    1 => 4,
+                    _ => 8,
+                };
+            assert_eq!(writes[19].1, vec![flags]);
+            let mut expected_writes = 20;
+            if with_request {
+                assert_eq!(writes[20].1, vec![5]);
+                expected_writes += 1;
+                assert_eq!(first(&log, REQUEST_FAKE + 0x18).1, vec![request, buffer]);
+            } else {
+                assert_eq!(count(&log, REQUEST_FAKE + 0x18), 0);
+            }
+            assert_eq!(writes.len(), expected_writes);
+            assert_eq!(count(&log, PATH_SAVE_GAME), with_path as usize);
+            if with_path {
+                assert_eq!(first(&log, PATH_SAVE_GAME).1, vec![path, buffer]);
+            }
+            assert_eq!(
+                count(&log, HANDLER_FAKE + 0x78),
+                (handler_kind != 0) as usize
+            );
+        }
+    }
+
+    /// What a load run read: the (destination, size) of every read, and the
+    /// buffer's calls. Reads into the mover leave it alone; every other
+    /// read takes the next value of `values` (little endian).
+    struct LoadRun {
+        reads: Rc<RefCell<Vec<(u32, u32)>>>,
+        buffer: u32,
+    }
+
+    fn load_rig(version: u8, values: &[u32]) -> (Rig, LoadRun) {
+        let mut r = rig();
+        let buffer = object(&mut r.e, BUFFER_TABLE, BUFFER_FAKE);
+        r.e.register_double(BUFFER_FAKE, move |_, _| ret(version as u32));
+        let reads = Rc::new(RefCell::new(Vec::new()));
+        let record = reads.clone();
+        let queue = Rc::new(RefCell::new(std::collections::VecDeque::from(
+            values.to_vec(),
+        )));
+        let low = r.mover.addr();
+        r.e.register_double(LOAD_BYTES, move |e, a| {
+            record.borrow_mut().push((a[1], a[2]));
+            if a[1] < low || a[1] >= low + 0x88 {
+                let value = queue.borrow_mut().pop_front().unwrap();
+                for i in 0..a[2] {
+                    e.mem.set_u8(a[1] + i, (value >> (8 * i)) as u8);
+                }
+            }
+            Ret::default()
+        });
+        r.e.map(LOCATION_TABLE, 0x1000);
+        r.e.mem.set_u32(LOCATION_TABLE + 4, LOCATION_FAKE + 4);
+        r.e.mem.set_u32(r.mover.addr() + 0x44, LOCATION_TABLE);
+        r.e.register(LOCATION_FAKE + 4, |_, _| Ret::default());
+        r.e.set_global(UNSET_POINT, 0u32);
+        (r, LoadRun { reads, buffer })
+    }
+
+    const SAVED_FIELDS: [(u32, u32); 17] = [
+        (0x40, 2),
+        (0x42, 2),
+        (0x70, 1),
+        (0x34, 4),
+        (0x71, 1),
+        (0x38, 4),
+        (0x72, 1),
+        (0x73, 1),
+        (0x04, 12),
+        (0x10, 12),
+        (0x3c, 4),
+        (0x74, 1),
+        (0x75, 1),
+        (0x77, 1),
+        (0x76, 1),
+        (0x78, 1),
+        (0x6c, 4),
+    ];
+
+    #[test]
+    fn load_game_reads_the_fields_by_save_version() {
+        // (version, timestamp, now, reads timing, reads location,
+        // stored last-failure stamp)
+        for (version, stored, now, timing, location, stamp) in [
+            (0x0eu8, 500u32, 2000u32, true, true, 1500u32),
+            (0x0e, 3000, 2000, true, true, 0),
+            (0x0d, 0, 2000, false, true, 0),
+            (0x06, 0, 2000, false, false, 0),
+        ] {
+            let values: Vec<u32> = if timing { vec![stored, 0] } else { vec![0] };
+            let (mut r, run) = load_rig(version, &values);
+            clock(&mut r.e, now);
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_f3d0, &args![r.mover, p(run.buffer)]);
+            let log = calls(&mut r.e);
+            let base = r.mover.addr();
+            let reads = run.reads.borrow();
+            for (index, (offset, size)) in SAVED_FIELDS.iter().enumerate() {
+                assert_eq!(reads[index], (base + offset, *size));
+            }
+            if timing {
+                assert_eq!(reads[17].1, 4);
+                assert_eq!(reads[18], (base + 0x84, 4));
+                assert_eq!(reads[19].1, 1);
+            } else {
+                assert_eq!(reads[17].1, 1);
+            }
+            assert_eq!(
+                r.e.get(r.mover, ActorMover::iLastFailureTimeStamp),
+                stamp,
+                "version {version:x}"
+            );
+            assert_eq!(count(&log, LOCATION_FAKE + 4), location as usize);
+            assert_eq!(first(&log, LOAD_FORM_ID).1, vec![run.buffer, base + 0x2c]);
+            // No flag bit: nothing is built.
+            assert_eq!(count(&log, CREATE_PATHING_REQUEST), 0);
+            assert_eq!(r.e.mem.u32(base + 0x24), 0);
+        }
+    }
+
+    #[test]
+    fn load_game_builds_the_request() {
+        for (part_test, sets_actor) in [(0u32, true), (1, false)] {
+            let (mut r, run) = load_rig(0x0e, &[0, 1, 3]);
+            clock(&mut r.e, 10);
+            let request = object(&mut r.e, REQUEST_TABLE, REQUEST_FAKE);
+            r.e.register_double(CREATE_PATHING_REQUEST, move |_, _| ret(request));
+            r.e.register(REQUEST_FAKE + 0x1c, |_, _| Ret::default());
+            let process = attach_process(&mut r);
+            r.e.register_double(PROCESS_PART_TEST, move |_, _| ret(part_test));
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_f3d0, &args![r.mover, p(run.buffer)]);
+            let log = calls(&mut r.e);
+            assert_eq!(first(&log, CREATE_PATHING_REQUEST).1, vec![3]);
+            assert_eq!(r.e.mem.u32(r.mover.addr() + 0x1c), request);
+            assert_eq!(
+                first(&log, REQUEST_FAKE + 0x1c).1,
+                vec![request, run.buffer]
+            );
+            assert_eq!(first(&log, PROCESS_PART_TEST).1, vec![process + 4, 0]);
+            assert_eq!(count(&log, REQUEST_SET_ACTOR), sets_actor as usize);
+            if sets_actor {
+                assert_eq!(first(&log, REQUEST_SET_ACTOR).1, vec![request, r.actor]);
+            }
+        }
+        // No process: the actor is not given to the request.
+        let (mut r, run) = load_rig(0x0e, &[0, 1, 3]);
+        let request = object(&mut r.e, REQUEST_TABLE, REQUEST_FAKE);
+        r.e.register_double(CREATE_PATHING_REQUEST, move |_, _| ret(request));
+        r.e.register(REQUEST_FAKE + 0x1c, |_, _| Ret::default());
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_f3d0, &args![r.mover, p(run.buffer)]);
+        assert_eq!(count(&calls(&mut r.e), PROCESS_PART_TEST), 0);
+    }
+
+    #[test]
+    fn load_game_builds_the_path_and_fails_on_a_stale_node() {
+        // The second node's location has no nav mesh: the failure message,
+        // then the clear and the failed state.
+        for (nav_answers, stale) in [([1u32, 1], false), ([1, 0], true)] {
+            let (mut r, run) = load_rig(0x0e, &[0, 2]);
+            clock(&mut r.e, 10);
+            r.e.register(PATH_CONSTRUCT, |_, a| ret(a[0]));
+            r.e.register(PATH_NODE_COUNT, |_, _| ret(2));
+            r.e.register(PATH_NODE_AT, |_, a| ret(0x900 + a[1]));
+            r.e.register(NODE_TEST_FLAG, |_, _| ret(1));
+            r.e.register(NODE_LOCATION, |_, a| ret(a[0] + 4));
+            let answers = Rc::new(RefCell::new(nav_answers.to_vec()));
+            let next = answers.clone();
+            r.e.register_double(LOCATION_NAV_MESH_TEST, move |_, _| {
+                ret(next.borrow_mut().remove(0))
+            });
+            r.e.register(ACTOR_FAKE + 0x130, |_, _| ret(0xaaa));
+            r.e.register(PROCESS_DOOR_ID, |_, _| ret(0xbbb));
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_f3d0, &args![r.mover, p(run.buffer)]);
+            let log = calls(&mut r.e);
+            let path = first(&log, PATH_LOAD_GAME).1[0];
+            let held = r.e.mem.u32(r.mover.addr() + 0x20);
+            assert_ne!(path, 0);
+            assert_eq!(first(&log, ALLOCATE).1, vec![0x44]);
+            assert_eq!(first(&log, PATH_LOAD_GAME).1, vec![path, run.buffer]);
+            assert_eq!(count(&log, PATH_NODE_AT), 4);
+            assert_eq!(count(&log, PRINT_LINE), stale as usize);
+            assert_eq!(count(&log, DEBUG_STUB), 2 * stale as usize);
+            if stale {
+                assert_eq!(
+                    first(&log, PRINT_LINE).1,
+                    vec![STALE_PATH_FORMAT, 0xaaa, 0xbbb]
+                );
+                assert_eq!(r.e.get(r.mover, ActorMover::eState), STATE_FAILED);
+                assert!(r.e.get(r.mover, ActorMover::bPathingFailed));
+                // ClearCurrentData dropped the path.
+                assert_eq!(r.e.mem.u32(r.mover.addr() + 0x20), 0);
+            } else {
+                assert!(!r.e.get(r.mover, ActorMover::bPathingFailed));
+                assert_eq!(held, path);
+            }
+        }
+        // A node whose test fails is skipped without a location test.
+        let (mut r, run) = load_rig(0x0e, &[0, 2]);
+        r.e.register(PATH_CONSTRUCT, |_, a| ret(a[0]));
+        r.e.register(PATH_NODE_COUNT, |_, _| ret(3));
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_f3d0, &args![r.mover, p(run.buffer)]);
+        let log = calls(&mut r.e);
+        assert_eq!(count(&log, NODE_TEST_FLAG), 3);
+        assert_eq!(count(&log, LOCATION_NAV_MESH_TEST), 0);
+    }
+
+    #[test]
+    fn load_game_creates_the_handler_the_flags_ask_for() {
+        // (flags, constructor, size)
+        for (flags, constructor, size) in [
+            (4u32, VIRTUAL_HANDLER_CONSTRUCT, 0x20u32),
+            (8, DETAILED_HANDLER_CONSTRUCT, 0xe4),
+            (12, VIRTUAL_HANDLER_CONSTRUCT, 0x20),
+        ] {
+            let (mut r, run) = load_rig(0x0e, &[0, flags]);
+            clock(&mut r.e, 10);
+            let handler = object(&mut r.e, HANDLER_TABLE, HANDLER_FAKE);
+            r.e.register_double(constructor, move |_, _| ret(handler));
+            r.e.register(HANDLER_FAKE + 0x7c, |_, _| Ret::default());
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_f3d0, &args![r.mover, p(run.buffer)]);
+            let log = calls(&mut r.e);
+            assert_eq!(r.e.mem.u32(r.mover.addr() + 0x24), handler);
+            assert_eq!(first(&log, OPERATOR_NEW).1, vec![size]);
+            let made = first(&log, constructor);
+            assert_eq!(
+                made.1[1..],
+                [r.actor, r.mover.addr(), r.mover.addr() + 0x20, 0]
+            );
+            assert_eq!(
+                first(&log, HANDLER_FAKE + 0x7c).1,
+                vec![handler, run.buffer]
+            );
+        }
+    }
+
+    #[test]
+    fn init_load_game_attaches_the_request_to_the_target_object() {
+        let buffer = SCRATCH + 0xa00;
+        // No request: only the handler hears about it.
+        let mut r = rig();
+        let handler = attach_handler(&mut r);
+        r.e.register(HANDLER_FAKE + 0x80, |_, _| Ret::default());
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_f8c0, &args![r.mover, p(buffer)]);
+        let log = calls(&mut r.e);
+        assert_eq!(first(&log, HANDLER_FAKE + 0x80).1, vec![handler, buffer]);
+        assert_eq!(log.len(), 3);
+        // A request of another type: initialised and given the actor.
+        for (kind, attaches) in [(5u32, true), (4, false)] {
+            let mut r = rig();
+            let request = attach_request(&mut r);
+            r.e.register_double(REQUEST_FAKE + 0x10, move |_, _| ret(kind));
+            r.e.register(REQUEST_FAKE + 0x20, |_, _| Ret::default());
+            r.e.register(ACTOR_FAKE + 0x428, |_, _| ret(0x6000));
+            r.e.register(SLOT_OBJECT_HOLDER, |_, _| ret(0x6100));
+            r.e.register(SLOT_OBJECT_VALUE, |_, _| ret(0x6200));
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_f8c0, &args![r.mover, p(buffer)]);
+            let log = calls(&mut r.e);
+            assert_eq!(count(&log, REQUEST_ATTACH), attaches as usize);
+            if attaches {
+                assert_eq!(first(&log, SLOT_OBJECT_HOLDER).1, vec![0x6000]);
+                assert_eq!(first(&log, SLOT_OBJECT_VALUE).1, vec![0x6100]);
+                let temporary = first(&log, NI_POINTER_CONSTRUCT).1[0];
+                assert_eq!(first(&log, NI_POINTER_CONSTRUCT).1[1], 0x6200);
+                assert_eq!(first(&log, REQUEST_ATTACH).1, vec![request, temporary]);
+                assert_eq!(first(&log, NI_POINTER_DESTRUCT).1, vec![temporary]);
+            }
+            assert_eq!(first(&log, REQUEST_FAKE + 0x20).1, vec![request, buffer]);
+            assert_eq!(first(&log, REQUEST_SET_ACTOR).1, vec![request, r.actor]);
+        }
+        // Type 5 but the slot object is missing or has no holder.
+        for holder in [0u32, 0x6100] {
+            let mut r = rig();
+            attach_request(&mut r);
+            r.e.register(REQUEST_FAKE + 0x10, |_, _| ret(5));
+            r.e.register(REQUEST_FAKE + 0x20, |_, _| Ret::default());
+            r.e.register_double(ACTOR_FAKE + 0x428, move |_, _| ret(holder));
+            r.e.register(SLOT_OBJECT_HOLDER, |_, _| ret(0));
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_f8c0, &args![r.mover, p(buffer)]);
+            assert_eq!(count(&calls(&mut r.e), REQUEST_ATTACH), 0);
+        }
+    }
+
+    #[test]
+    fn finish_load_game_asks_the_path_manager_again() {
+        // Not waiting for a path, or no request: nothing happens.
+        let mut r = rig();
+        attach_request(&mut r);
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_fa00, &args![r.mover, 0u32]);
+        assert_eq!(calls(&mut r.e).len(), 1);
+        let mut r = rig();
+        r.e.set(r.mover, ActorMover::bWaitingForPath, true);
+        r.e.call_log = Some(vec![]);
+        r.e.call(0x009d_fa00, &args![r.mover, 0u32]);
+        let log = calls(&mut r.e);
+        assert_eq!(count(&log, BUILD_PATH), 0);
+        assert!(!r.e.get(r.mover, ActorMover::bPathingFailed));
+        // (request type, holder set, queue set, BuildPath answer): the
+        // mover keeps waiting only when BuildPath accepts.
+        for (kind, holder, queue, accepts, builds, new_queue) in [
+            (0u32, 0u32, 0x700u32, 1u32, true, false),
+            (0, 0, 0x700, 0, true, false),
+            (5, 0x66, 0x700, 1, true, false),
+            (5, 0, 0x700, 1, false, false),
+            (0, 0, 0, 1, true, true),
+        ] {
+            let mut r = rig();
+            let request = attach_request(&mut r);
+            r.e.register_double(REQUEST_FAKE + 0x10, move |_, _| ret(kind));
+            let holder_cell = SCRATCH + 0x600;
+            r.e.mem.set_u32(holder_cell, holder);
+            r.e.register(REQUEST_HOLDER, |_, _| ret(SCRATCH + 0x600));
+            r.e.mem.set_u32(r.mover.addr() + 0x30, queue);
+            r.e.set(r.mover, ActorMover::bWaitingForPath, true);
+            r.e.register(QUEUE_POINTER_COPY, |e, a| {
+                let value = e.mem.u32(a[1]);
+                e.mem.set_u32(a[0], value);
+                ret(a[0])
+            });
+            r.e.register(REQUEST_POINTER_COPY, |e, a| {
+                let value = e.mem.u32(a[1]);
+                e.mem.set_u32(a[0], value);
+                ret(a[0])
+            });
+            r.e.register(PATH_MANAGER_INSTANCE, |_, _| ret(0x4444));
+            r.e.register(QUEUE_CONSTRUCT, |_, a| ret(a[0]));
+            r.e.register_double(BUILD_PATH, move |_, _| ret(accepts));
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x009d_fa00, &args![r.mover, 0u32]);
+            let log = calls(&mut r.e);
+            assert_eq!(count(&log, BUILD_PATH), builds as usize, "{kind} {holder}");
+            if builds {
+                let queue_now = r.e.mem.u32(r.mover.addr() + 0x30);
+                assert_eq!(
+                    first(&log, BUILD_PATH).1,
+                    vec![0x4444, request, queue_now, 1]
+                );
+            }
+            assert_eq!(count(&log, ALLOCATE), new_queue as usize);
+            let keeps_waiting = builds && accepts == 1;
+            assert_eq!(r.e.get(r.mover, ActorMover::bWaitingForPath), keeps_waiting);
+            assert_eq!(r.e.get(r.mover, ActorMover::bPathingFailed), !keeps_waiting);
+        }
+    }
 
     #[test]
     fn every_listed_function_is_registered_once() {
@@ -5541,7 +7695,7 @@ mod tests {
         for (address, _) in &table {
             assert!(seen.insert(*address), "{address:08x} registered twice");
         }
-        assert_eq!(table.len(), 60);
+        assert_eq!(table.len(), 73);
         let e = Engine::new();
         for (address, _) in &table {
             assert!(e.is_translated(*address), "{address:08x}");

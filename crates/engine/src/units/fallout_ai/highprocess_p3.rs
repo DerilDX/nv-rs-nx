@@ -8064,8 +8064,10 @@ fn follow_next_breadcrumb(
         e.call(NAV_POINTER_CONSTRUCTOR, &args![mesh_pointer]);
         let tes = e.global::<u32>(TES_POINTER);
         let mesh_data = e.mem.u32(node + 0xc);
-        let info_map = e.call(NAV_MESH_INFO_MAP, &args![tes, mesh_data]).u32();
-        let mesh = e.call(NAV_MESH_LOOKUP, &args![info_map]).u32();
+        // The mesh word is pushed before 0045af00 (plain RET) and popped by
+        // 00693d70 (RET 4) at 008e1cf8..008e1d06.
+        let info_map = e.call(NAV_MESH_INFO_MAP, &args![tes]).u32();
+        let mesh = e.call(NAV_MESH_LOOKUP, &args![info_map, mesh_data]).u32();
         if mesh != 0 {
             e.call(NAV_MESH_FILL_POINTER, &args![mesh, mesh_pointer]);
         }
