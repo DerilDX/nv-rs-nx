@@ -8,3 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 engine = { path = "../engine" }
+# The record a script form is made from, and the world's variables of a
+# script instance.
+esm = { path = "../esm" }
+script = { path = "../script" }

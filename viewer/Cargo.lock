@@ -2477,6 +2477,8 @@ name = "host"
 version = "0.1.0"
 dependencies = [
  "engine",
+ "esm",
+ "script",
 ]
 
 [[package]]

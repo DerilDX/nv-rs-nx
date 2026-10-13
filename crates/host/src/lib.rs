@@ -14,6 +14,9 @@
 //! the world as plain owned data. What it is connected to: docs/ENGINE_CRATE.md
 //! ("In the running game").
 
+pub mod global_form;
+pub mod script_form;
+
 use engine::Engine;
 use std::path::{Path, PathBuf};
 
@@ -94,7 +97,7 @@ mod tests {
     /// `operator new` hands out memory.
     #[test]
     fn starts_on_the_installed_executable_when_given() {
-        let Ok(path) = std::env::var("NV_EXE") else {
+        let Some(path) = std::env::var("NV_EXE").ok().filter(|p| !p.is_empty()) else {
             return;
         };
         let exe = PathBuf::from(path);
