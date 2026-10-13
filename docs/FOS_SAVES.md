@@ -28,6 +28,40 @@ tested, and `world::fos_import` builds nv-rs's `GameState` from a save
 - The `.nvse` files next to the saves are the script extender's co-saves, a
   separate format, not covered here.
 
+## Immutable inventory sources
+
+`fos::inventory_source::InventorySource` captures an owned immutable save
+and preserves its REFR/ACHR/ACRE inventories as original item, stack and
+extra byte spans. Capture runs inside the existing complete reference and
+actor decoders, including the player's path. It does not introduce another
+record parser or change the existing public decoded structures. ItemChange
+save/load boundaries remain those of `004bed60` / `004bee00`, and extra-list
+boundaries those of `00426a30` (class names from Xbox PDB).
+
+Each item retains the saved ID and its resolution through that save's own
+form-ID array, the signed item count delta, ordered stacks, and its complete
+record/save context. An absent count or health extra remains distinct from
+an explicitly stored default value. Health bytes retain their raw bits.
+Record-relative and file spans remain correct when Havok data rebases the
+reader. Cloned envelopes own their immutable source lifetime; no engine
+arena pointers or mutable gameplay state are stored here.
+
+Extras with known lengths but opaque semantics retain their entire original
+payload, even when the existing decoded enum only names their kind. Unknown
+lengths, malformed fields and failures after the inventory preserve the
+whole containing record with an explicit failure and publish no partial
+items. Unresolved holders are conservatively preserved undecoded; unresolved
+items in a completely decoded record retain an explicit resolution status.
+Records without an inventory flag are reported without decoding other fields.
+
+All 38 package tests and strict package lint pass, including eleven new
+generated regressions covering source boundaries, opaque payloads, failures,
+raw float bits, actor/player paths, Havok rebasing, separate save contexts
+and ownership. Full workspace checks pass (2026-10-12). This read-only API does
+not remap to installed plugins, import gameplay state, edit inventory or
+write an original save. Engine ownership and whole-save acceptance remain
+tracked in [ENGINE_STATE.md](ENGINE_STATE.md).
+
 ## Conventions
 
 - Little-endian throughout. `u8/u16/u32/i32/f32/f64` as usual.

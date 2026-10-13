@@ -11,6 +11,7 @@
 //! references' initial data).
 
 pub mod decode;
+pub mod inventory_source;
 mod pipe;
 
 pub use pipe::Pipe;

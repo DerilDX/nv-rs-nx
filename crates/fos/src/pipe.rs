@@ -26,6 +26,12 @@ impl<'a> Pipe<'a> {
         self.pos
     }
 
+    /// Position in the original source, including a rebased reader's origin.
+    /// Inventory capture only calls this on readers backed by a parsed save.
+    pub(crate) fn source_position(&self) -> usize {
+        self.base + self.pos
+    }
+
     pub fn remaining(&self) -> usize {
         self.data.len() - self.pos
     }

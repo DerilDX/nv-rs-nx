@@ -9,7 +9,9 @@
 
 use super::package::{actor_package_data, package_body};
 use super::{counted, script_locals, skip, ScriptLocals};
+use crate::inventory_source::{InventoryCapture, ItemSpans, StackSpans};
 use crate::{Error, Pipe, RefId, Result};
+use std::ops::Range;
 
 /// `EXTRA_DATA_TYPE` (Xbox PDB) names of the types a save can hold.
 pub mod kind {
@@ -284,7 +286,22 @@ pub fn active_effects(p: &mut Pipe<'_>) -> Result<Vec<(RefId, u8, u32)>> {
 
 /// One extra data list (`00426a30`).
 pub fn extra_list(p: &mut Pipe<'_>, cx: Context) -> Result<Vec<Extra>> {
-    counted(p, |p| extra(p, cx))
+    extra_list_with_spans(p, cx, None)
+}
+
+fn extra_list_with_spans(
+    p: &mut Pipe<'_>,
+    cx: Context,
+    mut spans: Option<&mut Vec<Range<usize>>>,
+) -> Result<Vec<Extra>> {
+    counted(p, |p| {
+        let start = spans.as_ref().map(|_| p.source_position());
+        let value = extra(p, cx)?;
+        if let (Some(spans), Some(start)) = (spans.as_mut(), start) {
+            spans.push(start..p.source_position());
+        }
+        Ok(value)
+    })
 }
 
 fn extra(p: &mut Pipe<'_>, cx: Context) -> Result<Extra> {
@@ -511,9 +528,37 @@ pub struct ItemChange {
 }
 
 pub fn item_change(p: &mut Pipe<'_>, cx: Context) -> Result<ItemChange> {
+    item_change_with_capture(p, cx, None)
+}
+
+fn item_change_with_capture(
+    p: &mut Pipe<'_>,
+    cx: Context,
+    capture: Option<&mut InventoryCapture>,
+) -> Result<ItemChange> {
+    let start = capture.as_ref().map(|_| p.source_position());
     let item = p.ref_id()?;
     let count = p.i32()?;
-    let stacks = counted(p, |p| extra_list(p, cx))?;
+    let mut stack_spans = Vec::new();
+    let stacks = counted(p, |p| {
+        if capture.is_none() {
+            return extra_list(p, cx);
+        }
+        let start = p.source_position();
+        let mut extras = Vec::new();
+        let values = extra_list_with_spans(p, cx, Some(&mut extras))?;
+        stack_spans.push(StackSpans {
+            range: start..p.source_position(),
+            extras,
+        });
+        Ok(values)
+    })?;
+    if let (Some(capture), Some(start)) = (capture, start) {
+        capture.items.push(ItemSpans {
+            range: start..p.source_position(),
+            stacks: stack_spans,
+        });
+    }
     Ok(ItemChange {
         item,
         count,
@@ -524,4 +569,12 @@ pub fn item_change(p: &mut Pipe<'_>, cx: Context) -> Result<ItemChange> {
 /// An inventory (`004d4090`): its item changes.
 pub fn inventory(p: &mut Pipe<'_>, cx: Context) -> Result<Vec<ItemChange>> {
     counted(p, |p| item_change(p, cx))
+}
+
+pub(crate) fn inventory_with_capture(
+    p: &mut Pipe<'_>,
+    cx: Context,
+    capture: &mut InventoryCapture,
+) -> Result<Vec<ItemChange>> {
+    counted(p, |p| item_change_with_capture(p, cx, Some(&mut *capture)))
 }

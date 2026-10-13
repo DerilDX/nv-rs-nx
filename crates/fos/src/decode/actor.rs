@@ -7,12 +7,15 @@
 //! (Xbox PDB); PC member offsets are the Xbox ones less 0x10 in these
 //! classes.
 
-use super::extra::{extra_list, inventory, item_change, Context, Extra, ItemChange};
+use super::extra::{
+    extra_list, inventory, inventory_with_capture, item_change, Context, Extra, ItemChange,
+};
 use super::package::{
     actor_package, detailed_path_handler, effects, pathing_location, pathing_request,
     pathing_solution,
 };
 use super::{counted, form_flags, reference_start, skip, InitialData};
+use crate::inventory_source::InventoryCapture;
 use crate::{save_type as t, ChangeForm, Error, Pipe, RefId, Result};
 
 /// `REFR` change flags that bring the extra data list
@@ -40,6 +43,7 @@ fn reference_data<'a>(
     flags: u32,
     actor: bool,
     cx: Context,
+    capture: Option<&mut InventoryCapture>,
 ) -> Result<ReferenceData<'a>> {
     let form_flags = form_flags(p, flags)?;
     let scale = if flags & 0x10 != 0 {
@@ -54,7 +58,10 @@ fn reference_data<'a>(
         None
     };
     let inventory = if flags & 0x0800_0020 != 0 {
-        Some(inventory(p, cx)?)
+        Some(match capture {
+            Some(capture) => inventory_with_capture(p, cx, capture)?,
+            None => inventory(p, cx)?,
+        })
     } else {
         None
     };
@@ -82,6 +89,20 @@ pub struct Reference<'a> {
 }
 
 pub fn reference<'a>(cf: &ChangeForm<'a>) -> Result<Reference<'a>> {
+    reference_impl(cf, None)
+}
+
+pub(crate) fn reference_captured<'a>(
+    cf: &ChangeForm<'a>,
+    capture: &mut InventoryCapture,
+) -> Result<Reference<'a>> {
+    reference_impl(cf, Some(capture))
+}
+
+fn reference_impl<'a>(
+    cf: &ChangeForm<'a>,
+    capture: Option<&mut InventoryCapture>,
+) -> Result<Reference<'a>> {
     if cf.save_type != t::REFR {
         return Err(Error::new(cf.offset, "not a REFR change form"));
     }
@@ -91,7 +112,7 @@ pub fn reference<'a>(cf: &ChangeForm<'a>) -> Result<Reference<'a>> {
         version: cf.version,
         npc: true,
     };
-    let data = reference_data(&mut p, cf.flags, false, cx)?;
+    let data = reference_data(&mut p, cf.flags, false, cx, capture)?;
     p.finish("reference")?;
     Ok(Reference {
         initial: start.initial,
@@ -257,9 +278,15 @@ pub struct Mobile<'a> {
     pub process: Option<Process>,
 }
 
-fn mobile<'a>(p: &mut Pipe<'a>, flags: u32, actor: bool, cx: Context) -> Result<Mobile<'a>> {
+fn mobile<'a>(
+    p: &mut Pipe<'a>,
+    flags: u32,
+    actor: bool,
+    cx: Context,
+    capture: Option<&mut InventoryCapture>,
+) -> Result<Mobile<'a>> {
     let level = p.u8()?;
-    let data = reference_data(p, flags, actor, cx)?;
+    let data = reference_data(p, flags, actor, cx, capture)?;
     skip(p, &[1, 1, 1, 1, 1, 1, 1, 1, 4, 4, 1, 1])?;
     p.ref_id()?;
     p.ref_id()?;
@@ -353,13 +380,18 @@ pub struct Actor<'a> {
     pub override_modifiers: Option<Vec<(u8, f32)>>,
 }
 
-fn actor<'a>(p: &mut Pipe<'a>, cf: &ChangeForm<'_>, player: bool) -> Result<Actor<'a>> {
+fn actor<'a>(
+    p: &mut Pipe<'a>,
+    cf: &ChangeForm<'_>,
+    player: bool,
+    capture: Option<&mut InventoryCapture>,
+) -> Result<Actor<'a>> {
     let flags = cf.flags;
     let cx = Context {
         version: cf.version,
         npc: cf.save_type == t::ACHR,
     };
-    let mobile = mobile(p, flags, true, cx)?;
+    let mobile = mobile(p, flags, true, cx, capture)?;
     // In written order: the time since the last update (+0x114), +0x124
     // `bForceRun`, +0x125, +0xbc, +0xc4, +0xc8, +0x7d, +0x110, +0x118,
     // +0x126, +0x145, +0x146, +0x14c, +0x14d, +0x150, +0x154, +0x158,
@@ -467,14 +499,18 @@ const PLAYER_FIXED: [usize; 55] = [
 ];
 
 /// Reads the player: [`Player`] around the [`Actor`] data.
-fn player<'a>(p: &mut Pipe<'a>, cf: &ChangeForm<'_>) -> Result<(Actor<'a>, Player)> {
+fn player<'a>(
+    p: &mut Pipe<'a>,
+    cf: &ChangeForm<'_>,
+    capture: Option<&mut InventoryCapture>,
+) -> Result<(Actor<'a>, Player)> {
     let mut out = Player::default();
     let av_list = |p: &mut Pipe<'_>| -> Result<Vec<f32>> { (0..77).map(|_| p.f32()).collect() };
     out.temporary_values = av_list(p)?;
     out.script_values = av_list(p)?;
     out.damage_values = av_list(p)?;
     out.health_modifier = p.f32()?;
-    let actor = actor(p, cf, true)?;
+    let actor = actor(p, cf, true, capture)?;
     let cx = Context {
         version: cf.version,
         npc: true,
@@ -560,16 +596,32 @@ pub struct ActorForm<'a> {
 /// Reads an `ACHR` or `ACRE`; `player` says whether it is the player's
 /// reference (form id 0x14, whose class saves more).
 pub fn actor_form<'a>(cf: &ChangeForm<'a>, player_ref: bool) -> Result<ActorForm<'a>> {
+    actor_form_impl(cf, player_ref, None)
+}
+
+pub(crate) fn actor_form_captured<'a>(
+    cf: &ChangeForm<'a>,
+    player_ref: bool,
+    capture: &mut InventoryCapture,
+) -> Result<ActorForm<'a>> {
+    actor_form_impl(cf, player_ref, Some(capture))
+}
+
+fn actor_form_impl<'a>(
+    cf: &ChangeForm<'a>,
+    player_ref: bool,
+    capture: Option<&mut InventoryCapture>,
+) -> Result<ActorForm<'a>> {
     if cf.save_type != t::ACHR && cf.save_type != t::ACRE {
         return Err(Error::new(cf.offset, "not an ACHR or ACRE change form"));
     }
     let start = reference_start(cf)?;
     let mut p = start.rest;
     let (actor, player) = if player_ref {
-        let (a, pl) = player(&mut p, cf)?;
+        let (a, pl) = player(&mut p, cf, capture)?;
         (a, Some(pl))
     } else {
-        (actor(&mut p, cf, false)?, None)
+        (actor(&mut p, cf, false, capture)?, None)
     };
     p.finish("actor")?;
     Ok(ActorForm {
@@ -591,7 +643,7 @@ pub fn projectile<'a>(cf: &ChangeForm<'a>) -> Result<Mobile<'a>> {
         version: cf.version,
         npc: true,
     };
-    let mobile = mobile(&mut p, cf.flags, false, cx)?;
+    let mobile = mobile(&mut p, cf.flags, false, cx, None)?;
     skip(&mut p, &[4, 4, 4, 4, 4, 4, 4, 4, 4])?;
     for _ in 0..3 {
         p.ref_id()?;

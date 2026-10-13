@@ -8,6 +8,8 @@ mod actor;
 mod extra;
 mod package;
 
+pub(crate) use actor::{actor_form_captured, reference_captured};
+
 pub use actor::{
     actor_form, modifiers, projectile, reference, Actor, ActorFields, ActorForm, Mobile, Player,
     Process, Reference, ReferenceData, ACTOR_EXTRA, REFR_EXTRA,
