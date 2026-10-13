@@ -7,9 +7,35 @@ use crate::prelude::*;
 layout! {
     /// `BGSSaveFormBuffer` (Xbox PDB), PC layout verified in 008659c0.
     pub struct BGSSaveFormBuffer: 0x24 {
+        /// `Header.iChangeFlags` (Xbox PDB `BGSSaveLoadFormHeader`, header at +0x14).
+        0x17 iChangeFlags: u32,
+        /// `Header.FormInfo` (Xbox PDB): the form type in the low six bits,
+        /// the size type in the top two.
+        0x1b FormInfo: u8,
+        /// `Header.cVersion` (Xbox PDB).
+        0x1c cVersion: u8,
         0x20 pForm: Ptr,
     }
 }
+
+/// `GetSizeTypeForSize` / `GetSizeTypeSize` (`bgssaveloaddefines.cpp`).
+const GET_SIZE_TYPE_FOR_SIZE: u32 = 0x0084_5d40;
+const GET_SIZE_TYPE_SIZE: u32 = 0x0084_5d70;
+/// `SaveGameSizeToFile` (cdecl): writes `size` in the given size type.
+const SAVE_GAME_SIZE_TO_FILE: u32 = 0x0084_5d80;
+/// `BGSSaveLoadFile::Write` (`__thiscall` on the file: `(buffer, length)`).
+const SAVE_LOAD_FILE_WRITE: u32 = 0x0084_6330;
+/// `BGSSaveGameBuffer::Save` overload that writes the buffer's bytes to a
+/// file (`__thiscall` on the form buffer: `(file, size)`).
+const SAVE_BUFFER_TO_FILE: u32 = 0x0086_5c80;
+/// `0084e3a0`: the word at `+0xc` of the buffer (the written size).
+const BUFFER_WRITTEN_SIZE: u32 = 0x0084_e3a0;
+/// `BGSNumericIDIndex::SetNumericID` (on the header at `+0x14`) and
+/// `BGSSaveLoadFormInfo::SetFormType` (on the form info at `+0x1b`).
+const SET_NUMERIC_ID: u32 = 0x0085_3570;
+const SET_FORM_TYPE: u32 = 0x0085_3670;
+/// Size of the form header written ahead of the data.
+const HEADER_SIZE: u32 = 9;
 
 // Translated from 008659c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BGSSaveFormBuffer::BGSSaveFormBuffer` (Xbox PDB): constructs the
@@ -53,9 +79,87 @@ pub fn get_actor(e: &mut Engine, this: Ptr<BGSSaveFormBuffer>) -> Ptr {
     }
 }
 
+// Translated from 00865a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveFormBuffer::Save` (Xbox PDB, `__thiscall`, one stack word):
+/// takes the written size (`0084e3a0`), its size type
+/// (`GetSizeTypeForSize`), stores the size type in the header's form info,
+/// writes the 9-byte header to `file`, then the size in that size type and
+/// the buffer's bytes.
+pub fn bgs_save_form_buffer_save(e: &mut Engine, this: Ptr<BGSSaveFormBuffer>, file: Ptr) {
+    let size = e.call(BUFFER_WRITTEN_SIZE, &args![this]).u32();
+    let size_type = e.call(GET_SIZE_TYPE_FOR_SIZE, &args![size]).u32();
+    fn_00865aa0(e, this.byte_add(0x1b), size_type);
+    e.call(
+        SAVE_LOAD_FILE_WRITE,
+        &args![file, this.addr().wrapping_add(0x14), HEADER_SIZE],
+    );
+    e.call(SAVE_GAME_SIZE_TO_FILE, &args![file, size, size_type]);
+    e.call(SAVE_BUFFER_TO_FILE, &args![this, file, size]);
+}
+
+// Translated from 00865aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a size type in the top two bits of the byte at `form_info` (the
+/// header's `FormInfo`, `+0x1b` of the buffer) and keeps the low six. The map
+/// has no name for it.
+pub fn fn_00865aa0(e: &mut Engine, form_info: Ptr, size_type: u32) {
+    let current = e.mem.u8(form_info.addr()) as u32;
+    e.mem.set_u8(
+        form_info.addr(),
+        ((current & 0x3f) | (size_type << 6)) as u8,
+    );
+}
+
+// Translated from 00865ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fills the buffer's 9-byte header (`+0x14`; the map has no name for this
+/// function): the form id index (`BGSNumericIDIndex::SetNumericID` on the
+/// header), the change flags word at `+0x17`, the form type
+/// (`BGSSaveLoadFormInfo::SetFormType` on the form info at `+0x1b`) and the
+/// version byte at `+0x1c`.
+pub fn fn_00865ad0(
+    e: &mut Engine,
+    this: Ptr<BGSSaveFormBuffer>,
+    form_id_index: u32,
+    change_flags: u32,
+    form_type: u32,
+    version: u8,
+) {
+    e.call(
+        SET_NUMERIC_ID,
+        &args![this.addr().wrapping_add(0x14), form_id_index],
+    );
+    e.set(this, BGSSaveFormBuffer::iChangeFlags, change_flags);
+    e.call(
+        SET_FORM_TYPE,
+        &args![this.addr().wrapping_add(0x1b), form_type],
+    );
+    e.set(this, BGSSaveFormBuffer::cVersion, version);
+}
+
+// Translated from 00865b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveFormBuffer::GetOverhead` (Xbox PDB): the size of the header (9)
+/// plus the bytes the size takes in its size type.
+pub fn bgs_save_form_buffer_get_overhead(e: &mut Engine, this: Ptr<BGSSaveFormBuffer>) -> i32 {
+    let size = e.call(BUFFER_WRITTEN_SIZE, &args![this]).u32();
+    let size_type = e.call(GET_SIZE_TYPE_FOR_SIZE, &args![size]).u32();
+    e.call(GET_SIZE_TYPE_SIZE, &args![size_type]).i32() + HEADER_SIZE as i32
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00865a30,
+            bgs_save_form_buffer_save(Ptr<BGSSaveFormBuffer>, Ptr)
+        ),
+        entry!(0x00865aa0, fn_00865aa0(Ptr, u32)),
+        entry!(
+            0x00865ad0,
+            fn_00865ad0(Ptr<BGSSaveFormBuffer>, u32, u32, u32, u8)
+        ),
+        entry!(
+            0x00865b10,
+            bgs_save_form_buffer_get_overhead(Ptr<BGSSaveFormBuffer>) -> i32
+        ),
         entry!(
             0x008659c0,
             construct(Ptr<BGSSaveFormBuffer>) -> Ptr<BGSSaveFormBuffer>
@@ -194,5 +298,93 @@ mod tests {
                 if is_reference && is_actor { form } else { 0 }
             );
         }
+    }
+
+    #[test]
+    fn save_writes_the_header_the_size_and_the_bytes_in_order() {
+        let mut e = Engine::new();
+        let buffer = e.new_object::<BGSSaveFormBuffer>();
+        e.mem.set_u32(buffer.addr() + 0x0c, 0x1234);
+        e.mem.set_u8(buffer.addr() + 0x1b, 0x15);
+        e.register(0x0084_e3a0, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(0x0084_5d40, |_, a| {
+            assert_eq!(a[0], 0x1234);
+            1u32.into_ret()
+        });
+        e.register(0x0084_6330, |e, a| {
+            // The size type is already in the form info when the header is written.
+            assert_eq!(e.mem.u8(a[1] + 7), 0x15 | (1 << 6));
+            Ret::default()
+        });
+        e.register(0x0084_5d80, |_, _| Ret::default());
+        e.register(0x0086_5c80, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0086_5a30, &[buffer.addr(), 0x7000]);
+        let b = buffer.addr();
+        assert_eq!(
+            e.call_log.take().unwrap(),
+            vec![
+                (0x0086_5a30, vec![b, 0x7000]),
+                (0x0084_e3a0, vec![b]),
+                (0x0084_5d40, vec![0x1234]),
+                (0x0084_6330, vec![0x7000, b + 0x14, 9]),
+                (0x0084_5d80, vec![0x7000, 0x1234, 1]),
+                (0x0086_5c80, vec![b, 0x7000, 0x1234]),
+            ]
+        );
+    }
+
+    #[test]
+    fn size_type_replaces_only_the_top_two_bits() {
+        let mut e = Engine::new();
+        let byte = e.mem.alloc(1);
+        e.mem.set_u8(byte, 0xff);
+        e.call(0x0086_5aa0, &[byte, 2]);
+        assert_eq!(e.mem.u8(byte), 0xbf);
+        e.mem.set_u8(byte, 0x2a);
+        e.call(0x0086_5aa0, &[byte, 0]);
+        assert_eq!(e.mem.u8(byte), 0x2a);
+        e.call(0x0086_5aa0, &[byte, 3]);
+        assert_eq!(e.mem.u8(byte), 0xea);
+    }
+
+    #[test]
+    fn header_setter_fills_the_nine_byte_header() {
+        let mut e = Engine::new();
+        let buffer = e.new_object::<BGSSaveFormBuffer>();
+        e.register(0x0085_3570, |_, _| Ret::default());
+        e.register(0x0085_3670, |_, _| Ret::default());
+        e.mem.set_u8(buffer.addr() + 0x1b, 0x99);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x0086_5ad0,
+            &[buffer.addr(), 0xabc, 0x1122_3344, 0x2b, 0xfe01],
+        );
+        let b = buffer.addr();
+        assert_eq!(
+            e.call_log.take().unwrap(),
+            vec![
+                (0x0086_5ad0, vec![b, 0xabc, 0x1122_3344, 0x2b, 0xfe01]),
+                (0x0085_3570, vec![b + 0x14, 0xabc]),
+                (0x0085_3670, vec![b + 0x1b, 0x2b]),
+            ]
+        );
+        assert_eq!(e.mem.u32(b + 0x17), 0x1122_3344);
+        assert_eq!(e.mem.u8(b + 0x1b), 0x99); // Only the double would change it.
+        assert_eq!(e.mem.u8(b + 0x1c), 0x01); // The version is one byte.
+    }
+
+    #[test]
+    fn overhead_is_nine_plus_the_size_type_width() {
+        let mut e = Engine::new();
+        let buffer = e.new_object::<BGSSaveFormBuffer>();
+        e.mem.set_u32(buffer.addr() + 0x0c, 70000);
+        e.register(0x0084_e3a0, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(0x0084_5d40, |_, a| {
+            assert_eq!(a[0], 70000);
+            2u32.into_ret()
+        });
+        e.register(0x0084_5d70, |_, a| (a[0] * 2).into_ret());
+        assert_eq!(e.call(0x0086_5b10, &[buffer.addr()]).i32(), 13);
     }
 }

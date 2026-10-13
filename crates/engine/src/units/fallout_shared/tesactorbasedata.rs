@@ -12,9 +12,10 @@
 //! `+0x24`, the change flags `+0x28` and the faction list `+0x2c`.
 //!
 //! Progress: the queue (`ledger queue "fallout shared/tesactorbasedata.cpp"`)
-//! is translated in address order up to `0047e4a0` (`SaveGame`). A later
-//! session continues with `0047e6f0` (`LoadGame`) and `004a8ae0`
-//! (`GetFatigue`).
+//! is translated in address order: the last two, `0047e6f0` (`LoadGame`) and
+//! `004a8ae0` (`GetFatigue`), are done. The unit is finished except for the
+//! functions carrying a `Translation incomplete` marker (`0047c700`,
+//! `0047c880`, `0047ce10`, `0047d0b0`: C++ exception unwinding).
 //!
 //! x87 note: the game computes in extended precision and stores `float`
 //! results. The translations compute in `f64` and round to `f32` where the
@@ -135,6 +136,25 @@ const CURRENT_SAVE_ENTRY: u32 = 0x004f_d3e0;
 const SAVE_DEBUG_SWITCH: u32 = 0x011d_e4e8;
 /// `"D:\\_Fallout3\\Platforms\\Common\\Code\\Fallout Shared\\TESActorBaseData.cpp"`.
 const SOURCE_FILE_PATH: u32 = 0x0101_b210;
+
+/// The save/load object's load-side methods (`this` is the global at
+/// `011de45c`): read `(destination, size)` bytes from the buffer and advance
+/// (`008579e0`); read a numeric form ID, remapping it (`00857aa0`, returns a
+/// byte flag the caller ignores); the current load entry, the word at
+/// `+0x84` (`004fd3c0`); the version byte at `+0x80` (`008df040`).
+const LOAD_BYTES: u32 = 0x0085_79e0;
+const LOAD_NUMERIC_ID: u32 = 0x0085_7aa0;
+const CURRENT_LOAD_ENTRY: u32 = 0x004f_d3c0;
+const SAVE_VERSION: u32 = 0x008d_f040;
+/// Messages `LoadGame` logs (`005b5e40`): the block header is wrong, then the
+/// buffer overran / underran its size, each without and with a current load
+/// entry naming the form being loaded.
+const TEXT_LOAD_HEADER_PLAIN: u32 = 0x0101_56a8;
+const TEXT_LOAD_HEADER_FORM: u32 = 0x0101_5718;
+const TEXT_LOAD_OVERRUN_PLAIN: u32 = 0x0101_54a0;
+const TEXT_LOAD_OVERRUN_FORM: u32 = 0x0101_5588;
+const TEXT_LOAD_UNDERRUN_PLAIN: u32 = 0x0101_5440;
+const TEXT_LOAD_UNDERRUN_FORM: u32 = 0x0101_5500;
 
 /// The object with the `+0x20` word the level calculation reads (`011dea3c`).
 const LEVEL_SOURCE_OBJECT: u32 = 0x011d_ea3c;
@@ -1667,6 +1687,139 @@ pub fn fn_0047e4a0(e: &mut Engine, this: Ptr<TESActorBaseData>, flags: u32) {
     }
 }
 
+/// One `LoadGame` buffer message (`005b5e40`). `amount` is `Some(bytes)` for
+/// the overrun / underrun messages. With a current load entry the message
+/// names its form (the form's virtual `+0x130`, which takes no argument but
+/// leaves the entry's version byte at `+9` and flags word at `+5` on the
+/// stack as the last two message arguments); without one it ends with the
+/// save version byte.
+fn log_load_message(
+    e: &mut Engine,
+    save_load: u32,
+    entry: u32,
+    texts: (u32, u32),
+    amount: Option<u32>,
+    line: u32,
+) {
+    let mut words = Vec::new();
+    if entry != 0 {
+        let form_id = e.mem.u32(entry);
+        let form = e.call(LOOKUP_FORM_BY_ID, &args![form_id]).u32();
+        let name = e.vcall(form, 0x130, &args![]).u32();
+        words.push(texts.1);
+        words.extend(amount);
+        words.extend([SOURCE_FILE_PATH, line, form_id, name]);
+        words.push(e.mem.u8(entry + 9) as u32);
+        words.push(e.mem.u32(entry + 5));
+    } else {
+        let version = e.call(SAVE_VERSION, &args![save_load]).u32() & 0xff;
+        words.push(texts.0);
+        words.extend(amount);
+        words.extend([SOURCE_FILE_PATH, line, version]);
+    }
+    e.call(MESSAGE_LOG, &words);
+}
+
+// Translated from 0047e6f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESActorBaseData::LoadGame` (Xbox PDB): reads, from the save buffer
+/// (global `011de45c`), the `KOBL` block header (logging when it differs)
+/// and the 16-bit block size when blocks are in use, the `0x18` bytes of
+/// `ACTOR_BASE_DATA` when `flags` has bit 1, then replaces the faction list
+/// by the stored entries (16-bit count; per entry a numeric form ID and a
+/// rank byte; entries whose form does not resolve are dropped). With blocks
+/// in use it finally logs a buffer overrun or underrun against the block
+/// size. `RET 8`: the second stack word is never read.
+pub fn tes_actor_base_data_load_game(
+    e: &mut Engine,
+    this: Ptr<TESActorBaseData>,
+    flags: u32,
+    _unused_1: u32,
+) {
+    let save_load = e.mem.u32(SAVE_LOAD_GAME_GLOBAL);
+    let mut block_size = 0u16;
+    let mut block_start = 0u32;
+    let blocks = e.call(USE_SAVE_GAME_BLOCKS, &args![save_load]).bool();
+    if blocks {
+        let tag = e.with_stack(4, |e, tag| {
+            e.call(LOAD_BYTES, &args![save_load, tag, 4u32]);
+            e.mem.u32(tag.addr())
+        });
+        if tag != TAG_KOBL {
+            let entry = e.call(CURRENT_LOAD_ENTRY, &args![save_load]).u32();
+            log_load_message(
+                e,
+                save_load,
+                entry,
+                (TEXT_LOAD_HEADER_PLAIN, TEXT_LOAD_HEADER_FORM),
+                None,
+                0xc80,
+            );
+        }
+        block_start = e.call(BUFFER_POSITION, &args![save_load]).u32();
+        block_size = e.with_stack(4, |e, size| {
+            e.mem.set_u16(size.addr(), 0);
+            e.call(LOAD_BYTES, &args![save_load, size, 2u32]);
+            e.mem.u16(size.addr())
+        });
+    }
+    if flags & 2 != 0 {
+        e.call(LOAD_BYTES, &args![save_load, this.addr() + 4, 0x18u32]);
+    }
+    tes_actor_base_data_clear_faction_list(e, this);
+    let count = e.with_stack(4, |e, count| {
+        e.call(LOAD_BYTES, &args![save_load, count, 2u32]);
+        e.mem.u16(count.addr())
+    });
+    for _ in 0..count {
+        let (id, rank) = e.with_stack(8, |e, slot| {
+            e.call(LOAD_NUMERIC_ID, &args![save_load, slot, 4u32]);
+            e.call(LOAD_BYTES, &args![save_load, slot.addr() + 4, 1u32]);
+            (e.mem.u32(slot.addr()), e.mem.u8(slot.addr() + 4))
+        });
+        let faction = e.call(LOOKUP_FORM_BY_ID, &args![id]).u32();
+        if faction != 0 {
+            let entry = e.call(OPERATOR_NEW, &args![8u32]).u32();
+            e.mem.set_u32(entry, faction);
+            e.mem.set_u8(entry + 4, rank);
+            e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), entry);
+                let head = faction_list_head(e, this);
+                e.call(LIST_TAKE_HEAD, &args![head, slot]);
+            });
+        }
+    }
+    if e.call(USE_SAVE_GAME_BLOCKS, &args![save_load]).bool() {
+        let position = e.call(BUFFER_POSITION, &args![save_load]).u32();
+        let entry = e.call(CURRENT_LOAD_ENTRY, &args![save_load]).u32();
+        let expected = (block_size as u32).wrapping_add(block_start);
+        if position > expected {
+            log_load_message(
+                e,
+                save_load,
+                entry,
+                (TEXT_LOAD_OVERRUN_PLAIN, TEXT_LOAD_OVERRUN_FORM),
+                Some(position - expected),
+                0xca2,
+            );
+        } else if position < expected {
+            log_load_message(
+                e,
+                save_load,
+                entry,
+                (TEXT_LOAD_UNDERRUN_PLAIN, TEXT_LOAD_UNDERRUN_FORM),
+                Some(expected - position),
+                0xca2,
+            );
+        }
+    }
+}
+
+// Translated from 004a8ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESActorBaseData::GetFatigue` (Xbox PDB): the 16-bit `usFatigue`.
+pub fn tes_actor_base_data_get_fatigue(e: &mut Engine, this: Ptr<TESActorBaseData>) -> u16 {
+    e.get(this, TESActorBaseData::usFatigue)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1791,6 +1944,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0047e360, fn_0047e360(Ptr<TESActorBaseData>, u32)),
         entry!(0x0047e380, fn_0047e380(Ptr<TESActorBaseData>, u32) -> u16),
         entry!(0x0047e4a0, fn_0047e4a0(Ptr<TESActorBaseData>, u32)),
+        entry!(
+            0x0047e6f0,
+            tes_actor_base_data_load_game(Ptr<TESActorBaseData>, u32, u32)
+        ),
+        entry!(
+            0x004a8ae0,
+            tes_actor_base_data_get_fatigue(Ptr<TESActorBaseData>) -> u16
+        ),
     ]
 }
 
@@ -3672,5 +3833,146 @@ mod tests {
             *messages.borrow(),
             vec![vec![TEXT_SAVE_BLOCK_TOO_BIG, SOURCE_FILE_PATH, 0xc77]]
         );
+    }
+
+    /// A load fixture: the save/load object, a buffer holding `bytes` with
+    /// the read position at `+0x14`, a message sink, doubles for the load
+    /// methods, the form lookup (`known` resolves to a form object) and the
+    /// current load entry (`entry`, may be 0). Returns the buffer address.
+    fn load_fixture(
+        e: &mut Engine,
+        blocks: bool,
+        bytes: &[u8],
+        known: u32,
+        entry: u32,
+    ) -> (u32, u32, Seen) {
+        let (save_load, _) = save_fixture(e, blocks, false);
+        let buffer = e.mem.alloc(0x100);
+        e.mem.write(buffer, bytes);
+        e.mem.set_u32(save_load + 0x14, buffer);
+        e.register(BUFFER_POSITION, |e, a| ret(e.mem.u32(a[0] + 0x14)));
+        for target in [LOAD_BYTES, LOAD_NUMERIC_ID] {
+            e.register(target, |e, a| {
+                let position = e.mem.u32(a[0] + 0x14);
+                let data = e.mem.bytes(position, a[2]);
+                e.mem.write(a[1], &data);
+                e.mem.set_u32(a[0] + 0x14, position + a[2]);
+                Ret::default()
+            });
+        }
+        let form = e.mem.alloc(0x20);
+        e.register_double(LOOKUP_FORM_BY_ID, move |_, a| {
+            ret(if a[0] == known { form } else { 0 })
+        });
+        e.register_double(CURRENT_LOAD_ENTRY, move |_, _| ret(entry));
+        e.register(SAVE_VERSION, |_, _| ret(0x1234_5678));
+        let messages: Seen = Rc::default();
+        let sink = messages.clone();
+        e.register_double(MESSAGE_LOG, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        (save_load, form, messages)
+    }
+
+    #[test]
+    fn load_game_reads_the_data_and_replaces_the_faction_list() {
+        let mut e = engine();
+        let mut bytes = TAG_KOBL.to_le_bytes().to_vec();
+        bytes.extend(38u16.to_le_bytes());
+        bytes.extend((0..0x18).map(|i| 0x40 + i as u8));
+        bytes.extend(2u16.to_le_bytes());
+        bytes.extend(0x100u32.to_le_bytes());
+        bytes.push(7);
+        bytes.extend(0x200u32.to_le_bytes());
+        bytes.push(9);
+        let (_, form, messages) = load_fixture(&mut e, true, &bytes, 0x100, 0);
+        let this = component(&mut e);
+        put_faction_list(&mut e, this, &[(0x999, 1)]);
+        e.call(0x0047e6f0, &args![this, 2u32, 0u32]);
+        assert_eq!(e.mem.u8(this.addr() + 4), 0x40);
+        assert_eq!(e.mem.u8(this.addr() + 4 + 0x17), 0x40 + 0x17);
+        // The old entry is gone; the unresolved ID is dropped.
+        let items = list_items(&e, this.addr() + 0x2c);
+        assert_eq!(items.len(), 1);
+        assert_eq!(e.mem.u32(items[0]), form);
+        assert_eq!(e.mem.u8(items[0] + 4), 7);
+        assert!(messages.borrow().is_empty());
+    }
+
+    #[test]
+    fn load_game_without_blocks_reads_only_the_faction_list() {
+        let mut e = engine();
+        let mut bytes = 1u16.to_le_bytes().to_vec();
+        bytes.extend(0x100u32.to_le_bytes());
+        bytes.push(3);
+        let (_, form, messages) = load_fixture(&mut e, false, &bytes, 0x100, 0);
+        let this = component(&mut e);
+        e.set(this, TESActorBaseData::iActorBaseFlags, 0x55);
+        e.call(0x0047e6f0, &args![this, 0u32, 0u32]);
+        assert_eq!(e.get(this, TESActorBaseData::iActorBaseFlags), 0x55);
+        let items = list_items(&e, this.addr() + 0x2c);
+        assert_eq!(e.mem.u32(items[0]), form);
+        assert_eq!(e.mem.u8(items[0] + 4), 3);
+        assert!(messages.borrow().is_empty());
+    }
+
+    #[test]
+    fn load_game_logs_a_wrong_header_and_an_overrun_without_a_load_entry() {
+        let mut e = engine();
+        let mut bytes = 0x1111_1111u32.to_le_bytes().to_vec();
+        bytes.extend(0u16.to_le_bytes());
+        bytes.extend(0u16.to_le_bytes());
+        let (_, _, messages) = load_fixture(&mut e, true, &bytes, 0, 0);
+        let this = component(&mut e);
+        e.call(0x0047e6f0, &args![this, 0u32, 0u32]);
+        assert_eq!(
+            *messages.borrow(),
+            vec![
+                vec![TEXT_LOAD_HEADER_PLAIN, SOURCE_FILE_PATH, 0xc80, 0x78],
+                // The block starts at the size field: it and the count are 4 bytes over.
+                vec![TEXT_LOAD_OVERRUN_PLAIN, 4, SOURCE_FILE_PATH, 0xca2, 0x78],
+            ]
+        );
+    }
+
+    #[test]
+    fn load_game_logs_an_underrun_naming_the_load_entry() {
+        let mut e = engine();
+        let mut bytes = TAG_KOBL.to_le_bytes().to_vec();
+        bytes.extend(10u16.to_le_bytes());
+        bytes.extend(0u16.to_le_bytes());
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u32(entry, 0x0100_0042);
+        e.mem.set_u32(entry + 5, 0xf1a9);
+        e.mem.set_u8(entry + 9, 0x33);
+        let (_, form, messages) = load_fixture(&mut e, true, &bytes, 0x0100_0042, entry);
+        e.mem.set_u32(form, 0x0395_1000);
+        e.register(0x0395_0130, |_, _| ret(0xabcd));
+        vtable(&mut e, 0x0395_1000, &[(0x130, 0x0395_0130)]);
+        let this = component(&mut e);
+        e.call(0x0047e6f0, &args![this, 0u32, 0u32]);
+        // Block size 10 counted from the size field; 4 bytes read.
+        assert_eq!(
+            *messages.borrow(),
+            vec![vec![
+                TEXT_LOAD_UNDERRUN_FORM,
+                6,
+                SOURCE_FILE_PATH,
+                0xca2,
+                0x0100_0042,
+                0xabcd,
+                0x33,
+                0xf1a9
+            ]]
+        );
+    }
+
+    #[test]
+    fn get_fatigue_returns_the_stored_halfword() {
+        let mut e = engine();
+        let this = component(&mut e);
+        e.set(this, TESActorBaseData::usFatigue, 0x1234);
+        assert_eq!(e.call(0x004a8ae0, &args![this]).u16(), 0x1234);
     }
 }
