@@ -9,8 +9,10 @@
 //! (`0044a4c0`..`0044a7f0`) that the linker placed with them.
 //!
 //! Layouts, constants and helpers are at the top; the functions follow in
-//! address order. `0050f9c0` was translated by an earlier session; the next
-//! session continues with `0050fdf0` (`TESObject::GetScaledModelFileName`).
+//! address order. The last function of the unit, `0050fdf0`
+//! (`TESObject::GetScaledModelFileName`), is translated; the functions still
+//! marked `Translation incomplete` are compiler-only partials (exception
+//! frames, security cookie).
 //!
 //! Float notes: the game copies floats through `FLD` / `FSTP`, which turns a
 //! signalling NaN into a quiet one ([`x87_float_copy`]), and compares them
@@ -1329,6 +1331,30 @@ pub fn fn_0050fd90(e: &mut Engine, this: Ptr, reference: Ptr) -> u32 {
     path
 }
 
+/// Format string of `0050fdf0`: `"%s%i"` (path, then the scale in percent).
+const SCALED_NAME_FORMAT: u32 = 0x0102_9ca8;
+/// The double `100.0` that `0050fdf0` multiplies the reference's scale by.
+const ONE_HUNDRED: u32 = 0x0101_7a40;
+
+// Translated from 0050fdf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObject::GetScaledModelFileName` (Xbox PDB): writes the form's model
+/// path (`0050fd90`) followed by the reference's scale in percent
+/// (`00567400` times 100.0, stored as a float and rounded by the
+/// float-to-int helper `00406d90`) into the 0x104 byte buffer `name`, with
+/// the `sprintf_s` variant `00406d00` and the format `"%s%i"`.
+pub fn tes_object_get_scaled_model_file_name(e: &mut Engine, this: Ptr, reference: Ptr, name: Ptr) {
+    let path = fn_0050fd90(e, this, reference);
+    let scale = e.call(0x0056_7400, &args![reference]).f64();
+    let percent = e.global::<f64>(ONE_HUNDRED);
+    // FMUL, FSTP to a float, then FLD/FSTP again to push it on the stack.
+    let product = x87_float_copy(((scale * percent) as f32).to_bits());
+    let rounded = e.call(0x0040_6d90, &args![product]).u32();
+    e.call(
+        0x0040_6d00,
+        &args![name, 0x104u32, SCALED_NAME_FORMAT, path, rounded],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1474,6 +1500,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0050fbe0, fn_0050fbe0(Ptr, u32, u32) -> u32),
         entry!(0x0050fbf0, fn_0050fbf0(Ptr, Ptr)),
         entry!(0x0050fd90, fn_0050fd90(Ptr, Ptr) -> u32),
+        entry!(
+            0x0050fdf0,
+            tes_object_get_scaled_model_file_name(Ptr, Ptr, Ptr)
+        ),
     ]
 }
 
@@ -2985,5 +3015,45 @@ mod tests {
             addresses(&calls(&mut e)),
             vec![0x0048_0e60, FORM_MODEL_PATH]
         );
+    }
+
+    #[test]
+    fn scaled_model_file_name_formats_path_and_percent() {
+        let mut e = engine();
+        e.set_global(ONE_HUNDRED, 100.0f64);
+        e.register(0x0057_15d0, |_, _| ret(0x11));
+        e.register(0x0056_7400, |_, _| float_ret(1.5));
+        e.register(0x0040_6d90, |_, a| ret(f32::from_bits(a[0]) as i32 as u32));
+        e.register(0x0040_6d00, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0050fdf0, &[0x1000, 0x2000, 0x3000]);
+        assert_eq!(
+            calls(&mut e),
+            vec![
+                (0x0057_15d0, vec![0x2000]),
+                (0x0056_7400, vec![0x2000]),
+                (0x0040_6d90, vec![150.0f32.to_bits()]),
+                (
+                    0x0040_6d00,
+                    vec![0x3000, 0x104, SCALED_NAME_FORMAT, 0x11, 150]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn scaled_model_file_name_passes_a_nan_scale_on_quietly() {
+        let mut e = engine();
+        e.set_global(ONE_HUNDRED, 100.0f64);
+        e.register(0x0057_15d0, |_, _| ret(0x11));
+        e.register(0x0056_7400, |_, _| float_ret(f64::NAN));
+        e.register(0x0040_6d90, |_, _| ret(0x8000_0000));
+        e.register(0x0040_6d00, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0050fdf0, &[0x1000, 0x2000, 0x3000]);
+        let log = calls(&mut e);
+        let pushed = log[2].1[0];
+        assert!(f32::from_bits(pushed).is_nan());
+        assert_ne!(pushed & 0x0040_0000, 0);
     }
 }

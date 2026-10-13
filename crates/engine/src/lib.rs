@@ -17,6 +17,11 @@
 //! `// Translated from <addr> (decompiled, FalloutNV.exe 1.4.0.525)`
 //! (ADR-0003); `docs/LEDGER.md` counts them.
 
+// Translation doc comments quote offsets and arithmetic ("+ 0x3c", "+ 1")
+// that markdown reads as list items; that only affects rendering, so the
+// lint is allowed for the crate rather than reflowing thousands of comments.
+#![allow(clippy::doc_lazy_continuation)]
+
 pub mod abi;
 mod engine;
 pub mod exe;

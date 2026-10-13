@@ -13,6 +13,10 @@ const FORMAT_VA_LIST: u32 = 0x0040_6f90;
 /// lead's `crt.rs` provides it, it is not translated here.
 const VSPRINTF: u32 = 0x00ec_6cc4;
 
+/// `004037f0(this, text, 0)`: stores the text in the string object (the
+/// `BSString` assignment; not translated here).
+const STRING_ASSIGN: u32 = 0x0040_37f0;
+
 // Translated from 00406f60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The `printf`-style string formatter (`cdecl`): `string` is the string
 /// object that receives the text, `format` the format string, and
@@ -43,6 +47,20 @@ fn fn_00406f60_uniform(e: &mut Engine, a: &[u32]) -> Ret {
 /// own result, so it is returned here).
 pub fn fn_00407000(e: &mut Engine, buffer: Ptr, format: Ptr, arguments: Ptr) -> u32 {
     e.call(VSPRINTF, &args![buffer, format, arguments]).u32()
+}
+
+// Translated from 00406f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `va_list` string formatter (`__thiscall`, `RET 8`): formats `format`
+/// with the `va_list` at `arguments` into a 0x400-byte stack buffer with the
+/// `vsprintf` wrapper `00407000`, stores the text in the string object `this`
+/// (`004037f0(this, buffer, 0)`) and returns the character count.
+// Translation incomplete: 00406f90 - the /GS stack-cookie check (00ec408c) is not translated.
+pub fn fn_00406f90(e: &mut Engine, this: Ptr, format: Ptr, arguments: Ptr) -> u32 {
+    e.with_stack(0x400, |e, buffer| {
+        let count = fn_00407000(e, buffer, format, arguments);
+        e.call(STRING_ASSIGN, &args![this, buffer, 0u32]);
+        count
+    })
 }
 
 // Translated from 00407020 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -98,6 +116,7 @@ pub fn fn_00407020(e: &mut Engine, this: Ptr) -> Ptr {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         (0x00406f60, fn_00406f60_uniform as AbiFn),
+        entry!(0x00406f90, fn_00406f90(Ptr, Ptr, Ptr) -> u32),
         entry!(0x00407000, fn_00407000(Ptr, Ptr, Ptr) -> u32),
         entry!(0x0040_7020, fn_00407020(Ptr) -> Ptr),
     ]
@@ -134,6 +153,31 @@ mod tests {
         assert_eq!(r.u32(), 123);
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1], (VSPRINTF, vec![100, 20, 3]));
+    }
+
+    #[test]
+    fn the_va_list_formatter_stores_the_text_and_returns_the_count() {
+        let mut e = Engine::new();
+        e.register(VSPRINTF, |e, a| {
+            assert_eq!((a[1], a[2]), (0x3000, 0x4000));
+            e.mem.write(a[0], b"hi\0");
+            Ret {
+                eax: 2,
+                ..Ret::default()
+            }
+        });
+        e.register(STRING_ASSIGN, |e, a| {
+            assert_eq!(a[2], 0);
+            assert_eq!(e.mem.bytes(a[1], 3), b"hi\0");
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let r = e.call(0x0040_6f90, &args![0x2000u32, 0x3000u32, 0x4000u32]);
+        assert_eq!(r.u32(), 2);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[2].0, STRING_ASSIGN);
+        assert_eq!(log[2].1[0], 0x2000, "the string object is this");
+        assert_eq!(log[1].1[1..], [0x3000, 0x4000], "format and va_list");
     }
 
     #[test]
