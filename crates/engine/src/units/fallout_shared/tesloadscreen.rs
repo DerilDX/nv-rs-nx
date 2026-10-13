@@ -4,7 +4,58 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+// Translated from 005a66e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005a66e0 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
+/// `TESLoadScreen::TESLoadScreen` (Xbox PDB): the form constructor `CreateFormOfType` (`00465110`) runs for form type 0x4b (0x40 bytes).
+/// `ECX` is the object; it runs the base and component constructors, stores the vtable pointers of the object and its components, and sets the fields to their start values.
+/// The exception-unwinding frame is not translated.
+pub fn tesloadscreen_tesloadscreen(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0048_3370, &args![this]);
+    e.call(0x0048_e270, &args![base + 0x18]);
+    e.call(0x0048_2c50, &args![base + 0x24]);
+    e.mem.set_u32(base, 0x0103_66cc);
+    e.mem.set_u32(base + 0x18, 0x0103_66ac);
+    e.mem.set_u32(base + 0x24, 0x0103_6694);
+    e.call(0x0096_a2d0, &args![base + 0x2c]);
+    e.call(0x0040_37b0, &args![base + 0x38]);
+    e.call(0x004f_15a0, &args![this, 0x4b]);
+    e.call(0x0048_4ab0, &args![this, 0x1]);
+    e.mem.set_u32(base + 0x34, 0x0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x005a_66e0, tesloadscreen_tesloadscreen(Ptr) -> Ptr)]
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn tesloadscreen_tesloadscreen_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x005a_66e0,
+            size: 0x40,
+            globals: &[],
+            returns: &[],
+            calls: &[
+                (0x0048_3370, &[A::T(0x0)]),
+                (0x0048_e270, &[A::T(0x18)]),
+                (0x0048_2c50, &[A::T(0x24)]),
+                (0x0096_a2d0, &[A::T(0x2c)]),
+                (0x0040_37b0, &[A::T(0x38)]),
+                (0x004f_15a0, &[A::T(0x0), A::V(0x4b)]),
+                (0x0048_4ab0, &[A::T(0x0), A::V(0x1)]),
+            ],
+            stores: &[
+                (0x0, 4, 0x0103_66cc),
+                (0x18, 4, 0x0103_66ac),
+                (0x24, 4, 0x0103_6694),
+                (0x34, 4, 0x0),
+            ],
+        });
+    }
 }

@@ -16,14 +16,41 @@ pub fn fn_005f65d0(e: &mut Engine, this: Ptr, wanted: Ptr) -> bool {
     node != 0
 }
 
+// Translated from 005f6610 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005f6610 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
+/// Constructor of the form `CreateFormOfType` (`00465110`) makes for form type 7 (0x60 bytes); `ECX` is the object.
+/// The engine map gives it no name (a `range-sub` function), so the class is unconfirmed.
+/// It runs the base and component constructors by address, stores the vtable pointers and sets the fields to their start values.
+/// The exception-unwinding frame is not translated.
+pub fn fn_005f6610(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0048_3370, &args![this]);
+    e.call(0x0040_2d00, &args![base + 0x18]);
+    e.call(0x0048_2c50, &args![base + 0x24]);
+    e.call(0x0048_e270, &args![base + 0x2c]);
+    e.call(0x0047_ff70, &args![base + 0x38]);
+    e.mem.set_u32(base, 0x0104_8bb4);
+    e.mem.set_u32(base + 0x18, 0x0104_8ba0);
+    e.mem.set_u32(base + 0x24, 0x0104_8b88);
+    e.mem.set_u32(base + 0x2c, 0x0104_8b68);
+    e.mem.set_u32(base + 0x38, 0x0104_8b54);
+    e.call(0x004f_15a0, &args![this, 0x7]);
+    e.call(0x005f_67c0, &args![this]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005f65d0, fn_005f65d0(Ptr, Ptr) -> bool)]
+    vec![
+        entry!(0x005f65d0, fn_005f65d0(Ptr, Ptr) -> bool),
+        entry!(0x005f_6610, fn_005f6610(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::units::crt::ctor_test::{self, A};
 
     fn word(e: &mut Engine, value: u32) -> Ptr {
         let p: Ptr = Ptr::new(e.mem.alloc(4));
@@ -52,5 +79,31 @@ mod tests {
         let mut e = Engine::new();
         let any = word(&mut e, 0);
         assert!(!e.call(0x005f_65d0, &args![Ptr::<()>::NULL, any]).bool());
+    }
+
+    #[test]
+    fn fn_005f6610_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x005f_6610,
+            size: 0x60,
+            globals: &[],
+            returns: &[],
+            calls: &[
+                (0x0048_3370, &[A::T(0x0)]),
+                (0x0040_2d00, &[A::T(0x18)]),
+                (0x0048_2c50, &[A::T(0x24)]),
+                (0x0048_e270, &[A::T(0x2c)]),
+                (0x0047_ff70, &[A::T(0x38)]),
+                (0x004f_15a0, &[A::T(0x0), A::V(0x7)]),
+                (0x005f_67c0, &[A::T(0x0)]),
+            ],
+            stores: &[
+                (0x0, 4, 0x0104_8bb4),
+                (0x18, 4, 0x0104_8ba0),
+                (0x24, 4, 0x0104_8b88),
+                (0x2c, 4, 0x0104_8b68),
+                (0x38, 4, 0x0104_8b54),
+            ],
+        });
     }
 }

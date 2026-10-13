@@ -335,6 +335,472 @@ pub fn rand(e: &mut Engine) -> i32 {
     ((s >> 16) & 0x7fff) as i32
 }
 
+// ---- Formatted output ------------------------------------------------------
+
+/// Reads the arguments of a `va_list` (a pointer to the pushed words: an
+/// `int` is one word, a `double` or `__int64` two, low word first).
+struct VaArgs {
+    at: u32,
+}
+
+impl VaArgs {
+    fn word(&mut self, e: &Engine) -> u32 {
+        let v = e.mem.u32(self.at);
+        self.at = self.at.wrapping_add(4);
+        v
+    }
+    fn dword(&mut self, e: &Engine) -> u64 {
+        let v = e.mem.u64(self.at);
+        self.at = self.at.wrapping_add(8);
+        v
+    }
+}
+
+/// The flags of one conversion specification.
+#[derive(Default, Clone, Copy)]
+struct Spec {
+    left: bool,
+    plus: bool,
+    space: bool,
+    alt: bool,
+    zero: bool,
+}
+
+/// Pads `body` (sign or prefix already split off as `head`) to `width`.
+fn pad(out: &mut Vec<u8>, head: &[u8], body: &[u8], width: usize, spec: Spec, zero_ok: bool) {
+    let len = head.len() + body.len();
+    let fill = width.saturating_sub(len);
+    if spec.left {
+        out.extend_from_slice(head);
+        out.extend_from_slice(body);
+        out.resize(out.len() + fill, b' ');
+    } else if spec.zero && zero_ok {
+        out.extend_from_slice(head);
+        out.resize(out.len() + fill, b'0');
+        out.extend_from_slice(body);
+    } else {
+        out.resize(out.len() + fill, b' ');
+        out.extend_from_slice(head);
+        out.extend_from_slice(body);
+    }
+}
+
+/// An integer conversion (`d i u o x X p`).
+fn format_integer(
+    out: &mut Vec<u8>,
+    conv: u8,
+    value: u64,
+    negative: bool,
+    spec: Spec,
+    width: usize,
+    precision: Option<usize>,
+) {
+    let mut digits = match conv {
+        b'o' => format!("{value:o}"),
+        b'x' => format!("{value:x}"),
+        b'X' | b'p' => format!("{value:X}"),
+        _ => format!("{value}"),
+    }
+    .into_bytes();
+    let zero_ok = precision.is_none();
+    let precision = precision.unwrap_or(1);
+    if value == 0 && precision == 0 {
+        digits.clear();
+    }
+    while digits.len() < precision {
+        digits.insert(0, b'0');
+    }
+    if conv == b'o' && spec.alt && digits.first() != Some(&b'0') {
+        digits.insert(0, b'0');
+    }
+    let mut head: Vec<u8> = Vec::new();
+    match conv {
+        b'd' | b'i' => {
+            if negative {
+                head.push(b'-');
+            } else if spec.plus {
+                head.push(b'+');
+            } else if spec.space {
+                head.push(b' ');
+            }
+        }
+        b'x' if spec.alt && value != 0 => head.extend_from_slice(b"0x"),
+        b'X' if spec.alt && value != 0 => head.extend_from_slice(b"0X"),
+        _ => {}
+    }
+    pad(out, &head, &digits, width, spec, zero_ok);
+}
+
+/// The decimal digits of a double the way MSVC's runtime of 2008 produces
+/// them: 17 significant digits (`$I10_OUTPUT`), which later conversions
+/// round with `_fptostr` (round half up on the digit string). Returns the
+/// digit string and the decimal point position (`decpt`: the number of
+/// digits before the point). Infinities and NaNs yield MSVC's `1#INF`,
+/// `1#QNAN`, `1#SNAN` and `1#IND` digit strings.
+fn double_digits(v: f64) -> (Vec<u8>, i32) {
+    let bits = v.to_bits();
+    if v.is_infinite() {
+        return (b"1#INF".to_vec(), 1);
+    }
+    if v.is_nan() {
+        let text: &[u8] = if bits == 0xfff8_0000_0000_0000 {
+            b"1#IND"
+        } else if bits & (1 << 51) != 0 {
+            b"1#QNAN"
+        } else {
+            b"1#SNAN"
+        };
+        return (text.to_vec(), 1);
+    }
+    if v == 0.0 {
+        return (b"0".to_vec(), 1);
+    }
+    let s = format!("{:.16e}", v.abs());
+    let (mantissa, exp) = s.split_once('e').unwrap_or((&s, "0"));
+    let digits: Vec<u8> = mantissa.bytes().filter(u8::is_ascii_digit).collect();
+    (digits, exp.parse::<i32>().unwrap_or(0) + 1)
+}
+
+/// `_fptostr`: the first `count` digits of `digits`, zero padded, rounded up
+/// when the next digit is `'5'` or above (a carry out of the first digit
+/// moves the decimal point). A negative `count` gives no digits and no
+/// rounding. Returns the digits and the new `decpt`.
+fn round_digits(digits: &[u8], decpt: i32, count: i32) -> (Vec<u8>, i32) {
+    if count < 0 {
+        return (Vec::new(), decpt);
+    }
+    let count = count as usize;
+    // Slot 0 receives a carry.
+    let mut buf: Vec<u8> = vec![b'0'];
+    for i in 0..count {
+        buf.push(*digits.get(i).unwrap_or(&b'0'));
+    }
+    if *digits.get(count).unwrap_or(&b'0') >= b'5' {
+        let mut i = buf.len();
+        loop {
+            i -= 1;
+            if buf[i] == b'9' {
+                buf[i] = b'0';
+            } else {
+                buf[i] += 1;
+                break;
+            }
+        }
+    }
+    if buf[0] == b'1' {
+        (buf, decpt + 1)
+    } else {
+        (buf[1..].to_vec(), decpt)
+    }
+}
+
+fn exponent_text(out: &mut Vec<u8>, upper: bool, exp: i32) {
+    out.push(if upper { b'E' } else { b'e' });
+    out.push(if exp < 0 { b'-' } else { b'+' });
+    out.extend_from_slice(format!("{:03}", exp.abs()).as_bytes());
+}
+
+/// `%f` body (no sign): `digits`/`decpt` already rounded to the precision.
+/// Digit `i` has the place value `10^(decpt - 1 - i)`.
+fn fixed_body(digits: &[u8], decpt: i32, precision: usize, alt: bool) -> Vec<u8> {
+    let mut body = Vec::new();
+    if decpt <= 0 {
+        body.push(b'0');
+    } else {
+        for i in 0..decpt {
+            body.push(*digits.get(i as usize).unwrap_or(&b'0'));
+        }
+    }
+    if precision > 0 || alt {
+        body.push(b'.');
+    }
+    for k in 1..=precision as i32 {
+        let i = decpt + k - 1;
+        body.push(if i < 0 {
+            b'0'
+        } else {
+            *digits.get(i as usize).unwrap_or(&b'0')
+        });
+    }
+    body
+}
+
+/// `%e`/`%E` body from rounded digits.
+fn exp_body(digits: &[u8], exp: i32, precision: usize, alt: bool, upper: bool) -> Vec<u8> {
+    let mut body = vec![digits[0]];
+    if precision > 0 || alt {
+        body.push(b'.');
+    }
+    for k in 1..=precision {
+        body.push(*digits.get(k).unwrap_or(&b'0'));
+    }
+    exponent_text(&mut body, upper, exp);
+    body
+}
+
+/// A floating-point conversion (`e E f g G`).
+fn format_float(
+    out: &mut Vec<u8>,
+    conv: u8,
+    value: f64,
+    spec: Spec,
+    width: usize,
+    precision: Option<usize>,
+) {
+    let head: &[u8] = if value.is_sign_negative() {
+        b"-"
+    } else if spec.plus {
+        b"+"
+    } else if spec.space {
+        b" "
+    } else {
+        b""
+    };
+    let (digits, decpt) = double_digits(value);
+    let precision = precision.unwrap_or(6);
+    let body = match conv {
+        b'f' => {
+            let (d, dp) = round_digits(&digits, decpt, decpt + precision as i32);
+            fixed_body(&d, dp, precision, spec.alt)
+        }
+        b'e' | b'E' => {
+            let (mut d, dp) = round_digits(&digits, decpt, precision as i32 + 1);
+            d.truncate(precision + 1);
+            exp_body(&d, dp - 1, precision, spec.alt, conv == b'E')
+        }
+        _ => {
+            let p = precision.max(1);
+            let (mut d, dp) = round_digits(&digits, decpt, p as i32);
+            d.truncate(p);
+            let x = dp - 1;
+            if !spec.alt {
+                while d.len() > 1 && d.last() == Some(&b'0') {
+                    d.pop();
+                }
+            }
+            if x < -4 || x >= p as i32 {
+                let frac = if spec.alt { p - 1 } else { d.len() - 1 };
+                exp_body(&d, x, frac, spec.alt, conv == b'G')
+            } else {
+                let frac = if spec.alt {
+                    (p as i32 - 1 - x) as usize
+                } else {
+                    (d.len() as i32 - dp).max(0) as usize
+                };
+                fixed_body(&d, dp, frac, spec.alt)
+            }
+        }
+    };
+    pad(out, head, &body, width, spec, true);
+}
+
+/// The size prefix of a conversion.
+#[derive(Clone, Copy, PartialEq)]
+enum Size {
+    Default,
+    Short,
+    /// `l`, `w`: wide for `c` and `s`.
+    Long,
+    /// `ll`, `I64`.
+    Quad,
+}
+
+/// MSVC `printf` formatting (`_output_l` of LIBCMT, C locale): `%d %i %u %o
+/// %x %X %p %c %C %s %S %f %e %E %g %G %n %%`, flags `- + space # 0`, width
+/// and precision (also `*`), size prefixes `h l ll L w I I32 I64` (`F` and
+/// `N` ignored). Differences of the 2008 runtime from the C standard are
+/// kept: three-digit exponents (`1.000000e+000`), floating-point digits
+/// beyond the 17th are zeros, `1.#INF`/`1.#QNAN`/`1.#IND` for infinities
+/// and NaNs, `%p` as 8 upper-case hex digits, `%05s` padded with zeros, and
+/// `(null)` for a null string. A wide character or string is narrowed to
+/// the low byte; a character above 0xff is dropped (the C locale's
+/// `wctomb` fails). A conversion character that is none of these is written
+/// as itself (the runtime's default state; unconfirmed in the disassembly).
+/// Returns the formatted bytes.
+pub fn format_va(e: &mut Engine, format: &[u8], va_list: u32) -> Vec<u8> {
+    let mut va = VaArgs { at: va_list };
+    let mut out: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i < format.len() {
+        let c = format[i];
+        i += 1;
+        if c != b'%' {
+            out.push(c);
+            continue;
+        }
+        let mut spec = Spec::default();
+        while let Some(&f) = format.get(i) {
+            match f {
+                b'-' => spec.left = true,
+                b'+' => spec.plus = true,
+                b' ' => spec.space = true,
+                b'#' => spec.alt = true,
+                b'0' => spec.zero = true,
+                _ => break,
+            }
+            i += 1;
+        }
+        let mut width = 0usize;
+        if format.get(i) == Some(&b'*') {
+            i += 1;
+            let w = va.word(e) as i32;
+            if w < 0 {
+                spec.left = true;
+            }
+            width = w.unsigned_abs() as usize;
+        } else {
+            while let Some(d) = format.get(i).filter(|d| d.is_ascii_digit()) {
+                width = width.saturating_mul(10).saturating_add((d - b'0') as usize);
+                i += 1;
+            }
+        }
+        let mut precision: Option<usize> = None;
+        if format.get(i) == Some(&b'.') {
+            i += 1;
+            if format.get(i) == Some(&b'*') {
+                i += 1;
+                let p = va.word(e) as i32;
+                precision = (p >= 0).then_some(p as usize); // negative: ignored
+            } else {
+                let mut p = 0usize;
+                while let Some(d) = format.get(i).filter(|d| d.is_ascii_digit()) {
+                    p = p.saturating_mul(10).saturating_add((d - b'0') as usize);
+                    i += 1;
+                }
+                precision = Some(p);
+            }
+        }
+        let mut size = Size::Default;
+        loop {
+            match format.get(i) {
+                Some(b'h') => size = Size::Short,
+                Some(b'l') => {
+                    size = if format.get(i + 1) == Some(&b'l') {
+                        i += 1;
+                        Size::Quad
+                    } else {
+                        Size::Long
+                    }
+                }
+                Some(b'w') => size = Size::Long,
+                Some(b'L') | Some(b'F') | Some(b'N') => {}
+                Some(b'I') => {
+                    if format[i + 1..].starts_with(b"64") {
+                        i += 2;
+                        size = Size::Quad;
+                    } else if format[i + 1..].starts_with(b"32") {
+                        i += 2;
+                    }
+                }
+                _ => break,
+            }
+            i += 1;
+        }
+        let Some(&conv) = format.get(i) else { break };
+        i += 1;
+        match conv {
+            b'd' | b'i' => {
+                let (v, neg) = match size {
+                    Size::Quad => {
+                        let v = va.dword(e) as i64;
+                        (v.unsigned_abs(), v < 0)
+                    }
+                    Size::Short => {
+                        let v = va.word(e) as u16 as i16 as i64;
+                        (v.unsigned_abs(), v < 0)
+                    }
+                    _ => {
+                        let v = va.word(e) as i32 as i64;
+                        (v.unsigned_abs(), v < 0)
+                    }
+                };
+                format_integer(&mut out, conv, v, neg, spec, width, precision);
+            }
+            b'u' | b'o' | b'x' | b'X' => {
+                let v = match size {
+                    Size::Quad => va.dword(e),
+                    Size::Short => va.word(e) as u16 as u64,
+                    _ => va.word(e) as u64,
+                };
+                format_integer(&mut out, conv, v, false, spec, width, precision);
+            }
+            b'p' => {
+                let v = va.word(e) as u64;
+                // MSVC: precision becomes 2 * sizeof(void *), upper-case hex.
+                format_integer(&mut out, conv, v, false, spec, width, Some(8));
+            }
+            b'c' | b'C' => {
+                let wide = conv == b'C' || size == Size::Long;
+                let v = va.word(e);
+                let byte = if wide {
+                    ((v & 0xffff) <= 0xff).then_some(v as u8)
+                } else {
+                    Some(v as u8)
+                };
+                let body: Vec<u8> = byte.into_iter().collect();
+                pad(&mut out, b"", &body, width, spec, true);
+            }
+            b's' | b'S' => {
+                let wide = conv == b'S' || size == Size::Long;
+                let p = va.word(e);
+                let limit = precision.unwrap_or(usize::MAX);
+                let body: Vec<u8> = if p == 0 {
+                    b"(null)".iter().copied().take(limit).collect()
+                } else if wide {
+                    let mut text = Vec::new();
+                    let mut at = p;
+                    while text.len() < limit {
+                        let ch = e.mem.u16(at);
+                        if ch == 0 {
+                            break;
+                        }
+                        at += 2;
+                        text.push(ch);
+                    }
+                    text.iter()
+                        .filter(|c| **c <= 0xff)
+                        .map(|c| *c as u8)
+                        .collect()
+                } else {
+                    let mut text = e.mem.cstr(p);
+                    text.truncate(limit);
+                    text
+                };
+                pad(&mut out, b"", &body, width, spec, true);
+            }
+            b'f' | b'e' | b'E' | b'g' | b'G' => {
+                let v = f64::from_bits(va.dword(e));
+                format_float(&mut out, conv, v, spec, width, precision);
+            }
+            b'n' => {
+                let target = va.word(e);
+                if size == Size::Short {
+                    e.mem.set_u16(target, out.len() as u16);
+                } else {
+                    e.mem.set_u32(target, out.len() as u32);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+// Platform: replaces 00ec6cc4 (_vsprintf, LIBCMT)
+/// `vsprintf(dest, format, va_list)`: formats into `dest` (no bound, as the
+/// C function) and returns the number of characters written, without the
+/// terminating zero. The game's callers: `ScriptError`, `AddNoteVarArgs`,
+/// `IdvFormatString` (via `00407000`).
+pub fn vsprintf(e: &mut Engine, dest: Ptr, format: Ptr, va_list: u32) -> i32 {
+    if dest.is_null() || format.is_null() {
+        invalid_parameter("vsprintf");
+    }
+    let text = e.mem.cstr(format.addr());
+    let out = format_va(e, &text, va_list);
+    e.mem.set_cstr(dest.addr(), &out);
+    out.len() as i32
+}
+
 // ---- Program ---------------------------------------------------------------
 
 // Platform: replaces 00ec658f (_atexit, LIBCMT)
@@ -447,9 +913,109 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00eca1d0, acos(f64) -> f64),
         entry!(0x00ecadb8, rand() -> i32),
         entry!(0x00ec658f, atexit(Ptr) -> i32),
+        entry!(0x00ec6cc4, vsprintf(Ptr, Ptr, u32) -> i32),
         entry!(0x00ec7c56, invalid_parameter_noinfo()),
         entry!(0x00ec43fb, rt_dynamic_cast(Ptr, i32, Ptr, Ptr, i32) -> Ptr),
     ]
+}
+
+/// Test support for the constructors of the forms (`CreateFormOfType`'s
+/// table): a constructor is a run of calls into the component and base
+/// constructors and stores of vtable pointers and zeros. [`run`] builds
+/// the object, doubles every callee, runs the constructor by its address
+/// and compares the calls (with the object's address substituted for
+/// [`A::T`]) and the stores; every other byte of the object must be left
+/// as it was.
+#[cfg(test)]
+pub(crate) mod ctor_test {
+    use crate::prelude::*;
+
+    /// An expected argument word: the object's address plus an offset, or
+    /// a plain value.
+    #[derive(Clone, Copy, Debug)]
+    pub enum A {
+        T(u32),
+        V(u32),
+    }
+
+    pub struct Case<'a> {
+        pub addr: u32,
+        pub size: u32,
+        /// (address, value) of the globals the constructor reads.
+        pub globals: &'a [(u32, u32)],
+        /// (address, value) a callee answers; other callees answer 0.
+        pub returns: &'a [(u32, u32)],
+        pub calls: &'a [(u32, &'a [A])],
+        /// (offset, width in bytes, value).
+        pub stores: &'a [(u32, u32, u32)],
+    }
+
+    fn noop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    pub fn run(c: &Case) {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(c.size);
+        e.mem.write(this, &vec![0xcd; c.size as usize]);
+        for (a, v) in c.globals {
+            e.mem.map(*a, 4);
+            e.mem.set_u32(*a, *v);
+        }
+        for (a, _) in c.calls {
+            e.register(*a, noop);
+        }
+        for (a, v) in c.returns {
+            let v = *v;
+            e.register_double(*a, move |_, _| Ret {
+                eax: v,
+                ..Ret::default()
+            });
+        }
+        e.call_log = Some(vec![]);
+        let ret = e.call(c.addr, &args![Ptr::<()>::new(this)]).u32();
+        assert_eq!(ret, this, "{:08x} returns this", c.addr);
+        let log = e.call_log.take().unwrap();
+        let seen: Vec<(u32, Vec<u32>)> = log.into_iter().skip(1).collect();
+        let want: Vec<(u32, Vec<u32>)> = c
+            .calls
+            .iter()
+            .map(|(a, args)| {
+                (
+                    *a,
+                    args.iter()
+                        .map(|x| match x {
+                            A::T(o) => this + o,
+                            A::V(v) => *v,
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(seen.len(), want.len(), "{:08x}: calls {:x?}", c.addr, seen);
+        for (s, w) in seen.iter().zip(&want) {
+            assert_eq!(s.0, w.0, "{:08x}: callee order", c.addr);
+            assert_eq!(
+                s.1[..w.1.len().min(s.1.len())],
+                w.1[..],
+                "{:08x}: arguments of {:08x}",
+                c.addr,
+                w.0
+            );
+        }
+        let mut expected = vec![0xcd_u8; c.size as usize];
+        for (off, width, v) in c.stores {
+            let bytes = v.to_le_bytes();
+            expected[*off as usize..(*off + *width) as usize]
+                .copy_from_slice(&bytes[..*width as usize]);
+        }
+        assert_eq!(
+            e.mem.bytes(this, c.size),
+            expected,
+            "{:08x}: object bytes",
+            c.addr
+        );
+    }
 }
 
 #[cfg(test)]
@@ -560,5 +1126,159 @@ mod tests {
         assert_eq!(cast(&mut e, td_d), obj);
         assert_eq!(cast(&mut e, td_b), obj);
         assert_eq!(cast(&mut e, td_x), 0);
+    }
+
+    /// `vsprintf(format, words)` through the registered entry.
+    fn vsp(e: &mut Engine, format: &[u8], words: &[u32]) -> String {
+        let f = cstr(e, format);
+        let list = e.mem.alloc(4 * words.len().max(1) as u32);
+        for (i, w) in words.iter().enumerate() {
+            e.mem.set_u32(list + 4 * i as u32, *w);
+        }
+        let dest: Ptr = Ptr::new(e.mem.alloc(512));
+        let n = e.call(0x00ec_6cc4, &args![dest, f, list]).i32();
+        let s = e.mem.cstr(dest.addr());
+        assert_eq!(n as usize, s.len());
+        String::from_utf8(s).unwrap()
+    }
+
+    fn dbl(v: f64) -> [u32; 2] {
+        let b = v.to_bits();
+        [b as u32, (b >> 32) as u32]
+    }
+
+    #[test]
+    fn vsprintf_integers_and_strings() {
+        let mut e = Engine::new();
+        let s = cstr(&mut e, b"Doc Mitchell");
+        assert_eq!(
+            vsp(&mut e, b"%d|%i|%u", &[(-5i32) as u32, 42, (-1i32) as u32]),
+            "-5|42|4294967295"
+        );
+        assert_eq!(
+            vsp(
+                &mut e,
+                b"%08X|%x|%X|%o|%#x|%#o",
+                &[0xbeef, 255, 255, 8, 255, 8]
+            ),
+            "0000BEEF|ff|FF|10|0xff|010"
+        );
+        assert_eq!(
+            vsp(&mut e, b"%03i|%10i|%-6d|%+d|% d", &[7, 7, 7, 7, 7]),
+            "007|         7|7     |+7| 7"
+        );
+        assert_eq!(
+            vsp(&mut e, b"%.3d|%5.3d|%-5.3d|%.0d", &[5, 5, 5, 0]),
+            "005|  005|005  |"
+        );
+        assert_eq!(
+            vsp(
+                &mut e,
+                b"%s|%.4s|%10s|%-10s|%s",
+                &[s.addr(), s.addr(), s.addr(), s.addr(), 0]
+            ),
+            "Doc Mitchell|Doc |Doc Mitchell|Doc Mitchell|(null)"
+        );
+        assert_eq!(
+            vsp(
+                &mut e,
+                b"%c%c|100%%|%p|%hd|%lu",
+                &[b'N' as u32, b'V' as u32, 0x1234, 0x1_0005, 9]
+            ),
+            "NV|100%|00001234|5|9"
+        );
+        assert_eq!(
+            vsp(&mut e, b"%*d|%-*d|%.*s", &[4, 9, 3, 9, 2, s.addr()]),
+            "   9|9  |Do"
+        );
+        assert_eq!(
+            vsp(&mut e, b"%I64d|%llx", &[0xffff_ffff, 1, 0, 3]),
+            "8589934591|300000000"
+        );
+        assert_eq!(vsp(&mut e, b"%5%|%q|%H", &[]), "%|q|H");
+        assert_eq!(vsp(&mut e, b"%d%", &[1]), "1");
+    }
+
+    #[test]
+    fn vsprintf_wide_text_and_count() {
+        let mut e = Engine::new();
+        let w = e.mem.alloc(16);
+        for (i, c) in "Vault".encode_utf16().enumerate() {
+            e.mem.set_u16(w + 2 * i as u32, c);
+        }
+        assert_eq!(
+            vsp(&mut e, b"%S|%ls|%C|%lc", &[w, w, b'a' as u32, 0x100]),
+            "Vault|Vault|a|"
+        );
+        let n = e.mem.alloc(4);
+        assert_eq!(vsp(&mut e, b"abc%n", &[n]), "abc");
+        assert_eq!(e.mem.u32(n), 3);
+    }
+
+    #[test]
+    fn vsprintf_floats_as_the_2008_runtime() {
+        let mut e = Engine::new();
+        let f = |e: &mut Engine, fmt: &[u8], v: f64| vsp(e, fmt, &dbl(v));
+        assert_eq!(f(&mut e, b"%f", 1.5), "1.500000");
+        assert_eq!(f(&mut e, b"%0.2f", 3.45678), "3.46");
+        assert_eq!(f(&mut e, b"%.2f", 2.675), "2.67"); // the 17th digits are 2.6749999999999998
+        assert_eq!(f(&mut e, b"%.0f", 0.5), "1");
+        assert_eq!(f(&mut e, b"%.0f", 2.5), "3");
+        assert_eq!(f(&mut e, b"%5.3f|", -0.0004), "-0.000|");
+        assert_eq!(f(&mut e, b"%.2f", 0.006), "0.01");
+        assert_eq!(f(&mut e, b"%.2f", 9.999), "10.00");
+        assert_eq!(f(&mut e, b"%f", 0.0), "0.000000");
+        assert_eq!(f(&mut e, b"%08.2f", -1.5), "-0001.50");
+        assert_eq!(f(&mut e, b"%+.1f", 1.25), "+1.3");
+        assert_eq!(f(&mut e, b"%.20f", 0.1), "0.10000000000000001000");
+        assert_eq!(f(&mut e, b"%e", 1.0), "1.000000e+000");
+        assert_eq!(f(&mut e, b"%E", 12345.678), "1.234568E+004");
+        assert_eq!(f(&mut e, b"%.2e", 0.000123), "1.23e-004");
+        assert_eq!(f(&mut e, b"%e", 0.0), "0.000000e+000");
+        assert_eq!(f(&mut e, b"%g", 100000.0), "100000");
+        assert_eq!(f(&mut e, b"%g", 1000000.0), "1e+006");
+        assert_eq!(f(&mut e, b"%g", 0.0001), "0.0001");
+        assert_eq!(f(&mut e, b"%g", 0.00001), "1e-005");
+        assert_eq!(f(&mut e, b"%g", 1.5), "1.5");
+        assert_eq!(f(&mut e, b"%g", 0.0), "0");
+        assert_eq!(f(&mut e, b"%G", 1.5e20), "1.5E+020");
+        assert_eq!(f(&mut e, b"%#g", 1.5), "1.50000");
+        assert_eq!(f(&mut e, b"%.3g", 1234.5), "1.23e+003");
+        assert_eq!(f(&mut e, b"%LG", 0.25), "0.25");
+        assert_eq!(f(&mut e, b"%10.1f|", 2.25), "       2.3|");
+        assert_eq!(f(&mut e, b"%-10.1f|", 2.25), "2.3       |");
+    }
+
+    #[test]
+    fn vsprintf_infinities_and_nans() {
+        let mut e = Engine::new();
+        let f = |e: &mut Engine, fmt: &[u8], v: f64| vsp(e, fmt, &dbl(v));
+        assert_eq!(f(&mut e, b"%f", f64::INFINITY), "1.#INF00");
+        assert_eq!(f(&mut e, b"%f", f64::NEG_INFINITY), "-1.#INF00");
+        assert_eq!(f(&mut e, b"%.2f", f64::INFINITY), "1.#J");
+        assert_eq!(
+            f(&mut e, b"%f", f64::from_bits(0xfff8_0000_0000_0000)),
+            "-1.#IND00"
+        );
+        assert_eq!(
+            f(&mut e, b"%f", f64::from_bits(0x7ff8_0000_0000_0001)),
+            "1.#QNAN0"
+        );
+        assert_eq!(f(&mut e, b"%g", f64::INFINITY), "1.#INF");
+    }
+
+    #[test]
+    fn vsprintf_game_messages() {
+        // A script error line: "%s at line %d, offset %d" style text and a hex id.
+        let mut e = Engine::new();
+        let name = cstr(&mut e, b"MQ101Script");
+        assert_eq!(
+            vsp(
+                &mut e,
+                b"Script '%s' line %i: form %08X, %.2f",
+                &[name.addr(), 12, 0x0001_f2c0, 0, 0x4000_0000]
+            ),
+            "Script 'MQ101Script' line 12: form 0001F2C0, 2.00"
+        );
     }
 }

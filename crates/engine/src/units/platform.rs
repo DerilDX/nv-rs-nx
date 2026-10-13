@@ -34,10 +34,63 @@ pub fn memory_manager_deallocate(e: &mut Engine, _this: Ptr, block: Ptr) {
     e.mem.free(block.addr());
 }
 
+/// `BSSystemUtility` singleton (`bssystemutility_xenon.cpp`, Xbox PDB): its
+/// storage in `.data` (`011f71a8`, 0x96 bytes) and the function-local static's
+/// guard word (`011f7240`, bit 0 = constructed).
+pub const SYSTEM_UTILITY: u32 = 0x011f_71a8;
+const SYSTEM_UTILITY_GUARD: u32 = 0x011f_7240;
+/// Vtable stored by the constructor (`010a42b4`, first slot the scalar
+/// deleting destructor) and the `atexit` destructor stub (`00fdc2f0`).
+const SYSTEM_UTILITY_VTABLE: u32 = 0x010a_42b4;
+const SYSTEM_UTILITY_ATEXIT: u32 = 0x00fd_c2f0;
+/// The C runtime's `_memset` and `_atexit`.
+const MEMSET: u32 = 0x00ec_61c0;
+const ATEXIT: u32 = 0x00ec_658f;
+
+// Translated from 00af30a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the object `BSSystemUtility::QInstance` builds
+/// (`fastcall`, `this` in ECX). The map gives it no name (range of
+/// `BSSystemUtilities`); it is called only from `QInstance` and stores the
+/// vtable at `010a42b4`, zeroes the fields at +0x84, +0x88, +0x8c (byte),
+/// +0x90, +0x94 (byte) and +0x95 (byte), and clears the 0x80 bytes at +4.
+/// Returns `this`.
+pub fn fn_00af30a0(e: &mut Engine, this: Ptr) -> Ptr {
+    let t = this.addr();
+    e.mem.set_u32(t, SYSTEM_UTILITY_VTABLE);
+    e.mem.set_u32(t + 0x84, 0);
+    e.mem.set_u32(t + 0x88, 0);
+    e.mem.set_u8(t + 0x8c, 0);
+    e.mem.set_u32(t + 0x90, 0);
+    e.mem.set_u8(t + 0x94, 0);
+    e.mem.set_u8(t + 0x95, 0);
+    e.call(MEMSET, &args![Ptr::<()>::new(t + 4), 0i32, 0x80u32]);
+    this
+}
+
+// Translated from 00af2640 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00af2640 - the SEH frame (FS:[0] handler 00f22f4e, state -1/0 around the constructor call) and the 00ec408c security cookie are not translated.
+/// `BSSystemUtility::QInstance` (Xbox PDB name; the exe's body is shared
+/// with the other `_Immortalize` singleton getters, Ghidra's name): the
+/// function-local static singleton. The first call sets bit 0 of the guard
+/// word `011f7240`, constructs the object at `011f71a8` with `00af30a0` and
+/// registers its destructor stub `00fdc2f0` with `_atexit`; every call
+/// returns `011f71a8`.
+pub fn bs_system_utility_q_instance(e: &mut Engine) -> Ptr {
+    let guard = e.mem.u32(SYSTEM_UTILITY_GUARD);
+    if guard & 1 == 0 {
+        e.mem.set_u32(SYSTEM_UTILITY_GUARD, guard | 1);
+        fn_00af30a0(e, Ptr::new(SYSTEM_UTILITY));
+        e.call(ATEXIT, &args![Ptr::<()>::new(SYSTEM_UTILITY_ATEXIT)]);
+    }
+    Ptr::new(SYSTEM_UTILITY)
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00401020, get_memory_manager() -> Ptr),
         entry!(0x00401030, operator_delete(Ptr)),
+        entry!(0x00af2640, bs_system_utility_q_instance() -> Ptr),
+        entry!(0x00af30a0, fn_00af30a0(Ptr) -> Ptr),
         entry!(0x00aa3e40, memory_manager_allocate(Ptr, u32) -> Ptr),
         entry!(0x00aa4060, memory_manager_deallocate(Ptr, Ptr)),
     ]
@@ -209,5 +262,35 @@ mod tests {
         assert_eq!(e.mem.block_size(p.addr()), Some(24));
         e.call(0x0040_1030, &args![p]);
         assert_eq!(e.mem.block_size(p.addr()), None);
+    }
+
+    #[test]
+    fn system_utility_is_built_once_and_registered_for_exit() {
+        let mut e = Engine::new();
+        e.mem.map(SYSTEM_UTILITY, 0x100);
+        e.mem.map(SYSTEM_UTILITY_GUARD, 4);
+        e.mem.write(SYSTEM_UTILITY + 4, &[0xaa; 0x80]);
+        e.mem.set_u32(SYSTEM_UTILITY + 0x84, 7);
+        e.mem.set_u8(SYSTEM_UTILITY + 0x95, 9);
+        e.mem.set_u32(SYSTEM_UTILITY_GUARD, 0x10); // other guard bits are kept
+        e.register(ATEXIT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let p: Ptr = e.call_as(0x00af_2640, &args![]);
+        assert_eq!(p.addr(), SYSTEM_UTILITY);
+        assert_eq!(e.mem.u32(SYSTEM_UTILITY_GUARD), 0x11);
+        assert_eq!(e.mem.u32(SYSTEM_UTILITY), SYSTEM_UTILITY_VTABLE);
+        assert_eq!(e.mem.bytes(SYSTEM_UTILITY + 4, 0x80), vec![0u8; 0x80]);
+        assert_eq!(e.mem.u32(SYSTEM_UTILITY + 0x84), 0);
+        assert_eq!(e.mem.u8(SYSTEM_UTILITY + 0x95), 0);
+        let log = e.call_log.clone().unwrap();
+        assert_eq!(log.iter().filter(|c| c.0 == ATEXIT).count(), 1);
+
+        // The second call neither rebuilds nor registers again.
+        e.mem.set_u32(SYSTEM_UTILITY + 0x84, 5);
+        e.call_log = Some(vec![]);
+        let q: Ptr = e.call_as(0x00af_2640, &args![]);
+        assert_eq!(q.addr(), SYSTEM_UTILITY);
+        assert_eq!(e.mem.u32(SYSTEM_UTILITY + 0x84), 5);
+        assert!(e.call_log.unwrap().iter().all(|c| c.0 != ATEXIT));
     }
 }

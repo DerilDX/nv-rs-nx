@@ -4,7 +4,144 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+// Translated from 00509a10 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00509a10 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
+/// Constructor of the form `CreateFormOfType` (`00465110`) makes for form type 0x24 (0x68 bytes); `ECX` is the object.
+/// The engine map gives it no name (a `range-sub` function), so the class is unconfirmed.
+/// It runs the base and component constructors by address, stores the vtable pointers and sets the fields to their start values.
+/// The exception-unwinding frame is not translated.
+pub fn fn_00509a10(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0050_e820, &args![this]);
+    e.call(0x0048_8f50, &args![base + 0x30]);
+    e.mem.set_u32(base, 0x0102_814c);
+    e.mem.set_u32(base + 0x30, 0x0102_8128);
+    e.call(0x004f_15a0, &args![this, 0x24]);
+    e.call(0x0050_9ee0, &args![this]);
+    this
+}
+
+// Translated from 0050a5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0050a5a0 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
+/// Constructor of the form `CreateFormOfType` (`00465110`) makes for form type 0x2e (0xac bytes); `ECX` is the object.
+/// The engine map gives it no name (a `range-sub` function), so the class is unconfirmed.
+/// It runs the base and component constructors by address, stores the vtable pointers and sets the fields to their start values.
+/// The exception-unwinding frame is not translated.
+pub fn fn_0050a5a0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0051_a6a0, &args![this]);
+    e.mem.set_u32(base, 0x0102_8444);
+    e.mem.set_u32(base + 0x30, 0x0102_842c);
+    e.mem.set_u32(base + 0x3c, 0x0102_8408);
+    e.mem.set_u32(base + 0x5c, 0x0102_83e8);
+    e.mem.set_u32(base + 0x68, 0x0102_83d4);
+    e.mem.set_u32(base + 0x74, 0x0102_83b4);
+    e.mem.set_u32(base + 0x7c, 0x0102_83a0);
+    e.mem.set_u32(base + 0x84, 0x0102_838c);
+    e.mem.set_u32(base + 0x8c, 0x0102_8378);
+    e.mem.set_u32(base + 0x9c, 0x0102_8364);
+    e.call(0x004f_15a0, &args![this, 0x2e]);
+    e.call(0x0048_4ab0, &args![this, 0x1]);
+    this
+}
+
+// Translated from 0050a770 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0050a770 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
+/// Constructor of the form `CreateFormOfType` (`00465110`) makes for form type 0x2d (0x70 bytes); `ECX` is the object.
+/// The engine map gives it no name (a `range-sub` function), so the class is unconfirmed.
+/// It runs the base and component constructors by address, stores the vtable pointers and sets the fields to their start values.
+/// The exception-unwinding frame is not translated.
+pub fn fn_0050a770(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0050_f6f0, &args![this]);
+    e.call(0x0048_7650, &args![base + 0x30]);
+    e.call(0x0048_a3d0, &args![base + 0x4c]);
+    e.mem.set_u32(base, 0x0102_864c);
+    e.mem.set_u32(base + 0x30, 0x0102_862c);
+    e.mem.set_u32(base + 0x4c, 0x0102_8608);
+    e.call(0x004f_15a0, &args![this, 0x2d]);
+    e.call(0x0048_3710, &args![this]);
+    e.call(0x0048_4ab0, &args![this, 0x1]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![
+        entry!(0x0050_9a10, fn_00509a10(Ptr) -> Ptr),
+        entry!(0x0050_a5a0, fn_0050a5a0(Ptr) -> Ptr),
+        entry!(0x0050_a770, fn_0050a770(Ptr) -> Ptr),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_00509a10_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0050_9a10,
+            size: 0x68,
+            globals: &[],
+            returns: &[],
+            calls: &[
+                (0x0050_e820, &[A::T(0x0)]),
+                (0x0048_8f50, &[A::T(0x30)]),
+                (0x004f_15a0, &[A::T(0x0), A::V(0x24)]),
+                (0x0050_9ee0, &[A::T(0x0)]),
+            ],
+            stores: &[(0x0, 4, 0x0102_814c), (0x30, 4, 0x0102_8128)],
+        });
+    }
+
+    #[test]
+    fn fn_0050a5a0_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0050_a5a0,
+            size: 0xac,
+            globals: &[],
+            returns: &[],
+            calls: &[
+                (0x0051_a6a0, &[A::T(0x0)]),
+                (0x004f_15a0, &[A::T(0x0), A::V(0x2e)]),
+                (0x0048_4ab0, &[A::T(0x0), A::V(0x1)]),
+            ],
+            stores: &[
+                (0x0, 4, 0x0102_8444),
+                (0x30, 4, 0x0102_842c),
+                (0x3c, 4, 0x0102_8408),
+                (0x5c, 4, 0x0102_83e8),
+                (0x68, 4, 0x0102_83d4),
+                (0x74, 4, 0x0102_83b4),
+                (0x7c, 4, 0x0102_83a0),
+                (0x84, 4, 0x0102_838c),
+                (0x8c, 4, 0x0102_8378),
+                (0x9c, 4, 0x0102_8364),
+            ],
+        });
+    }
+
+    #[test]
+    fn fn_0050a770_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0050_a770,
+            size: 0x70,
+            globals: &[],
+            returns: &[],
+            calls: &[
+                (0x0050_f6f0, &[A::T(0x0)]),
+                (0x0048_7650, &[A::T(0x30)]),
+                (0x0048_a3d0, &[A::T(0x4c)]),
+                (0x004f_15a0, &[A::T(0x0), A::V(0x2d)]),
+                (0x0048_3710, &[A::T(0x0)]),
+                (0x0048_4ab0, &[A::T(0x0), A::V(0x1)]),
+            ],
+            stores: &[
+                (0x0, 4, 0x0102_864c),
+                (0x30, 4, 0x0102_862c),
+                (0x4c, 4, 0x0102_8608),
+            ],
+        });
+    }
 }
