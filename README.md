@@ -23,7 +23,10 @@ own and aims to behave exactly like the original (1:1).
 
 - **Original files at runtime.** nv-rs reads the game's own plugins, archives,
   meshes, textures, sounds, menus and shaders directly. There is no
-  conversion step, and the installation is never modified.
+  conversion step, and the installation is never modified. The game's
+  executable is read too (version 1.4.0.525 only; any other build is refused
+  at start-up with the reason), for the constants and tables of the
+  translated code.
 - **Behaviour from the original program.** Rules, constants and formulas come
   from the game's program (`FalloutNV.exe`, read in Ghidra), its data, and
   recordings of the original game. Nothing is invented or tuned by eye. The
@@ -64,7 +67,7 @@ nv-rs/
 | Group | Crates | What they do |
 | --- | --- | --- |
 | **Formats** | `esm`, `bsa`, `nif`, `dds`, `mp3`, `bink`, `speedtree`, `shaders`, `assets`, `fos` | Read the game's files: plugins and records, archives, meshes and animations, textures, audio, movies, trees, compiled shaders, the loose-file/archive lookup, and the original game's saves (read-only). |
-| **Engine port** | `engine` | `FalloutNV.exe` translated function by function, running on a model of the game's memory ([ADR-0006](docs/adr/0006-engine-crate-memory-model.md), [docs/ENGINE_CRATE.md](docs/ENGINE_CRATE.md)). |
+| **Engine port** | `engine`, `host` | `FalloutNV.exe` translated function by function, running on a model of the game's memory ([ADR-0006](docs/adr/0006-engine-crate-memory-model.md), [docs/ENGINE_CRATE.md](docs/ENGINE_CRATE.md)). `host` starts it in the running game on the player's own `FalloutNV.exe`. |
 | **Game** | `world`, `physics`, `script`, `scriptgen`, `ui`, `preview`, `cellview` | The game's rules: world state and the per-frame order, actors, AI, combat, dialogue, quests, inventory, saves, collision, the script engine and the game's scripts translated to Rust, menus built from the game's XML, and per-cell scene data. |
 | **Tools** | `nvinspect` | Command-line inspection of real game data: records, cells, meshes, collision walks, coverage tables and more. |
 | **Test content** | `testdata` | Builds synthetic plugins, archives and meshes for tests, so tests never need game files. |

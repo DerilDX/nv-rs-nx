@@ -158,6 +158,18 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // The game's own code (`crates/engine`) runs on the player's
+    // FalloutNV.exe, read from the same installation as Data: any build but
+    // 1.4.0.525 is refused here, with the reason (the maintainer's decision,
+    // 2026-10-13). Started now, it doesn't run anything yet.
+    let game_code = match host::Host::start(&data) {
+        Ok(host) => host,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    println!("{}", game_code.describe());
     println!("Loading {} from {} ...", args.cell, data.display());
     let started = std::time::Instant::now();
     let game = match Game::open(&data, &args.options) {
@@ -277,6 +289,8 @@ fn main() {
             ..default()
         })
         .insert_resource(dialogue::DialogueState(state))
+        // Main thread only: the engine is not `Send` (`host`).
+        .insert_non_send_resource(game_code)
         .insert_resource(sitting::Seats::new(&game.order))
         .init_resource::<sitting::PlayerSeat>()
         .insert_resource(faces::Faces::new(&game))

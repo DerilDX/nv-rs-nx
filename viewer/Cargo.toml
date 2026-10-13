@@ -19,6 +19,8 @@ wgpu = { version = "24", default-features = false }
 cellview = { path = "../crates/cellview" }
 physics = { path = "../crates/physics" }
 world = { path = "../crates/world" }
+# The game's own translated code, started on the player's FalloutNV.exe.
+host = { path = "../crates/host" }
 esm = { path = "../crates/esm" }
 nif = { path = "../crates/nif" }
 preview = { path = "../crates/preview" }

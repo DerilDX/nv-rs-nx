@@ -177,6 +177,22 @@ NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p engine --test real_scda -- 
 The executable is found next to `Data` (`exe::installed_exe`) and refused
 unless it is 1.4.0.525 (`exe::verify`), the check a game start-up can reuse.
 
+## In the running game
+
+The `host` crate starts the engine for the running game. The viewer calls
+`host::Host::start(<Data>)` before loading anything: it opens the
+`FalloutNV.exe` next to `Data` (read-only), refuses every build but
+1.4.0.525 with the file and the reason, maps the data sections and runs the
+allocator start-up the probes run (`00401000`, `00aa2230`, `00aa21d0`,
+holder at `011f6118`, `00aa2020`); the rest of `WinMain`'s start-up is not
+reproduced. The startup line reads `Game code: <exe> (1.4.0.525), <n>
+translated functions, allocator started.` The `Host` is a Bevy non-send
+resource (main thread only; the engine is not `Send`).
+
+Nothing runs through it yet (script track step S4): the game's scripts
+still run through `crates/script`. Next steps and their blockers are in
+the script track plan (S5 form and locals bridge, S6 quest scripts).
+
 ## Lessons from the first sessions (2026-10-09)
 
 - **Test doubles that keep state.** `e.register` takes a plain `fn`; a double that
