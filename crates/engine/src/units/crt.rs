@@ -240,6 +240,11 @@ pub fn atol(e: &mut Engine, s: Ptr) -> i32 {
     parse_long(&e.mem.cstr(s.addr()))
 }
 
+// Platform: replaces 00eca6bd (_atol's body, strtol(s, NULL, 10), LIBCMT; 00eca6d3 jumps here)
+pub fn atol_body(e: &mut Engine, s: Ptr) -> i32 {
+    parse_long(&e.mem.cstr(s.addr()))
+}
+
 /// C `atof`: the longest prefix that is a decimal floating-point number.
 fn parse_double(s: &[u8]) -> f64 {
     let t: Vec<u8> = s
@@ -430,6 +435,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec67aa, tolower(i32) -> i32),
         entry!(0x00eca7f4, toupper(i32) -> i32),
         entry!(0x00eca6d3, atol(Ptr) -> i32),
+        entry!(0x00eca6bd, atol_body(Ptr) -> i32),
         entry!(0x00eca573, atof(Ptr) -> f64),
         entry!(0x00ec62c0, ftol2(f64) -> u64),
         entry!(0x00ec6040, ci_sqrt(f64) -> f64),

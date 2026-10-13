@@ -159,24 +159,55 @@ pub fn imports(file: &[u8]) -> Result<Vec<Import>, String> {
     Ok(out)
 }
 
+/// The FalloutNV.exe of an installation, given its `Data` folder: the
+/// executable sits in the folder that contains `Data`.
+pub fn installed_exe(data_dir: &Path) -> std::path::PathBuf {
+    let game_dir = data_dir.parent().unwrap_or(data_dir);
+    game_dir.join("FalloutNV.exe")
+}
+
+/// The data sections of `file` (the bytes of `exe`) after checking that it
+/// is FalloutNV.exe 1.4.0.525, the build every translated address belongs
+/// to. Any other build is refused with a message that says so.
+pub fn checked_sections(exe: &Path, file: &[u8]) -> Result<Vec<Section>, String> {
+    let refuse = |what: String| {
+        format!(
+            "{}: {what}. nv-rs needs FalloutNV.exe version 1.4.0.525 (the build it \
+             was traced from); other builds are not supported yet.",
+            exe.display()
+        )
+    };
+    let secs = sections(file).map_err(refuse)?;
+    for (name, va, _, hash) in SECTIONS {
+        let s = secs
+            .iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| refuse(format!("no {name} section")))?;
+        if s.va != va || fnv1a64(&s.raw) != hash {
+            return Err(refuse(format!(
+                "section {name} is not 1.4.0.525's (address {:08x}, hash {:016x})",
+                s.va,
+                fnv1a64(&s.raw)
+            )));
+        }
+    }
+    Ok(secs)
+}
+
+/// Reads `exe` and checks it ([`checked_sections`]) without mapping it:
+/// the startup check of an installation's executable.
+pub fn verify(exe: &Path) -> Result<(), String> {
+    let file = std::fs::read(exe).map_err(|e| format!("{}: {e}", exe.display()))?;
+    checked_sections(exe, &file).map(|_| ())
+}
+
 /// Maps `.rdata`, `.data`, `.tls` and `CONST` of `exe` (the installed
 /// FalloutNV.exe, packed or unpacked) after checking each against 1.4.0.525.
 pub fn map_data_sections(mem: &mut Mem, exe: &Path) -> Result<(), String> {
     let file = std::fs::read(exe).map_err(|e| format!("{}: {e}", exe.display()))?;
-    let secs = sections(&file)?;
-    for (name, va, vsize, hash) in SECTIONS {
-        let s = secs
-            .iter()
-            .find(|s| s.name == name)
-            .ok_or_else(|| format!("{} has no {name} section", exe.display()))?;
-        if s.va != va || fnv1a64(&s.raw) != hash {
-            return Err(format!(
-                "{}: section {name} is not FalloutNV.exe 1.4.0.525's (address {:08x}, hash {:016x})",
-                exe.display(),
-                s.va,
-                fnv1a64(&s.raw)
-            ));
-        }
+    let secs = checked_sections(exe, &file)?;
+    for (name, va, vsize, _) in SECTIONS {
+        let s = secs.iter().find(|s| s.name == name).expect("checked above");
         mem.map(va, vsize.max(s.raw.len() as u32));
         let n = s.raw.len().min(vsize as usize);
         mem.write(va, &s.raw[..n]);
@@ -187,6 +218,18 @@ pub fn map_data_sections(mem: &mut Mem, exe: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn other_files_are_refused_with_the_supported_build_named() {
+        let err = checked_sections(Path::new("x.exe"), b"MZ but not a PE file").unwrap_err();
+        assert!(err.starts_with("x.exe: "), "{err}");
+        assert!(err.contains("version 1.4.0.525"), "{err}");
+        let data = Path::new("C:/Games/Fallout New Vegas/Data");
+        assert_eq!(
+            installed_exe(data),
+            Path::new("C:/Games/Fallout New Vegas/FalloutNV.exe")
+        );
+    }
 
     #[test]
     fn fnv_reference_values() {

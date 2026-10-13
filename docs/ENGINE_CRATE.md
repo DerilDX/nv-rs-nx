@@ -160,6 +160,23 @@ translation, bit for bit. The ledger will gain a column for that check.
 Stateful code is checked by the save round trip (Phase 2) and the
 acceptance routes once it is wired.
 
+## The script interpreter (opt-in run on real scripts)
+
+The interpreter's trunk (`Script::Run` → `ScriptRunManager::Run` →
+`ScriptRunner::Run` → `EvaluateLine` → `CExpression::Eval`) is translated;
+`INTERPRETER_TRUNK` in `units/fallout_shared/tesscriptrunmanager.rs` lists
+it and fails when a member is not registered. CI runs it on generated
+compiled scripts only. With the player's installation, an ignored test runs
+every quest script of `FalloutNV.esm` once through it on generated forms
+and prints which untranslated functions stop them:
+
+```sh
+NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p engine --test real_scda -- --ignored --nocapture
+```
+
+The executable is found next to `Data` (`exe::installed_exe`) and refused
+unless it is 1.4.0.525 (`exe::verify`), the check a game start-up can reuse.
+
 ## Lessons from the first sessions (2026-10-09)
 
 - **Test doubles that keep state.** `e.register` takes a plain `fn`; a double that

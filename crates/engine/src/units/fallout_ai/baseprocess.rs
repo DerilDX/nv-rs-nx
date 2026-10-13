@@ -12,9 +12,21 @@ pub fn fn_008d0360(_e: &mut Engine, _this: Ptr) -> bool {
     true
 }
 
+// Translated from 00401280 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the address of the empty string at 01011584 without reading the
+/// receiver. The map names this folded body
+/// `BaseProcess::GetCurrentHeadTrackTypeString`; forms use it as their
+/// name getter (vtable +0x130), which script error reports call.
+pub fn fn_00401280(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0101_1584
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x008d0360, fn_008d0360(Ptr) -> bool)]
+    vec![
+        entry!(0x008d0360, fn_008d0360(Ptr) -> bool),
+        entry!(0x00401280, fn_00401280(Ptr) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -32,6 +44,14 @@ mod tests {
         for receiver in [0, 1, 0x1000_0000, 0xdead_beef, u32::MAX, guard] {
             assert!(e.call(0x008d0360, &[receiver]).bool());
             assert_eq!(e.mem.bytes(guard, 16), [0xa5; 16]);
+        }
+    }
+
+    #[test]
+    fn name_getter_answers_the_shared_empty_string() {
+        let mut e = Engine::new();
+        for receiver in [0, 0x1234, u32::MAX] {
+            assert_eq!(e.call(0x00401280, &[receiver]).u32(), 0x0101_1584);
         }
     }
 

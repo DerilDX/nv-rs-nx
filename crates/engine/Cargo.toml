@@ -12,3 +12,6 @@ description = "FalloutNV.exe translated function by function into Rust, on a mod
 # The frame's player stage (`world::frame::player`), which the tests of
 # `0086f940` and `0093e860` compare their call order with.
 world = { path = "../world" }
+# The opt-in real-script run (`tests/real_scda.rs`) reads the player's
+# FalloutNV.esm.
+esm = { path = "../esm" }
