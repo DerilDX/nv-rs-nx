@@ -30,14 +30,14 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 11557 | 17.4% |
-| traced | 4270 | 6.4% |
-| platform | 3414 | 5.2% |
+| translated | 11686 | 17.6% |
+| traced | 4257 | 6.4% |
+| platform | 3413 | 5.2% |
 | library | 21912 | 33.1% |
-| open | 25106 | 37.9% |
+| open | 24991 | 37.7% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **237** engine functions
+Translation totals count markers, not complete behavior. **248** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -62,6 +62,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `0049db60` | `crates/engine/src/units/fallout_shared/bgsautowater.rs:80` |
 | `0049e410` | `crates/engine/src/units/fallout_shared/bgsautowater.rs:498` |
 | `0049ec80` | `crates/engine/src/units/fallout_shared/bgsautowater.rs:787` |
+| `0051f630` | `crates/engine/src/units/fallout_shared/tesobjectweap.rs:1930` |
+| `00523150` | `crates/engine/src/units/fallout_shared/tesobjectweap.rs:2745` |
+| `00524db0` | `crates/engine/src/units/fallout_shared/tesobjectweap.rs:2254` |
 | `0055a2f0` | `crates/engine/src/units/fallout_shared/tesobjectrefr.rs:803` |
 | `005e1160` | `crates/engine/src/units/fallout_shared/tesscriptrunmanager.rs:41` |
 | `005e1550` | `crates/engine/src/units/fallout_shared/tesscriptrunmanager.rs:225` |
@@ -278,11 +281,19 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00c69010` | `crates/engine/src/units/bshavok/bhkworld.rs:2105` |
 | `00c69240` | `crates/engine/src/units/bshavok/bhkworld.rs:2194` |
 | `00c69580` | `crates/engine/src/units/bshavok/bhkworld.rs:2245` |
+| `00c696d0` | `crates/engine/src/units/bshavok/bhkworld.rs:2419` |
+| `00c69960` | `crates/engine/src/units/bshavok/bhkworld.rs:2707` |
+| `00c6a540` | `crates/engine/src/units/bshavok/bhkworld.rs:2971` |
+| `00c6a640` | `crates/engine/src/units/bshavok/bhkworld.rs:3029` |
+| `00c6a870` | `crates/engine/src/units/bshavok/bhkworld.rs:3121` |
+| `00c6aac0` | `crates/engine/src/units/bshavok/bhkworld.rs:3193` |
+| `00c6aca0` | `crates/engine/src/units/bshavok/bhkworld.rs:3269` |
+| `00c6b3c0` | `crates/engine/src/units/bshavok/bhkworld.rs:3606` |
 | `00ec408c` | `crates/engine/src/units/bsmain/bsocclusionplane.rs:932, crates/engine/src/units/fallout_misc/bgssaveloadfile.rs:328, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:123, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:135, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:147, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:162, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:169, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:179, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:200, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:214, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:228, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:248, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:262, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:282, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:302, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:323, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:337, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:358, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:379, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:404, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:418, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:436, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:449, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:469, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:478, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:487, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:497, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:517, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:532, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:547, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:560, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:581, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:598, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:615, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:624, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:633, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:646, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:663, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:676, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:690, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:709, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:724, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:741, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:754, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:767` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 15414 (38.0%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 15529 (38.3%) are translated or traced.
 
-Rust cites 16525 distinct `.text` addresses; 60 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 16641 distinct `.text` addresses; 60 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -313,28 +324,28 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 66 | 0 | 21268 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6429 | 942 | 0 | 0 | 3099 | 70.4% |
-| Havok SDK | 6591 | 1555 | 3499 | 53 | 92 | 0 | 0 | 6446 | 2.2% |
-| fallout/ai | 4849 | 1475 | 1888 | 2356 | 561 | 0 | 0 | 1932 | 60.2% |
+| fallout shared | 10470 | 2065 | 3149 | 6473 | 926 | 0 | 0 | 3071 | 70.7% |
+| Havok SDK | 6591 | 1555 | 3499 | 53 | 101 | 0 | 0 | 6437 | 2.3% |
+| fallout/ai | 4849 | 1475 | 1888 | 2356 | 565 | 0 | 0 | 1928 | 60.2% |
 | fallout/interface | 2645 | 991 | 1247 | 703 | 707 | 0 | 0 | 1235 | 53.3% |
-| (unplaced) | 2353 | 470 | 0 | 42 | 411 | 1 | 0 | 1899 | 19.3% |
+| (unplaced) | 2353 | 470 | 0 | 65 | 411 | 1 | 0 | 1876 | 20.2% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 711 | 173 | 0 | 0 | 904 | 49.4% |
 | NiMain | 1619 | 261 | 1134 | 3 | 78 | 0 | 0 | 1538 | 5.0% |
-| BSHavok | 1615 | 316 | 1134 | 99 | 131 | 0 | 0 | 1385 | 14.2% |
+| BSHavok | 1615 | 316 | 1134 | 127 | 122 | 0 | 0 | 1366 | 15.4% |
 | BSShader | 1549 | 608 | 350 | 0 | 143 | 1406 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 32 | 0 | 0 | 1247 | 2.5% |
 | fallout/misc | 1045 | 171 | 353 | 575 | 85 | 0 | 0 | 385 | 63.2% |
 | BSMain | 991 | 192 | 478 | 137 | 61 | 0 | 0 | 793 | 20.0% |
 | NiXenonRenderer | 965 | 172 | 298 | 1 | 5 | 959 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 112 | 620 | 0 | 0 | - |
-| fallout/magic | 705 | 162 | 378 | 7 | 73 | 0 | 0 | 625 | 11.3% |
+| fallout/magic | 705 | 162 | 378 | 7 | 75 | 0 | 0 | 623 | 11.6% |
 | LIBCMT | 682 | 124 | 503 | 0 | 23 | 31 | 628 | 0 | - |
 | NiParticle | 649 | 89 | 540 | 0 | 66 | 0 | 0 | 583 | 10.2% |
 | fallout shared/havok | 478 | 60 | 110 | 39 | 68 | 0 | 0 | 371 | 22.4% |
 | FaceGen | 474 | 164 | 51 | 0 | 10 | 0 | 0 | 464 | 2.1% |
 | fallout shared/facegen | 433 | 63 | 91 | 0 | 55 | 0 | 0 | 378 | 12.7% |
 | BSMenu | 361 | 136 | 221 | 165 | 39 | 0 | 0 | 157 | 56.5% |
-| BSAudio | 304 | 75 | 141 | 62 | 39 | 0 | 0 | 203 | 33.2% |
+| BSAudio | 304 | 75 | 141 | 96 | 35 | 0 | 0 | 173 | 43.1% |
 | fallout shared/magic | 296 | 43 | 83 | 82 | 45 | 0 | 0 | 169 | 42.9% |
 | BSSystem | 275 | 54 | 36 | 1 | 37 | 237 | 0 | 0 | - |
 | NiCollision | 215 | 104 | 115 | 0 | 4 | 0 | 0 | 211 | 1.9% |
@@ -356,7 +367,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | BSDevices | 8 | 1 | 5 | 0 | 5 | 3 | 0 | 0 | - |
 | XAPILIB | 8 | 0 | 6 | 1 | 5 | 2 | 0 | 0 | - |
 | zLib | 4 | 10 | 1 | 0 | 0 | 0 | 4 | 0 | - |
-| BSDiag | 3 | 0 | 3 | 0 | 0 | 3 | 0 | 0 | - |
+| BSDiag | 3 | 0 | 3 | 0 | 1 | 2 | 0 | 0 | - |
 | RemoteLog | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 | - |
 | XBOXKRNL | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | - |
 | d3d9 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | - |
@@ -371,9 +382,9 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | Depth | Call sites | Functions | translated | traced | platform | library | open |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
-| 1 | 143 | 117 | 101 | 30 | 3 | 0 | 9 |
-| 2 | 1575 | 583 | 1154 | 305 | 24 | 4 | 88 |
-| 3 | 4973 | 1303 | 3702 | 835 | 147 | 26 | 263 |
+| 1 | 143 | 117 | 104 | 27 | 3 | 0 | 9 |
+| 2 | 1575 | 583 | 1161 | 298 | 24 | 4 | 88 |
+| 3 | 4973 | 1303 | 3757 | 789 | 147 | 26 | 254 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
@@ -419,7 +430,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 38 | `00705ea0` | `Interface::IsInGameLoadingMenuOpen` | translated |
 | 39 | `00457d70` | `TES::ShowLoadingMenu` | translated |
 | 40 | `0086efe0` | `Main::OnIdle_ScaleLOD` | translated |
-| 41 | `00524c90` | - | traced |
+| 41 | `00524c90` | - | translated |
 | 42 | `004a0ea0` | - | translated |
 | 43 | `00b6dd00` | - | platform |
 | 44 | `0086f450` | `Main::OnIdle_HandleMenuBackground` | translated |
@@ -454,7 +465,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 73 | `00a61cd0` | `BSTexturePalette::PurgeUnusedTextures` | traced |
 | 74 | `00868850` | `GarbageCollector::Update` | translated |
 | 75 | `00868d10` | `GarbageCollector::ClearTempEffects` | translated |
-| 76 | `00524c90` | - | traced |
+| 76 | `00524c90` | - | translated |
 | 77 | `006652e0` | `BSTreeManager::Update` | traced |
 | 78 | `0086fbe0` | `Main::OnIdle_UpdateCurrentGridCell` | translated |
 | 79 | `0043d4d0` | - | translated |
@@ -462,7 +473,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 81 | `00483710` | - | translated |
 | 82 | `0049fef0` | `BGSDecalManager::GetInstance` | traced |
 | 83 | `0049fff0` | `BGSDecalManager::UpdateDecals` | open |
-| 84 | `00524c90` | - | traced |
+| 84 | `00524c90` | - | translated |
 | 85 | `00712e60` | - | translated |
 | 86 | `0044ddc0` | - | translated |
 | 87 | `00710ab0` | - | translated |

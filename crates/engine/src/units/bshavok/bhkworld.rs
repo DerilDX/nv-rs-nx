@@ -2278,6 +2278,1375 @@ pub fn fn_00c69580(e: &mut Engine, this: Ptr<BhkWorld>, action: Ptr) -> bool {
     true
 }
 
+// ---------------------------------------------------------------------------
+// Picking, adding objects to the world and the notification requests.
+//
+// Import slots used below (named by Ghidra's decompilation of the callers):
+// `00fdf044` is `TlsGetValue` (`00c696d0`), `00fdf1c0` / `00fdf1c4` are
+// `InterlockedIncrement` / `InterlockedDecrement` (`00c6a540`, `00c6b3c0`).
+// `RDTSC` has no model in the engine: `time_stamp_low` stands in with the
+// host clock; only the profiling records written next to it use it.
+
+const OBJECT_RECORD: u32 = 0x00c4_3490;
+const PICK_CALC_TO: u32 = 0x0045_8840;
+const CAST_RAY_WITH_FILTER: u32 = 0x00cb_f860;
+const CAST_RAY: u32 = 0x00c9_1f70;
+const CAST_RAY_OV2: u32 = 0x00c9_2040;
+const RAY_COLLECTOR_VTABLE: u32 = 0x010c_3bd4;
+const HIT_COPY_FROM_INPUT: u32 = 0x009c_1a70;
+const HIT_COPY_FROM_OUTPUT: u32 = 0x009c_1aa0;
+const SORT_HITS: u32 = 0x00c8_55f0;
+const GLOBAL_PROFILE_SLOT: u32 = 0x0126_835c;
+const GLOBAL_PICK_LIMIT_NORMAL: u32 = 0x011a_fe74;
+const GLOBAL_PICK_LIMIT_ALTERNATE: u32 = 0x011a_fe78;
+const GLOBAL_PICK_LIMIT_SELECTOR: u32 = 0x0126_77cc;
+/// The string `TtPickObject` (the profiling record's begin label).
+const PROFILE_BEGIN_PICK_OBJECT: u32 = 0x010c_41fc;
+/// The string `Et` (the profiling record's end label).
+const PROFILE_END: u32 = 0x010c_41f8;
+/// Byte flag the add functions test before sending their first request.
+const GLOBAL_ADD_PRELUDE_FLAG: u32 = 0x0126_77a1;
+/// Table of request callbacks, indexed by the request kind at `request + 8`.
+const REQUEST_CALLBACK_TABLE: u32 = 0x011a_fe88;
+const GLOBAL_ENTITY_FLUSH_LIMIT: u32 = 0x011a_fe80;
+const GLOBAL_PARTIAL_FLUSH_DONE: u32 = 0x0126_77a2;
+const GLOBAL_UPDATING: u32 = 0x0126_77a0;
+const GLOBAL_SCHEDULED_DEBUGGER: u32 = 0x0126_77cd;
+const GLOBAL_STEP_TIME: u32 = 0x011a_fe64;
+const GLOBAL_STEP_LENGTH: u32 = 0x011a_fe68;
+const GLOBAL_STEP_SCALE: u32 = 0x0126_7b38;
+const GLOBAL_STEP_FACTOR: u32 = 0x011a_c3a0;
+const GLOBAL_STEP_DELTA: u32 = 0x0126_77ac;
+const GLOBAL_ACQUIRE_FLAG: u32 = 0x0126_7b2c;
+const GLOBAL_ADD_ENTITY_CHECK: u32 = 0x011b_0c44;
+const ACQUIRE_MT_RESOURCES: u32 = 0x00cb_f6b0;
+const WORLD_GET_CURRENT_TIME: u32 = 0x00c9_1020;
+const WORLD_GET_CURRENT_PSI_TIME: u32 = 0x00c9_1030;
+const WORLD_SET_CURRENT_TIME: u32 = 0x00c9_1040;
+const WORLD_STEP_DONE: u32 = 0x00c9_1060;
+const WORLD_PREPARE_STEP: u32 = 0x00c9_1bd0;
+const WORLD_STEP_DELTA_TIME: u32 = 0x00c9_1b10;
+const WORLD_STEP_MULTITHREADED: u32 = 0x00c9_3ae0;
+const WORLD_BEFORE_STEP_A: u32 = 0x00c9_1120;
+const WORLD_BEFORE_STEP_B: u32 = 0x00c9_1140;
+const WORLD_ADD_ENTITY: u32 = 0x00c9_14d0;
+const WORLD_ADD_PHANTOM: u32 = 0x00c9_36a0;
+const WORLD_ADD_CONSTRAINT: u32 = 0x00c9_7d30;
+const WORLD_ADD_ACTION: u32 = 0x00c9_7370;
+const CLEANUP_DIRTY_ISLANDS: u32 = 0x00cb_55d0;
+const MARK_ISLAND_INACTIVE: u32 = 0x00cb_5420;
+const POINTER_ASSIGN: u32 = 0x0063_3c90;
+const POINTER_RELEASE: u32 = 0x0045_cec0;
+const NI_TO_HK_TRANSFORM: u32 = 0x0056_df80;
+const TRANSFORM_POSITION: u32 = 0x00c7_f640;
+const QUATERNION_FROM_TRANSFORM: u32 = 0x00cb_26e0;
+const BODY_CREATE_T: u32 = 0x00cb_38c0;
+const HAVOK_ALIGNED_ALLOC: u32 = 0x00c7_4ea0;
+const SET_WORLD_OBJECT: u32 = 0x00c6_b980;
+const SET_COLLISION_OBJECT: u32 = 0x0062_bc90;
+const BODY_ACCEPT_CHECK: u32 = 0x0043_b300;
+const ENTITY_OWNER_RECORD: u32 = 0x0043_b4f0;
+const OWNER_POSITION_VECTOR: u32 = 0x0056_0d80;
+const OWNER_ROTATION_VECTOR: u32 = 0x0056_0e10;
+const PHYSICS_REGISTER_PROCESSES: u32 = 0x00cd_1ed0;
+const PHYSICS_CONTEXT_CREATE: u32 = 0x00cd_25d0;
+const PHYSICS_CONTEXT_ADD_WORLD: u32 = 0x00cd_2530;
+const VISUAL_DEBUGGER_CREATE: u32 = 0x00cd_1780;
+const VISUAL_DEBUGGER_SERVE: u32 = 0x00cd_0d00;
+const ARRAY_GROW: u32 = 0x00c9_0940;
+const GLOBAL_BODY_CHECK_TABLE: u32 = 0x0126_83c8;
+const GLOBAL_IDENTITY_MATRIX: u32 = 0x011a_9448;
+const GLOBAL_IDENTITY_TRANSLATION: u32 = 0x011f_426c;
+const GLOBAL_QUATERNION_BIAS: u32 = 0x010c_71e0;
+const GLOBAL_BODY_ZERO_ARGUMENT: u32 = 0x0126_83b0;
+const WORLD_DESTRUCTOR_VTABLE: u32 = 0x010c_40b4;
+const SERIALIZABLE_KILL: u32 = 0x00c8_76a0;
+const SERIALIZABLE_DESTRUCTOR: u32 = 0x00c8_77b0;
+const REFERENCE_OWNER_NOTIFY: u32 = 0x0055_33f0;
+
+/// Low word of the time-stamp counter (`RDTSC`); the host clock stands in.
+fn time_stamp_low() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u32)
+        .unwrap_or(0)
+}
+
+/// Appends a profiling record (`label`, time stamp) to the calling thread's
+/// record stream (`TlsGetValue` of the slot in `0126835c`) while the cursor at
+/// `+4` is below the limit at `+0xC`; each record takes 12 bytes.
+fn profile_record(e: &mut Engine, label: u32) {
+    let slot = e.global::<u32>(GLOBAL_PROFILE_SLOT);
+    let stream = e.call(TLS_GET_VALUE, &args![slot]).u32();
+    let cursor = e.mem.u32(stream + 4);
+    if cursor < e.mem.u32(stream + 0xc) {
+        e.mem.set_u32(cursor, label);
+        e.mem.set_u32(cursor + 4, time_stamp_low());
+        e.mem.set_u32(stream + 4, cursor + 12);
+    }
+}
+
+/// Casts the ray described by `pick` with the filtered caster: builds the
+/// caster object on the stack (vtable `010c3bd4`, words `+0x40` and `+0x44`
+/// cleared) and calls `hkpWorldRayCaster::castRay` (`00cbf860`) with the
+/// `hkpWorld`'s words `+0x58` and `+0x7C`, the filter and the output.
+fn cast_ray_with_filter(e: &mut Engine, world: u32, pick: Ptr, filter: u32, output: u32) {
+    e.with_stack(0x4c, |e, caster| {
+        e.mem.set_u32(caster.addr(), RAY_COLLECTOR_VTABLE);
+        e.mem.set_u32(caster.addr() + 0x40, 0);
+        e.mem.set_u32(caster.addr() + 0x44, 0);
+        let first = e.mem.u32(world + 0x58);
+        let second = e.mem.u32(world + 0x7c);
+        e.call(
+            CAST_RAY_WITH_FILTER,
+            &args![caster, first, pick, second, filter, output],
+        );
+    });
+}
+
+// Translated from 00c696d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::PickObject` (Xbox PDB): casts the ray of the `bhkPickData` at
+/// `pick` through the world and says whether it hit something. When the pick
+/// count override byte is clear and the limit (`011afe74`, or `011afe78` when
+/// the byte at `012677cc` is set) is below the world float at `012677c4`, the
+/// pick is skipped: the result fields are reset and false is returned. Otherwise
+/// (between two profiling records, `TtPickObject` and `Et`) it asks
+/// `bhkPickData::CalcTo` (`00458840`) to prepare the pick and casts: with an
+/// output at `pick + 0xA8` through the world's `castRay` (or the filtered
+/// caster when `pick + 0xA0` is set), else with an input at `pick + 0xA4` the
+/// same way, else with the second `castRay` overload into `pick + 0x30`. A hit
+/// is copied into the pick data (`009c1a70` / `009c1aa0`).
+// Translation incomplete: 00c696d0 - SEH exception unwinding and the stack cookie check are unsupported.
+pub fn bhk_world_pick_object(e: &mut Engine, this: Ptr<BhkWorld>, pick: Ptr) -> bool {
+    let base = pick.addr();
+    if e.global::<u8>(GLOBAL_PICK_COUNT_OVERRIDE) == 0 {
+        let limit = if e.global::<u8>(GLOBAL_PICK_LIMIT_SELECTOR) != 0 {
+            e.global::<f32>(GLOBAL_PICK_LIMIT_ALTERNATE)
+        } else {
+            e.global::<f32>(GLOBAL_PICK_LIMIT_NORMAL)
+        };
+        if limit < e.global::<f32>(GLOBAL_WORLD_FLOAT) {
+            e.mem.set_u8(base + 0xac, 1);
+            e.mem.set_f32(base + 0x40, 1.0);
+            e.mem.set_u32(base + 0x44, u32::MAX);
+            e.mem.set_u32(base + 0x50, u32::MAX);
+            e.mem.set_u32(base + 0x80, 0);
+            e.mem.set_u32(base + 0x70, 0);
+            return false;
+        }
+    }
+    profile_record(e, PROFILE_BEGIN_PICK_OBJECT);
+    let mut hit = false;
+    let world = hk_world(e, this.cast());
+    if world != 0 {
+        e.call(PICK_CALC_TO, &args![pick]);
+        let result = base + 0x30;
+        e.mem.set_f32(base + 0x40, 1.0);
+        e.mem.set_u32(base + 0x80, 0);
+        e.mem.set_u32(base + 0x44, u32::MAX);
+        e.mem.set_u32(base + 0x70, 0);
+        e.mem.set_u32(base + 0x50, u32::MAX);
+        let output = e.mem.u32(base + 0xa8);
+        let filter = e.mem.u32(base + 0xa0);
+        if output != 0 {
+            if filter == 0 {
+                e.call(CAST_RAY, &args![world, pick, output]);
+            } else {
+                cast_ray_with_filter(e, world, pick, filter, output);
+            }
+            if e.mem.u32(output + 0x14) != 0 {
+                e.call(SORT_HITS, &args![output]);
+                let best = e.mem.u32(output + 0x10);
+                e.call(HIT_COPY_FROM_OUTPUT, &args![result, best]);
+                let value = e.mem.u32(best + 0x50);
+                e.mem.set_u32(result + 0x50, value);
+                hit = true;
+            }
+        } else {
+            let input = e.mem.u32(base + 0xa4);
+            if input != 0 {
+                e.mem.set_f32(input + 0x20, 1.0);
+                e.mem.set_u32(input + 0x60, 0);
+                e.mem.set_u32(input + 0x24, u32::MAX);
+                e.mem.set_u32(input + 0x50, 0);
+                e.mem.set_u32(input + 0x30, u32::MAX);
+                e.mem.set_f32(input + 4, 1.0);
+                if filter == 0 {
+                    e.call(CAST_RAY, &args![world, pick, input]);
+                } else {
+                    cast_ray_with_filter(e, world, pick, filter, input);
+                }
+                if e.mem.u32(input + 0x60) != 0 {
+                    e.call(HIT_COPY_FROM_INPUT, &args![result, input + 0x10]);
+                    hit = true;
+                }
+            } else {
+                e.call(CAST_RAY_OV2, &args![world, pick, result]);
+                hit = e.mem.u32(base + 0x80) != 0;
+            }
+        }
+    }
+    profile_record(e, PROFILE_END);
+    hit
+}
+
+/// The record `00c43490` returns for `object` has bit 1 set in its word at
+/// `+0xC`; false when it returns none.
+fn object_is_registered(e: &mut Engine, object: Ptr) -> bool {
+    let record = e.call(OBJECT_RECORD, &args![object]).u32();
+    record != 0 && e.mem.u32(record + 0xc) & 2 != 0
+}
+
+/// Sends the request of kind `kind` for `object` as the small `bhkWorld`
+/// notification functions do. Unless `skip_check` is non-zero the object must
+/// pass `object_is_registered`; `None` is returned (and nothing is sent) for a
+/// null object or a failed check. The 0x1C-byte request record holds a null
+/// word at `+0`, `flag` at `+4`, the kind at `+8` and the two words `+0xC`
+/// and `+0x10`; the callback of the kind (`011afe88 + 4 * kind`), if any, is
+/// run on the object through `fn_00c68900`. The request's word at `+0xC`
+/// after the callback is returned.
+fn send_object_request(
+    e: &mut Engine,
+    object: Ptr,
+    skip_check: u8,
+    kind: u32,
+    flag: u8,
+    word_c: u32,
+    word_10: u32,
+) -> Option<u32> {
+    if object.is_null() {
+        return None;
+    }
+    if skip_check == 0 && !object_is_registered(e, object) {
+        return None;
+    }
+    Some(e.with_stack(0x1c, |e, request| {
+        let base = request.addr();
+        e.mem.set_u32(base, 0);
+        e.mem.set_u8(base + 4, flag);
+        e.mem.set_u32(base + 8, kind);
+        e.mem.set_u32(base + 0xc, word_c);
+        e.mem.set_u32(base + 0x10, word_10);
+        let callback = e.mem.u32(REQUEST_CALLBACK_TABLE + kind * 4);
+        if callback != 0 {
+            fn_00c68900(e, object, request, callback);
+        }
+        e.mem.u32(base + 0xc)
+    }))
+}
+
+/// Runs the flushes the add functions run when a batch is full: the phantoms
+/// (`fn_00c676e0`), the actions (`fn_00c6aac0`) and the constraints
+/// (`fn_00c67850`).
+fn flush_pending_batches(e: &mut Engine, this: Ptr<BhkWorld>) {
+    fn_00c676e0(e, this);
+    fn_00c6aac0(e, this);
+    fn_00c67850(e, this);
+}
+
+/// Flushes the tail of the entity batch (`pEntityBatch`): the count is
+/// clamped to 3000, at most `011afe80` entries from the end are added with
+/// `fn_00c674d0` and the rest stay queued; marks the partial flush as done
+/// (`012677a2`).
+fn flush_entity_batch_partially(e: &mut Engine, this: Ptr<BhkWorld>) {
+    if e.get(this, BhkWorld::iEntityBatchCount) >= 3000 {
+        e.set(this, BhkWorld::iEntityBatchCount, 3000);
+    }
+    let count = e.get(this, BhkWorld::iEntityBatchCount);
+    let limit = e.global::<u32>(GLOBAL_ENTITY_FLUSH_LIMIT);
+    let take = count.min(limit);
+    let remaining = count - take;
+    let entities = e.get(this, BhkWorld::pEntityBatch).addr() + remaining * 4;
+    fn_00c674d0(e, this.cast(), Ptr::new(entities), take);
+    e.set(this, BhkWorld::iEntityBatchCount, remaining);
+    e.set_global(GLOBAL_PARTIAL_FLUSH_DONE, 1u8);
+}
+
+/// SSE rotation of the vector `v` by the quaternion `q` as the executable's
+/// `MULPS` / `SHUFPS` / `ADDPS` sequence computes it, every lane in single
+/// precision: `2 * (cross * q.w + ((q.w * q.w + bias) * v + dot * q))`, where
+/// `dot` is `v.z * q.z + (v.y * q.y + v.x * q.x)` and `cross` is
+/// `v.zxy * q.yzx - v.yzx * q.zxy`, taken the other way round when
+/// `negate_cross` is set.
+fn rotate_by_quaternion(q: [f32; 4], v: [f32; 4], bias: [f32; 4], negate_cross: bool) -> [f32; 4] {
+    let product = [v[0] * q[0], v[1] * q[1], v[2] * q[2], v[3] * q[3]];
+    let dot = product[2] + (product[1] + product[0]);
+    let first = [v[1] * q[2], v[2] * q[0], v[0] * q[1], v[3] * q[3]];
+    let second = [v[2] * q[1], v[0] * q[2], v[1] * q[0], v[3] * q[3]];
+    let mut out = [0.0f32; 4];
+    for lane in 0..4 {
+        let cross = if negate_cross {
+            first[lane] - second[lane]
+        } else {
+            second[lane] - first[lane]
+        };
+        let scaled = cross * q[3];
+        let factor = (q[3] * q[3] + bias[lane]) * v[lane];
+        let sum = factor + dot * q[lane];
+        let total = scaled + sum;
+        out[lane] = total + total;
+    }
+    out
+}
+
+fn read_vector(e: &mut Engine, address: u32) -> [f32; 4] {
+    [
+        e.mem.f32(address),
+        e.mem.f32(address + 4),
+        e.mem.f32(address + 8),
+        e.mem.f32(address + 12),
+    ]
+}
+
+fn write_vector(e: &mut Engine, address: u32, vector: [f32; 4]) {
+    for (lane, value) in vector.into_iter().enumerate() {
+        e.mem.set_f32(address + lane as u32 * 4, value);
+    }
+}
+
+/// Prepares the body that `node`'s transform is composed with: `body` itself
+/// when `0043b300` accepts it, otherwise a copy made through `body`'s slot
+/// `+0x40`, wrapped in a new 0x40-byte `bhkRigidBodyT` (`00cb38c0`) whose
+/// position (`+0x30`) and rotation (`+0x20`) come from the copy's slots
+/// `+0xD4` / `+0xD8` and which replaces the collision object's world object.
+/// Returns the body to use (null when there is none).
+fn body_for_move(e: &mut Engine, collision: u32, body: u32) -> u32 {
+    if e.call(BODY_ACCEPT_CHECK, &args![GLOBAL_BODY_CHECK_TABLE, body])
+        .bool()
+    {
+        return body;
+    }
+    let cloned = e.vcall(body, 0x40, &[]).u32();
+    e.with_stack(4, |e, slot| {
+        e.call(POINTER_ASSIGN, &args![slot, cloned]);
+        let copy = e.mem.u32(slot.addr());
+        let mut result = 0;
+        if copy != 0 {
+            e.call(SET_WORLD_OBJECT, &args![collision, 0u32]);
+            let memory = e.call(HAVOK_ALIGNED_ALLOC, &args![0x40u32]).u32();
+            let created = if memory != 0 {
+                e.call(BODY_CREATE_T, &args![memory, copy]).u32()
+            } else {
+                0
+            };
+            e.with_stack(0x20, |e, vectors| {
+                let position = vectors.addr();
+                let rotation = vectors.addr() + 0x10;
+                e.vcall(copy, 0xd4, &args![position]);
+                e.vcall(copy, 0xd8, &args![rotation]);
+                let position = e.mem.bytes(position, 16);
+                let rotation = e.mem.bytes(rotation, 16);
+                e.mem.write(created + 0x30, &position);
+                e.mem.write(created + 0x20, &rotation);
+            });
+            e.vcall(created, 0xdc, &args![GLOBAL_ZERO_VECTOR]);
+            e.vcall(created, 0xe0, &args![GLOBAL_BODY_ZERO_ARGUMENT]);
+            e.call(SET_WORLD_OBJECT, &args![collision, created]);
+            let count = e.call(INTERLOCKED_DECREMENT, &args![copy + 4]).i32();
+            if count == 0 {
+                e.vcall(copy, 4, &[]);
+            }
+            result = memory;
+            e.mem.set_u32(slot.addr(), 0);
+        }
+        e.call(POINTER_RELEASE, &args![slot]);
+        result
+    })
+}
+
+/// Composes the body's position and rotation with the transform of `node`
+/// (`NI2HK` of `node + 0x34`), hands the collision object to `other` and
+/// clears `node`'s collision object; the flags word of `node` at `+0x30` then
+/// has bit 4 cleared and bits 1 and 2 set.
+fn move_body_to_other(e: &mut Engine, node: Ptr, other: Ptr, collision: u32, body: u32) {
+    e.with_stack(0x80, |e, frame| {
+        let transform = frame.addr();
+        let transformed = frame.addr() + 0x40;
+        let vector = frame.addr() + 0x50;
+        let quaternion = frame.addr() + 0x60;
+        let product = frame.addr() + 0x70;
+        e.call(NI_TO_HK_TRANSFORM, &args![transform, node.addr() + 0x34]);
+        let bias = read_vector(e, GLOBAL_QUATERNION_BIAS);
+        let rotation = read_vector(e, body + 0x20);
+        let position = read_vector(e, body + 0x30);
+        let rotated = rotate_by_quaternion(rotation, position, bias, false);
+        write_vector(e, vector, rotated);
+        e.call(TRANSFORM_POSITION, &args![transformed, transform, vector]);
+        e.call(QUATERNION_FROM_TRANSFORM, &args![quaternion, transform]);
+        hk_quaternion_set_mul(
+            e,
+            Ptr::new(product),
+            Ptr::new(body + 0x20),
+            Ptr::new(quaternion),
+        );
+        let rotation = read_vector(e, body + 0x20);
+        let moved = read_vector(e, transformed);
+        let result = rotate_by_quaternion(rotation, moved, bias, true);
+        write_vector(e, body + 0x30, result);
+        let product_bytes = e.mem.bytes(product, 16);
+        e.mem.write(body + 0x20, &product_bytes);
+        e.call(SET_COLLISION_OBJECT, &args![other, collision]);
+        e.call(SET_COLLISION_OBJECT, &args![node, 0u32]);
+        let flags = e.mem.u32(node.addr() + 0x30);
+        e.mem.set_u32(node.addr() + 0x30, (flags & !0x10) | 6);
+    });
+}
+
+// Translated from 00c69960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::AddObjectsAndMoveController` (Xbox PDB): when both `node` and
+/// `other` are non-null and `other` is registered (`object_is_registered`),
+/// asks `node`'s object at `+0x1C` (slot `+0x38`) for its collision object. If
+/// that has a body and its slot `+0xB4` answers false the world is marked
+/// added (`bAdded`) and, unless `other` is `node`, the collision object moves
+/// to `other`: with a body to use (`body_for_move`) its transform is
+/// composed with `node`'s (`move_body_to_other`), without one `node` gets the
+/// identity transform (nine words from `011a9448`, three from `011f426c`) and
+/// the same flag changes. Afterwards the add requests (kind 0xA when the byte
+/// `012677a1` is set, then kind 0) are sent for `other`. True when the world
+/// was marked added.
+// Translation incomplete: 00c69960 - SEH exception unwinding and the stack cookie check are unsupported.
+pub fn bhk_world_add_objects_and_move_controller(
+    e: &mut Engine,
+    this: Ptr<BhkWorld>,
+    node: Ptr,
+    other: Ptr,
+) -> bool {
+    let scope = enter_scope(e);
+    let mut added = false;
+    if !node.is_null() && !other.is_null() && object_is_registered(e, other) {
+        let mut found = 0u32;
+        let holder = e.mem.u32(node.addr() + 0x1c);
+        if holder != 0 {
+            let collision = e.vcall(holder, 0x38, &[]).u32();
+            if collision != 0 {
+                let body = e.mem.u32(collision + 0x10);
+                found = 1;
+                if body != 0 && !e.vcall(collision, 0xb4, &[]).bool() {
+                    e.set(this, BhkWorld::bAdded, true);
+                    added = true;
+                    if other != node {
+                        let target = body_for_move(e, collision, body);
+                        if target != 0 {
+                            move_body_to_other(e, node, other, collision, target);
+                        } else {
+                            e.call(SET_COLLISION_OBJECT, &args![other, collision]);
+                            e.call(SET_COLLISION_OBJECT, &args![node, 0u32]);
+                            let identity = e.mem.bytes(GLOBAL_IDENTITY_MATRIX, 36);
+                            e.mem.write(node.addr() + 0x34, &identity);
+                            for offset in [0u32, 4, 8] {
+                                let value = e.mem.u32(GLOBAL_IDENTITY_TRANSLATION + offset);
+                                e.mem.set_u32(node.addr() + 0x58 + offset, value);
+                            }
+                            let flags = e.mem.u32(node.addr() + 0x30);
+                            e.mem.set_u32(node.addr() + 0x30, (flags & !0x10) | 6);
+                        }
+                    }
+                }
+            }
+        }
+        e.with_stack(0x1c, |e, request| {
+            let base = request.addr();
+            e.mem.set_u32(base, this.addr());
+            e.mem.set_u8(base + 4, 1);
+            if e.global::<u8>(GLOBAL_ADD_PRELUDE_FLAG) != 0 {
+                e.mem.set_u32(base + 8, 0xa);
+                fn_00c68e90(e, other, request);
+            }
+            e.mem.set_u32(base + 8, 0);
+            e.mem.set_u32(base + 0xc, found);
+            e.mem.set_u32(base + 0x10, 0);
+            e.mem.set_u32(base + 0x14, 0);
+            e.mem.set_u32(base + 0x18, 1);
+            let callback = e.mem.u32(REQUEST_CALLBACK_TABLE);
+            if callback != 0 {
+                fn_00c68900(e, other, request, callback);
+            }
+        });
+    }
+    leave_scope(e, scope);
+    added
+}
+
+// Translated from 00c69e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::AddObjects` (Xbox PDB): unless `skip_check` is set, `object`
+/// must be non-null and registered (`object_is_registered`). Marks the world
+/// added, sends the kind 0xA request (callback `011afeb0`) when the byte
+/// `012677a1` is set, then the kind 0 request with `flag_b` (cleared when the
+/// object has no word at `+0x1C`) and `word`. False for a rejected object.
+pub fn bhk_world_add_objects(
+    e: &mut Engine,
+    this: Ptr<BhkWorld>,
+    object: Ptr,
+    flag_a: u8,
+    flag_b: u8,
+    word: u32,
+    skip_check: u8,
+) -> bool {
+    if object.is_null() {
+        return false;
+    }
+    if skip_check == 0 && !object_is_registered(e, object) {
+        return false;
+    }
+    e.set(this, BhkWorld::bAdded, true);
+    e.with_stack(0x1c, |e, request| {
+        let base = request.addr();
+        e.mem.set_u32(base, this.addr());
+        e.mem.set_u8(base + 4, flag_a);
+        if e.global::<u8>(GLOBAL_ADD_PRELUDE_FLAG) != 0 {
+            e.mem.set_u32(base + 8, 0xa);
+            let callback = e.mem.u32(REQUEST_CALLBACK_TABLE + 0xa * 4);
+            if callback != 0 {
+                fn_00c68900(e, object, request, callback);
+            }
+        }
+        let attach = flag_b != 0 && e.mem.u32(object.addr() + 0x1c) != 0;
+        e.mem.set_u32(base + 8, 0);
+        e.mem.set_u32(base + 0xc, attach as u32);
+        e.mem.set_u32(base + 0x10, word);
+        e.mem.set_u32(base + 0x14, 0);
+        e.mem.set_u32(base + 0x18, 1);
+        let callback = e.mem.u32(REQUEST_CALLBACK_TABLE);
+        if callback != 0 {
+            fn_00c68900(e, object, request, callback);
+        }
+    });
+    true
+}
+
+// Translated from 00c69ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::RemoveObjects` (Xbox PDB), `cdecl` without `this`: sends the
+/// kind 1 request (callback `011afe8c`) for `object` with `flag` unless the
+/// object is null or (without `skip_check`) not registered. Returns the
+/// `skip_check` byte itself when the request was sent (so zero when the check
+/// is what let it through), zero otherwise.
+pub fn bhk_world_remove_objects(e: &mut Engine, object: Ptr, flag: u8, skip_check: u8) -> u8 {
+    match send_object_request(e, object, skip_check, 1, flag, 0, 0) {
+        Some(_) => skip_check,
+        None => 0,
+    }
+}
+
+// Translated from 00c69f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::UpdatePosition` (Xbox PDB), `cdecl` without `this`: sends the
+/// kind 2 request (callback `011afe90`) for `object` with `flag`; true when it
+/// was sent.
+pub fn bhk_world_update_position(e: &mut Engine, object: Ptr, flag: u8, skip_check: u8) -> bool {
+    send_object_request(e, object, skip_check, 2, flag, 0, 0).is_some()
+}
+
+// Translated from 00c69fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::AdjustForceAddCount` (Xbox PDB), `cdecl` without `this`: sends
+/// the kind 0xD request (callback `011afebc`) with `value != 0` in the word at
+/// `+0xC`; true when it was sent.
+pub fn bhk_world_adjust_force_add_count(
+    e: &mut Engine,
+    object: Ptr,
+    value: u8,
+    flag: u8,
+    skip_check: u8,
+) -> bool {
+    send_object_request(e, object, skip_check, 0xd, flag, (value != 0) as u32, 0).is_some()
+}
+
+// Translated from 00c6a040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Request kind 3 (callback `011afe94`) for `object` with the byte `value` in
+/// the word at `+0xC`; `cdecl` without `this`, true when it was sent. The
+/// executable's name for it is unknown.
+pub fn fn_00c6a040(e: &mut Engine, object: Ptr, value: u8, flag: u8, skip_check: u8) -> bool {
+    send_object_request(e, object, skip_check, 3, flag, value as u32, 0).is_some()
+}
+
+// Translated from 00c6a0b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Request kind 0xE (callback `011afec0`) for `object` with the byte `value`
+/// in the word at `+0xC`; `cdecl` without `this`, true when it was sent. The
+/// executable's name for it is unknown.
+pub fn fn_00c6a0b0(e: &mut Engine, object: Ptr, value: u8, flag: u8, skip_check: u8) -> bool {
+    send_object_request(e, object, skip_check, 0xe, flag, value as u32, 0).is_some()
+}
+
+// Translated from 00c6a120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Request kind 0xF (callback `011afec4`) for `object` with the float `value`
+/// in the word at `+0xC`; `cdecl` without `this`, true when it was sent. The
+/// executable's name for it is unknown.
+pub fn fn_00c6a120(e: &mut Engine, object: Ptr, value: f32, flag: u8, skip_check: u8) -> bool {
+    send_object_request(e, object, skip_check, 0xf, flag, value.to_bits(), 0).is_some()
+}
+
+// Translated from 00c6a190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Request kind 0x10 (callback `011afec8`) for `object` with the float
+/// `value` in the word at `+0xC`; `cdecl` without `this`, true when it was
+/// sent. The executable's name for it is unknown.
+pub fn fn_00c6a190(e: &mut Engine, object: Ptr, value: f32, flag: u8, skip_check: u8) -> bool {
+    send_object_request(e, object, skip_check, 0x10, flag, value.to_bits(), 0).is_some()
+}
+
+// Translated from 00c6a200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::SetDisabled` (Xbox PDB), `cdecl` without `this`: request kind
+/// 0x11 (callback `011afecc`) with the byte `value` in the word at `+0xC`;
+/// true when it was sent.
+pub fn bhk_world_set_disabled(
+    e: &mut Engine,
+    object: Ptr,
+    value: u8,
+    flag: u8,
+    skip_check: u8,
+) -> bool {
+    send_object_request(e, object, skip_check, 0x11, flag, value as u32, 0).is_some()
+}
+
+// Translated from 00c6a270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::Activate` (Xbox PDB), `cdecl` without `this`: request kind 0xC
+/// (callback `011afeb8`) with the byte `value` in the word at `+0xC`; true
+/// when it was sent.
+pub fn bhk_world_activate(
+    e: &mut Engine,
+    object: Ptr,
+    value: u8,
+    flag: u8,
+    skip_check: u8,
+) -> bool {
+    send_object_request(e, object, skip_check, 0xc, flag, value as u32, 0).is_some()
+}
+
+// Translated from 00c6a2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::KillHavok` (Xbox PDB), `cdecl` without `this`: request kind 4
+/// (callback `011afe98`) for `object` with `flag`; true when it was sent.
+pub fn bhk_world_kill_havok(e: &mut Engine, object: Ptr, flag: u8, skip_check: u8) -> bool {
+    send_object_request(e, object, skip_check, 4, flag, 0, 0).is_some()
+}
+
+// Translated from 00c6a350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::SetMotion` (Xbox PDB), `cdecl` without `this`: request kind 5
+/// (callback `011afe9c`) with `motion` in the word at `+0xC` and the byte
+/// `extra` in the word at `+0x10`; true when it was sent.
+pub fn bhk_world_set_motion(
+    e: &mut Engine,
+    object: Ptr,
+    motion: u32,
+    flag: u8,
+    skip_check: u8,
+    extra: u8,
+) -> bool {
+    send_object_request(e, object, skip_check, 5, flag, motion, extra as u32).is_some()
+}
+
+// Translated from 00c6a3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Request kind 7 (callback `011afea4`) with `value` in the word at `+0xC`;
+/// `cdecl` without `this`, true when it was sent. The executable's name for it
+/// is unknown.
+pub fn fn_00c6a3d0(e: &mut Engine, object: Ptr, value: u32, flag: u8, skip_check: u8) -> bool {
+    send_object_request(e, object, skip_check, 7, flag, value, 0).is_some()
+}
+
+// Translated from 00c6a440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Request kind 8 (callback `011afea8`) for `object` with `flag`; `cdecl`
+/// without `this`. Returns whether the callback left a non-zero word in the
+/// request's word at `+0xC` (false when the request was not sent). The
+/// executable's name for it is unknown.
+pub fn fn_00c6a440(e: &mut Engine, object: Ptr, flag: u8, skip_check: u8) -> bool {
+    send_object_request(e, object, skip_check, 8, flag, 0, 0).is_some_and(|word| word != 0)
+}
+
+// Translated from 00c6a4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Request kind 9 (callback `011afeac`) with `first` in the word at `+0x10`
+/// and `second` in the word at `+0xC`; `cdecl` without `this`, true when it was
+/// sent. The executable's name for it is unknown.
+pub fn fn_00c6a4c0(
+    e: &mut Engine,
+    object: Ptr,
+    first: u32,
+    second: u32,
+    flag: u8,
+    skip_check: u8,
+) -> bool {
+    send_object_request(e, object, skip_check, 9, flag, second, first).is_some()
+}
+
+// Translated from 00c6a540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::UpdateActions` (Xbox PDB): walks the action list at `this +
+/// 0x90`. An item with no `hkpWorld` (its slot `+0x94`) is taken out of the
+/// list (`BSSimpleList<NiPointer<bhkAction>>::Remove`) holding a temporary
+/// reference; any other item gets its slot `+0xC4` called with `delta`.
+// Translation incomplete: 00c6a540 - SEH exception unwinding is unsupported.
+pub fn bhk_world_update_actions(e: &mut Engine, this: Ptr<BhkWorld>, delta: f32) {
+    let head = this.addr() + 0x90;
+    let mut node = head;
+    while node != 0 {
+        let next = e.mem.u32(node + 4);
+        let item = e.mem.u32(node);
+        if next == 0 && item == 0 {
+            break;
+        }
+        let mut following = next;
+        if item != 0 {
+            if e.vcall(item, 0x94, &[]).u32() == 0 {
+                if node == head {
+                    following = node;
+                }
+                e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), item);
+                    e.call(INTERLOCKED_INCREMENT, &args![item + 4]);
+                    bs_simple_list_ni_pointer_bhk_action_remove(e, Ptr::new(head), slot);
+                    let count = e.call(INTERLOCKED_DECREMENT, &args![item + 4]).i32();
+                    if count == 0 {
+                        e.vcall(item, 4, &[]);
+                    }
+                });
+            } else {
+                e.vcall(item, 0xc4, &args![delta]);
+            }
+        }
+        node = following;
+    }
+}
+
+// Translated from 00c6a620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `005533f0` on `this` with `value` and then stores `value` in the
+/// word at `+0x24`. The class and the executable's name for it are unknown.
+pub fn fn_00c6a620(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(REFERENCE_OWNER_NOTIFY, &args![this, value]);
+    e.mem.set_u32(this.addr() + 0x24, value);
+}
+
+/// Releases an `hkArray`-style buffer through the allocator at `allocator`
+/// (slot `+0x10`, `bytes` long) unless the capacity word marks it as not
+/// owned (sign bit set).
+fn free_array_buffer(e: &mut Engine, allocator: u32, data: u32, capacity_word: u32, bytes: u32) {
+    if capacity_word & 0x8000_0000 == 0 {
+        e.vcall(allocator, 0x10, &args![data, bytes]);
+    }
+}
+
+// Translated from 00c6a640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::SetVisualDebugger` (Xbox PDB): with `enable` clear, releases the
+/// visual debugger at `+0x10` (`00c905b0`) if there is one. With `enable`
+/// set and no debugger yet, registers all physics processes (`00cd1ed0`),
+/// builds a 0x90-byte physics context (`00cd25d0`) holding the world
+/// (`00cd2530`), creates the 0x90-byte visual debugger over a one-element
+/// array of contexts (`00cd1780`), stores it at `+0x10`, starts serving on
+/// port 0x61A9 (`00cd0d00`) and frees the temporary array.
+// Translation incomplete: 00c6a640 - SEH exception unwinding is unsupported.
+pub fn bhk_world_set_visual_debugger(e: &mut Engine, this: Ptr<BhkWorld>, enable: u8) {
+    let scope = enter_scope(e);
+    let debugger = e.get(this, BhkWorld::pDebugger);
+    if enable == 0 {
+        if !debugger.is_null() {
+            hk_world(e, this.cast());
+            e.call(HAVOK_RELEASE, &args![debugger]);
+            e.set(this, BhkWorld::pDebugger, Ptr::NULL);
+        }
+    } else if debugger.is_null() {
+        e.with_stack(12, |e, contexts| {
+            let base = contexts.addr();
+            e.mem.set_u32(base, 0);
+            e.mem.set_u32(base + 4, 0);
+            e.mem.set_u32(base + 8, 0x8000_0000);
+            e.call(PHYSICS_REGISTER_PROCESSES, &[]);
+            let router = e.call(MEMORY_ROUTER, &[]).u32();
+            let allocator = e.mem.u32(router + 0x10);
+            let memory = e.vcall(allocator, 4, &args![0x90u32]).u32();
+            e.mem.set_u16(memory + 4, 0x90);
+            let context = e.call(PHYSICS_CONTEXT_CREATE, &args![memory]).u32();
+            let world = hk_world(e, this.cast());
+            e.call(PHYSICS_CONTEXT_ADD_WORLD, &args![context, world]);
+            let entry = if context != 0 { context + 8 } else { 0 };
+            let router = e.call(MEMORY_ROUTER, &[]).u32();
+            let allocator = e.mem.u32(router + 0x10);
+            let capacity = e.mem.u32(base + 8) & 0x3fff_ffff;
+            if e.mem.u32(base + 4) == capacity {
+                e.call(ARRAY_GROW, &args![allocator, contexts, 4u32]);
+            }
+            let size = e.mem.u32(base + 4);
+            let data = e.mem.u32(base);
+            e.mem.set_u32(data + size * 4, entry);
+            e.mem.set_u32(base + 4, size + 1);
+            let router = e.call(MEMORY_ROUTER, &[]).u32();
+            let allocator = e.mem.u32(router + 0x10);
+            let memory = e.vcall(allocator, 4, &args![0x90u32]).u32();
+            e.mem.set_u16(memory + 4, 0x90);
+            let created = e
+                .call(VISUAL_DEBUGGER_CREATE, &args![memory, contexts, 0u32])
+                .u32();
+            e.set(this, BhkWorld::pDebugger, Ptr::new(created));
+            e.call(VISUAL_DEBUGGER_SERVE, &args![created, 0x61a9u32]);
+            let router = e.call(MEMORY_ROUTER, &[]).u32();
+            let allocator = e.mem.u32(router + 0x10);
+            let capacity_word = e.mem.u32(base + 8);
+            let data = e.mem.u32(base);
+            e.mem.set_u32(base + 4, 0);
+            free_array_buffer(
+                e,
+                allocator,
+                data,
+                capacity_word,
+                (capacity_word & 0x3fff_ffff) * 4,
+            );
+        });
+    }
+    leave_scope(e, scope);
+}
+
+// Translated from 00c6a810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::SetDebugDisplay` (Xbox PDB): stores `enabled` in `bDebugDisplay`
+/// and, for a non-null `object`, sends the kind 6 request (callback
+/// `011afea0`) with the new flag in the word at `+0xC`.
+pub fn bhk_world_set_debug_display(e: &mut Engine, this: Ptr<BhkWorld>, object: Ptr, enabled: u8) {
+    e.mem.set_u8(this.addr() + 0x16, enabled);
+    if !object.is_null() {
+        let flag = e.get(this, BhkWorld::bDebugDisplay);
+        e.with_stack(0x1c, |e, request| {
+            let base = request.addr();
+            e.mem.set_u32(base, 0);
+            e.mem.set_u8(base + 4, 1);
+            e.mem.set_u32(base + 8, 6);
+            e.mem.set_u32(base + 0xc, flag as u32);
+            let callback = e.mem.u32(REQUEST_CALLBACK_TABLE + 6 * 4);
+            if callback != 0 {
+                fn_00c68900(e, object, request, callback);
+            }
+        });
+    }
+}
+
+// Translated from 00c6a870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::DeactivateAllIslands` (Xbox PDB): with an `hkpWorld`, cleans its
+/// dirty islands (`00cb55d0`), copies the island pointer array (`+0x28`,
+/// count `+0x2C`) into a temporary buffer and marks every island inactive
+/// (`00cb5420`) whose bodies all have the vectors at `+0x1B0` and `+0x1C0`
+/// within the tolerance `01017d00` of the zero vector (first three lanes); an
+/// island with no bodies counts. Cleans the dirty islands again and frees the
+/// buffer. The calls of the world getter whose result the executable ignores
+/// are kept.
+// Translation incomplete: 00c6a870 - SEH exception unwinding is unsupported.
+pub fn bhk_world_deactivate_all_islands(e: &mut Engine, this: Ptr) {
+    let world = hk_world(e, this);
+    if world == 0 {
+        return;
+    }
+    hk_world(e, this);
+    e.call(CLEANUP_DIRTY_ISLANDS, &args![world]);
+    hk_world(e, this);
+    let mut data = 0u32;
+    let mut capacity_word = 0x8000_0000u32;
+    hk_world(e, this);
+    let router = e.call(MEMORY_ROUTER, &[]).u32();
+    let count = e.mem.i32(world + 0x2c);
+    if count > 0 {
+        let allocator = e.mem.u32(router + 0x10);
+        let (block, granted) = e.with_stack(4, |e, size| {
+            e.mem.set_i32(size.addr(), count.wrapping_mul(4));
+            let block = e.vcall(allocator, 0xc, &args![size]).u32();
+            (block, e.mem.i32(size.addr()))
+        });
+        data = block;
+        capacity_word = (granted.wrapping_add((granted >> 31) & 3) >> 2) as u32;
+    }
+    let source = e.mem.u32(world + 0x28);
+    for index in 0..count.max(0) as u32 {
+        let island = e.mem.u32(source + index * 4);
+        e.mem.set_u32(data + index * 4, island);
+    }
+    hk_world(e, this);
+    let tolerance = e.global::<f32>(GLOBAL_TOLERANCE);
+    for index in 0..count.max(0) as u32 {
+        let island = e.mem.u32(data + index * 4);
+        let bodies = e.mem.i32(island + 0x4c);
+        let mut moving = false;
+        let mut body_index = 0;
+        while body_index < bodies && !moving {
+            let bodies_array = e.mem.u32(island + 0x48);
+            let body = e.mem.u32(bodies_array + body_index as u32 * 4);
+            if !near_zero_vector(e, body + 0x1b0, tolerance)
+                || !near_zero_vector(e, body + 0x1c0, tolerance)
+            {
+                moving = true;
+            }
+            body_index += 1;
+        }
+        if !moving {
+            hk_world(e, this);
+            e.call(MARK_ISLAND_INACTIVE, &args![world, island]);
+            hk_world(e, this);
+        }
+    }
+    hk_world(e, this);
+    e.call(CLEANUP_DIRTY_ISLANDS, &args![world]);
+    hk_world(e, this);
+    let router = e.call(MEMORY_ROUTER, &[]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    free_array_buffer(
+        e,
+        allocator,
+        data,
+        capacity_word,
+        (capacity_word & 0x3fff_ffff) * 4,
+    );
+}
+
+// Translated from 00c6aac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Flushes the batched action additions (`pActionBatch`, at most 100): each
+/// action without a world (word `+8`) is added to the `hkpWorld` (`00c97370`)
+/// unless one of the entries its slot `+0x10` lists has a different world
+/// (word `+8`); each action is then released and the batch emptied. Does
+/// nothing without an `hkpWorld`.
+// Translation incomplete: 00c6aac0 - SEH exception unwinding is unsupported.
+pub fn fn_00c6aac0(e: &mut Engine, this: Ptr<BhkWorld>) {
+    let scope = enter_scope(e);
+    let count = e.get(this, BhkWorld::iActionBatchCount);
+    if count == 0 {
+        leave_scope(e, scope);
+        return;
+    }
+    if count >= 100 {
+        e.set(this, BhkWorld::iActionBatchCount, 100);
+    }
+    let world = hk_world(e, this.cast());
+    if world == 0 {
+        leave_scope(e, scope);
+        return;
+    }
+    let mut index = 0;
+    while index < e.get(this, BhkWorld::iActionBatchCount) {
+        let array = e.get(this, BhkWorld::pActionBatch).addr();
+        let action = e.mem.u32(array + index * 4);
+        if action != 0 && e.mem.u32(action + 8) == 0 {
+            e.with_stack(12, |e, entities| {
+                let base = entities.addr();
+                e.mem.set_u32(base, 0);
+                e.mem.set_u32(base + 4, 0);
+                e.mem.set_u32(base + 8, 0x8000_0000);
+                e.vcall(action, 0x10, &args![entities]);
+                let listed = e.mem.i32(base + 4);
+                let data = e.mem.u32(base);
+                let mut all_in_world = true;
+                let mut entry = 0;
+                while entry < listed && all_in_world {
+                    let item = e.mem.u32(data + entry as u32 * 4);
+                    all_in_world = e.mem.u32(item + 8) == world;
+                    entry += 1;
+                }
+                if listed <= 0 || all_in_world {
+                    let array = e.get(this, BhkWorld::pActionBatch).addr();
+                    let action = e.mem.u32(array + index * 4);
+                    e.call(WORLD_ADD_ACTION, &args![world, action]);
+                }
+                let router = e.call(MEMORY_ROUTER, &[]).u32();
+                let allocator = e.mem.u32(router + 0x10);
+                let capacity_word = e.mem.u32(base + 8);
+                e.mem.set_u32(base + 4, 0);
+                free_array_buffer(
+                    e,
+                    allocator,
+                    data,
+                    capacity_word,
+                    (capacity_word & 0x3fff_ffff) * 4,
+                );
+            });
+        }
+        let array = e.get(this, BhkWorld::pActionBatch).addr();
+        let action = e.mem.u32(array + index * 4);
+        if action != 0 {
+            e.call(HAVOK_RELEASE, &args![action]);
+        }
+        index += 1;
+    }
+    let array = e.get(this, BhkWorld::pActionBatch).addr();
+    let count = e.get(this, BhkWorld::iActionBatchCount);
+    clear_pointers(e, array, count);
+    e.set(this, BhkWorld::iActionBatchCount, 0);
+    leave_scope(e, scope);
+}
+
+// Translated from 00c6aca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld` destructor body: installs the vtable `010c40b4`, counts the
+/// world out, releases the visual debugger (`00c905b0`), kills the
+/// serializable base object (`00c876a0`), frees the five batch arrays, deletes
+/// every entity listener (slot 0 with 1) and empties the listener count,
+/// empties and destroys the action list at `+0x90` (`fn_00c67f20`,
+/// `fn_00c68ae0`), frees the `DebugColorA` and `pEntityListenerA` buffers
+/// and runs the base destructor (`00c877b0`).
+// Translation incomplete: 00c6aca0 - SEH exception unwinding is unsupported.
+pub fn fn_00c6aca0(e: &mut Engine, this: Ptr<BhkWorld>) {
+    let base = this.addr();
+    e.mem.set_u32(base, WORLD_DESTRUCTOR_VTABLE);
+    let scope = enter_scope(e);
+    let worlds = e.global::<u32>(GLOBAL_WORLD_COUNT);
+    e.set_global(GLOBAL_WORLD_COUNT, worlds.wrapping_sub(1));
+    let debugger = e.get(this, BhkWorld::pDebugger);
+    if !debugger.is_null() {
+        hk_world(e, this.cast());
+        e.call(HAVOK_RELEASE, &args![debugger]);
+        e.set(this, BhkWorld::pDebugger, Ptr::NULL);
+    }
+    e.mem.set_u32(scope.0 + SCOPE_WORD, 0x10);
+    hk_world(e, this.cast());
+    e.call(SERIALIZABLE_KILL, &args![this]);
+    for field in [0x2cu32, 0x34, 0x3c, 0x44, 0x4c] {
+        let block = e.mem.u32(base + field);
+        e.call(HEAP_FREE, &args![HEAP_SINGLETON, block]);
+    }
+    let mut index = 0;
+    while (index as i32) < e.get(this, BhkWorld::entityListenerCount) {
+        let listeners = e.get(this, BhkWorld::entityListeners).addr();
+        let listener = e.mem.u32(listeners + index * 4);
+        if listener != 0 {
+            e.vcall(listener, 0, &args![1u32]);
+        }
+        index += 1;
+    }
+    e.set(this, BhkWorld::entityListenerCount, 0);
+    fn_00c67f20(e, Ptr::new(base + 0x90));
+    leave_scope(e, scope);
+    fn_00c68ae0(e, Ptr::new(base + 0x90));
+    let router = e.call(MEMORY_ROUTER, &[]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    e.set(this, BhkWorld::debugColorCount, 0);
+    let capacity_word = e.mem.u32(base + 0x84);
+    let data = e.get(this, BhkWorld::debugColorData).addr();
+    free_array_buffer(
+        e,
+        allocator,
+        data,
+        capacity_word,
+        (capacity_word & 0x3fff_ffff) * 8,
+    );
+    e.set(this, BhkWorld::debugColorData, Ptr::NULL);
+    e.mem.set_u32(base + 0x84, 0x8000_0000);
+    let router = e.call(MEMORY_ROUTER, &[]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    e.mem.set_u32(base + 0x74, 0);
+    let capacity_word = e.mem.u32(base + 0x78);
+    let data = e.get(this, BhkWorld::entityListeners).addr();
+    free_array_buffer(
+        e,
+        allocator,
+        data,
+        capacity_word,
+        (capacity_word & 0x3fff_ffff) * 4,
+    );
+    e.set(this, BhkWorld::entityListeners, Ptr::NULL);
+    e.mem.set_u32(base + 0x78, 0x8000_0000);
+    e.call(SERIALIZABLE_DESTRUCTOR, &args![this]);
+}
+
+// Translated from 00c6ae70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::Update` (Xbox PDB): resets the step accumulators and raises the
+/// updating byte (`012677a0`). A pending entity batch is added (the tail of at
+/// most `011afe80` entries, once until `012677a2` is cleared elsewhere) and the
+/// constraint and action batches are flushed. An enabled world with a
+/// positive step length (`011afe68`) then runs the solver: acquires the
+/// multithreaded resources when the `hkpWorld` is in mode 3, updates the
+/// actions, scales the solver info, advances the world's time and steps it
+/// until its step-done query (`00c91060`) says so (single or multithreaded),
+/// then updates the solver value and the debugger; the result is true when it
+/// stepped. Finally the remaining entity removals are flushed, a scheduled
+/// visual debugger is created (`012677cd`) and the updating byte is cleared.
+pub fn bhk_world_update(e: &mut Engine, this: Ptr<BhkWorld>) -> bool {
+    e.set_global(GLOBAL_WORLD_FLOAT, 0.0f32);
+    e.set_global(GLOBAL_UPDATING, 1u8);
+    e.set_global(GLOBAL_WORLD_INTEGER, 0u32);
+    let mut stepped = false;
+    if e.get(this, BhkWorld::iEntityBatchCount) != 0 {
+        if e.global::<u8>(GLOBAL_PARTIAL_FLUSH_DONE) == 0 {
+            flush_entity_batch_partially(e, this);
+        }
+        fn_00c67850(e, this);
+        fn_00c6aac0(e, this);
+    }
+    if e.get(this, BhkWorld::bEnabled) && 0.0 < e.global::<f32>(GLOBAL_STEP_LENGTH) {
+        let world = hk_world(e, this.cast());
+        let multithreaded = e.mem.u32(world + 0xf0) == 3;
+        if multithreaded {
+            let system = e.global::<u32>(GLOBAL_MULTITHREADED_SYSTEM);
+            let flag = e.global::<u8>(GLOBAL_ACQUIRE_FLAG) as u32;
+            e.call(ACQUIRE_MT_RESOURCES, &args![system, flag]);
+        }
+        let scale = e.global::<f32>(GLOBAL_STEP_SCALE) as f64;
+        let factor = e.global::<f32>(GLOBAL_STEP_FACTOR) as f64;
+        e.set_global(GLOBAL_STEP_DELTA, (scale * factor) as f32);
+        let step_time = e.global::<f32>(GLOBAL_STEP_TIME);
+        bhk_world_update_actions(e, this, step_time);
+        bhk_world_scale_solver_info(e, this.cast());
+        hk_world(e, this.cast());
+        if e.mem.u32(world + 0x94) == 0 && e.mem.u8(world + 0x9c) == 0 {
+            if e.mem.u32(world + 0x8c) != 0 {
+                e.call(WORLD_BEFORE_STEP_A, &args![world]);
+            }
+            if e.mem.u32(world + 0xa4) == 1 && e.mem.u32(world + 0x90) != 0 {
+                e.call(WORLD_BEFORE_STEP_B, &args![world]);
+            }
+        }
+        hk_world(e, this.cast());
+        e.call(WORLD_GET_CURRENT_TIME, &args![world]);
+        let step_time = e.global::<f32>(GLOBAL_STEP_TIME);
+        e.call(WORLD_SET_CURRENT_TIME, &args![world, step_time]);
+        e.call(WORLD_PREPARE_STEP, &args![world]);
+        while !e.call(WORLD_STEP_DONE, &args![world]).bool() {
+            e.call(WORLD_GET_CURRENT_PSI_TIME, &args![world]);
+            let delta = e.global::<f32>(GLOBAL_STEP_DELTA);
+            if multithreaded {
+                let system = e.global::<u32>(GLOBAL_MULTITHREADED_SYSTEM);
+                let first = e.mem.u32(system + 0x14);
+                let second = e.mem.u32(system + 0x18);
+                e.call(
+                    WORLD_STEP_MULTITHREADED,
+                    &args![world, first, second, delta],
+                );
+            } else {
+                e.call(WORLD_STEP_DELTA_TIME, &args![world, delta]);
+            }
+        }
+        let length = e.global::<f32>(GLOBAL_STEP_LENGTH);
+        bhk_world_set_solver_value(e, this, length);
+        bhk_world_update_debugger(e, this);
+        stepped = true;
+    }
+    if e.get(this, BhkWorld::iEntityRemoveBatchCount) != 0 {
+        bhk_world_remove_batched_entities_partial(e, this);
+    }
+    if e.global::<u8>(GLOBAL_SCHEDULED_DEBUGGER) != 0 {
+        bhk_world_set_visual_debugger(e, this, 1);
+        e.set_global(GLOBAL_SCHEDULED_DEBUGGER, 0u8);
+    }
+    e.set_global(GLOBAL_UPDATING, 0u8);
+    stepped
+}
+
+// Translated from 00c6b070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld` deleting destructor (Xbox PDB `_scalar_deleting_destructor_`):
+/// runs the destructor body (`fn_00c6aca0`) and, with bit 0 of `flags` set,
+/// frees the block through the alignment byte before `this`.
+pub fn bhk_world_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BhkWorld>,
+    flags: u8,
+) -> Ptr<BhkWorld> {
+    fn_00c6aca0(e, this);
+    if flags & 1 != 0 && !this.is_null() {
+        let padding = e.mem.u8(this.addr() - 1) as u32;
+        e.call(
+            HEAP_FREE,
+            &args![HEAP_SINGLETON, this.addr().wrapping_sub(padding)],
+        );
+    }
+    this
+}
+
+/// The owner word the add functions test: for an object whose kind byte
+/// (`+0x28`) is `kind`, the word at `+0xC` of the target
+/// `object + 0x10 + (signed byte at +0x20)`; `None` when there is no such
+/// target or owner.
+fn owner_of_kind(e: &mut Engine, object: u32, kind: u8) -> Option<u32> {
+    if e.mem.u8(object + 0x28) != kind {
+        return None;
+    }
+    let base = object.wrapping_add(0x10);
+    let target = base.wrapping_add_signed(e.mem.i8(base + 0x10) as i32);
+    if target == 0 {
+        return None;
+    }
+    let owner = e.mem.u32(target + 0xc);
+    (owner != 0).then_some(owner)
+}
+
+/// `bhkWorld::Add` with an entity added at once: asks `0043b4f0` about the
+/// owner (given a stack slot holding the object) and, when `011b0c44` is
+/// set, the record's low seven bits are not 8 and the owner's position and
+/// rotation vectors (`00560d80`, `00560e10`) are both within the tolerance
+/// `01017d00` of zero, the flag passed to `addEntity` is 0, otherwise 1.
+fn entity_add_flag(e: &mut Engine, owner: u32, object: Ptr) -> u32 {
+    if e.global::<u8>(GLOBAL_ADD_ENTITY_CHECK) == 0 {
+        return 1;
+    }
+    let kind = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), object.addr());
+        let record = e.call(ENTITY_OWNER_RECORD, &args![owner, slot]).u32();
+        e.mem.u8(record) & 0x7f
+    });
+    if kind == 8 {
+        return 1;
+    }
+    let tolerance = e.global::<f32>(GLOBAL_TOLERANCE);
+    let position = e.call(OWNER_POSITION_VECTOR, &args![owner]).u32();
+    if !near_zero_vector(e, position, tolerance) {
+        return 1;
+    }
+    let rotation = e.call(OWNER_ROTATION_VECTOR, &args![owner]).u32();
+    if near_zero_vector(e, rotation, tolerance) {
+        0
+    } else {
+        1
+    }
+}
+
+// Translated from 00c6b0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::Add` (Xbox PDB): adds an entity (kind byte `+0x28` equal to 1)
+/// or a phantom (kind 2) to the world. Needs `this` and its `hkpWorld`, and
+/// an owner (word `+0xC`, resolved as the entity or phantom owner) whose flags
+/// have neither bit 4 nor bit 5 set. Without batching (`iBatchAdd` zero) an
+/// entity is added at once (`00c914d0`, flag from `entity_add_flag`) and a
+/// phantom at once (`00c936a0`). With batching the owner is marked (flag bit
+/// 4) and the object is referenced and queued: entities in `pEntityBatch` (a
+/// full batch of 3000 flushes the entity tail and the other batches first),
+/// phantoms in `pPhantomBatch` (a full batch of 200 flushes the other batches
+/// first, and the entity tail when entities are pending and no partial flush
+/// ran yet).
+pub fn bhk_world_add(e: &mut Engine, this: Ptr<BhkWorld>, object: Ptr) {
+    if this.is_null() {
+        return;
+    }
+    let world = hk_world(e, this.cast());
+    if world == 0 {
+        return;
+    }
+    let batching = e.get(this, BhkWorld::iBatchAdd) != 0;
+    if e.mem.u8(object.addr() + 0x28) == 1 {
+        let owner = e.mem.u32(object.addr() + 0xc);
+        if owner == 0 || e.mem.u8(owner + 0x10) & 0x30 != 0 {
+            return;
+        }
+        if !batching {
+            let flag = entity_add_flag(e, owner, object);
+            e.call(WORLD_ADD_ENTITY, &args![world, object, flag]);
+        } else {
+            if e.get(this, BhkWorld::iEntityBatchCount) >= 3000 {
+                flush_entity_batch_partially(e, this);
+                flush_pending_batches(e, this);
+            }
+            let flags = e.mem.u32(owner + 0x10);
+            e.mem.set_u32(owner + 0x10, flags | 0x10);
+            e.call(HAVOK_ADD_REFERENCE, &args![object]);
+            let count = e.get(this, BhkWorld::iEntityBatchCount);
+            let array = e.get(this, BhkWorld::pEntityBatch).addr();
+            e.mem.set_u32(array + count * 4, object.addr());
+            e.set(this, BhkWorld::iEntityBatchCount, count.wrapping_add(1));
+        }
+        return;
+    }
+    let Some(owner) = owner_of_kind(e, object.addr(), 2) else {
+        return;
+    };
+    if e.mem.u8(owner + 0x14) & 0x30 != 0 {
+        return;
+    }
+    if !batching {
+        e.call(WORLD_ADD_PHANTOM, &args![world, object]);
+        return;
+    }
+    if e.get(this, BhkWorld::iPhantomBatchCount) >= 200 {
+        if e.get(this, BhkWorld::iEntityBatchCount) != 0
+            && e.global::<u8>(GLOBAL_PARTIAL_FLUSH_DONE) == 0
+        {
+            flush_entity_batch_partially(e, this);
+        }
+        flush_pending_batches(e, this);
+    }
+    let flags = e.mem.u8(owner + 0x14);
+    e.mem.set_u8(owner + 0x14, flags | 0x10);
+    e.call(HAVOK_ADD_REFERENCE, &args![object]);
+    let count = e.get(this, BhkWorld::iPhantomBatchCount);
+    let array = e.get(this, BhkWorld::pPhantomBatch).addr();
+    e.mem.set_u32(array + count * 4, object.addr());
+    e.set(this, BhkWorld::iPhantomBatchCount, count.wrapping_add(1));
+}
+
+// Translated from 00c6b320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::Add_ov2` (Xbox PDB): adds a constraint instance. Needs `this`
+/// and its `hkpWorld`. Without batching the constraint is added at once
+/// (`00c97d30`) if it has no world yet (word `+8`) and both of its entities
+/// (words `+0x14`, `+0x18`), when present, have an island (word `+0xCC`).
+/// With batching it is referenced and queued in `pConstraintInstanceBatch`;
+/// a full batch of 200 first flushes the entity batch (`fn_00c68a40`) and the
+/// other pending batches.
+pub fn bhk_world_add_ov2(e: &mut Engine, this: Ptr<BhkWorld>, constraint: Ptr) {
+    if this.is_null() {
+        return;
+    }
+    let world = hk_world(e, this.cast());
+    if world == 0 {
+        return;
+    }
+    if e.get(this, BhkWorld::iBatchAdd) == 0 {
+        if constraint.is_null() || e.mem.u32(constraint.addr() + 8) != 0 {
+            return;
+        }
+        for offset in [0x14u32, 0x18] {
+            let entity = e.mem.u32(constraint.addr() + offset);
+            if entity != 0 && e.mem.u32(entity + 0xcc) == 0 {
+                return;
+            }
+        }
+        e.call(WORLD_ADD_CONSTRAINT, &args![world, constraint]);
+    } else {
+        if e.get(this, BhkWorld::iConstraintInstanceBatchCount) >= 200 {
+            fn_00c68a40(e, this);
+            flush_pending_batches(e, this);
+        }
+        e.call(HAVOK_ADD_REFERENCE, &args![constraint]);
+        let count = e.get(this, BhkWorld::iConstraintInstanceBatchCount);
+        let array = e.get(this, BhkWorld::pConstraintInstanceBatch).addr();
+        e.mem.set_u32(array + count * 4, constraint.addr());
+        e.set(
+            this,
+            BhkWorld::iConstraintInstanceBatchCount,
+            count.wrapping_add(1),
+        );
+    }
+}
+
+// Translated from 00c6b3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorld::Add_ov3` (Xbox PDB): adds an action. Needs `this` and its
+/// `hkpWorld`. Without batching the action is added at once (`00c97370`);
+/// with batching it is referenced and queued in `pActionBatch`, after a full
+/// batch of 100 flushed the entity tail (when entities are pending and no
+/// partial flush ran yet) and the other pending batches. Then the action's
+/// object at `+0x10`, if any, is put into the action list at `+0x90`
+/// (`fn_00c68b50`) under a temporary reference.
+// Translation incomplete: 00c6b3c0 - SEH exception unwinding is unsupported.
+pub fn bhk_world_add_ov3(e: &mut Engine, this: Ptr<BhkWorld>, action: Ptr) {
+    let scope = enter_scope(e);
+    if !this.is_null() {
+        let world = hk_world(e, this.cast());
+        if world != 0 {
+            if e.get(this, BhkWorld::iBatchAdd) == 0 {
+                e.call(WORLD_ADD_ACTION, &args![world, action]);
+            } else {
+                if e.get(this, BhkWorld::iActionBatchCount) >= 100 {
+                    if e.get(this, BhkWorld::iEntityBatchCount) != 0
+                        && e.global::<u8>(GLOBAL_PARTIAL_FLUSH_DONE) == 0
+                    {
+                        flush_entity_batch_partially(e, this);
+                    }
+                    flush_pending_batches(e, this);
+                }
+                e.call(HAVOK_ADD_REFERENCE, &args![action]);
+                let count = e.get(this, BhkWorld::iActionBatchCount);
+                let array = e.get(this, BhkWorld::pActionBatch).addr();
+                e.mem.set_u32(array + count * 4, action.addr());
+                e.set(this, BhkWorld::iActionBatchCount, count.wrapping_add(1));
+            }
+            let inner = if action.is_null() {
+                0
+            } else {
+                e.mem.u32(action.addr() + 0x10)
+            };
+            if inner != 0 {
+                e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), inner);
+                    e.call(INTERLOCKED_INCREMENT, &args![inner + 4]);
+                    fn_00c68b50(e, Ptr::new(this.addr() + 0x90), slot);
+                    let count = e.call(INTERLOCKED_DECREMENT, &args![inner + 4]).i32();
+                    if count == 0 {
+                        e.vcall(inner, 4, &[]);
+                    }
+                });
+            }
+        }
+    }
+    leave_scope(e, scope);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2403,6 +3772,59 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             bhk_world_get_viewer_strings(Ptr<BhkWorld>, Ptr)
         ),
         entry!(0x00c6_9580, fn_00c69580(Ptr<BhkWorld>, Ptr) -> bool),
+        entry!(
+            0x00c6_96d0,
+            bhk_world_pick_object(Ptr<BhkWorld>, Ptr) -> bool
+        ),
+        entry!(
+            0x00c6_9960,
+            bhk_world_add_objects_and_move_controller(Ptr<BhkWorld>, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00c6_9e10,
+            bhk_world_add_objects(Ptr<BhkWorld>, Ptr, u8, u8, u32, u8) -> bool
+        ),
+        entry!(0x00c6_9ee0, bhk_world_remove_objects(Ptr, u8, u8) -> u8),
+        entry!(0x00c6_9f50, bhk_world_update_position(Ptr, u8, u8) -> bool),
+        entry!(
+            0x00c6_9fc0,
+            bhk_world_adjust_force_add_count(Ptr, u8, u8, u8) -> bool
+        ),
+        entry!(0x00c6_a040, fn_00c6a040(Ptr, u8, u8, u8) -> bool),
+        entry!(0x00c6_a0b0, fn_00c6a0b0(Ptr, u8, u8, u8) -> bool),
+        entry!(0x00c6_a120, fn_00c6a120(Ptr, f32, u8, u8) -> bool),
+        entry!(0x00c6_a190, fn_00c6a190(Ptr, f32, u8, u8) -> bool),
+        entry!(0x00c6_a200, bhk_world_set_disabled(Ptr, u8, u8, u8) -> bool),
+        entry!(0x00c6_a270, bhk_world_activate(Ptr, u8, u8, u8) -> bool),
+        entry!(0x00c6_a2e0, bhk_world_kill_havok(Ptr, u8, u8) -> bool),
+        entry!(
+            0x00c6_a350,
+            bhk_world_set_motion(Ptr, u32, u8, u8, u8) -> bool
+        ),
+        entry!(0x00c6_a3d0, fn_00c6a3d0(Ptr, u32, u8, u8) -> bool),
+        entry!(0x00c6_a440, fn_00c6a440(Ptr, u8, u8) -> bool),
+        entry!(0x00c6_a4c0, fn_00c6a4c0(Ptr, u32, u32, u8, u8) -> bool),
+        entry!(0x00c6_a540, bhk_world_update_actions(Ptr<BhkWorld>, f32)),
+        entry!(0x00c6_a620, fn_00c6a620(Ptr, u32)),
+        entry!(
+            0x00c6_a640,
+            bhk_world_set_visual_debugger(Ptr<BhkWorld>, u8)
+        ),
+        entry!(
+            0x00c6_a810,
+            bhk_world_set_debug_display(Ptr<BhkWorld>, Ptr, u8)
+        ),
+        entry!(0x00c6_a870, bhk_world_deactivate_all_islands(Ptr)),
+        entry!(0x00c6_aac0, fn_00c6aac0(Ptr<BhkWorld>)),
+        entry!(0x00c6_aca0, fn_00c6aca0(Ptr<BhkWorld>)),
+        entry!(0x00c6_ae70, bhk_world_update(Ptr<BhkWorld>) -> bool),
+        entry!(
+            0x00c6_b070,
+            bhk_world_scalar_deleting_destructor(Ptr<BhkWorld>, u8) -> Ptr<BhkWorld>
+        ),
+        entry!(0x00c6_b0a0, bhk_world_add(Ptr<BhkWorld>, Ptr)),
+        entry!(0x00c6_b320, bhk_world_add_ov2(Ptr<BhkWorld>, Ptr)),
+        entry!(0x00c6_b3c0, bhk_world_add_ov3(Ptr<BhkWorld>, Ptr)),
     ]
 }
 
@@ -4922,5 +6344,1807 @@ mod tests {
         let bare = world_with(&mut e, 0);
         assert!(!e.call(0x00c6_9580, &args![bare, action]).bool());
         assert_scope_restored(&mut e, tls);
+    }
+
+    // ----- picking, adding objects and the notification requests -----
+
+    /// Writes a 0x80-slot vtable at `address` with the given (byte offset, target) slots.
+    fn vtable_at(e: &mut Engine, address: u32, slots: &[(u32, u32)]) {
+        let mut table = vec![0u32; 0x80];
+        for &(offset, target) in slots {
+            table[(offset / 4) as usize] = target;
+        }
+        e.put_vtable(address, &table);
+    }
+
+    /// The world getter answers `world` once and no world afterwards, so the
+    /// flushers that run in between find nothing to flush.
+    fn once_world(e: &mut Engine, this: Ptr<BhkWorld>, world: u32) {
+        e.mem.set_u32(this.addr() + 0x9c, 0);
+        e.register_double(GETTER, move |e, a| {
+            let calls = e.mem.u32(a[0] + 0x9c);
+            e.mem.set_u32(a[0] + 0x9c, calls + 1);
+            ret(if calls == 0 { world } else { 0 })
+        });
+    }
+
+    /// Request callback double for `kind`: copies the 0x1C-byte request into
+    /// the returned sink (`+0x20`: the `found` object it was called with,
+    /// `+0x24`: call count) and sets the request's word `+0xC` to `reply`
+    /// when that is non-zero.
+    fn record_requests(e: &mut Engine, kind: u32, reply: u32) -> u32 {
+        let sink = e.mem.alloc(0x40);
+        let double = 0x0400_8000 + kind * 4;
+        e.mem.set_u32(REQUEST_CALLBACK_TABLE + kind * 4, double);
+        e.register_double(double, move |e, a| {
+            let bytes = e.mem.bytes(a[1], 0x1c);
+            e.mem.write(sink, &bytes);
+            e.mem.set_u32(sink + 0x20, a[0]);
+            let count = e.mem.u32(sink + 0x24);
+            e.mem.set_u32(sink + 0x24, count + 1);
+            if reply != 0 {
+                e.mem.set_u32(a[1] + 0xc, reply);
+            }
+            Ret::default()
+        });
+        sink
+    }
+
+    const FOUND: u32 = 0x0abc_0001;
+
+    /// An object `fn_00c68900` visits: its holder (word `+0x1C`) answers
+    /// `found` from slot `+0x38`, and slot `+0x0C` of the object finds no
+    /// node. `id` keeps the tables of several objects apart.
+    fn visitable_object_with(e: &mut Engine, id: u32, found: u32) -> u32 {
+        let base = 0x0400_c000 + id * 0x1000;
+        vtable_at(e, base, &[(0xc, base + 0x800)]);
+        vtable_at(e, base + 0x400, &[(0x38, base + 0x804)]);
+        e.register_double(base + 0x800, |_, _| Ret::default());
+        e.register_double(base + 0x804, move |_, _| ret(found));
+        let object = e.mem.alloc(0xb0);
+        let holder = e.mem.alloc(0x10);
+        e.mem.set_u32(object, base);
+        e.mem.set_u32(object + 0x1c, holder);
+        e.mem.set_u32(holder, base + 0x400);
+        object
+    }
+
+    fn visitable_object(e: &mut Engine) -> u32 {
+        visitable_object_with(e, 0, FOUND)
+    }
+
+    /// `00c43490` answers a record whose word `+0xC` is `bits`.
+    fn registered(e: &mut Engine, bits: u32) {
+        let record = e.mem.alloc(0x20);
+        e.mem.set_u32(record + 0xc, bits);
+        e.register_double(OBJECT_RECORD, move |_, _| ret(record));
+    }
+
+    struct Sent {
+        result: Ret,
+        words: [u32; 7],
+        count: u32,
+        found: u32,
+    }
+
+    /// Runs the request function at `address` on a registered, visitable
+    /// object with the arguments `extra` after the object.
+    fn run_request(address: u32, kind: u32, reply: u32, extra: &[u32]) -> Sent {
+        let mut e = engine();
+        let object = visitable_object(&mut e);
+        registered(&mut e, 2);
+        let sink = record_requests(&mut e, kind, reply);
+        let mut words = vec![object];
+        words.extend_from_slice(extra);
+        let result = e.call(address, &words);
+        let mut seen = [0; 7];
+        for (i, word) in seen.iter_mut().enumerate() {
+            *word = e.mem.u32(sink + i as u32 * 4);
+        }
+        Sent {
+            result,
+            words: seen,
+            count: e.mem.u32(sink + 0x24),
+            found: e.mem.u32(sink + 0x20),
+        }
+    }
+
+    /// The request function sends nothing for an unregistered object, an
+    /// object without a record and a null object, but does once the skip flag
+    /// (`extra[skip_at]`) is set.
+    fn check_rejection(address: u32, kind: u32, extra: &[u32], skip_at: usize) {
+        let mut e = engine();
+        let object = visitable_object(&mut e);
+        let sink = record_requests(&mut e, kind, 0);
+        let mut words = vec![object];
+        words.extend_from_slice(extra);
+        words[1 + skip_at] = 0;
+        registered(&mut e, 0);
+        assert_eq!(e.call(address, &words).u8(), 0);
+        e.register_double(OBJECT_RECORD, |_, _| Ret::default());
+        assert_eq!(e.call(address, &words).u8(), 0);
+        let mut null = words.clone();
+        null[0] = 0;
+        null[1 + skip_at] = 1;
+        assert_eq!(e.call(address, &null).u8(), 0);
+        assert_eq!(e.mem.u32(sink + 0x24), 0);
+        words[1 + skip_at] = 1;
+        e.call(address, &words);
+        assert_eq!(e.mem.u32(sink + 0x24), 1);
+    }
+
+    fn flag_byte(sent: &Sent) -> u32 {
+        sent.words[1] & 0xff
+    }
+
+    #[test]
+    fn update_position_sends_the_kind_2_request() {
+        let sent = run_request(0x00c6_9f50, 2, 0, &[1, 0]);
+        assert!(sent.result.bool());
+        assert_eq!((sent.words[0], flag_byte(&sent), sent.words[2]), (0, 1, 2));
+        assert_eq!((sent.count, sent.found), (1, FOUND));
+        check_rejection(0x00c6_9f50, 2, &[1, 0], 1);
+    }
+
+    #[test]
+    fn remove_objects_sends_the_kind_1_request_and_returns_the_skip_byte() {
+        let sent = run_request(0x00c6_9ee0, 1, 0, &[1, 0]);
+        // Passing the check (skip clear) returns the skip byte itself: zero.
+        assert_eq!(sent.result.u8(), 0);
+        assert_eq!((flag_byte(&sent), sent.words[2], sent.count), (1, 1, 1));
+        let forced = run_request(0x00c6_9ee0, 1, 0, &[0, 1]);
+        assert_eq!(forced.result.u8(), 1);
+        assert_eq!((flag_byte(&forced), forced.count), (0, 1));
+        check_rejection(0x00c6_9ee0, 1, &[1, 0], 1);
+    }
+
+    #[test]
+    fn adjust_force_add_count_sends_kind_13_with_a_truth_value() {
+        let sent = run_request(0x00c6_9fc0, 0xd, 0, &[5, 1, 0]);
+        assert!(sent.result.bool());
+        assert_eq!(
+            (flag_byte(&sent), sent.words[2], sent.words[3]),
+            (1, 0xd, 1)
+        );
+        let zero = run_request(0x00c6_9fc0, 0xd, 0, &[0, 0, 0]);
+        assert_eq!((flag_byte(&zero), zero.words[3]), (0, 0));
+        check_rejection(0x00c6_9fc0, 0xd, &[5, 1, 0], 2);
+    }
+
+    #[test]
+    fn unnamed_kind_3_request_carries_a_byte_value() {
+        let sent = run_request(0x00c6_a040, 3, 0, &[0x1ff, 1, 0]);
+        assert!(sent.result.bool());
+        assert_eq!(
+            (
+                flag_byte(&sent),
+                sent.words[2],
+                sent.words[3],
+                sent.words[4]
+            ),
+            (1, 3, 0xff, 0)
+        );
+        check_rejection(0x00c6_a040, 3, &[7, 1, 0], 2);
+    }
+
+    #[test]
+    fn unnamed_kind_14_request_carries_a_byte_value() {
+        let sent = run_request(0x00c6_a0b0, 0xe, 0, &[0x2a, 0, 0]);
+        assert!(sent.result.bool());
+        assert_eq!(
+            (flag_byte(&sent), sent.words[2], sent.words[3]),
+            (0, 0xe, 0x2a)
+        );
+        check_rejection(0x00c6_a0b0, 0xe, &[7, 1, 0], 2);
+    }
+
+    #[test]
+    fn unnamed_kind_15_request_carries_a_float() {
+        let sent = run_request(0x00c6_a120, 0xf, 0, &[1.5f32.to_bits(), 1, 0]);
+        assert!(sent.result.bool());
+        assert_eq!(
+            (flag_byte(&sent), sent.words[2], sent.words[3]),
+            (1, 0xf, 1.5f32.to_bits())
+        );
+        check_rejection(0x00c6_a120, 0xf, &[1.5f32.to_bits(), 1, 0], 2);
+    }
+
+    #[test]
+    fn unnamed_kind_16_request_carries_a_float() {
+        let sent = run_request(0x00c6_a190, 0x10, 0, &[(-2.25f32).to_bits(), 0, 0]);
+        assert!(sent.result.bool());
+        assert_eq!(
+            (flag_byte(&sent), sent.words[2], sent.words[3]),
+            (0, 0x10, (-2.25f32).to_bits())
+        );
+        check_rejection(0x00c6_a190, 0x10, &[1.0f32.to_bits(), 1, 0], 2);
+    }
+
+    #[test]
+    fn set_disabled_sends_kind_17_with_a_byte() {
+        let sent = run_request(0x00c6_a200, 0x11, 0, &[1, 1, 0]);
+        assert!(sent.result.bool());
+        assert_eq!(
+            (flag_byte(&sent), sent.words[2], sent.words[3]),
+            (1, 0x11, 1)
+        );
+        check_rejection(0x00c6_a200, 0x11, &[1, 1, 0], 2);
+    }
+
+    #[test]
+    fn activate_sends_kind_12_with_a_byte() {
+        let sent = run_request(0x00c6_a270, 0xc, 0, &[0x101, 1, 0]);
+        assert!(sent.result.bool());
+        assert_eq!(
+            (flag_byte(&sent), sent.words[2], sent.words[3]),
+            (1, 0xc, 1)
+        );
+        check_rejection(0x00c6_a270, 0xc, &[1, 1, 0], 2);
+    }
+
+    #[test]
+    fn kill_havok_sends_the_kind_4_request() {
+        let sent = run_request(0x00c6_a2e0, 4, 0, &[1, 0]);
+        assert!(sent.result.bool());
+        assert_eq!((flag_byte(&sent), sent.words[2]), (1, 4));
+        check_rejection(0x00c6_a2e0, 4, &[1, 0], 1);
+    }
+
+    #[test]
+    fn set_motion_sends_kind_5_with_a_word_and_a_byte() {
+        let sent = run_request(0x00c6_a350, 5, 0, &[0x1234_5678, 1, 0, 0x1ff]);
+        assert!(sent.result.bool());
+        assert_eq!(
+            (
+                flag_byte(&sent),
+                sent.words[2],
+                sent.words[3],
+                sent.words[4]
+            ),
+            (1, 5, 0x1234_5678, 0xff)
+        );
+        check_rejection(0x00c6_a350, 5, &[3, 1, 0, 2], 2);
+    }
+
+    #[test]
+    fn unnamed_kind_7_request_carries_a_word() {
+        let sent = run_request(0x00c6_a3d0, 7, 0, &[0xdead_beef, 1, 0]);
+        assert!(sent.result.bool());
+        assert_eq!(
+            (flag_byte(&sent), sent.words[2], sent.words[3]),
+            (1, 7, 0xdead_beef)
+        );
+        check_rejection(0x00c6_a3d0, 7, &[3, 1, 0], 2);
+    }
+
+    #[test]
+    fn unnamed_kind_8_request_answers_with_the_callbacks_reply() {
+        let sent = run_request(0x00c6_a440, 8, 9, &[1, 0]);
+        assert!(sent.result.bool());
+        assert_eq!((flag_byte(&sent), sent.words[2], sent.words[3]), (1, 8, 0));
+        // A callback that leaves the word clear makes the answer false.
+        let silent = run_request(0x00c6_a440, 8, 0, &[1, 0]);
+        assert!(!silent.result.bool());
+        assert_eq!(silent.count, 1);
+        check_rejection(0x00c6_a440, 8, &[1, 0], 1);
+    }
+
+    #[test]
+    fn unnamed_kind_9_request_carries_two_words() {
+        let sent = run_request(0x00c6_a4c0, 9, 0, &[0x11, 0x22, 1, 0]);
+        assert!(sent.result.bool());
+        assert_eq!(
+            (
+                flag_byte(&sent),
+                sent.words[2],
+                sent.words[3],
+                sent.words[4]
+            ),
+            (1, 9, 0x22, 0x11)
+        );
+        check_rejection(0x00c6_a4c0, 9, &[0x11, 0x22, 1, 0], 3);
+    }
+
+    #[test]
+    fn add_objects_sends_the_prelude_request_and_then_kind_0() {
+        let mut e = engine();
+        let this = world_with(&mut e, 0);
+        let object = visitable_object(&mut e);
+        registered(&mut e, 2);
+        let prelude = record_requests(&mut e, 0xa, 0);
+        let main = record_requests(&mut e, 0, 0);
+        // The prelude byte is clear: only the kind 0 request goes out.
+        let call_args = |flag_b: u32, skip: u32| args![this, object, 1u32, flag_b, 0x77u32, skip];
+        assert!(e.call(0x00c6_9e10, &call_args(1, 0)).bool());
+        assert!(e.get(this, BhkWorld::bAdded));
+        assert_eq!(e.mem.u32(prelude + 0x24), 0);
+        assert_eq!(e.mem.u32(main + 0x24), 1);
+        assert_eq!(e.mem.u32(main), this.addr());
+        assert_eq!(e.mem.u32(main + 4) & 0xff, 1);
+        assert_eq!(e.mem.u32(main + 8), 0);
+        assert_eq!(e.mem.u32(main + 0xc), 1);
+        assert_eq!(e.mem.u32(main + 0x10), 0x77);
+        assert_eq!(e.mem.u32(main + 0x14), 0);
+        assert_eq!(e.mem.u32(main + 0x18), 1);
+        assert_eq!(e.mem.u32(main + 0x20), FOUND);
+        // The second flag clears the attach word.
+        e.call(0x00c6_9e10, &call_args(0, 0));
+        assert_eq!(e.mem.u32(main + 0xc), 0);
+        // With the prelude byte set the kind 0xA request goes first.
+        e.set_global(GLOBAL_ADD_PRELUDE_FLAG, 1u8);
+        e.call(0x00c6_9e10, &call_args(1, 0));
+        assert_eq!(e.mem.u32(prelude + 0x24), 1);
+        assert_eq!(e.mem.u32(prelude + 8), 0xa);
+        assert_eq!(e.mem.u32(prelude), this.addr());
+        // The object's flags: the kind 0 visit sets bits 1 and 2.
+        assert_eq!(e.mem.u32(object + 0x30) & 6, 6);
+    }
+
+    #[test]
+    fn add_objects_rejects_null_and_unregistered_objects_unless_skipped() {
+        let mut e = engine();
+        let this = world_with(&mut e, 0);
+        let object = visitable_object(&mut e);
+        registered(&mut e, 0);
+        let main = record_requests(&mut e, 0, 0);
+        assert!(!e
+            .call(0x00c6_9e10, &args![this, 0u32, 1u32, 1u32, 0u32, 1u32])
+            .bool());
+        assert!(!e
+            .call(0x00c6_9e10, &args![this, object, 1u32, 1u32, 0u32, 0u32])
+            .bool());
+        assert!(!e.get(this, BhkWorld::bAdded));
+        assert_eq!(e.mem.u32(main + 0x24), 0);
+        assert!(e
+            .call(0x00c6_9e10, &args![this, object, 1u32, 1u32, 0u32, 1u32])
+            .bool());
+        assert!(e.get(this, BhkWorld::bAdded));
+        assert_eq!(e.mem.u32(main + 0x24), 1);
+    }
+
+    #[test]
+    fn update_actions_updates_live_actions_and_drops_dead_ones() {
+        let mut e = engine();
+        let this = world_with(&mut e, 0);
+        interlocked_doubles(&mut e);
+        quiet(&mut e, &[HEAP_FREE]);
+        e.register_double(0x0400_d0f0, |_, _| ret(0x0500_0000));
+        e.register_double(0x0400_d0f4, |_, _| Ret::default());
+        e.register_double(0x0400_d0f8, |_, _| ret(0));
+        let live = e.mem.alloc(0x20);
+        let dead = e.mem.alloc(0x20);
+        // Slot 0x94 (the world), slot 0xC4 (the update) and slot 4 (delete).
+        let delete = e.mem.alloc(8);
+        e.mem.set_u32(delete, 0);
+        vtable_at(
+            &mut e,
+            0x0400_d000,
+            &[(0x94, 0x0400_d0f0), (0xc4, 0x0400_d0f4), (4, 0x0400_d0fc)],
+        );
+        vtable_at(
+            &mut e,
+            0x0400_d400,
+            &[(0x94, 0x0400_d0f8), (0xc4, 0x0400_d0f4), (4, 0x0400_d0fc)],
+        );
+        e.register_double(0x0400_d0fc, move |e, a| {
+            let n = e.mem.u32(delete);
+            e.mem.set_u32(delete, n + 1);
+            assert_eq!(a[0], dead);
+            Ret::default()
+        });
+        e.mem.set_u32(live, 0x0400_d000);
+        e.mem.set_u32(live + 4, 1);
+        e.mem.set_u32(dead, 0x0400_d400);
+        e.mem.set_u32(dead + 4, 1);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(second, dead);
+        e.mem.set_u32(this.addr() + 0x90, live);
+        e.mem.set_u32(this.addr() + 0x94, second);
+        log(&mut e);
+        e.call(0x00c6_a540, &args![this, 0.25f32]);
+        let seen = calls(&mut e);
+        assert_eq!(calls_to(&seen, 0x0400_d0f4), [[live, 0.25f32.to_bits()]]);
+        // The dead action left the list and its last reference was dropped.
+        assert_eq!(e.mem.u32(this.addr() + 0x90), live);
+        assert_eq!(e.mem.u32(this.addr() + 0x94), 0);
+        assert_eq!(e.mem.u32(delete), 1);
+        assert_eq!(e.mem.u32(dead + 4), 0);
+        // A dead head item is removed and the walk ends on the empty head.
+        let head_dead = e.mem.alloc(0x20);
+        e.mem.set_u32(head_dead, 0x0400_d400);
+        e.mem.set_u32(head_dead + 4, 1);
+        e.mem.set_u32(this.addr() + 0x90, head_dead);
+        e.mem.set_u32(this.addr() + 0x94, 0);
+        e.register_double(0x0400_d0fc, |_, _| Ret::default());
+        e.call(0x00c6_a540, &args![this, 1.0f32]);
+        assert_eq!(e.mem.u32(this.addr() + 0x90), 0);
+        assert_eq!(e.mem.u32(head_dead + 4), 0);
+    }
+
+    #[test]
+    fn fn_00c6a620_notifies_and_stores_the_value() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x40);
+        e.register_double(REFERENCE_OWNER_NOTIFY, move |_, a| {
+            assert_eq!(a, [this, 0x1234]);
+            Ret::default()
+        });
+        log(&mut e);
+        e.call(0x00c6_a620, &args![this, 0x1234u32]);
+        assert_eq!(
+            addresses(&calls(&mut e)),
+            [0x00c6_a620, REFERENCE_OWNER_NOTIFY]
+        );
+        assert_eq!(e.mem.u32(this + 0x24), 0x1234);
+    }
+
+    #[test]
+    fn set_debug_display_stores_the_flag_and_notifies_an_object() {
+        let mut e = engine();
+        let this: Ptr<BhkWorld> = e.new_object();
+        let object = visitable_object(&mut e);
+        let sink = record_requests(&mut e, 6, 0);
+        e.call(0x00c6_a810, &args![this, 0u32, 1u32]);
+        assert!(e.get(this, BhkWorld::bDebugDisplay));
+        assert_eq!(e.mem.u32(sink + 0x24), 0);
+        e.call(0x00c6_a810, &args![this, object, 0x100u32]);
+        // The byte is stored as given (low byte zero), the request says so.
+        assert!(!e.get(this, BhkWorld::bDebugDisplay));
+        assert_eq!(e.mem.u32(sink + 0x24), 1);
+        assert_eq!(e.mem.u32(sink), 0);
+        assert_eq!(e.mem.u32(sink + 4) & 0xff, 1);
+        assert_eq!(e.mem.u32(sink + 8), 6);
+        assert_eq!(e.mem.u32(sink + 0xc), 0);
+        e.call(0x00c6_a810, &args![this, object, 1u32]);
+        assert_eq!(e.mem.u32(sink + 0xc), 1);
+        assert_eq!(e.mem.u32(sink + 0x24), 2);
+    }
+
+    /// An allocator object whose slot 4 allocates `block` bytes, slot 0xC
+    /// allocates the requested size and slot 0x10 frees (recording
+    /// `(address, size)` pairs into the returned log: count at `+0`).
+    fn allocator_with_log(e: &mut Engine) -> (u32, u32) {
+        let router = e.mem.alloc(0x20);
+        let allocator = e.mem.alloc(0x10);
+        let record = e.mem.alloc(0x40);
+        vtable_at(
+            e,
+            0x0400_e000,
+            &[(4, 0x0400_e0f0), (0xc, 0x0400_e0f4), (0x10, 0x0400_e0f8)],
+        );
+        e.mem.set_u32(allocator, 0x0400_e000);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| ret(router));
+        e.register_double(0x0400_e0f0, |e, a| ret(e.mem.alloc(a[1].max(0x100))));
+        e.register_double(0x0400_e0f4, |e, a| {
+            ret(e.mem.alloc(e.mem.u32(a[1]).max(16)))
+        });
+        e.register_double(0x0400_e0f8, move |e, a| {
+            let count = e.mem.u32(record);
+            e.mem.set_u32(record + 4 + count * 8, a[1]);
+            e.mem.set_u32(record + 8 + count * 8, a[2]);
+            e.mem.set_u32(record, count + 1);
+            Ret::default()
+        });
+        (allocator, record)
+    }
+
+    #[test]
+    fn set_visual_debugger_creates_and_releases_the_debugger() {
+        let mut e = engine();
+        let world = 0x0500_0000;
+        let this = world_with(&mut e, world);
+        let scope = scope_marker(&mut e);
+        let (_, record) = allocator_with_log(&mut e);
+        quiet(
+            &mut e,
+            &[
+                PHYSICS_REGISTER_PROCESSES,
+                VISUAL_DEBUGGER_SERVE,
+                HAVOK_RELEASE,
+            ],
+        );
+        e.register_double(PHYSICS_CONTEXT_CREATE, |_, a| ret(a[0]));
+        // The context is remembered so the create double can compare it.
+        e.register_double(PHYSICS_CONTEXT_ADD_WORLD, move |e, a| {
+            assert_eq!(a[1], world);
+            assert_eq!(e.mem.u16(a[0] + 4), 0x90);
+            e.mem.set_u32(0x0126_9000, a[0]);
+            Ret::default()
+        });
+        e.register_double(ARRAY_GROW, |e, a| {
+            assert_eq!(e.mem.u32(a[1] + 4), 0);
+            assert_eq!(a[2], 4);
+            let data = e.mem.alloc(16);
+            e.mem.set_u32(a[1], data);
+            e.mem.set_u32(a[1] + 8, 4);
+            Ret::default()
+        });
+        e.register_double(VISUAL_DEBUGGER_CREATE, |e, a| {
+            // One context was queued: the entry is `context + 8`.
+            assert_eq!(e.mem.u32(a[1] + 4), 1);
+            let entry = e.mem.u32(e.mem.u32(a[1]));
+            assert_eq!(entry, e.mem.u32(0x0126_9000) + 8);
+            assert_eq!(a[2], 0);
+            ret(a[0])
+        });
+        log(&mut e);
+        e.call(0x00c6_a640, &args![this, 1u32]);
+        let seen = calls(&mut e);
+        let debugger = e.get(this, BhkWorld::pDebugger);
+        assert!(!debugger.is_null());
+        assert_eq!(e.mem.u16(debugger.addr() + 4), 0x90);
+        assert_eq!(
+            calls_to(&seen, VISUAL_DEBUGGER_SERVE),
+            [[debugger.addr(), 0x61a9]]
+        );
+        // The temporary array of contexts was freed with its 4-element capacity.
+        assert_eq!(e.mem.u32(record), 1);
+        assert_eq!(e.mem.u32(record + 8), 16);
+        assert_scope_restored(&mut e, scope);
+        // Already created: nothing happens.
+        log(&mut e);
+        e.call(0x00c6_a640, &args![this, 1u32]);
+        assert_eq!(addresses(&calls(&mut e)), [0x00c6_a640]);
+        // Disabling releases it through the world getter first.
+        log(&mut e);
+        e.call(0x00c6_a640, &args![this, 0u32]);
+        let seen = calls(&mut e);
+        assert_eq!(addresses(&seen), [0x00c6_a640, GETTER, HAVOK_RELEASE]);
+        assert_eq!(calls_to(&seen, HAVOK_RELEASE), [[debugger.addr()]]);
+        assert!(e.get(this, BhkWorld::pDebugger).is_null());
+        // Disabling without one does nothing.
+        log(&mut e);
+        e.call(0x00c6_a640, &args![this, 0u32]);
+        assert_eq!(addresses(&calls(&mut e)), [0x00c6_a640]);
+        assert_scope_restored(&mut e, scope);
+    }
+
+    #[test]
+    fn deactivate_all_islands_marks_only_the_still_islands() {
+        let mut e = engine();
+        let world = e.mem.alloc(0x100);
+        let this = world_with(&mut e, world);
+        let (_, record) = allocator_with_log(&mut e);
+        e.set_global(GLOBAL_TOLERANCE, 0.001f32);
+        for lane in 0..4 {
+            e.mem.set_u32(GLOBAL_ABSOLUTE_MASK + lane * 4, 0x7fff_ffff);
+            e.mem.set_u32(GLOBAL_ZERO_VECTOR + lane * 4, 0);
+        }
+        let still_body = e.mem.alloc(0x200);
+        let moving_body = e.mem.alloc(0x200);
+        let spinning_body = e.mem.alloc(0x200);
+        e.mem.set_f32(moving_body + 0x1b0, 1.0);
+        e.mem.set_f32(spinning_body + 0x1c0 + 8, -2.0);
+        let island = |e: &mut Engine, bodies: &[u32]| {
+            let island = e.mem.alloc(0x60);
+            let array = pointer_array(e, bodies);
+            e.mem.set_u32(island + 0x48, array);
+            e.mem.set_u32(island + 0x4c, bodies.len() as u32);
+            island
+        };
+        let quiet_island = island(&mut e, &[still_body, still_body]);
+        let moving_island = island(&mut e, &[still_body, moving_body]);
+        let spinning_island = island(&mut e, &[spinning_body]);
+        let empty_island = island(&mut e, &[]);
+        let islands = pointer_array(
+            &mut e,
+            &[quiet_island, moving_island, spinning_island, empty_island],
+        );
+        e.mem.set_u32(world + 0x28, islands);
+        e.mem.set_u32(world + 0x2c, 4);
+        quiet(&mut e, &[CLEANUP_DIRTY_ISLANDS, MARK_ISLAND_INACTIVE]);
+        log(&mut e);
+        e.call(0x00c6_a870, &args![this]);
+        let seen = calls(&mut e);
+        assert_eq!(
+            calls_to(&seen, MARK_ISLAND_INACTIVE),
+            [[world, quiet_island], [world, empty_island]]
+        );
+        assert_eq!(calls_to(&seen, CLEANUP_DIRTY_ISLANDS), [[world], [world]]);
+        // The temporary copy (4 pointers) was freed through slot 0x10.
+        assert_eq!(e.mem.u32(record), 1);
+        assert_eq!(e.mem.u32(record + 8), 16);
+        // Without an hkpWorld nothing happens.
+        let bare = world_with(&mut e, 0);
+        log(&mut e);
+        e.call(0x00c6_a870, &args![bare]);
+        assert_eq!(addresses(&calls(&mut e)), [0x00c6_a870, GETTER]);
+    }
+
+    #[test]
+    fn deactivate_all_islands_with_no_islands_allocates_nothing() {
+        let mut e = engine();
+        let world = e.mem.alloc(0x100);
+        let this = world_with(&mut e, world);
+        let (_, record) = allocator_with_log(&mut e);
+        quiet(&mut e, &[CLEANUP_DIRTY_ISLANDS, MARK_ISLAND_INACTIVE]);
+        e.call(0x00c6_a870, &args![this]);
+        assert_eq!(e.mem.u32(record), 0);
+    }
+
+    #[test]
+    fn action_batch_flush_adds_actions_whose_entities_are_in_this_world() {
+        let mut e = engine();
+        let world = 0x0500_0000;
+        let this = world_with(&mut e, world);
+        let scope = scope_marker(&mut e);
+        let (_, record) = allocator_with_log(&mut e);
+        memset_double(&mut e);
+        quiet(&mut e, &[WORLD_ADD_ACTION, HAVOK_RELEASE]);
+        // Slot 0x10 lists the entities of an action: `entities[n]` per action.
+        let entity_here = e.mem.alloc(0x20);
+        let entity_elsewhere = e.mem.alloc(0x20);
+        e.mem.set_u32(entity_here + 8, world);
+        e.mem.set_u32(entity_elsewhere + 8, 0x0600_0000);
+        let list_a = pointer_array(&mut e, &[entity_here]);
+        let list_b = pointer_array(&mut e, &[entity_here, entity_elsewhere]);
+        vtable_at(&mut e, 0x0400_f000, &[(0x10, 0x0400_f0f0)]);
+        e.register_double(0x0400_f0f0, move |e, a| {
+            let list = e.mem.u32(a[0] + 0x60);
+            let (data, size) = match list {
+                1 => (list_a, 1),
+                2 => (list_b, 2),
+                _ => (0, 0),
+            };
+            e.mem.set_u32(a[1], data);
+            e.mem.set_u32(a[1] + 4, size);
+            // Not owned: the executable's own empty buffer marks capacity this way.
+            e.mem.set_u32(a[1] + 8, 0x8000_0000);
+            Ret::default()
+        });
+        let make_action = |e: &mut Engine, list: u32, owner_world: u32| {
+            let action = e.mem.alloc(0x80);
+            e.mem.set_u32(action, 0x0400_f000);
+            e.mem.set_u32(action + 8, owner_world);
+            e.mem.set_u32(action + 0x60, list);
+            action
+        };
+        let plain = make_action(&mut e, 0, 0);
+        let here = make_action(&mut e, 1, 0);
+        let mixed = make_action(&mut e, 2, 0);
+        let owned = make_action(&mut e, 0, 0x0700_0000);
+        let batch = pointer_array(&mut e, &[plain, here, mixed, owned, 0]);
+        e.set(this, BhkWorld::pActionBatch, Ptr::new(batch));
+        e.set(this, BhkWorld::iActionBatchCount, 5);
+        log(&mut e);
+        e.call(0x00c6_aac0, &args![this]);
+        let seen = calls(&mut e);
+        assert_eq!(
+            calls_to(&seen, WORLD_ADD_ACTION),
+            [[world, plain], [world, here]]
+        );
+        assert_eq!(
+            calls_to(&seen, HAVOK_RELEASE),
+            [[plain], [here], [mixed], [owned]]
+        );
+        assert_eq!(e.get(this, BhkWorld::iActionBatchCount), 0);
+        assert_eq!(e.mem.u32(batch), 0);
+        assert_eq!(e.mem.u32(record), 0);
+        assert_scope_restored(&mut e, scope);
+    }
+
+    #[test]
+    fn action_batch_flush_clamps_and_skips_without_a_world() {
+        let mut e = engine();
+        let scope = scope_marker(&mut e);
+        let this = world_with(&mut e, 0);
+        memset_double(&mut e);
+        // Nothing queued.
+        log(&mut e);
+        e.call(0x00c6_aac0, &args![this]);
+        assert_eq!(addresses(&calls(&mut e)), [0x00c6_aac0]);
+        // No world: the count is clamped to 100 and the batch is left alone.
+        e.set(this, BhkWorld::iActionBatchCount, 150);
+        e.call(0x00c6_aac0, &args![this]);
+        assert_eq!(e.get(this, BhkWorld::iActionBatchCount), 100);
+        assert_scope_restored(&mut e, scope);
+    }
+
+    /// A world laid out for the destructor tests, with every callee doubled.
+    fn dying_world(e: &mut Engine) -> (Ptr<BhkWorld>, u32) {
+        // The block starts 16 bytes before `this` so the byte before it can be written.
+        world_with(e, 0);
+        let this: Ptr<BhkWorld> = Ptr::new(e.mem.alloc(0xb0) + 0x10);
+        e.mem.set_u32(this.addr(), 0x0400_0000);
+        // The destructor installs its own vtable: it must still answer the world getter.
+        vtable_at(e, WORLD_DESTRUCTOR_VTABLE, &[(0x94, GETTER)]);
+        let (_, record) = allocator_with_log(e);
+        quiet(
+            e,
+            &[
+                HEAP_FREE,
+                SERIALIZABLE_KILL,
+                SERIALIZABLE_DESTRUCTOR,
+                HAVOK_RELEASE,
+            ],
+        );
+        interlocked_doubles(e);
+        for (i, field) in [0x2cu32, 0x34, 0x3c, 0x44, 0x4c].into_iter().enumerate() {
+            e.mem.set_u32(this.addr() + field, 0x0800_0000 + i as u32);
+        }
+        (this, record)
+    }
+
+    #[test]
+    fn destructor_body_tears_the_world_down_in_order() {
+        let mut e = engine();
+        let (this, record) = dying_world(&mut e);
+        let scope = scope_marker(&mut e);
+        e.set_global(GLOBAL_WORLD_COUNT, 5u32);
+        let debugger = e.mem.alloc(0x10);
+        e.set(this, BhkWorld::pDebugger, Ptr::new(debugger));
+        // Two listeners (one null): slot 0 of the first is called with 1.
+        vtable_at(&mut e, 0x0400_9400, &[(0, 0x0400_94f0)]);
+        let listener = e.mem.alloc(0x10);
+        e.mem.set_u32(listener, 0x0400_9400);
+        e.register_double(0x0400_94f0, move |_, a| {
+            assert_eq!(a, [listener, 1]);
+            Ret::default()
+        });
+        let listeners = pointer_array(&mut e, &[listener, 0]);
+        e.set(this, BhkWorld::entityListeners, Ptr::new(listeners));
+        e.set(this, BhkWorld::entityListenerCount, 2);
+        e.mem.set_u32(this.addr() + 0x78, 4);
+        // Owned debug color buffer of capacity 3 (24 bytes).
+        let colors = e.mem.alloc(0x20);
+        e.set(this, BhkWorld::debugColorData, Ptr::new(colors));
+        e.set(this, BhkWorld::debugColorCount, 2);
+        e.mem.set_u32(this.addr() + 0x84, 3);
+        log(&mut e);
+        e.call(0x00c6_aca0, &args![this]);
+        let seen = calls(&mut e);
+        assert_eq!(e.mem.u32(this.addr()), WORLD_DESTRUCTOR_VTABLE);
+        assert_eq!(e.global::<u32>(GLOBAL_WORLD_COUNT), 4);
+        assert_eq!(calls_to(&seen, HAVOK_RELEASE), [[debugger]]);
+        assert!(e.get(this, BhkWorld::pDebugger).is_null());
+        assert_eq!(calls_to(&seen, SERIALIZABLE_KILL), [[this.addr()]]);
+        assert_eq!(calls_to(&seen, SERIALIZABLE_DESTRUCTOR), [[this.addr()]]);
+        let frees: Vec<u32> = calls_to(&seen, HEAP_FREE).iter().map(|a| a[1]).collect();
+        assert_eq!(
+            frees,
+            [
+                0x0800_0000,
+                0x0800_0001,
+                0x0800_0002,
+                0x0800_0003,
+                0x0800_0004
+            ]
+        );
+        assert_eq!(e.get(this, BhkWorld::entityListenerCount), 0);
+        assert!(e.get(this, BhkWorld::entityListeners).is_null());
+        assert_eq!(e.mem.u32(this.addr() + 0x78), 0x8000_0000);
+        assert!(e.get(this, BhkWorld::debugColorData).is_null());
+        assert_eq!(e.get(this, BhkWorld::debugColorCount), 0);
+        assert_eq!(e.mem.u32(this.addr() + 0x84), 0x8000_0000);
+        // Both owned buffers went back to the allocator: colors 3 * 8, listeners 4 * 4.
+        assert_eq!(e.mem.u32(record), 2);
+        assert_eq!((e.mem.u32(record + 4), e.mem.u32(record + 8)), (colors, 24));
+        assert_eq!(
+            (e.mem.u32(record + 12), e.mem.u32(record + 16)),
+            (listeners, 16)
+        );
+        assert_scope_restored(&mut e, scope);
+    }
+
+    #[test]
+    fn destructor_body_does_not_free_borrowed_buffers() {
+        let mut e = engine();
+        let (this, record) = dying_world(&mut e);
+        e.mem.set_u32(this.addr() + 0x78, 0x8000_0000);
+        e.mem.set_u32(this.addr() + 0x84, 0x8000_0000);
+        log(&mut e);
+        e.call(0x00c6_aca0, &args![this]);
+        let seen = calls(&mut e);
+        assert!(calls_to(&seen, HAVOK_RELEASE).is_empty());
+        assert_eq!(e.mem.u32(record), 0);
+    }
+
+    #[test]
+    fn deleting_destructor_frees_only_when_asked() {
+        let mut e = engine();
+        let (this, _) = dying_world(&mut e);
+        // The block starts 5 bytes before `this`: the byte before it says so.
+        e.mem.set_u8(this.addr() - 1, 5);
+        log(&mut e);
+        assert_eq!(e.call(0x00c6_b070, &args![this, 0u32]).u32(), this.addr());
+        let seen = calls(&mut e);
+        assert!(!calls_to(&seen, SERIALIZABLE_DESTRUCTOR).is_empty());
+        assert_eq!(calls_to(&seen, HEAP_FREE).len(), 5);
+        log(&mut e);
+        e.call(0x00c6_b070, &args![this, 1u32]);
+        let seen = calls(&mut e);
+        let frees = calls_to(&seen, HEAP_FREE);
+        assert_eq!(frees.len(), 6);
+        assert_eq!(frees[5], [HEAP_SINGLETON, this.addr() - 5]);
+    }
+
+    /// Doubles for everything `Update` calls on the Havok side.
+    fn stepping_world(e: &mut Engine, mode: u32) -> (Ptr<BhkWorld>, u32) {
+        let world = e.mem.alloc(0x400);
+        e.mem.set_u32(world + 0xf0, mode);
+        let this = world_with(e, world);
+        e.set(this, BhkWorld::bEnabled, true);
+        e.set_global(GLOBAL_STEP_LENGTH, 0.5f32);
+        e.set_global(GLOBAL_STEP_TIME, 0.25f32);
+        e.set_global(GLOBAL_STEP_SCALE, 60.0f32);
+        e.set_global(GLOBAL_STEP_FACTOR, 0.5f32);
+        quiet(
+            e,
+            &[
+                WORLD_BEFORE_STEP_A,
+                WORLD_BEFORE_STEP_B,
+                WORLD_GET_CURRENT_TIME,
+                WORLD_SET_CURRENT_TIME,
+                WORLD_PREPARE_STEP,
+                WORLD_GET_CURRENT_PSI_TIME,
+                WORLD_STEP_DELTA_TIME,
+                WORLD_STEP_MULTITHREADED,
+                ACQUIRE_MT_RESOURCES,
+                0x00ec_62c0,
+            ],
+        );
+        // Two steps, then the step-done query says so.
+        let steps = e.mem.alloc(8);
+        e.register_double(WORLD_STEP_DONE, move |e, _| {
+            let n = e.mem.u32(steps);
+            e.mem.set_u32(steps, n + 1);
+            ret((n >= 2) as u32)
+        });
+        (this, world)
+    }
+
+    #[test]
+    fn update_steps_a_single_threaded_world() {
+        let mut e = engine();
+        let (this, world) = stepping_world(&mut e, 0);
+        e.set_global(GLOBAL_WORLD_FLOAT, 9.0f32);
+        e.set_global(GLOBAL_WORLD_INTEGER, 9u32);
+        e.mem.set_u32(world + 0x8c, 1);
+        e.mem.set_u32(world + 0xa4, 1);
+        e.mem.set_u32(world + 0x90, 1);
+        log(&mut e);
+        assert!(e.call(0x00c6_ae70, &args![this]).bool());
+        let seen = calls(&mut e);
+        let of = [
+            WORLD_BEFORE_STEP_A,
+            WORLD_BEFORE_STEP_B,
+            WORLD_GET_CURRENT_TIME,
+            WORLD_SET_CURRENT_TIME,
+            WORLD_PREPARE_STEP,
+            WORLD_STEP_DONE,
+            WORLD_GET_CURRENT_PSI_TIME,
+            WORLD_STEP_DELTA_TIME,
+            ACQUIRE_MT_RESOURCES,
+        ];
+        let order: Vec<u32> = addresses(&seen)
+            .into_iter()
+            .filter(|a| of.contains(a))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                WORLD_BEFORE_STEP_A,
+                WORLD_BEFORE_STEP_B,
+                WORLD_GET_CURRENT_TIME,
+                WORLD_SET_CURRENT_TIME,
+                WORLD_PREPARE_STEP,
+                WORLD_STEP_DONE,
+                WORLD_GET_CURRENT_PSI_TIME,
+                WORLD_STEP_DELTA_TIME,
+                WORLD_STEP_DONE,
+                WORLD_GET_CURRENT_PSI_TIME,
+                WORLD_STEP_DELTA_TIME,
+                WORLD_STEP_DONE,
+            ]
+        );
+        assert_eq!(
+            calls_to(&seen, WORLD_SET_CURRENT_TIME),
+            [[world, 0.25f32.to_bits()]]
+        );
+        // 60 * 0.5 computed in double precision and rounded to float.
+        assert_eq!(e.global::<f32>(GLOBAL_STEP_DELTA), 30.0);
+        assert_eq!(
+            calls_to(&seen, WORLD_STEP_DELTA_TIME),
+            [[world, 30.0f32.to_bits()], [world, 30.0f32.to_bits()]]
+        );
+        assert_eq!(e.global::<u8>(GLOBAL_UPDATING), 0);
+        // The accumulators were cleared first (and the solver scaling ran).
+        assert_eq!(e.global::<f32>(GLOBAL_WORLD_FLOAT), 0.0);
+        assert_eq!(e.global::<u32>(GLOBAL_WORLD_INTEGER), 0);
+    }
+
+    #[test]
+    fn update_steps_a_multithreaded_world_through_the_system() {
+        let mut e = engine();
+        let (this, world) = stepping_world(&mut e, 3);
+        let system = e.mem.alloc(0x40);
+        e.mem.set_u32(system + 0x14, 0x1111);
+        e.mem.set_u32(system + 0x18, 0x2222);
+        e.set_global(GLOBAL_MULTITHREADED_SYSTEM, system);
+        e.set_global(GLOBAL_ACQUIRE_FLAG, 1u8);
+        log(&mut e);
+        assert!(e.call(0x00c6_ae70, &args![this]).bool());
+        let seen = calls(&mut e);
+        assert_eq!(calls_to(&seen, ACQUIRE_MT_RESOURCES), [[system, 1]]);
+        let delta = 30.0f32.to_bits();
+        assert_eq!(
+            calls_to(&seen, WORLD_STEP_MULTITHREADED),
+            [
+                [world, 0x1111, 0x2222, delta],
+                [world, 0x1111, 0x2222, delta]
+            ]
+        );
+        assert!(calls_to(&seen, WORLD_STEP_DELTA_TIME).is_empty());
+        // The single-threaded hooks did not run: the world has none pending.
+        assert!(calls_to(&seen, WORLD_BEFORE_STEP_A).is_empty());
+    }
+
+    #[test]
+    fn update_skips_the_hooks_when_the_world_is_busy() {
+        let mut e = engine();
+        let (this, world) = stepping_world(&mut e, 0);
+        e.mem.set_u32(world + 0x8c, 1);
+        e.mem.set_u32(world + 0x94, 1);
+        log(&mut e);
+        assert!(e.call(0x00c6_ae70, &args![this]).bool());
+        let seen = calls(&mut e);
+        assert!(calls_to(&seen, WORLD_BEFORE_STEP_A).is_empty());
+        assert!(calls_to(&seen, WORLD_BEFORE_STEP_B).is_empty());
+    }
+
+    #[test]
+    fn update_does_not_step_a_disabled_world_or_a_zero_length_step() {
+        let mut e = engine();
+        let (this, _) = stepping_world(&mut e, 0);
+        e.set(this, BhkWorld::bEnabled, false);
+        log(&mut e);
+        assert!(!e.call(0x00c6_ae70, &args![this]).bool());
+        assert!(calls_to(&calls(&mut e), WORLD_STEP_DONE).is_empty());
+        e.set(this, BhkWorld::bEnabled, true);
+        e.set_global(GLOBAL_STEP_LENGTH, 0.0f32);
+        log(&mut e);
+        assert!(!e.call(0x00c6_ae70, &args![this]).bool());
+        assert!(calls_to(&calls(&mut e), WORLD_STEP_DONE).is_empty());
+        assert_eq!(e.global::<u8>(GLOBAL_UPDATING), 0);
+    }
+
+    #[test]
+    fn update_flushes_an_entity_tail_once_and_runs_a_scheduled_debugger() {
+        let mut e = engine();
+        let this = world_with(&mut e, 0);
+        let array = e.mem.alloc(0x100);
+        e.set(this, BhkWorld::pEntityBatch, Ptr::new(array));
+        e.set(this, BhkWorld::iEntityBatchCount, 5);
+        e.set_global(GLOBAL_ENTITY_FLUSH_LIMIT, 2u32);
+        // An existing debugger keeps the scheduled creation a no-op.
+        let debugger = e.mem.alloc(0x10);
+        e.set(this, BhkWorld::pDebugger, Ptr::new(debugger));
+        e.set_global(GLOBAL_SCHEDULED_DEBUGGER, 1u8);
+        // A pending entity removal runs the partial removal.
+        e.set(this, BhkWorld::iEntityRemoveBatchCount, 1);
+        assert!(!e.call(0x00c6_ae70, &args![this]).bool());
+        assert_eq!(e.get(this, BhkWorld::iEntityBatchCount), 3);
+        assert_eq!(e.global::<u8>(GLOBAL_PARTIAL_FLUSH_DONE), 1);
+        assert_eq!(e.global::<u8>(GLOBAL_SCHEDULED_DEBUGGER), 0);
+        // The partial flush is not repeated until the flag is cleared.
+        assert!(!e.call(0x00c6_ae70, &args![this]).bool());
+        assert_eq!(e.get(this, BhkWorld::iEntityBatchCount), 3);
+        // A batch over 3000 is clamped first.
+        e.set_global(GLOBAL_PARTIAL_FLUSH_DONE, 0u8);
+        e.set(this, BhkWorld::iEntityBatchCount, 4000);
+        e.set_global(GLOBAL_ENTITY_FLUSH_LIMIT, 100u32);
+        e.call(0x00c6_ae70, &args![this]);
+        assert_eq!(e.get(this, BhkWorld::iEntityBatchCount), 2900);
+    }
+
+    /// A world with an `hkpWorld` for the add functions, every callee doubled.
+    fn adding_world(e: &mut Engine, batching: bool) -> (Ptr<BhkWorld>, u32) {
+        let world = 0x0500_0000;
+        let this = world_with(e, world);
+        if batching {
+            e.set(this, BhkWorld::iBatchAdd, 1);
+        }
+        let entities = e.mem.alloc(0x3000 * 4);
+        let phantoms = e.mem.alloc(0x400 * 4);
+        let constraints = e.mem.alloc(0x400 * 4);
+        let actions = e.mem.alloc(0x200 * 4);
+        e.set(this, BhkWorld::pEntityBatch, Ptr::new(entities));
+        e.set(this, BhkWorld::pPhantomBatch, Ptr::new(phantoms));
+        e.set(
+            this,
+            BhkWorld::pConstraintInstanceBatch,
+            Ptr::new(constraints),
+        );
+        e.set(this, BhkWorld::pActionBatch, Ptr::new(actions));
+        quiet(
+            e,
+            &[
+                HAVOK_ADD_REFERENCE,
+                WORLD_ADD_ENTITY,
+                WORLD_ADD_PHANTOM,
+                WORLD_ADD_CONSTRAINT,
+                WORLD_ADD_ACTION,
+            ],
+        );
+        (this, world)
+    }
+
+    /// An entity (kind byte 1) whose owner flags are `flags`.
+    fn entity_with_owner(e: &mut Engine, flags: u32) -> (u32, u32) {
+        let entity = e.mem.alloc(0x40);
+        let owner = e.mem.alloc(0x40);
+        e.mem.set_u8(entity + 0x28, 1);
+        e.mem.set_u32(entity + 0xc, owner);
+        e.mem.set_u32(owner + 0x10, flags);
+        (entity, owner)
+    }
+
+    /// A phantom (kind byte 2) whose owner sits at `phantom + 0x10` itself.
+    fn phantom_with_owner(e: &mut Engine, flags: u8) -> (u32, u32) {
+        let phantom = e.mem.alloc(0x40);
+        let owner = e.mem.alloc(0x40);
+        e.mem.set_u8(phantom + 0x28, 2);
+        e.mem.set_i8(phantom + 0x20, 0);
+        e.mem.set_u32(phantom + 0x10 + 0xc, owner);
+        e.mem.set_u8(owner + 0x14, flags);
+        (phantom, owner)
+    }
+
+    #[test]
+    fn add_puts_an_entity_straight_into_the_world() {
+        let mut e = engine();
+        let (this, world) = adding_world(&mut e, false);
+        let (entity, owner) = entity_with_owner(&mut e, 0);
+        log(&mut e);
+        e.call(0x00c6_b0a0, &args![this, entity]);
+        let seen = calls(&mut e);
+        // The check byte is clear: the flag argument is 1.
+        assert_eq!(calls_to(&seen, WORLD_ADD_ENTITY), [[world, entity, 1]]);
+        // Owner flags with bit 4 or 5 stop it.
+        e.mem.set_u32(owner + 0x10, 0x20);
+        log(&mut e);
+        e.call(0x00c6_b0a0, &args![this, entity]);
+        assert!(calls_to(&calls(&mut e), WORLD_ADD_ENTITY).is_empty());
+        // So do a missing owner, an unknown kind, a null world object and no world.
+        e.mem.set_u32(entity + 0xc, 0);
+        e.call(0x00c6_b0a0, &args![this, entity]);
+        e.mem.set_u8(entity + 0x28, 3);
+        e.call(0x00c6_b0a0, &args![this, entity]);
+        e.call(0x00c6_b0a0, &args![0u32, entity]);
+        let bare = world_with(&mut e, 0);
+        e.call(0x00c6_b0a0, &args![bare, entity]);
+    }
+
+    #[test]
+    fn add_clears_the_entity_flag_only_for_still_unremarkable_owners() {
+        let mut e = engine();
+        let (this, world) = adding_world(&mut e, false);
+        let (entity, owner) = entity_with_owner(&mut e, 0);
+        e.set_global(GLOBAL_ADD_ENTITY_CHECK, 1u8);
+        e.set_global(GLOBAL_TOLERANCE, 0.001f32);
+        for lane in 0..4 {
+            e.mem.set_u32(GLOBAL_ABSOLUTE_MASK + lane * 4, 0x7fff_ffff);
+            e.mem.set_u32(GLOBAL_ZERO_VECTOR + lane * 4, 0);
+        }
+        let record = e.mem.alloc(8);
+        let position = e.mem.alloc(0x10);
+        let rotation = e.mem.alloc(0x10);
+        e.register_double(ENTITY_OWNER_RECORD, move |e, a| {
+            // The object travels in a stack slot; the record is that slot.
+            assert_eq!(a[0], owner);
+            assert_eq!(e.mem.u32(a[1]), entity);
+            ret(record)
+        });
+        e.register_double(OWNER_POSITION_VECTOR, move |_, _| ret(position));
+        e.register_double(OWNER_ROTATION_VECTOR, move |_, _| ret(rotation));
+        let flag_after = |e: &mut Engine| {
+            log(e);
+            e.call(0x00c6_b0a0, &args![this, entity]);
+            calls_to(&calls(e), WORLD_ADD_ENTITY)[0][2]
+        };
+        // Kind byte 8 (low seven bits): the flag stays 1.
+        e.mem.set_u8(record, 0x88);
+        assert_eq!(flag_after(&mut e), 1);
+        // Other kind with zero vectors: the flag is cleared.
+        e.mem.set_u8(record, 0x05);
+        assert_eq!(flag_after(&mut e), 0);
+        // A moving position or rotation keeps it.
+        e.mem.set_f32(position + 4, 1.0);
+        assert_eq!(flag_after(&mut e), 1);
+        e.mem.set_f32(position + 4, 0.0);
+        e.mem.set_f32(rotation + 8, 0.5);
+        assert_eq!(flag_after(&mut e), 1);
+        // Without the check byte the flag is always 1.
+        e.mem.set_f32(rotation + 8, 0.0);
+        e.set_global(GLOBAL_ADD_ENTITY_CHECK, 0u8);
+        assert_eq!(flag_after(&mut e), 1);
+        let _ = (world, owner);
+    }
+
+    #[test]
+    fn add_queues_entities_when_batching_and_flushes_a_full_batch() {
+        let mut e = engine();
+        let (this, _) = adding_world(&mut e, true);
+        let scope = scope_marker(&mut e);
+        let (entity, owner) = entity_with_owner(&mut e, 0x01);
+        log(&mut e);
+        e.call(0x00c6_b0a0, &args![this, entity]);
+        let seen = calls(&mut e);
+        assert_eq!(calls_to(&seen, HAVOK_ADD_REFERENCE), [[entity]]);
+        assert!(calls_to(&seen, WORLD_ADD_ENTITY).is_empty());
+        assert_eq!(e.mem.u32(owner + 0x10), 0x11);
+        assert_eq!(e.get(this, BhkWorld::iEntityBatchCount), 1);
+        let array = e.get(this, BhkWorld::pEntityBatch).addr();
+        assert_eq!(e.mem.u32(array), entity);
+        once_world(&mut e, this, 0x0500_0000);
+        // A full batch (3000) flushes its tail (the world getter has no
+        // hkpWorld for the flushers here) and then the other batches, then
+        // queues the entity.
+        e.mem.set_u32(owner + 0x10, 0x01);
+        e.set(this, BhkWorld::iEntityBatchCount, 3000);
+        e.set_global(GLOBAL_ENTITY_FLUSH_LIMIT, 1000u32);
+        e.call(0x00c6_b0a0, &args![this, entity]);
+        assert_eq!(e.get(this, BhkWorld::iEntityBatchCount), 2001);
+        assert_eq!(e.mem.u32(array + 2000 * 4), entity);
+        assert_eq!(e.global::<u8>(GLOBAL_PARTIAL_FLUSH_DONE), 1);
+        assert_scope_restored(&mut e, scope);
+    }
+
+    #[test]
+    fn add_handles_phantoms_directly_and_in_batches() {
+        let mut e = engine();
+        let (this, world) = adding_world(&mut e, false);
+        let (phantom, owner) = phantom_with_owner(&mut e, 0);
+        log(&mut e);
+        e.call(0x00c6_b0a0, &args![this, phantom]);
+        assert_eq!(
+            calls_to(&calls(&mut e), WORLD_ADD_PHANTOM),
+            [[world, phantom]]
+        );
+        // Blocked by owner flags, a missing owner or the wrong kind.
+        e.mem.set_u8(owner + 0x14, 0x10);
+        log(&mut e);
+        e.call(0x00c6_b0a0, &args![this, phantom]);
+        assert!(calls_to(&calls(&mut e), WORLD_ADD_PHANTOM).is_empty());
+        e.mem.set_u8(owner + 0x14, 0);
+        e.mem.set_u8(phantom + 0x28, 3);
+        log(&mut e);
+        e.call(0x00c6_b0a0, &args![this, phantom]);
+        assert!(calls_to(&calls(&mut e), WORLD_ADD_PHANTOM).is_empty());
+        e.mem.set_u8(phantom + 0x28, 2);
+        // Batching: the owner is marked and the phantom queued.
+        e.set(this, BhkWorld::iBatchAdd, 1);
+        log(&mut e);
+        e.call(0x00c6_b0a0, &args![this, phantom]);
+        let seen = calls(&mut e);
+        assert_eq!(calls_to(&seen, HAVOK_ADD_REFERENCE), [[phantom]]);
+        assert_eq!(e.mem.u8(owner + 0x14), 0x10);
+        assert_eq!(e.get(this, BhkWorld::iPhantomBatchCount), 1);
+        let array = e.get(this, BhkWorld::pPhantomBatch).addr();
+        assert_eq!(e.mem.u32(array), phantom);
+    }
+
+    #[test]
+    fn add_flushes_before_queueing_a_phantom_into_a_full_batch() {
+        let mut e = engine();
+        let (this, _) = adding_world(&mut e, true);
+        let (phantom, _) = phantom_with_owner(&mut e, 0);
+        once_world(&mut e, this, 0x0500_0000);
+        e.set(this, BhkWorld::iPhantomBatchCount, 200);
+        // Entities are pending and no partial flush has run: it runs first.
+        e.set(this, BhkWorld::iEntityBatchCount, 7);
+        e.set_global(GLOBAL_ENTITY_FLUSH_LIMIT, 3u32);
+        e.call(0x00c6_b0a0, &args![this, phantom]);
+        assert_eq!(e.get(this, BhkWorld::iEntityBatchCount), 4);
+        assert_eq!(e.global::<u8>(GLOBAL_PARTIAL_FLUSH_DONE), 1);
+        assert_eq!(e.get(this, BhkWorld::iPhantomBatchCount), 201);
+        // With the partial flush already done it is not repeated.
+        let owner_word = e.mem.u32(phantom + 0x1c);
+        e.mem.set_u8(owner_word + 0x14, 0);
+        e.mem.set_u32(this.addr() + 0x9c, 0);
+        e.call(0x00c6_b0a0, &args![this, phantom]);
+        assert_eq!(e.get(this, BhkWorld::iEntityBatchCount), 4);
+        // The phantom flush clamped the full batch to 200 before queueing again.
+        assert_eq!(e.get(this, BhkWorld::iPhantomBatchCount), 201);
+    }
+
+    #[test]
+    fn add_ov2_adds_a_constraint_whose_entities_have_islands() {
+        let mut e = engine();
+        let (this, world) = adding_world(&mut e, false);
+        let constraint = e.mem.alloc(0x40);
+        let first = e.mem.alloc(0xd0);
+        let second = e.mem.alloc(0xd0);
+        e.mem.set_u32(constraint + 0x14, first);
+        e.mem.set_u32(constraint + 0x18, second);
+        e.mem.set_u32(first + 0xcc, 1);
+        e.mem.set_u32(second + 0xcc, 1);
+        log(&mut e);
+        e.call(0x00c6_b320, &args![this, constraint]);
+        assert_eq!(
+            calls_to(&calls(&mut e), WORLD_ADD_CONSTRAINT),
+            [[world, constraint]]
+        );
+        // An entity without an island, an existing world, a null constraint stop it.
+        e.mem.set_u32(second + 0xcc, 0);
+        log(&mut e);
+        e.call(0x00c6_b320, &args![this, constraint]);
+        e.mem.set_u32(constraint + 0x18, 0);
+        e.call(0x00c6_b320, &args![this, constraint]);
+        assert_eq!(calls_to(&calls(&mut e), WORLD_ADD_CONSTRAINT).len(), 1);
+        e.mem.set_u32(constraint + 8, 5);
+        log(&mut e);
+        e.call(0x00c6_b320, &args![this, constraint]);
+        e.call(0x00c6_b320, &args![this, 0u32]);
+        e.call(0x00c6_b320, &args![0u32, constraint]);
+        assert!(calls_to(&calls(&mut e), WORLD_ADD_CONSTRAINT).is_empty());
+    }
+
+    #[test]
+    fn add_ov2_queues_constraints_when_batching() {
+        let mut e = engine();
+        let (this, _) = adding_world(&mut e, true);
+        let constraint = e.mem.alloc(0x40);
+        log(&mut e);
+        e.call(0x00c6_b320, &args![this, constraint]);
+        let seen = calls(&mut e);
+        assert_eq!(calls_to(&seen, HAVOK_ADD_REFERENCE), [[constraint]]);
+        assert_eq!(e.get(this, BhkWorld::iConstraintInstanceBatchCount), 1);
+        let array = e.get(this, BhkWorld::pConstraintInstanceBatch).addr();
+        assert_eq!(e.mem.u32(array), constraint);
+        // A full batch (200) first flushes the entity batch (its count is
+        // clamped and cleared by `fn_00c68a40`, which has no world to use).
+        once_world(&mut e, this, 0x0500_0000);
+        e.set(this, BhkWorld::iConstraintInstanceBatchCount, 200);
+        e.set(this, BhkWorld::iEntityBatchCount, 4000);
+        e.call(0x00c6_b320, &args![this, constraint]);
+        assert_eq!(e.get(this, BhkWorld::iConstraintInstanceBatchCount), 201);
+        assert_eq!(e.get(this, BhkWorld::iEntityBatchCount), 0);
+    }
+
+    #[test]
+    fn add_ov3_adds_an_action_and_registers_its_object() {
+        let mut e = engine();
+        let (this, world) = adding_world(&mut e, false);
+        let scope = scope_marker(&mut e);
+        interlocked_doubles(&mut e);
+        let inner = e.mem.alloc(0x20);
+        e.mem.set_u32(inner + 4, 1);
+        let action = e.mem.alloc(0x40);
+        e.mem.set_u32(action + 0x10, inner);
+        log(&mut e);
+        e.call(0x00c6_b3c0, &args![this, action]);
+        let seen = calls(&mut e);
+        assert_eq!(calls_to(&seen, WORLD_ADD_ACTION), [[world, action]]);
+        // The object went into the action list at +0x90 and the temporary
+        // reference was dropped again (the list holds the count of 2).
+        assert_eq!(e.mem.u32(this.addr() + 0x90), inner);
+        assert_eq!(e.mem.u32(inner + 4), 2);
+        assert_scope_restored(&mut e, scope);
+        // Without an hkpWorld or `this` nothing is added.
+        let bare = world_with(&mut e, 0);
+        log(&mut e);
+        e.call(0x00c6_b3c0, &args![bare, action]);
+        e.call(0x00c6_b3c0, &args![0u32, action]);
+        assert!(calls_to(&calls(&mut e), WORLD_ADD_ACTION).is_empty());
+        assert_scope_restored(&mut e, scope);
+    }
+
+    #[test]
+    fn add_ov3_queues_actions_when_batching() {
+        let mut e = engine();
+        let (this, _) = adding_world(&mut e, true);
+        let action = e.mem.alloc(0x40);
+        log(&mut e);
+        e.call(0x00c6_b3c0, &args![this, action]);
+        let seen = calls(&mut e);
+        assert_eq!(calls_to(&seen, HAVOK_ADD_REFERENCE), [[action]]);
+        assert!(calls_to(&seen, WORLD_ADD_ACTION).is_empty());
+        assert_eq!(e.get(this, BhkWorld::iActionBatchCount), 1);
+        let array = e.get(this, BhkWorld::pActionBatch).addr();
+        assert_eq!(e.mem.u32(array), action);
+        // A full batch (100) flushes the entity tail once, then queues.
+        once_world(&mut e, this, 0x0500_0000);
+        e.set(this, BhkWorld::iActionBatchCount, 100);
+        e.set(this, BhkWorld::iEntityBatchCount, 9);
+        e.set_global(GLOBAL_ENTITY_FLUSH_LIMIT, 4u32);
+        e.call(0x00c6_b3c0, &args![this, action]);
+        assert_eq!(e.get(this, BhkWorld::iEntityBatchCount), 5);
+        assert_eq!(e.global::<u8>(GLOBAL_PARTIAL_FLUSH_DONE), 1);
+        assert_eq!(e.get(this, BhkWorld::iActionBatchCount), 101);
+    }
+
+    // ----- picking -----
+
+    /// A world and pick data for `PickObject` with the thread's profiling
+    /// record stream (room for two records) and `CalcTo` doubled.
+    fn pick_fixture(e: &mut Engine, world: u32) -> (Ptr<BhkWorld>, u32, u32) {
+        let this = world_with(e, world);
+        let pick = e.mem.alloc(0xb0);
+        e.set_global(GLOBAL_PICK_COUNT_OVERRIDE, 0u8);
+        e.set_global(GLOBAL_PICK_LIMIT_SELECTOR, 0u8);
+        e.set_global(GLOBAL_PICK_LIMIT_NORMAL, 1.0f32);
+        e.set_global(GLOBAL_WORLD_FLOAT, 0.5f32);
+        let stream = e.mem.alloc(0x40);
+        e.mem.set_u32(stream + 4, stream + 0x20);
+        e.mem.set_u32(stream + 0xc, stream + 0x38);
+        e.set_global(GLOBAL_PROFILE_SLOT, 3u32);
+        e.register_double(TLS_GET_VALUE, move |_, a| {
+            assert_eq!(a, [3]);
+            ret(stream)
+        });
+        quiet(e, &[PICK_CALC_TO]);
+        (this, pick, stream)
+    }
+
+    #[test]
+    fn pick_object_skips_the_cast_when_the_limit_is_below_the_world_float() {
+        let mut e = engine();
+        let (this, pick, stream) = pick_fixture(&mut e, 0);
+        e.set_global(GLOBAL_WORLD_FLOAT, 2.0f32);
+        e.set_global(GLOBAL_PICK_LIMIT_ALTERNATE, 5.0f32);
+        for offset in [0x70, 0x80] {
+            e.mem.set_u32(pick + offset, 5);
+        }
+        assert!(!e.call(0x00c6_96d0, &args![this, pick]).bool());
+        assert_eq!(e.mem.u8(pick + 0xac), 1);
+        assert_eq!(e.mem.f32(pick + 0x40), 1.0);
+        assert_eq!(e.mem.u32(pick + 0x44), u32::MAX);
+        assert_eq!(e.mem.u32(pick + 0x50), u32::MAX);
+        assert_eq!(e.mem.u32(pick + 0x70), 0);
+        assert_eq!(e.mem.u32(pick + 0x80), 0);
+        assert_eq!(e.mem.u32(stream + 4), stream + 0x20);
+        // The selector byte picks the larger alternate limit: not skipped.
+        e.set_global(GLOBAL_PICK_LIMIT_SELECTOR, 1u8);
+        assert!(!e.call(0x00c6_96d0, &args![this, pick]).bool());
+        assert_eq!(e.mem.u32(stream + 4), stream + 0x38);
+        assert_eq!(e.mem.u32(stream + 0x20), PROFILE_BEGIN_PICK_OBJECT);
+        assert_eq!(e.mem.u32(stream + 0x2c), PROFILE_END);
+        // The override byte forces the pick as well.
+        e.set_global(GLOBAL_PICK_LIMIT_SELECTOR, 0u8);
+        e.set_global(GLOBAL_PICK_COUNT_OVERRIDE, 1u8);
+        e.mem.set_u32(stream + 4, stream + 0x20);
+        e.call(0x00c6_96d0, &args![this, pick]);
+        assert_eq!(e.mem.u32(stream + 4), stream + 0x38);
+        // A full stream takes no record.
+        e.mem.set_u32(stream + 4, stream + 0x38);
+        e.mem.set_u32(stream + 0x20, 0);
+        e.call(0x00c6_96d0, &args![this, pick]);
+        assert_eq!(e.mem.u32(stream + 4), stream + 0x38);
+        assert_eq!(e.mem.u32(stream + 0x20), 0);
+    }
+
+    #[test]
+    fn pick_object_casts_into_the_output_and_copies_the_best_hit() {
+        let mut e = engine();
+        let world = e.mem.alloc(0x100);
+        e.mem.set_u32(world + 0x58, 0x58);
+        e.mem.set_u32(world + 0x7c, 0x7c);
+        let (this, pick, _) = pick_fixture(&mut e, world);
+        let output = e.mem.alloc(0x80);
+        let best = e.mem.alloc(0x80);
+        e.mem.set_u32(pick + 0xa8, output);
+        e.mem.set_u32(output + 0x14, 2);
+        e.mem.set_u32(output + 0x10, best);
+        e.mem.set_u32(best + 0x50, 0x77);
+        quiet(&mut e, &[CAST_RAY, SORT_HITS, HIT_COPY_FROM_OUTPUT]);
+        log(&mut e);
+        assert!(e.call(0x00c6_96d0, &args![this, pick]).bool());
+        let seen = calls(&mut e);
+        let of = [PICK_CALC_TO, CAST_RAY, SORT_HITS, HIT_COPY_FROM_OUTPUT];
+        let order: Vec<u32> = addresses(&seen)
+            .into_iter()
+            .filter(|a| of.contains(a))
+            .collect();
+        assert_eq!(order, of);
+        assert_eq!(calls_to(&seen, PICK_CALC_TO), [[pick]]);
+        assert_eq!(calls_to(&seen, CAST_RAY), [[world, pick, output]]);
+        assert_eq!(calls_to(&seen, SORT_HITS), [[output]]);
+        assert_eq!(calls_to(&seen, HIT_COPY_FROM_OUTPUT), [[pick + 0x30, best]]);
+        assert_eq!(e.mem.u32(pick + 0x80), 0x77);
+        assert_eq!(e.mem.f32(pick + 0x40), 1.0);
+        assert_eq!(e.mem.u32(pick + 0x44), u32::MAX);
+        assert_eq!(e.mem.u32(pick + 0x50), u32::MAX);
+        assert_eq!(e.mem.u32(pick + 0x70), 0);
+        // No hits: false and nothing copied.
+        e.mem.set_u32(output + 0x14, 0);
+        log(&mut e);
+        assert!(!e.call(0x00c6_96d0, &args![this, pick]).bool());
+        let seen = calls(&mut e);
+        assert!(calls_to(&seen, SORT_HITS).is_empty());
+        assert!(calls_to(&seen, HIT_COPY_FROM_OUTPUT).is_empty());
+    }
+
+    #[test]
+    fn pick_object_uses_the_filtered_caster_when_a_filter_is_set() {
+        let mut e = engine();
+        let world = e.mem.alloc(0x100);
+        e.mem.set_u32(world + 0x58, 0x58);
+        e.mem.set_u32(world + 0x7c, 0x7c);
+        let (this, pick, _) = pick_fixture(&mut e, world);
+        let output = e.mem.alloc(0x80);
+        e.mem.set_u32(pick + 0xa8, output);
+        e.mem.set_u32(pick + 0xa0, 0x0f17);
+        e.register_double(CAST_RAY_WITH_FILTER, move |e, a| {
+            assert_eq!(a[1..], [0x58, pick, 0x7c, 0x0f17, output]);
+            assert_eq!(e.mem.u32(a[0]), RAY_COLLECTOR_VTABLE);
+            assert_eq!(e.mem.u32(a[0] + 0x40), 0);
+            assert_eq!(e.mem.u32(a[0] + 0x44), 0);
+            Ret::default()
+        });
+        quiet(&mut e, &[CAST_RAY]);
+        log(&mut e);
+        assert!(!e.call(0x00c6_96d0, &args![this, pick]).bool());
+        let seen = calls(&mut e);
+        assert_eq!(calls_to(&seen, CAST_RAY_WITH_FILTER).len(), 1);
+        assert!(calls_to(&seen, CAST_RAY).is_empty());
+    }
+
+    #[test]
+    fn pick_object_casts_into_the_input_and_copies_its_hit() {
+        let mut e = engine();
+        let world = e.mem.alloc(0x100);
+        let (this, pick, _) = pick_fixture(&mut e, world);
+        let input = e.mem.alloc(0x80);
+        e.mem.set_u32(pick + 0xa4, input);
+        e.register_double(CAST_RAY, move |e, a| {
+            assert_eq!(a, [world, pick, input]);
+            assert_eq!(e.mem.f32(input + 0x20), 1.0);
+            assert_eq!(e.mem.u32(input + 0x24), u32::MAX);
+            assert_eq!(e.mem.u32(input + 0x30), u32::MAX);
+            assert_eq!(e.mem.u32(input + 0x50), 0);
+            assert_eq!(e.mem.f32(input + 4), 1.0);
+            e.mem.set_u32(input + 0x60, 1);
+            Ret::default()
+        });
+        quiet(&mut e, &[HIT_COPY_FROM_INPUT]);
+        log(&mut e);
+        assert!(e.call(0x00c6_96d0, &args![this, pick]).bool());
+        assert_eq!(
+            calls_to(&calls(&mut e), HIT_COPY_FROM_INPUT),
+            [[pick + 0x30, input + 0x10]]
+        );
+        // The filtered caster casts into the input as well; no hit, no copy.
+        e.mem.set_u32(pick + 0xa0, 0x0f17);
+        e.register_double(CAST_RAY_WITH_FILTER, move |_, a| {
+            assert_eq!(a[1..], [0, pick, 0, 0x0f17, input]);
+            Ret::default()
+        });
+        log(&mut e);
+        assert!(!e.call(0x00c6_96d0, &args![this, pick]).bool());
+        assert!(calls_to(&calls(&mut e), HIT_COPY_FROM_INPUT).is_empty());
+    }
+
+    #[test]
+    fn pick_object_falls_back_to_the_second_cast_overload() {
+        let mut e = engine();
+        let world = e.mem.alloc(0x100);
+        let (this, pick, _) = pick_fixture(&mut e, world);
+        e.register_double(CAST_RAY_OV2, move |e, a| {
+            assert_eq!(a, [world, pick, pick + 0x30]);
+            e.mem.set_u32(pick + 0x80, 3);
+            Ret::default()
+        });
+        assert!(e.call(0x00c6_96d0, &args![this, pick]).bool());
+        e.register_double(CAST_RAY_OV2, |_, _| Ret::default());
+        assert!(!e.call(0x00c6_96d0, &args![this, pick]).bool());
+    }
+
+    // ----- AddObjectsAndMoveController -----
+
+    struct MoveFixture {
+        this: Ptr<BhkWorld>,
+        node: u32,
+        other: u32,
+        collision: u32,
+        body: u32,
+        sink: u32,
+        prelude: u32,
+    }
+
+    /// `node` has a collision object with a body; `other` is a registered,
+    /// visitable object. Slot 0xB4 of the collision object answers
+    /// `blocked`.
+    fn move_fixture(e: &mut Engine, blocked: bool) -> MoveFixture {
+        let this = world_with(e, 0);
+        registered(e, 2);
+        interlocked_doubles(e);
+        let collision = e.mem.alloc(0x40);
+        let body = e.mem.alloc(0x80);
+        let node = visitable_object_with(e, 1, collision);
+        let other = visitable_object_with(e, 2, FOUND);
+        e.mem.set_u32(collision + 0x10, body);
+        vtable_at(e, 0x0400_b400, &[(0xb4, 0x0400_b4f0)]);
+        e.mem.set_u32(collision, 0x0400_b400);
+        e.register_double(0x0400_b4f0, move |_, _| ret(blocked as u32));
+        for lane in 0..4 {
+            e.mem.set_f32(GLOBAL_QUATERNION_BIAS + lane * 4, -0.5);
+        }
+        let sink = record_requests(e, 0, 0);
+        let prelude = record_requests(e, 0xa, 0);
+        quiet(e, &[SET_COLLISION_OBJECT]);
+        MoveFixture {
+            this,
+            node,
+            other,
+            collision,
+            body,
+            sink,
+            prelude,
+        }
+    }
+
+    const MOVE: u32 = 0x00c6_9960;
+
+    #[test]
+    fn move_controller_needs_both_objects_and_a_registered_other() {
+        let mut e = engine();
+        let f = move_fixture(&mut e, false);
+        let scope = scope_marker(&mut e);
+        let this = f.this;
+        assert!(!e.call(MOVE, &args![this, 0u32, f.other]).bool());
+        assert!(!e.call(MOVE, &args![this, f.node, 0u32]).bool());
+        registered(&mut e, 0);
+        assert!(!e.call(MOVE, &args![this, f.node, f.other]).bool());
+        assert!(!e.get(this, BhkWorld::bAdded));
+        assert_eq!(e.mem.u32(f.sink + 0x24), 0);
+        assert_scope_restored(&mut e, scope);
+    }
+
+    #[test]
+    fn move_controller_sends_the_add_requests_for_the_same_object() {
+        let mut e = engine();
+        let f = move_fixture(&mut e, false);
+        let scope = scope_marker(&mut e);
+        e.set_global(GLOBAL_ADD_PRELUDE_FLAG, 1u8);
+        e.mem.set_u32(f.node + 0x30, 0x10);
+        // The node is its own target: it is marked added, nothing moves.
+        assert!(e.call(MOVE, &args![f.this, f.node, f.node]).bool());
+        assert!(e.get(f.this, BhkWorld::bAdded));
+        let sink = f.sink;
+        assert_eq!(e.mem.u32(sink + 0x24), 1);
+        assert_eq!(e.mem.u32(sink), f.this.addr());
+        assert_eq!(e.mem.u32(sink + 4) & 0xff, 1);
+        assert_eq!(e.mem.u32(sink + 8), 0);
+        // `found` is the collision object (the node's holder answers it).
+        assert_eq!(e.mem.u32(sink + 0xc), 1);
+        assert_eq!(e.mem.u32(sink + 0x10), 0);
+        assert_eq!(e.mem.u32(sink + 0x14), 0);
+        assert_eq!(e.mem.u32(sink + 0x18), 1);
+        assert_eq!(e.mem.u32(sink + 0x20), f.collision);
+        assert_eq!(e.mem.u32(f.prelude + 0x24), 1);
+        assert_eq!(e.mem.u32(f.prelude + 8), 0xa);
+        // The kind 0 visit set bits 1 and 2 of the flags and cleared bit 4.
+        assert_eq!(e.mem.u32(f.node + 0x30), 6);
+        assert_scope_restored(&mut e, scope);
+    }
+
+    #[test]
+    fn move_controller_reports_a_blocked_collision_object_as_not_added() {
+        let mut e = engine();
+        let f = move_fixture(&mut e, true);
+        assert!(!e.call(MOVE, &args![f.this, f.node, f.other]).bool());
+        assert!(!e.get(f.this, BhkWorld::bAdded));
+        // The requests still go out with the found flag set.
+        assert_eq!(e.mem.u32(f.sink + 0x24), 1);
+        assert_eq!(e.mem.u32(f.sink + 0xc), 1);
+        // A node without a holder sends them with the flag clear.
+        e.mem.set_u32(f.node + 0x1c, 0);
+        assert!(!e.call(MOVE, &args![f.this, f.node, f.other]).bool());
+        assert_eq!(e.mem.u32(f.sink + 0x24), 2);
+        assert_eq!(e.mem.u32(f.sink + 0xc), 0);
+    }
+
+    #[test]
+    fn move_controller_composes_the_bodys_transform_with_the_nodes() {
+        let mut e = engine();
+        let f = move_fixture(&mut e, false);
+        let (node, other, collision, body) = (f.node, f.other, f.collision, f.body);
+        write_vector(&mut e, body + 0x20, [0.0, 0.0, 0.0, 1.0]);
+        write_vector(&mut e, body + 0x30, [1.0, 2.0, 3.0, 4.0]);
+        e.mem.set_u32(node + 0x30, 0x11);
+        e.register_double(BODY_ACCEPT_CHECK, move |_, a| {
+            assert_eq!(a, [GLOBAL_BODY_CHECK_TABLE, body]);
+            ret(1)
+        });
+        e.register_double(NI_TO_HK_TRANSFORM, move |e, a| {
+            assert_eq!(a[1], node + 0x34);
+            e.mem.set_u32(a[0], 0xcafe);
+            Ret::default()
+        });
+        e.register_double(TRANSFORM_POSITION, |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0xcafe);
+            let vector = read_vector(e, a[2]);
+            // The rotation by the identity quaternion returned the position.
+            assert_eq!(vector, [1.0, 2.0, 3.0, 4.0]);
+            write_vector(e, a[0], [2.0, 4.0, 6.0, 4.0]);
+            Ret::default()
+        });
+        e.register_double(QUATERNION_FROM_TRANSFORM, |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0xcafe);
+            write_vector(e, a[0], [0.1, 0.2, 0.3, 0.4]);
+            Ret::default()
+        });
+        log(&mut e);
+        assert!(e.call(MOVE, &args![f.this, node, other]).bool());
+        let seen = calls(&mut e);
+        assert_eq!(read_vector(&mut e, body + 0x30), [2.0, 4.0, 6.0, 4.0]);
+        assert_eq!(read_vector(&mut e, body + 0x20), [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(
+            calls_to(&seen, SET_COLLISION_OBJECT),
+            [[other, collision], [node, 0]]
+        );
+        // Bit 4 cleared, bits 1 and 2 set.
+        assert_eq!(e.mem.u32(node + 0x30), 7);
+    }
+
+    #[test]
+    fn move_controller_clones_a_body_the_check_does_not_accept() {
+        let mut e = engine();
+        let f = move_fixture(&mut e, false);
+        let (node, other, collision, body) = (f.node, f.other, f.collision, f.body);
+        e.register_double(BODY_ACCEPT_CHECK, |_, _| ret(0));
+        // Slot 0x40 of the body answers the clone, a counted object whose
+        // slots 0xD4 / 0xD8 give position and rotation.
+        let clone = e.mem.alloc(0x40);
+        e.mem.set_u32(clone + 4, 1);
+        vtable_at(
+            &mut e,
+            0x0400_b800,
+            &[(4, 0x0400_b8f0), (0xd4, 0x0400_b8f4), (0xd8, 0x0400_b8f8)],
+        );
+        e.mem.set_u32(clone, 0x0400_b800);
+        vtable_at(&mut e, 0x0400_bc00, &[(0x40, 0x0400_bcf0)]);
+        e.mem.set_u32(body, 0x0400_bc00);
+        e.register_double(0x0400_bcf0, move |_, a| {
+            assert_eq!(a, [body]);
+            ret(clone)
+        });
+        e.register_double(0x0400_b8f0, move |_, a| {
+            assert_eq!(a, [clone]);
+            Ret::default()
+        });
+        e.register_double(0x0400_b8f4, |e, a| {
+            write_vector(e, a[1], [1.0, 2.0, 3.0, 4.0]);
+            Ret::default()
+        });
+        e.register_double(0x0400_b8f8, |e, a| {
+            write_vector(e, a[1], [0.0, 0.0, 0.0, 1.0]);
+            Ret::default()
+        });
+        // The pointer wrapper stores the clone; the new body is built in
+        // aligned memory.
+        e.register_double(POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register_double(POINTER_RELEASE, |e, a| {
+            assert_eq!(e.mem.u32(a[0]), 0);
+            Ret::default()
+        });
+        let memory = e.mem.alloc(0x40);
+        e.register_double(HAVOK_ALIGNED_ALLOC, move |_, a| {
+            assert_eq!(a, [0x40]);
+            ret(memory)
+        });
+        e.register_double(BODY_CREATE_T, move |_, a| {
+            assert_eq!(a, [memory, clone]);
+            ret(memory)
+        });
+        vtable_at(
+            &mut e,
+            0x0400_b000,
+            &[(0xdc, 0x0400_b0f0), (0xe0, 0x0400_b0f4)],
+        );
+        e.mem.set_u32(memory, 0x0400_b000);
+        e.register_double(0x0400_b0f0, move |_, a| {
+            assert_eq!(a, [memory, GLOBAL_ZERO_VECTOR]);
+            Ret::default()
+        });
+        e.register_double(0x0400_b0f4, move |_, a| {
+            assert_eq!(a, [memory, GLOBAL_BODY_ZERO_ARGUMENT]);
+            Ret::default()
+        });
+        quiet(
+            &mut e,
+            &[SET_WORLD_OBJECT, NI_TO_HK_TRANSFORM, TRANSFORM_POSITION],
+        );
+        e.register_double(QUATERNION_FROM_TRANSFORM, |e, a| {
+            write_vector(e, a[0], [0.0, 0.0, 0.0, 1.0]);
+            Ret::default()
+        });
+        e.register_double(TRANSFORM_POSITION, |e, a| {
+            write_vector(e, a[0], [5.0, 6.0, 7.0, 8.0]);
+            Ret::default()
+        });
+        log(&mut e);
+        assert!(e.call(MOVE, &args![f.this, node, other]).bool());
+        let seen = calls(&mut e);
+        assert_eq!(
+            calls_to(&seen, SET_WORLD_OBJECT),
+            [[collision, 0], [collision, memory]]
+        );
+        // The copy lost its last reference and was deleted through slot 4.
+        assert_eq!(e.mem.u32(clone + 4), 0);
+        assert_eq!(calls_to(&seen, 0x0400_b8f0).len(), 1);
+        // The new body took the clone's position and rotation, then the
+        // composition with the node's transform.
+        assert_eq!(read_vector(&mut e, memory + 0x30), [5.0, 6.0, 7.0, 8.0]);
+        assert_eq!(read_vector(&mut e, memory + 0x20), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(
+            calls_to(&seen, SET_COLLISION_OBJECT),
+            [[other, collision], [node, 0]]
+        );
+    }
+
+    #[test]
+    fn move_controller_gives_the_node_an_identity_transform_without_a_body() {
+        let mut e = engine();
+        let f = move_fixture(&mut e, false);
+        let (node, other, collision, body) = (f.node, f.other, f.collision, f.body);
+        e.register_double(BODY_ACCEPT_CHECK, |_, _| ret(0));
+        vtable_at(&mut e, 0x0400_bc00, &[(0x40, 0x0400_bcf0)]);
+        e.mem.set_u32(body, 0x0400_bc00);
+        // The body's clone is null: the pointer wrapper stores null.
+        e.register_double(0x0400_bcf0, |_, _| ret(0));
+        e.register_double(POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        quiet(&mut e, &[POINTER_RELEASE]);
+        for word in 0..9 {
+            e.mem
+                .set_u32(GLOBAL_IDENTITY_MATRIX + word * 4, 0x100 + word);
+        }
+        for word in 0..3 {
+            e.mem
+                .set_u32(GLOBAL_IDENTITY_TRANSLATION + word * 4, 0x200 + word);
+        }
+        e.mem.set_u32(node + 0x30, 0x11);
+        log(&mut e);
+        assert!(e.call(MOVE, &args![f.this, node, other]).bool());
+        let seen = calls(&mut e);
+        assert_eq!(
+            calls_to(&seen, SET_COLLISION_OBJECT),
+            [[other, collision], [node, 0]]
+        );
+        for word in 0..9 {
+            assert_eq!(e.mem.u32(node + 0x34 + word * 4), 0x100 + word);
+        }
+        for word in 0..3 {
+            assert_eq!(e.mem.u32(node + 0x58 + word * 4), 0x200 + word);
+        }
+        assert_eq!(e.mem.u32(node + 0x30), 7);
+        assert!(calls_to(&seen, SET_WORLD_OBJECT).is_empty());
+    }
+
+    #[test]
+    fn rotation_helper_rotates_a_vector_about_an_axis() {
+        let bias = [-0.5; 4];
+        // 0.6 / 0.8 are sin and cos of half the angle: cos = 0.28, sin = 0.96.
+        let q = [0.0, 0.0, 0.6, 0.8];
+        let rotated = rotate_by_quaternion(q, [1.0, 0.0, 0.0, 0.0], bias, false);
+        for (value, expected) in rotated.into_iter().zip([0.28, 0.96, 0.0, 0.0]) {
+            assert!((value - expected).abs() < 1e-6, "{rotated:?}");
+        }
+        // Negating the cross product rotates the other way.
+        let back = rotate_by_quaternion(q, [1.0, 0.0, 0.0, 0.0], bias, true);
+        for (value, expected) in back.into_iter().zip([0.28, -0.96, 0.0, 0.0]) {
+            assert!((value - expected).abs() < 1e-6, "{back:?}");
+        }
+    }
+
+    #[test]
+    fn profile_record_appends_a_record_while_there_is_room() {
+        let mut e = engine();
+        let stream = e.mem.alloc(0x40);
+        e.mem.set_u32(stream + 4, stream + 0x20);
+        e.mem.set_u32(stream + 0xc, stream + 0x2c);
+        e.set_global(GLOBAL_PROFILE_SLOT, 1u32);
+        e.register_double(TLS_GET_VALUE, move |_, _| ret(stream));
+        profile_record(&mut e, 0x1234);
+        assert_eq!(e.mem.u32(stream + 0x20), 0x1234);
+        assert_eq!(e.mem.u32(stream + 4), stream + 0x2c);
     }
 }
