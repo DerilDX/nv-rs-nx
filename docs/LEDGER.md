@@ -30,14 +30,14 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 11295 | 17.0% |
-| traced | 4288 | 6.5% |
+| translated | 11338 | 17.1% |
+| traced | 4267 | 6.4% |
 | platform | 3416 | 5.2% |
 | library | 21912 | 33.1% |
-| open | 25348 | 38.3% |
+| open | 25326 | 38.2% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **149** engine functions
+Translation totals count markers, not complete behavior. **186** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -108,6 +108,42 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00846b60` | `crates/engine/src/units/fallout_misc/run_00846b60.rs:16` |
 | `008643b0` | `crates/engine/src/units/fallout_misc/bgsloadformbuffer.rs:20` |
 | `008659c0` | `crates/engine/src/units/fallout_misc/bgssaveformbuffer.rs:17` |
+| `0087aa40` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:146` |
+| `0087aa90` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:161` |
+| `0087aad0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:86` |
+| `0087abb0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:168` |
+| `0087ac00` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:178` |
+| `0087ac60` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:199` |
+| `0087acb0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:213` |
+| `0087ad00` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:227` |
+| `0087ad50` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:247` |
+| `0087ada0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:261` |
+| `0087ae10` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:281` |
+| `0087ae60` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:122` |
+| `0087aec0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:134` |
+| `0087af50` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:301` |
+| `0087afa0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:322` |
+| `0087aff0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:336` |
+| `0087b040` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:357` |
+| `0087b090` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:378` |
+| `0087b0f0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:403` |
+| `0087b140` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:417` |
+| `0087b190` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:435` |
+| `0087b1e0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:448` |
+| `0087b230` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:468` |
+| `0087b270` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:477` |
+| `0087b2b0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:486` |
+| `0087b300` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:496` |
+| `0087b360` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:516` |
+| `0087b3b0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:531` |
+| `0087b400` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:546` |
+| `0087b440` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:559` |
+| `0087b4a0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:580` |
+| `0087b4f0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:597` |
+| `0087b540` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:614` |
+| `0087b580` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:623` |
+| `0087b5c0` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:632` |
+| `0087b600` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:645` |
 | `008c9330` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1407` |
 | `008c9430` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1423` |
 | `008c94e0` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:1438` |
@@ -191,10 +227,11 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00c410b0` | `crates/engine/src/units/bsmain/iomanager.rs:1319` |
 | `00c41330` | `crates/engine/src/units/bsmain/iomanager.rs:1430` |
 | `00c41ac0` | `crates/engine/src/units/bsmain/iomanager.rs:1489` |
+| `00ec408c` | `crates/engine/src/units/fallout_misc/taskqueueinterface.rs:122, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:134, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:146, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:161, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:168, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:178, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:199, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:213, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:227, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:247, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:261, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:281, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:301, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:322, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:336, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:357, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:378, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:403, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:417, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:435, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:448, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:468, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:477, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:486, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:496, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:516, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:531, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:546, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:559, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:580, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:597, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:614, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:623, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:632, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:645` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 15172 (37.4%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 15194 (37.5%) are translated or traced.
 
-Rust cites 16258 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 16284 distinct `.text` addresses; 59 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -235,7 +272,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | BSHavok | 1615 | 316 | 1134 | 59 | 134 | 0 | 0 | 1422 | 12.0% |
 | BSShader | 1549 | 608 | 350 | 0 | 142 | 1407 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 32 | 0 | 0 | 1247 | 2.5% |
-| fallout/misc | 1045 | 171 | 353 | 461 | 122 | 0 | 0 | 462 | 55.8% |
+| fallout/misc | 1045 | 171 | 353 | 504 | 101 | 0 | 0 | 440 | 57.9% |
 | BSMain | 991 | 192 | 478 | 107 | 64 | 0 | 0 | 820 | 17.3% |
 | NiXenonRenderer | 965 | 172 | 298 | 1 | 5 | 959 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 112 | 620 | 0 | 0 | - |
@@ -285,7 +322,7 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 101 | 30 | 3 | 0 | 9 |
 | 2 | 1575 | 583 | 1139 | 316 | 24 | 4 | 92 |
-| 3 | 4973 | 1303 | 3642 | 861 | 148 | 26 | 296 |
+| 3 | 4973 | 1303 | 3647 | 859 | 148 | 26 | 293 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 

@@ -7,7 +7,337 @@ machinery runs.
 
 ## Resume here
 
-### Current state, 2026-10-11 16:10 EDT
+### Final Codex handoff requested, 2026-10-11 evening
+
+The user asked to finish current work, start nothing else, and hand off to
+Claude. This supersedes all automatic restart instructions below. The Codex
+heartbeat `keep-nv-rs-translation-moving` is PAUSED. No new slot, cycle or
+compiler is authorized in this closing pass. Preserve the unfinished work;
+Claude can use the resumption order below when asked to continue.
+
+#### Immediate state and release hold
+
+- Main is verified through #146, merge `05ee5a0`. The ordinary Desktop
+  `nv-rs` checkout was not used for these changes; do not reset it.
+- Lead: `%USERPROFILE%/nv-re/work/wt-phase0`, branch `claude/engine-crate`.
+  #147 is DRAFT at published `d35327b`. Both checks pass for that old head,
+  but **do not merge it**: it discards the callback return at `0087a890`.
+  Local commit `331b99e` fixes the function and ABI entry to return `u8`,
+  with noncanonical/nonzero-upper-byte regressions. PC and independent
+  review are clean; formatting passes. Normal Cargo validation is UNRUN.
+  The correction and this final handoff are local, not pushed.
+- The last cycle01, session 27282, is DONE and must never be rerun.
+  It collected the first taskqueue batch as `c766db2` and wrote the next
+  task. Its 14,469 engine tests, doctest, strict lint and formatting pass.
+- Water's release build was the only active compiler at the stop request.
+  Its final result and commit are recorded in the closing note below.
+  No collection or fresh water task will be started by Codex.
+- Build 40 is still the user's play copy. No later build was promised or
+  published. The usage reading at the stop request was 93%; retain the
+  user's 98% weekly stop/handoff rule if this Codex session is resumed.
+
+#### Closing result
+
+Water release session 92015 finished successfully (25m45s). Slot `agent-04`
+committed `22c75494201a826e0b6d19651262df7d2b0867ac`; its worktree is clean
+and only `fallout_shared/bgsautowater.rs` changed. All 37 ordinary bodies
+are translated: 32 complete, five SEH-only partials, none skipped. Focused44,
+engine14,355 plus one doctest (one ignored), strict all-target lint,
+workspace formatting, hygiene49 and the engine release build all pass.
+The worker stopped. No cycle04, new task, collection or replacement worker
+was started. Final process inspection found no Cargo, rustc or cycle shell
+running. The lead return correction remains unvalidated by normal Cargo.
+
+Uncommitted a01/a03 drafts have private patch backups
+`work/phase0/codex-audit/handoff-20261011-a01.patch` and `-a03.patch`, with
+source hashes in `handoff-20261011-source-manifest.json`. Both backups passed
+reverse-apply checking against the preserved working files; no patch was
+applied. Do not reapply them on top of the already modified trees.
+
+#### Work preserved for Claude
+
+| Checkout / branch | Preserved work | Verified / still required |
+| --- | --- | --- |
+| `work/agents/a01`, `agent-01`, task b0213 | Uncommitted `fallout_misc/taskqueueinterface.rs`; last 31 ordinary bodies, all 71 now drafted; 49 new tests, 91 total; 49 explicit compiler-only partials including earlier ones | Private standalone 91 tests and lint pass; 23 native cases and independent PC review pass. Fresh normal-registry Cargo tests/lint/hygiene/release UNRUN. Do not reset or run task.sh. |
+| `work/agents/a03`, `agent-03`, task b0223 | Uncommitted `fallout_misc/bgssaveloadchangesmap.rs` and `bgssaveloadfile.rs`; 40 ordinary bodies, 43 tests, eight compiler-only partials | PC review and 33 native cases pass. Required Cargo checks UNRUN. Do not reset or run task.sh. |
+| `work/agents/a04`, `agent-04`, task b0046 | Clean commit `22c7549`, `fallout_shared/bgsautowater.rs`; 37 ordinary bodies, 44 tests, five exception-only partials | Focused44, engine14,355 plus doctest, strict lint, formatting, hygiene49 and engine release pass. Not collected. |
+| `.codex/worktrees/phase2-extra-data/wt-phase0`, `codex/phase2-inventory-source` | Clean local `e024a28`, source checkpoint `c1c2897`, based on actual #146 merge. Seven fos files plus FOS_SAVES/ENGINE_STATE docs | 38 package tests, strict package lint and formatting passed before rebase; private source and composition probes pass. Full workspace/release checks and final Cargo-artifact probes UNRUN. No PR. |
+
+Paths in that table are relative to `%USERPROFILE%/nv-re` except the
+`.codex` checkout, which is relative to `%USERPROFILE%`.
+
+a01's private harness explicitly installs draft functions into an existing
+release registry. It is useful evidence, not a substitute for rebuilding
+the normal registry. Its first run found unmapped global pages in test
+fixtures; explicit test maps resolved all 53 failures without changing
+production logic. The 31 new bodies have 18 complete and 13 partial entries:
+eight cookie omissions (`0087b650`, `0087b6b0`, `0087b700`, `0087b760`,
+`0087b7c0`, `0087b810`, `0087b850`, `0087b890`) and five exception omissions
+(`0087b8d0`, `0087b990`, `0087d030`, `0087d1b0`, `0087d230`). All 50 dispatcher
+targets were independently compared with the PC jump table. Evidence lives
+in `agents/scratch/a01/round20-status.txt`, its harness/native results, and
+`agents/scratch/a03/taskqueue-round20-review/review.txt`.
+
+a03's eight partials are `008455b0`, `008457b0`, `008458b0`, `00845960`,
+`00845c00`, `008461e0`, `00846520` and `00846a20`. Water's five are
+`0049c860`, `0049c930`, `0049db60`, `0049e410` and `0049ec80`. Their normal
+paths are implemented; compiler cleanup is not silently declared complete.
+
+#### What this lead completed
+
+- Took over the existing slot work without discarding partial edits,
+  collected validated batches, reviewed PC behavior and native probes,
+  maintained the ledger, and merged only after both current-head CI checks.
+  The merged rolling batches are #109, #112, #114, #116, #119, #120, #121,
+  #123, #124, #126, #127, #129, #131, #133, #134, #137, #139, #141, #142,
+  #143 and #145. They cover navigation/pathing, exterior/multibound loading,
+  AI/Havok, explosions, animation, movement, effects, HUD, I/O and audio.
+  See Git history for exact contents; these are translations, not proof of
+  playable completeness. Unrelated contributor PRs were left alone.
+- Finished Phase 1 PR 7 as #113 (`f917219`): interface/render call models and
+  post-swap ordering, plus the active off-screen actor/menu/freeze and late
+  SFX/radio/music order. Published Build 40. Core/viewer checks and scripted
+  Doc, VCG02 and VMS16 routes passed (63, 410 and 339 seconds). Evidence is
+  `%USERPROFILE%/nv-re/acceptance/build40-main-20261010`; no original-game
+  comparison was claimed. Exact still-open input/render boundaries remain
+  in FRAME_SKELETON.md.
+- Advanced Phase 2 through #115, #117, #118, #122, #125, #128, #130, #132,
+  #135, #136, #138, #140, #144 and #146: engine-owned extra-list/count/health
+  adapters, reference accessors, native inventory read/write buffers and
+  form maps, then script headers, action/BEGIN lists and saved-local values.
+  ENGINE_STATE.md in the root Phase 2 checkout contains detailed evidence.
+- #146 preserves raw integer flags, x87 signaling-NaN behavior, first-match
+  variable lookup, reference bits, live callback field reloads and compact
+  IDs. It passed 16,273 workspace tests including doctests, strict lint,
+  formatting and release/debug builds. Native comparison covered 102 cases
+  plus 18 complete save/load/save chains (36 additional native calls).
+  Final normal-registry release probes matched all nine load buffers,
+  eighteen save buffers and eighteen three-leg chains.
+- Hardened private shipping/queue handling: retain explicit partials;
+  only advance a partial-only lane after review; check exact remote heads
+  with leases; stop on a failed remote-ref query; preserve later local
+  commits when needed. task.sh retains caches after the prior automatic
+  cleanup rejection. No deletion bypass was attempted; the user cleaned
+  space manually. Do not repeat old cycles or task resets.
+- Added a recurring Codex check after coordination paused between replies;
+  it is now explicitly PAUSED for this handoff. It must not compete with
+  Claude or resume without authorization.
+
+#### Phase 2 evidence and remaining boundary
+
+Original Count/Health item reads and untouched writes matched 10,201 item
+payloads in earlier probes, with three full-record decode failures excluded
+explicitly. Eighteen multi-stack items across eight private saves retain
+separate stack order, counts and raw health bits. Script-bearing item probes
+also round-trip selected payloads and run the real BEGIN handlers; one
+official Save138 case uses installed script declarations and zero defaults.
+Historical nonzero locals with missing mod scripts were not replaced with
+guessed current scripts. Generated nonzero save/load cases are separately
+labeled and are not historical mod-save acceptance.
+
+The current `fos::inventory_source` batch captures immutable save context
+and item/stack/extra spans through the existing complete record decoders.
+Known-length opaque payloads stay byte-exact; unknown lengths and complete
+record failures keep the whole record, with no partial inventory published.
+Saved identity, resolution, signed item delta and source order remain
+separate. Three known decode failures and three unresolved holders remain
+explicit in the newer original-save probes. The new composition probe takes
+actual envelopes through translated item loading and untouched writing;
+owned snapshots survive engine disposal. Its generated form headers and
+partial allocator setup are fixture infrastructure, not runtime startup.
+
+The seven changed fos source files are `lib.rs`, `pipe.rs`, `decode.rs`,
+`decode/actor.rs`, `decode/extra.rs`, `inventory_source.rs` and
+`inventory_source/tests.rs`. Promotion from the frozen private mirror was
+hash-verified and is DONE. Never blindly reapply that mirror: one intentional
+invalid-range test was subsequently rewritten as a Range struct for Clippy.
+Private manifests/probes are under `work/phase0/codex-audit`.
+
+The live world still aggregates inventory count/health rather than owning
+these independent stacks. Whole-FOS writing remains synthetic-only; no real
+save round-trip or gameplay persistence gate has passed. Engine is not
+Send/Sync/Clone; do not force it through unsafe traits or a shared mutex.
+Keep owned plain snapshots and source context at the world boundary. No new
+play-build date or visible Phase 2 improvement is established yet.
+
+#### Resumption order for the next lead
+
+1. Inspect status and any running processes before changing anything.
+   Read AGENTS.md, CLAUDE.md, this top section, MILESTONES.md, ENGINE_STATE.md
+   in the Phase 2 checkout, and private `work/phase0/STATE.md`. Historical
+   sections below do not override this stop/handoff.
+2. Preserve local `331b99e`. If water has its clean final commit, collect it
+   exactly once after verifying all gates. Its combined lead checks can
+   also validate that minimal return fix. Only after success publish the
+   corrected #147 head, refresh the PR description and take it out of draft.
+   Both new core/viewer checks must pass; the old green head is insufficient.
+3. Validate a03's frozen draft, a01's final draft, and the root source batch
+   in a deliberate single-compiler order. Do not repeatedly starve root
+   integration with new leaf batches. Each slot commits only its owned files;
+   cycle only validated clean commits. New agents/continuous cycling require
+   the next lead's resumption instruction, not this closing session.
+   Once the three slot drafts pass all gates, their ordinary bodies are
+   exhausted and the reviewed compiler-only tails can remain explicit with
+   `ADVANCE_PARTIAL_ONLY=1` during the authorized collection. Never use that
+   switch to bypass unimplemented ordinary behavior or failed checks.
+4. For the root batch, use private `check-inventory-source.ps1`, then
+   `run-inventory-source-final.ps1`. Both are prepared/parser-checked but
+   UNRUN. The final runner uses actual Cargo release fos/engine artifacts,
+   writes separate final evidence and does not overwrite the frozen mirror.
+   Publish only after required checks and final original-item probes pass.
+5. Continue toward real world inventory integration and the Phase 2 real
+   save-round-trip gate, then viewer acceptance before another play build.
+   Original game installation, raw saves, exe/PDB bytes and decompiler
+   exports remain private; only names/addresses/provenance belong in Git.
+
+Use one heavy compiler and one cycle at a time, `CARGO_BUILD_JOBS=1` and
+`CARGO_PROFILE_DEV_DEBUG=0`. Two engine compilers exhausted this 31 GB
+machine's committed memory despite earlier estimates; do not repeat that.
+Root focused tests should select the same workspace/features as full tests
+to avoid unnecessary recompilation. Ghidra is GET-only on 127.0.0.1:8090,
+never 8089. Use engine_map.tsv/frame.tsv and the private pdbdump tool;
+TESForm Xbox offsets minus 0x10 still require PC verification. Mark Xbox PDB
+names and keep all reference material outside Git.
+
+### Release hold, 2026-10-11 20:22 EDT
+
+PR #147 is DRAFT and must not ship its published `d35327b` head, even if
+both checks pass. The next taskqueue pass exposed a discarded return in
+`0087a890`: PC preserves the virtual callback's AL and caller `0087d160`
+tests it. Root and an independent reader verified both disassemblies.
+Lead now corrects the function and registry return type to `u8`, with the
+existing regression checking noncanonical low byte `7f` and zero under
+nonzero upper bytes. Formatting passes; normal Cargo checks are pending.
+Keep this correction local until the next water collection validates the
+combined lead, then push the corrected head and require both fresh CI checks.
+
+Water's corrected 44 tests, 14,355 full engine tests plus doctest, strict
+lint, formatting and hygiene49 pass. Release session 92015 owns the sole
+heavy compiler. Fresh a01 has all 31 remaining bodies and 49 new tests
+drafted, but its required Cargo checks are unrun. A private lightweight
+harness and independent a03 PC review are in progress. a03's own save-file
+slot stays compiler-held. Usage reached 90%; heartbeat remains active.
+
+### Current state, 2026-10-11 20:05 EDT
+
+This section supersedes the historical notes below.
+
+- #146 merged `05ee5a0` at 19:31 EDT after both exact-head core/viewer
+  checks passed. Lead's later documentation was rebased before collection.
+- cycle01 session 27282 is DONE PASS; never rerun it. Taskqueue source
+  `0ee2d55` collected as `c766db2`: 14,469 combined engine tests, one
+  passing doctest (one ignored), strict Clippy and formatting pass. The
+  slot also passed 42 focused tests, hygiene49 and its workspace release
+  build. Forty ordinary bodies are implemented; four are complete and
+  thirty-six retain reviewed compiler-only cookie/exception partials.
+- Fresh worker a01_round20 immediately started the newly written b0213
+  task. It continues the remaining thirty-one ordinary bodies beginning
+  `0087b650`; do not loop over the already reviewed compiler-only partials.
+  It is source-only until an explicit compiler grant.
+- Water a04_water_complete now owns the sole heavy compiler. Rerun the
+  corrected forty-four focused tests, then remaining full checks/release;
+  commit cleanly before cycle04. Its source retains five explicit exception
+  partials. a03_round20's save-file/change-map batch remains unchanged and
+  compiler-held; it follows water. Run only one cycle at a time, and start
+  a fresh worker immediately after each successful cycle writes its task.
+- Root inventory-source branch `codex/phase2-inventory-source`, checkpoint
+  `e024a28`, is rebased onto #146's actual merge. The 38 package tests,
+  strict package lint and formatting passed before that rebase. Full
+  workspace validation is queued after slots; no PR for this source yet.
+  Private check-inventory-source.ps1 and run-inventory-source-final.ps1 are
+  prepared and parser-checked only. Run them in that order; the final probe
+  must use actual Cargo release artifacts rather than the frozen mirror.
+- The new private composition probe passes eighteen original ItemEnvelopes
+  through the current release engine, with complete reads, exact untouched
+  writes and owned snapshots surviving engine disposal. Three decode
+  failures and three unresolved holders remain explicit exclusions. Its
+  generated form/allocator setup is not production startup, gameplay import
+  or whole-save acceptance. Root ENGINE_STATE.md records this evidence.
+- The thread heartbeat keep-nv-rs-translation-moving is active every fifteen
+  minutes. Inspect live process state before resuming; never duplicate a
+  cycle or compiler. Preserve the 98% weekly stop/handoff rule and pause the
+  heartbeat there or on an explicit stop. Usage was 88% at 20:03 EDT.
+  Build 40 remains current; no new play-build date is confirmed.
+
+### Current state, 2026-10-11 17:21 EDT
+
+This section supersedes the historical notes below.
+
+- #145 is merged `fb4b846`; shipping session 30959 is DONE.
+- Root #146 is open and attached at `787d282` on
+  `codex/phase2-script-local-values`. All focused checks, 16,273 workspace
+  tests including doctests, strict lint, formatting and release/debug builds
+  pass. Session 74945 is DONE. Final release probe session 98029 is also
+  DONE PASS: nine LoadGame buffers, eighteen SaveGame buffers and eighteen
+  complete SaveGame/LoadGame/SaveGame chains match native expectations.
+  Both current-head GitHub checks are running. Merge after both pass.
+- The same root checkout now owns the next branch,
+  `codex/phase2-inventory-source`, source checkpoint `446fefd`, based on #146.
+  Seven fos files were promoted from the reviewed private mirror only after
+  all source baseline and draft hashes matched. Promotion is DONE; never
+  reapply the mirror blindly. A test's intentionally reversed range was
+  expressed as a Range struct literal to satisfy Clippy without changing
+  its rejection case. The 38 package tests, strict package lint and full
+  workspace formatting pass. Full workspace tests/lint/release remain
+  queued; no PR for this batch yet. Rebase onto the verified #146 merge
+  when safe, before final full validation.
+- The source envelope keeps exact immutable source bytes/context and
+  ordered item/stack/extra spans through the existing complete decoder.
+  A private probe against the frozen mirror matches all eighteen original
+  multi-stack targets across eight saves, with three known decode failures
+  and three null-holder records preserved explicitly. This is source
+  preservation, not runtime import or whole-save writing. a03 now prepares
+  a private composition probe from the new envelope API into the existing
+  normal engine registry; no repository or slot changes are authorized there.
+- a01 owns the sole heavy compiler lane, last reported strict Clippy
+  session 75392 after its existing forty-two focused and 14,445 engine
+  tests passed. Hygiene and release must finish before a clean commit,
+  collection and immediate fresh worker. Water and a03 remain held with
+  their documented source drafts. After a01 collection, validate water,
+  then a03. Root's next full workspace pipeline waits for capacity.
+- Do not rebase or otherwise edit lead during an active collection. If #146
+  passes while a cycle runs, merge the passing remote PR first and defer
+  lead synchronization until that cycle finishes. Run only one cycle at a
+  time. Build 40 remains current, with no confirmed next-play date.
+  Preserve the 98% weekly stop/handoff rule (81% around 17:02 EDT).
+
+### Current state, 2026-10-11 16:47 EDT
+
+This section supersedes the historical notes below.
+
+- #145 merged `fb4b846` after both current-head core and viewer checks
+  passed at head `58a404c`. Shipping session 30959 is DONE; never rerun it.
+  Lead's two later documentation commits were rebased and retained locally
+  with `HOLD_LATER_PUSH=1`. No new rolling PR is open yet.
+- Root saved-local branch `codex/phase2-script-local-values` remains on
+  source `af1de08`, based on merged #144. Session 74945 is the sole heavy
+  compiler pipeline: all 1,343 script, eight reader and ten writer focused
+  tests pass, followed by all 16,273 workspace tests including doctests.
+  Strict lint is now running; formatting, release/debug builds and final
+  normal-registry load/save/three-leg-chain probes remain pending. Only
+  `docs/ENGINE_STATE.md` is dirty in that checkout. Three copied native
+  overlap-fixture strings were corrected before the passing run; production
+  behavior was unchanged by that test correction. Do not rebase or edit
+  source during the running checks.
+- a01 taskqueue retains its earlier focused/full-engine passes; interrupted
+  Clippy, hygiene and release remain queued. Water's corrected forty-four
+  tests and a03's forty-three save-file/change-map tests remain queued.
+  All three slots stay compiler-held. After root checks, finish a01 and
+  collect/restart it, then water, then a03. Use one Cargo job and one
+  heavy compiler pipeline; only one cycle script may run at a time.
+- Private inventory projection probes preserve eighteen original multi-stack
+  item payloads and a generated three-stack item, including explicit zero
+  counts, health bits and Worn markers. This is read-only feasibility, not
+  world integration. a03 now prepares a private source-bound owner prototype
+  with fresh save mappings and complete provenance; no compilation grant.
+  Whole-save preservation, live inventory integration and play acceptance
+  remain open. Build 40 stays current with no confirmed next-play date.
+- Future root focused tests should use the same workspace selection as the
+  full test run to reuse compiled tests. The current running pipeline used
+  the old engine-only focused selection and must not be restarted solely
+  for that optimization. Preserve the user's 98% weekly stop/handoff rule.
+
+### Current state, 2026-10-11 16:19 EDT
 
 This section supersedes the historical notes below.
 
@@ -29,11 +359,15 @@ This section supersedes the historical notes below.
 - `/root/a04_water_complete` owns `fallout_shared/bgsautowater.rs`:
   thirty-seven normal bodies, five SEH-only partials, forty-four drafted
   tests and fifteen passing native comparisons. It is validating now;
-  initial pointer type-annotation errors were corrected, tests still await
-  results. `/root/a01_round19` now has the other compiler lane for its
+  focused tests reached 41/44. Three incorrect expectations were corrected
+  against PC assembly (pop element address, plane threshold and independent
+  Y-edge handling); production is unchanged and the corrected tests await
+  a rerun. `/root/a01_round19` owns the draft for its
   forty TaskQueueInterface bodies and forty-two tests. Four are complete;
   thirty-six retain reviewed compiler-only partials. Its forty-two focused
-  and 14,445 engine tests pass; strict lint and release checks continue.
+  and 14,445 engine tests pass. Clippy session 69339 was interrupted without
+  diagnostics when system committed-memory headroom fell below 400 MB;
+  rerun it, then hygiene and release, after the memory-capacity grant.
   After collection its
   fresh worker must continue ordinary bodies at `0087b650`.
 - Root PR #144 merged from `94e709c`, branch
@@ -53,7 +387,10 @@ This section supersedes the historical notes below.
   raw flag copying, signaling-NaN stores and live list-item lookup, and adds
   two saved-form reader helpers and the numeric-form writer. SaveGame
   reloads the reference ID and effect flag/pointer after helper calls.
-  Thirteen regressions are drafted but unrun; 102 native cases pass.
+  Thirteen regressions are drafted; root validation session 90996 now runs
+  the prepared checks with one Cargo job. No completed result yet.
+  The initial session 55330 was stopped immediately to change from two jobs;
+  it produced no result. The 102 native cases pass.
   Independent PC/source review passes, including the corrected test fixtures.
   It is rebased onto #144; run the prepared full check pipeline and
   final normal-registry release probes (nine LoadGame and eighteen SaveGame
@@ -64,12 +401,16 @@ This section supersedes the historical notes below.
 - Fresh a03's b0223 batch now has forty normal bodies and forty-three
   drafted tests. Thirty-three native cases and independent PC review pass.
   Eight compiler-only partials remain explicit. Cargo checks are queued.
-- Limit full Cargo pipelines to two: water and taskqueue now own them.
-  Root and fresh a03 are source-only. No deletion attempts after automatic
+- Root currently owns the only compiler lane. Two large checks exhausted
+  committed-memory headroom; stopping taskqueue Clippy recovered about
+  8 GB. Gate subsequent checks on available memory and use one Cargo job
+  to avoid simultaneous library/test compilation. All three slots are held.
+  After root checks, finish a01 validation/collection and restart it, then
+  water and a03. No deletion attempts after automatic
   review rejected cleanup and the user removed idle caches manually.
 - Build 40 remains current, without a confirmed next-play date or new
   visible feature. Continue cycling and shipping until stopped. Preserve
-  the user's 98% weekly stop/handoff rule (70% around 16:02 EDT).
+  the user's 98% weekly stop/handoff rule (73% around 16:18 EDT).
 ### Active again, 2026-10-11 after the usage reset
 
 This section supersedes the historical stopped state below. User requested

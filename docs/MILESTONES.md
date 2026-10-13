@@ -33,7 +33,44 @@ reading do not establish them.
 
 ## Active work: M1
 
-Continuous translation remains active. #143 merged after both CI checks.
+The user requested a stop and handoff to Claude on October 11. Automatic
+translation and the recurring Codex check are paused; no new tasks start.
+[HANDOFF.md](HANDOFF.md) now records the full session results, exact checkout
+states, evidence and resumption order. Water's release passed and its clean
+slot commit `22c7549` is ready but uncollected. #147 remains a draft: the published green
+head omits the locally committed callback-return correction, whose normal
+checks remain unrun. The final taskqueue/save-file and inventory-source
+drafts are preserved with their pending checks. Build 40 is unchanged.
+Next action for the next lead: inspect the handoff, preserve all local work,
+then validate the return correction and ready water batch before publishing
+a corrected #147 head with fresh core/viewer checks.
+
+#146 merged `05ee5a0` after both
+current-head checks passed. Taskqueue collection `c766db2` passes 14,469
+engine tests, its doctest, strict lint and formatting; forty ordinary bodies
+are implemented, with thirty-six compiler-only partials retained explicitly.
+A fresh worker continues its remaining thirty-one ordinary bodies. Water
+now owns the sole heavy compiler, followed by a03's save-file batch and the
+root inventory-source workspace checks. The latter passes 38 package tests
+and private eighteen-item source/composition probes, but remains outside
+gameplay. Build 40 is current, without a confirmed next-play date. Next
+action: publish this validated taskqueue batch, collect/restart each ready
+slot and finish inventory-source validation. [HANDOFF.md](HANDOFF.md)
+records exact states.
+
+#145 merged `fb4b846` after both
+current-head checks passed. Root's saved-local batch passes all focused
+checks and 16,273 workspace tests including doctests; strict lint is running,
+with release/debug builds and final load/save/three-leg-chain probes pending.
+Taskqueue, water and save-file drafts retain their documented validation
+state and wait for the single heavy compiler lane. Private inventory probes
+preserve eighteen original multi-stack item payloads plus generated count,
+health and Worn cases; source-bound ownership and world integration remain
+open. Build 40 is current, with no confirmed next-play date. Next action:
+finish and publish the saved-local batch, then collect each validated slot
+and immediately restart its worker. [HANDOFF.md](HANDOFF.md) tracks ownership.
+
+#143 merged after both CI checks.
 HUD's final six normal bodies passed validation and collection `34ee119`:
 14,410 combined engine tests, doctest, strict lint and formatting. Seventeen
 compiler-only partials remain explicit. A fresh worker immediately started
@@ -46,7 +83,10 @@ variable defaults from the installed official plugins in saved order.
 Ordinary script bodies, historical overrides and whole-save/world integration
 remain open. Root's next bounded correction has 102 native cases and
 thirteen drafted Rust regressions; compilation is queued. Taskqueue's
-14,445 engine tests pass, with lint/build checks continuing. Rolling #145
+14,445 engine tests pass; lint was interrupted for memory pressure and
+must rerun before collection. Water's three incorrect test expectations
+were corrected after 41/44 passed and await a rerun. Root now validates
+with one Cargo job while all three slots are held for memory. Rolling #145
 was rebased onto merged #144 and awaits both fresh CI checks. Build 40 remains
 current with no next-play date confirmed. Next action: validate the queued
 batches, ship #145 after both checks, and continue the saved-local path.
