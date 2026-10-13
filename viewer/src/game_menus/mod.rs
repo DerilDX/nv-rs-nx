@@ -285,12 +285,12 @@ impl Plugin for GameMenusPlugin {
                 )
                     .chain()
                     // Kept: the game's menus have the input before the
-                    // viewer's own (both in the interface set,
+                    // viewer's own (both in the interface idle's set,
                     // `crate::frame_order`).
                     .before(crate::menus::run_menus)
-                    .in_set(crate::frame_order::ViewerSet::Interface),
+                    .in_set(crate::frame_order::IdleSet),
             )
-            // Kept, inside the interface set: each after the menus it draws
+            // Kept, inside the interface idle's set: each after the menus it draws
             // or voices have run this frame.
             .add_systems(
                 Update,
@@ -300,7 +300,7 @@ impl Plugin for GameMenusPlugin {
                     hacking::play_sounds.after(run_open_menus),
                     companion_wheel::play_voices.after(run_open_menus),
                 )
-                    .in_set(crate::frame_order::ViewerSet::Interface),
+                    .in_set(crate::frame_order::IdleSet),
             );
     }
 }

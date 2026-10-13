@@ -2,7 +2,7 @@
 
 Drafted 2026-10-09 at the end of Phase 0 ([ENGINE_PORT_PLAN.md](ENGINE_PORT_PLAN.md),
 [LEDGER.md](LEDGER.md)); PR 1 (the frame map), PR 2 (`world::frame`), PR 3 (the viewer's order), PR 4 (the player stage), PR 5 (the world and time stage) done 2026-10-09 and PR 6 (the AI task stage) 2026-10-10.
-PR 7's model and scoped wiring are described below, with remaining calls
+PR 7's model and scoped wiring and PR 8's controls' buffer (2026-10-12) are described below, with remaining calls
 explicitly open. Names are from the Xbox 360 prototype (Xbox PDB,
 ADR-0002), PC addresses from `research/engine-map/engine_map.tsv` and
 `research/engine-map/frame.tsv`.
@@ -974,6 +974,158 @@ Outstanding interface follow-up: establish buffered player input before
 relocating menu idle. Next shared action after validation and merge: publish
 the play build, then start Phase 2 as directed in HANDOFF.md.
 
+## PR 8 result: the controls' buffer and the menus at the idle
+
+`crates/world/src/frame/input.rs` (`world::frame::input`, 2026-10-12)
+records where the game polls the controls and which poll each reader sees;
+the viewer's `poll.rs` makes Bevy's input that buffer, and its menus move
+from ahead of the frame to the interface idle. Source: FalloutNV.exe
+1.4.0.525, private Ghidra server on port 8090 (read-only queries), and the
+engine crate's translations of `0093e860` and `009466d0`.
+
+### What was traced
+
+- **The poll.** `Main::OnIdle` calls `Main::OnIdle_PollControls`
+  (`0086f390`) once, at `0086e88c` (step 33, ungated); it calls
+  `Controls::Poll` (`00a23010`) at `0086f39e`. No other step calls it.
+  `Controls::Poll` copies each device's current state over its previous one
+  and then reads the device anew (DirectInput `GetDeviceState`, slot +0x24,
+  after `Acquire`, +0x64; a lost device reads as nothing): the XInput pad
+  (globals `011f35a8` to `011f35b8`), each joystick (`+0x34` to `+0x84`,
+  0x50 bytes, 0xa0 apart), the keyboard (`+0x18f8` to `+0x19f8`, 256 bytes),
+  the mouse (`+0x1b24` to `+0x1b38`, 0x14 bytes: the axes' counts and
+  buttons). Its other callers are outside the frame: the window's
+  activation (`00871cc8`), `CheckContinuePlaying` (`008674b2`, `008674f1`)
+  and the modal message loop `00704010` (`007040fc`, used by
+  `LoadHeader`), which polls and then calls the three idle wrappers, the
+  same order as the frame.
+- **The queries read only the buffer**: a control (`00a24660`, through
+  the bindings at `+0x1b94`; state 0 held, 1 gone down, 2 come up, 3
+  changed), a key (`00a24180`, `+0x18f8` against `+0x19f8`), a mouse button
+  (`00a23a50`), a mouse axis (`00a239e0`).
+- **The player reads the previous poll.** Step 14,
+  `Main::OnIdle_UpdatePlayer` (`0086f940`), comes before step 33. Its
+  `PlayerCharacter::Update` (`0093e860`, slot +0x2f8) reads the movement,
+  attack, aim, Activate, Grab, Quick Save (`0094285d`) and Quick Load
+  (`009403aa`, `00942878`) controls; with the fly camera `009466d0`
+  (`0086f9c7`) reads them instead (Quick Save and Load at `00947aa5`,
+  `00947ad9`). The translation calls `009466d0` "the player's per-frame
+  input handling"; the PR 4 model's lead name `UpdateFlyCamera` is only its
+  gate (`Main` +6).
+- **The interface reads this frame's poll.** `InterfaceManager::Idle`
+  (`0070c4a0`, 15 query sites) runs through `Main::OnIdle_DoInterfaceIdle`
+  from step 80 (one thread, `0086eb36`), the AI threads' first call
+  (`008c7be9`, `008c7db9`; they start at step 101, `StartThreads`) or step 105
+  (`0086ecba`, no AI work: menu mode). All are after step 33.
+- **What the player then sees** is the buffer as the interface left it:
+  `Controls::ClearKeystrokes` as the menus take over and on the console's
+  key, `Controls::ClearUserActions` in `Idle` (`0070e9ac`) as the Pip-Boy
+  closes, and in the poll itself (`0086f43d`) while V.A.T.S. plays back or
+  the Pip-Boy comes up.
+- **Not the buffer**: the frame's Tab and Alt test (`GetAsyncKeyState`,
+  `0086e682`, `0086e69a`), and the keyboard's event queue
+  (`GetDeviceData`, slot +0x28, in `00a23820`), which `Idle` drains at
+  `0070dfd8`, `0070e017`, `0070e0c5`, `0070e104` for the console and the
+  frontmost menu.
+
+So each poll reaches the interface in its frame and the player in the
+next, after the interface. Tests (`world::frame::input`, 5): the poll is
+step 33 and `Controls::Poll` is its first sub-step and `frame.tsv`'s row;
+the player's step reads the previous poll for 1, 2 and 8 threads in and out
+of menu mode; the idle's step is 80, 101 or 105 by thread count and mode,
+always after the poll, with the four callers checked; Tab and Alt reach
+neither; the buffer's parts and the device reads' sites.
+
+### What changed in the viewer
+
+- `viewer/src/poll.rs`: Bevy's keys, mouse buttons, mouse motion and wheel
+  are the buffer. `hold_last_poll` (new `ViewerSet::Input`, first in
+  `Update`) sets Bevy's fresh `PreUpdate` read aside and puts back the
+  buffer as the last frame left it; `poll_controls` (at `Controls::Poll`'s
+  sub-step of step 33) puts this frame's read in; `keep_buffer` (`Last`)
+  keeps what the frame left, with the menus' `reset_all`, for the next
+  frame's player. A system so reads the buffer as its place in the frame
+  finds it. `PlayerInput` is the buffer as the player's step read it,
+  copied at the poll, for player controls the viewer runs later for order:
+  the doors' E (`walk::doors`; the Activate control), grabbing
+  (`clutter::grab_held`; the Grab control), F5/F9 (`scripts::save_and_load`;
+  Quick Save and Quick Load) and T (`run_scripts`' wait key; the Rest
+  control, whose exe reader isn't traced: read from the player's buffer so
+  a menu that took the key keeps it, as before).
+- `begin_frame`'s Tab and Alt test reads this frame's device read, as
+  `GetAsyncKeyState` does.
+- The menus (`ViewerSet::Interface`, now `frame_order::IdleSet`: the game's
+  menus, the viewer's, the Pip-Boy's keys, the rendered terminal,
+  V.A.T.S., lockpicking and the menu scenes) run in stage 6 at the AI
+  threads' interface idle call, outside its gate, before the HUD and the
+  Pip-Boy's screen, which were already there and now follow them. Their
+  internal order is unchanged.
+- Wiring: step 33 and `Controls::Poll` are `Partial`; the idle's wiring
+  text says where the menus are. `frame_wiring.tsv` and LEDGER.md were
+  regenerated.
+- Tests (viewer): `poll::tests` (3: a press reaches the interface in its
+  frame and the player in the next, mouse motion too; what the interface
+  takes the player never sees; a frame without a poll keeps the buffer);
+  `frame_order::tests` (the input set first; the player's step, the poll,
+  the menus and the HUD in that order for 2 and 8 threads in and out of
+  menu mode, agreeing with `world::frame::input`; a press through the real
+  systems in their sets).
+
+### Behaviour differences
+
+- The player's controls act a frame later (keys, mouse buttons, the mouse
+  look and the wheel), as in the exe: the player's update reads the last
+  poll.
+- A menu opened or closed by a key changes menu mode from the next frame's
+  start, not the same frame's: the player's step in the frame a menu opens
+  ran before the menu did, on the previous poll.
+- The menus see a script's request (a message box, a menu a script opens,
+  stage 4) in the same frame instead of the next; menu saves and loads
+  from the start menu reach `save_and_load` (stage 6, before the idle) a
+  frame later.
+- Between the poll and the idle, the scripts (stage 4) and the AI stage's
+  systems read this frame's input before the menus take it. None of them
+  reads a key except the player controls moved to `PlayerInput` above (and
+  the viewer's own grade switch in stage 3, which reads the buffer wherever
+  it falls in that stage).
+- With Tab and Alt held the frame doesn't poll: the buffer keeps the last
+  poll and Bevy's device state goes on, so a key going down or up during
+  those frames is seen as held or not, not as a press or release.
+
+### Validation
+
+Core: `cargo test --workspace` (engine 14,427 and every other suite
+passed), clippy with warnings denied, `cargo fmt --check`, release build.
+Viewer: release tests (187 passed), release clippy with warnings denied,
+fmt, release build. All checks went through the machine's compiler lock.
+`frame_wiring.tsv` and LEDGER.md regenerated. All three release acceptance
+routes passed: Doc Mitchell (57 s), Back in the Saddle (398 s), Ghost Town
+Gunfight (337 s); private logs and screenshots in
+%USERPROFILE%\nv-re\acceptance\pr8-input-buffer-20261012. Startup
+diagnostics read (no panics; vcg02's 3,441 Bevy warnings about despawned
+entities are the same count as PR 7's and earlier runs); Doc's screenshot
+shows him in the hall with the HUD and "E) Talk". No original-game
+comparison has been made.
+
+### Still open
+
+- The idle's menu-mode position: without AI work the exe calls it at step
+  105, after `Main::OnIdle_UpdateAnimationsAndEffects` (whose sky update runs
+  in the dialogue menu). That is after the poll too, but the viewer keeps the
+  menus at the threads' call in every mode (with a thread count of 1, which
+  `main` never leaves, they go to step 80's place).
+- The menus' places inside `PreIdleStuff`/`Idle`/`PostIdleStuff` and the
+  exe's clears (`ClearKeystrokes`, `ClearUserActions`, the poll's own clear
+  for V.A.T.S. playback and the Pip-Boy coming up): the viewer's menus
+  still take the input with their own `reset_all`.
+- The menus' typed characters are Bevy's keyboard events, read where the
+  menus run, as the exe's idle drains the key queue; the pad isn't polled
+  (the viewer has none). The DirectInput state semantics (an edge is a
+  change between two polls) are Bevy's event semantics here.
+- VR (docs/VR.md): the buffer holds controls only. Head and hand poses are
+  per-view, not polled controls, and must not go through it; the action
+  layer VR.md proposes would read this buffer in place of Bevy's resources.
+
 ## PR sequence
 
 Each PR names one next action, regenerates the ledger and passes the
@@ -1018,6 +1170,9 @@ acceptance routes, as in B1.
    steps, `LastMinuteUpdate`, the menu background, `Main::Swap`'s
    pre/post-swap work (the renderer itself stays Bevy). Model and scoped
    wiring: "PR 7 result" above; exact menu input and renderer work remain open.
+8. **The controls' buffer.** The poll at step 33 as the input boundary: the
+   player reads the previous poll, the interface this frame's; the menus at
+   the interface idle. *Done*: "PR 8 result" above.
 
 After PR 7 every call in `Main::OnIdle` to depth 2 is either wired to a
 system or listed as `open` in the ledger, which is Phase 1's gate. Phase 2

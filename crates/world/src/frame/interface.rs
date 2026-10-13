@@ -60,9 +60,12 @@
 //! engine crate; for the others its tests drive the translation and check
 //! its calls against this model ([`follows`]).
 //!
-//! The viewer wires post-swap audio and process-list work to these sets.
-//! The menu input, idle fallback routing and actual render submission remain
-//! open; Bevy's render schedule is not a call of `Main::Swap`.
+//! The viewer wires post-swap audio and process-list work to these sets,
+//! the controls' poll to `Controls::Poll`'s sub-step, and runs its menus at
+//! the AI idle's position after it ([`super::input`], Phase 1 PR 8). The
+//! idle's fallback routing (one thread, menu mode), the menus' exact
+//! sub-step places and actual render submission remain open; Bevy's render
+//! schedule is not a call of `Main::Swap`.
 
 // Translated from 0086fd70 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translated from 007027e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -603,8 +606,9 @@ use SubGate as G;
 use Wiring::{Open, Partial};
 
 const MENUS_WIRING: Wiring = Partial(
-    "viewer: menu behavior exists in ViewerSet::Interface ahead of the frame; \
-     exact input buffering, idle caller routing and pre/idle/post ordering remain open",
+    "viewer: menu behavior in frame_order::IdleSet, at the AI idle's position after the \
+     controls' poll (world::frame::input); idle caller routing and pre/idle/post ordering \
+     remain open",
 );
 
 /// `Main::OnIdle_DoInterfaceIdle` (`0086fd70`): the three wrappers.
@@ -1891,7 +1895,7 @@ pub const POLL_CONTROLS_STEPS: [SubStep; 3] = [
         Some("Controls::Poll"),
         G::Always,
         &[],
-        Open,
+        Partial("viewer: poll::poll_controls (world::frame::input)"),
     ),
     // The frame time handed to the controls.
     sub(

@@ -473,7 +473,10 @@ pub(crate) fn is_door(order: &esm::LoadOrder, reference: esm::FormId) -> bool {
 /// E goes through it, into the next interior or out to a worldspace.
 #[allow(clippy::too_many_arguments)]
 pub fn doors(
-    keys: Res<ButtonInput<KeyCode>>,
+    // The Activate control is the player's (`PlayerCharacter::Update`,
+    // `00943250`): the controls' buffer as the player's step read it
+    // (`crate::poll`), though this runs after the poll for order.
+    player_input: Res<crate::poll::PlayerInput>,
     game: Res<GameFiles>,
     doors: Res<Doors>,
     crosshair: Res<crate::crosshair::Crosshair>,
@@ -492,6 +495,7 @@ pub fn doors(
         Res<crate::menus::Menus>,
     ),
 ) {
+    let keys = &player_input.keys;
     // A lock just picked: the player uses the door or container, as the
     // game has them do after the lockpicking menu (`00573170`): E again.
     let again = lockpicking.again.take();

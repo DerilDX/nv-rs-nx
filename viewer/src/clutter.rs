@@ -770,8 +770,10 @@ fn destructible(order: &esm::LoadOrder, reference: FormId) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn grab_held(
     game: Res<GameFiles>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    // The Grab control is the player's (`PlayerCharacter::Update`, the grab
+    // controls at `0094363c`): the controls' buffer as the player's step
+    // read it (`crate::poll`), though this runs after the poll for order.
+    player_input: Res<crate::poll::PlayerInput>,
     controls: Res<Controls>,
     player: Res<Player>,
     (conversation, menus): (Res<Conversation>, Res<Menus>),
@@ -791,7 +793,10 @@ fn grab_held(
     let s = *clutter.grab_settings.get_or_insert_with(|| {
         GrabSettings::read(|name| world::scripting::game_setting(&game.0.order, name))
     });
-    let pressed = !busy && controls.grab.just_pressed(&keys, &mouse);
+    let pressed = !busy
+        && controls
+            .grab
+            .just_pressed(&player_input.keys, &player_input.buttons);
     if let Some(held) = clutter.held {
         let Some(i) = clutter.world.find(held.reference) else {
             clutter.held = None;

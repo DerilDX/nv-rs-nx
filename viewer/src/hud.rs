@@ -176,6 +176,9 @@ impl Plugin for HudPlugin {
                 .after(crate::frame_order::AiSet::Call(
                     crate::frame_order::INTERFACE_IDLE,
                 ))
+                // Kept: after the menus, as when they ran ahead of the frame
+                // (the idle's own order among them isn't traced).
+                .after(crate::frame_order::IdleSet)
                 .before(crate::frame_order::AiSet::next(
                     crate::frame_order::INTERFACE_IDLE,
                 )),

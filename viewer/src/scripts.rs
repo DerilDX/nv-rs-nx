@@ -741,7 +741,10 @@ fn save_camera(
 #[allow(clippy::too_many_arguments)]
 pub fn save_and_load(
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
+    // The Quick Save and Quick Load controls are the player's
+    // (`PlayerCharacter::Update`, `0094285d`, `009403aa`, `00942878`): the
+    // controls' buffer as the player's step read it (`crate::poll`).
+    player_input: Res<crate::poll::PlayerInput>,
     time: Res<Time>,
     game: Res<GameFiles>,
     mut state: ResMut<DialogueState>,
@@ -771,12 +774,14 @@ pub fn save_and_load(
     let asked = menu_saves.0.take();
     let save_to = match &asked {
         Some(SaveFile::Save(p)) => Some(p.to_string_lossy().to_string()),
-        _ if keys.just_pressed(KeyCode::F5) => Some(QUICKSAVE.to_string()),
+        _ if player_input.keys.just_pressed(KeyCode::F5) => Some(QUICKSAVE.to_string()),
         _ => None,
     };
     let load_from = match &asked {
         Some(SaveFile::Load(p)) => Some(p.to_string_lossy().to_string()),
-        _ if keys.just_pressed(KeyCode::F9) || requested => Some(QUICKSAVE.to_string()),
+        _ if player_input.keys.just_pressed(KeyCode::F9) || requested => {
+            Some(QUICKSAVE.to_string())
+        }
         _ => None,
     };
     if let Some(save_to) = save_to {
@@ -1008,7 +1013,10 @@ pub fn run_scripts(
     cameras: Query<(&Transform, &FlyCamera, Option<&Projection>)>,
     mut placed: Query<(&PlacedRef, &mut Visibility)>,
     mut text: Query<NoticePanel, (With<NoticeText>, Without<PlacedRef>)>,
-    keys: Res<ButtonInput<KeyCode>>,
+    // T, the Rest control: the player's controls' buffer (`crate::poll`; where
+    // the exe reads the Rest control isn't traced), so a menu that took the
+    // key keeps it, as when the menus ran ahead of the frame.
+    player_input: Res<crate::poll::PlayerInput>,
 ) {
     let HereNow {
         mut cell_scripts,
@@ -1056,7 +1064,10 @@ pub fn run_scripts(
     // Tab, I and J open the Pip-Boy (`pipboy`).
     // T (the Rest control): the wait menu, unless the game refuses first
     // (`world::living::sleep`).
-    if keys.just_pressed(KeyCode::KeyT) && conversation.0.is_none() && !waiting.is_open() {
+    if player_input.keys.just_pressed(KeyCode::KeyT)
+        && conversation.0.is_none()
+        && !waiting.is_open()
+    {
         match world::living::sleep::may_wait(order, &state.0) {
             Ok(()) => waiting.push(crate::menus::Menu::SleepWait { sleep: false }),
             Err(why) => {

@@ -159,9 +159,9 @@ impl Plugin for LockpickPlugin {
             Update,
             show_lockpicking
                 // Kept: drawn as the menu ran this frame, inside the
-                // interface set (`crate::frame_order`).
+                // interface idle's set (`crate::frame_order::IdleSet`).
                 .after(pick_locks)
-                .in_set(crate::frame_order::ViewerSet::Interface),
+                .in_set(crate::frame_order::IdleSet),
         );
     }
 }

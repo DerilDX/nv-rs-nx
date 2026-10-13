@@ -246,7 +246,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 
 Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 15301 (37.8%) are translated or traced.
 
-Rust cites 16393 distinct `.text` addresses; 60 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 16409 distinct `.text` addresses; 60 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -493,5 +493,5 @@ Every depth-1 and depth-2 call is listed in [frame_wiring.tsv](../research/engin
 
 | Depth | system | partial | open |
 | ---: | ---: | ---: | ---: |
-| 1 | 1 | 11 | 131 |
-| 2 | 0 | 18 | 1557 |
+| 1 | 1 | 12 | 130 |
+| 2 | 0 | 19 | 1556 |

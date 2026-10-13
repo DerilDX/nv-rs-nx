@@ -517,6 +517,8 @@ fn wiring() {
             0x0086_f657,
             0x0086_f65f,
             0x0086_f905,
+            // `Controls::Poll` (Phase 1 PR 8).
+            0x0086_f39e,
         ]
     );
 }

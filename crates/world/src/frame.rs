@@ -68,7 +68,8 @@
 //! [`ai_stage`] (Phase 1 PR 6); the interface and render stages (the
 //! interface idle, `LastMinuteUpdate`, sleeping, the menus' background,
 //! `Main::Swap`, the post-swap and post-thread work, the console) and the
-//! controls' poll in [`interface`] (Phase 1 PR 7). [`coverage`] says, for
+//! controls' poll in [`interface`] (Phase 1 PR 7); which poll the player
+//! and the interface read in [`input`] (Phase 1 PR 8). [`coverage`] says, for
 //! every call to depth 2, which model holds it and how it is wired (Phase
 //! 1's gate).
 
@@ -76,6 +77,7 @@
 
 pub mod ai_stage;
 pub mod coverage;
+pub mod input;
 pub mod interface;
 pub mod player;
 pub mod world_time;
@@ -565,8 +567,14 @@ const fn step(
 
 /// The interface idle's wiring (both calls, steps 80 and 105).
 const IDLE_WIRING: &str = "interface::DO_INTERFACE_IDLE_STEPS and the interface manager's \
-    PreIdleStuff, Idle and PostIdleStuff (viewer menus remain before the frame; HUD and \
-    Pip-Boy remain at the AI idle's approximate position; input buffering and fallback routing open)";
+    PreIdleStuff, Idle and PostIdleStuff (viewer: the menus, then the HUD and Pip-Boy, at the AI \
+    idle's position after the controls' poll, frame_order::IdleSet; the one-thread and menu-mode \
+    fallback positions open)";
+
+/// The controls' poll's wiring (step 33, `world::frame::input`).
+const POLL_WIRING: &str = "world::frame::input; viewer: poll::poll_controls puts the frame's \
+    device read (keys, mouse buttons, mouse motion and wheel; no pad) into the controls' buffer, \
+    which the player's step read as the last frame left it";
 
 /// The calls of `Main::OnIdle` (`0086e650`), in order.
 pub const STEPS: [FrameStep; 143] = [
@@ -602,7 +610,7 @@ pub const STEPS: [FrameStep; 143] = [
     step(0x004e_1610, None, Stage::Housekeeping, Gate::Always, Wiring::Open),
     step(0x0086_ef40, None, Stage::Housekeeping, Gate::MenuFlagClear, Wiring::Open),
     step(0x0086_f260, Some("Main::OnIdle_UpdateTimer"), Stage::Housekeeping, Gate::Always, Wiring::Partial("physics::havok::Clock (the frame timer and Havok's delta time only; viewer: clutter::time_havok_frame with physics::havok::FrameTimer)")),
-    step(0x0086_f390, Some("Main::OnIdle_PollControls"), Stage::Housekeeping, Gate::Always, Wiring::Open),
+    step(0x0086_f390, Some("Main::OnIdle_PollControls"), Stage::Housekeeping, Gate::Always, Wiring::Partial(POLL_WIRING)),
     step(0x00c3_dbf0, Some("IOManager::UpdateQueue"), Stage::Housekeeping, Gate::Always, Wiring::Open),
     step(0x0086_efa0, None, Stage::Housekeeping, Gate::Always, Wiring::Open),
     step(0x0070_edf0, Some("XUserInterface::XUIIsUp"), Stage::Housekeeping, Gate::StartMenuNotBusy, Wiring::Open),

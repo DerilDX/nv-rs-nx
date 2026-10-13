@@ -78,10 +78,10 @@ impl Plugin for RenderedTerminalPlugin {
             Update,
             show_terminal
                 // Kept: drawn after the game's menus, before the viewer's,
-                // inside the interface set (`crate::frame_order`).
+                // inside the interface idle's set (`crate::frame_order`).
                 .after(crate::game_menus::draw_menus)
                 .before(crate::menus::run_menus)
-                .in_set(crate::frame_order::ViewerSet::Interface),
+                .in_set(crate::frame_order::IdleSet),
         );
     }
 }

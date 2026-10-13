@@ -129,13 +129,13 @@ impl Plugin for PipboyPlugin {
             .add_systems(Startup, setup_pipboy)
             .add_systems(
                 Update,
-                // Kept, inside the interface set (`crate::frame_order`):
+                // Kept, inside the interface idle's set (`crate::frame_order`):
                 // after the game's own menus, so one open over the Pip-Boy
                 // (a question, "how many?") has the input first.
                 pipboy_keys
                     .after(crate::game_menus::run_open_menus)
                     .before(crate::menus::run_menus)
-                    .in_set(crate::frame_order::ViewerSet::Interface),
+                    .in_set(crate::frame_order::IdleSet),
             )
             // The Pip-Boy's screen is the interface idle's
             // (`Main::OnIdle_DoInterfaceIdle`), the AI threads' first call
@@ -157,6 +157,9 @@ impl Plugin for PipboyPlugin {
                     .after(crate::frame_order::AiSet::Call(
                         crate::frame_order::INTERFACE_IDLE,
                     ))
+                    // Kept: after the menus, as when they ran ahead of the frame
+                    // (the idle's own order among them isn't traced).
+                    .after(crate::frame_order::IdleSet)
                     .before(crate::frame_order::AiSet::next(
                         crate::frame_order::INTERFACE_IDLE,
                     )),

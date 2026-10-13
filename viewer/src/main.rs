@@ -53,6 +53,7 @@ mod pipboy;
 mod player_body;
 mod player_camera;
 mod player_idle;
+mod poll;
 mod present;
 mod radio;
 mod rendered_terminal;
@@ -492,10 +493,12 @@ fn main() {
                 .chain()
                 .in_set(ViewerSet::Loading),
         )
-        // Then the interface (`ViewerSet::Interface`, which says why it is
-        // ahead of the stages). Menus take the keyboard before anything
-        // else sees it. V.A.T.S. takes them next while it's on, and the
-        // lockpicking menu (keyboard and mouse) while it's open.
+        // The interface idle's menus (`frame_order::IdleSet`, in stage 6
+        // after the controls' poll, step 33): they take this frame's input
+        // before the player's step reads it in the next frame
+        // (`world::frame::input`). The viewer's menus take the keyboard;
+        // V.A.T.S. takes it next while it's on, and the lockpicking menu
+        // (keyboard and mouse) while it's open.
         .add_systems(
             Update,
             (
@@ -506,7 +509,7 @@ fn main() {
             )
                 // Kept: which of them takes the input first.
                 .chain()
-                .in_set(ViewerSet::Interface),
+                .in_set(frame_order::IdleSet),
         )
         // Stage 2, the player (`Main::OnIdle_UpdatePlayer`, `0086f940`, step
         // 14): its calls and `PlayerCharacter::Update`'s sub-steps are sets

@@ -226,9 +226,9 @@ seq	depth	call	address	name	wiring	model	system
 975	2	10	0086f330		open	-	
 976	2	11	0084d030		open	-	
 977	2	12	00403e20		open	-	
-978	1	33	0086f390	Main::OnIdle_PollControls	open	world::frame	
+978	1	33	0086f390	Main::OnIdle_PollControls	partial	world::frame	world::frame::input; viewer: poll::poll_controls puts the frame's device read (keys, mouse buttons, mouse motion and wheel; no pad) into the controls' buffer, which the player's step read as the last frame left it
 979	2	1	007fdf30	Controls::GetInstance	open	-	
-980	2	2	00a23010	Controls::Poll	open	world::frame::interface	
+980	2	2	00a23010	Controls::Poll	partial	world::frame::interface	viewer: poll::poll_controls (world::frame::input)
 990	2	3	007013e0		open	-	
 991	2	4	007fdf30	Controls::GetInstance	open	-	
 992	2	5	00a257c0		open	world::frame::interface	
@@ -971,9 +971,9 @@ seq	depth	call	address	name	wiring	model	system
 3575	2	5	00575d70	TESObjectREFR::GetWorldSpace	open	world::frame::world_time	
 3578	2	6	004fd3e0	TES::GetWorldSpace	open	world::frame::world_time	
 3579	1	79	0043d4d0		open	world::frame	
-3580	1	80	0086fd70	Main::OnIdle_DoInterfaceIdle	partial	world::frame	interface::DO_INTERFACE_IDLE_STEPS and the interface manager's PreIdleStuff, Idle and PostIdleStuff (viewer menus remain before the frame; HUD and Pip-Boy remain at the AI idle's approximate position; input buffering and fallback routing open)
+3580	1	80	0086fd70	Main::OnIdle_DoInterfaceIdle	partial	world::frame	interface::DO_INTERFACE_IDLE_STEPS and the interface manager's PreIdleStuff, Idle and PostIdleStuff (viewer: the menus, then the HUD and Pip-Boy, at the AI idle's position after the controls' poll, frame_order::IdleSet; the one-thread and menu-mode fallback positions open)
 3581	2	1	007027e0	Interface::PreIdleStuff	open	world::frame::interface	
-3587	2	2	00702810	Interface::Idle	partial	world::frame::interface	viewer: menu behavior exists in ViewerSet::Interface ahead of the frame; exact input buffering, idle caller routing and pre/idle/post ordering remain open
+3587	2	2	00702810	Interface::Idle	partial	world::frame::interface	viewer: menu behavior in frame_order::IdleSet, at the AI idle's position after the controls' poll (world::frame::input); idle caller routing and pre/idle/post ordering remain open
 3593	2	3	00702840	Interface::PostIdleStuff	open	world::frame::interface	
 3599	1	81	00483710		open	world::frame	
 3600	1	82	0049fef0	BGSDecalManager::GetInstance	open	world::frame	
@@ -1289,9 +1289,9 @@ seq	depth	call	address	name	wiring	model	system
 4434	2	13	0045a190		open	-	
 4436	2	14	00c50610	BSParticleSystemManager::UpdateParallel	open	world::frame::ai_stage	
 4446	1	104	0043d4d0		open	world::frame	
-4447	1	105	0086fd70	Main::OnIdle_DoInterfaceIdle	partial	world::frame	interface::DO_INTERFACE_IDLE_STEPS and the interface manager's PreIdleStuff, Idle and PostIdleStuff (viewer menus remain before the frame; HUD and Pip-Boy remain at the AI idle's approximate position; input buffering and fallback routing open)
+4447	1	105	0086fd70	Main::OnIdle_DoInterfaceIdle	partial	world::frame	interface::DO_INTERFACE_IDLE_STEPS and the interface manager's PreIdleStuff, Idle and PostIdleStuff (viewer: the menus, then the HUD and Pip-Boy, at the AI idle's position after the controls' poll, frame_order::IdleSet; the one-thread and menu-mode fallback positions open)
 4448	2	1	007027e0	Interface::PreIdleStuff	open	world::frame::interface	
-4454	2	2	00702810	Interface::Idle	partial	world::frame::interface	viewer: menu behavior exists in ViewerSet::Interface ahead of the frame; exact input buffering, idle caller routing and pre/idle/post ordering remain open
+4454	2	2	00702810	Interface::Idle	partial	world::frame::interface	viewer: menu behavior in frame_order::IdleSet, at the AI idle's position after the controls' poll (world::frame::input); idle caller routing and pre/idle/post ordering remain open
 4460	2	3	00702840	Interface::PostIdleStuff	open	world::frame::interface	
 4466	1	106	00702360	Interface::IsInMenuMode	open	world::frame	
 4467	2	1	004b7210		open	-	
