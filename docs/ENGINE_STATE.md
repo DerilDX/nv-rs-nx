@@ -105,6 +105,81 @@ records and 168,638 preserved items with zero invalid captures; all eighteen
 original targets pass both the envelope comparison and the engine bridge,
 with the same three decode failures and three unresolved holders.
 
+## Inventory replay through the engine (Phase 2 step A), 2026-10-13
+
+Each saved inventory was loaded by the translated buffer loader `004d4160`
+and written back by `004d4090`, and the written section was compared with the
+original bytes. This is the path the 1.4 PC change-form load takes: the
+two change-form loaders `00847df0` (call at `00848b68`) and `008495d0`
+(call at `008496f9`) dispatch form vtable slot `0x5c`. For TESObjectREFR
+(vtable `0102f55c`) that slot is `005623d0`, which calls `004d4160` under
+change flag `0x08000020`. The actor loader `00932a00` reaches `005623d0`
+too (`00932a2f`). The save side is `00562230`, which calls `004d4090`
+(`00562300`). The stream path `InventoryChanges::LoadGame` (`004d3cc0`, Xbox
+PDB) is reached only from `TESObjectREFR::LoadGame` (`0055ec40`, slot
+`0x60`, called directly from `009320e0`). Its load fix `004cbbc0` is reached
+only from `004d3cc0`. Neither PC change-form loader calls slot `0x60`.
+
+Two behaviors of the original code determine the expected output.
+
+- **Reversed order.** `004d4160` adds each loaded entry with `005ae3d0`
+  (call at `004d42a9`, ECX = the list of changes). That function pushes to
+  the front of the list: `00470440` copies the old head into a new node, and
+  the new entry becomes the head. `004d4090` writes the list in order. So
+  loading and then saving writes an inventory's entries in reverse order,
+  with each entry's bytes unchanged. The translation does the same.
+- **Dropped entries.** An entry whose saved ID resolves to no form is
+  deleted, and a null entry is added in its place (`004d4160`). `005ae3d0`
+  ignores the null and `004d4090` neither writes nor counts it.
+
+One translation gap was found and closed: `004d4090` switches the save
+buffer's mode word through the shared setter `0050f9c0`, which was
+untranslated. It is now in `tesobject.rs`, with a regression test.
+
+The private probe ran against all eight original saves. It replays all
+36,629 flagged records (168,638 items) through the release registry, with
+generated form/reference receivers and the partial allocator setup. Script
+receivers are built from installed SCPT records only when every plugin of
+the save is installed. Results:
+
+| Outcome | Records | Items |
+| --- | ---: | ---: |
+| Exact, single entry | 6,252 | |
+| Exact, entries in the reverse order explained above | 21,881 | |
+| Exact after the game's drop of entries resolving to no form | 110 | 121 dropped |
+| Empty inventories (count zero; replayed from a synthesized zero because fos does not expose the empty section's position) | 36 | 0 |
+| **All of the above (every item reproduced)** | **28,279** | **104,447** |
+| Excepted: complete-record decode failure (known) | 3 | |
+| Excepted: unresolved holder (known) | 3 | |
+| Not testable here: script not built (8,341 in saves whose plugins are not installed, 2 open in Save 138) | 8,343 | 64,070 with the row below |
+| Open: untranslated function during load | 1 | |
+
+No record produced different bytes. The script cases are an environment
+limit, not a translation result. Seven of the saves list mod plugins that
+are not installed on this machine, so their item scripts cannot be built.
+For such an item, the script extra loads with no script and no locals, and
+saving it passes the null locals to `ScriptLocals::SaveGame` (`005a9db0`,
+Xbox PDB) at `00426ce8`. That function reads `[this+0xc]` at `005a9dce`
+without a null test, so the original game would fault the same way.
+
+Open items for a later session:
+
+- `00401280`: untranslated. It is reached from the script event handler
+  `005ca260` through `005accb0` while loading one Save 138 record (holder
+  `090009e9`, a DLC reference with a script extra).
+- Two Save 138 records (holders `0200a2f1`, `0200a2fd`) carry a script that
+  was not built from the installed plugins, although all ten plugins are
+  installed. The cause is unexamined.
+- The planned committed engine regression is not done: generated data
+  through `004d4160` and `004d4090` with multiple stacks, Worn, and absent
+  versus explicit count/health. A generated-memory prototype stopped at the
+  map constructor's allocator (`006e20e0` calls `00aa1070`, which reads
+  `011f6080`). It needs the partial allocator startup (`00aa2230`,
+  `00aa21d0`, `00aa2020`) and the vtable/RTTI words recorded in the private
+  dump.
+- Scripted items from the modded saves remain untested until those plugins
+  are available.
+
 ## World inventory stacks (Phase 2 step B), 2026-10-13
 
 `GameState::inventory_stacks` (`world::inventory_stacks`) now holds each
