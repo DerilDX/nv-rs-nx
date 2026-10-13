@@ -13,17 +13,23 @@
 //! - Inventories are saved as changes against the holder's record
 //!   (`ItemChange` count); with `CHANGE_REFR_LEVELED_INVENTORY` the
 //!   record's leveled lists were already resolved by the game and appear
-//!   among the changes, so they aren't rolled again.
+//!   among the changes, so they aren't rolled again. Each holder's changes
+//!   are kept stack by stack ([`crate::inventory_stacks`], taken from
+//!   `fos::inventory_source`); the counts, worn items and weapon
+//!   conditions nv-rs plays with are derived from them.
 //! - What isn't imported is listed in [`GAPS`].
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use esm::{FormId, FourCC, LoadOrder};
 use fos::decode::{self, Extra, InitialData, Value};
+use fos::inventory_source::{InventorySource, ItemEnvelope, RecordState, Resolution};
 use fos::{save_type as t, ChangeForm, RefId, Save};
 use script::VarKind;
 
 use crate::dialogue::{PLAYER_BASE, PLAYER_REF};
+use crate::inventory_stacks::{SavedExtra, SavedInventory, SavedItem, SavedResolution, SavedStack};
 use crate::save::PlayerPlace;
 use crate::scripting::GameState;
 
@@ -140,25 +146,38 @@ impl Ids<'_> {
     }
 }
 
-/// Imports a save's bytes (see [`import_save`]).
+/// Builds the state a save's bytes describe: a new game's state
+/// (start-game quests running, globals and the player's record items)
+/// with everything the save changed laid over it.
 pub fn import(order: &LoadOrder, bytes: &[u8]) -> Result<Import, String> {
     let save = Save::parse(bytes).map_err(|e| e.to_string())?;
-    import_save(order, &save)
+    let source = InventorySource::parse(Arc::from(bytes)).map_err(|e| e.to_string())?;
+    import_parsed(order, &save, &source)
 }
 
-/// Builds the state a save describes: a new game's state (start-game
-/// quests running, globals and the player's record items) with everything
-/// the save changed laid over it.
-pub fn import_save(order: &LoadOrder, save: &Save<'_>) -> Result<Import, String> {
+/// [`import`] with the save and its inventory source parsed from the same
+/// bytes.
+fn import_parsed(
+    order: &LoadOrder,
+    save: &Save<'_>,
+    source: &InventorySource,
+) -> Result<Import, String> {
     let mut state = GameState::new(order);
     let mut report = Report::default();
     let (ids, missing) = Ids::new(order, save);
     report.missing_plugins = missing;
+    // Each reference's inventory record, by where its data starts.
+    let stacks: HashMap<usize, &RecordState> = source
+        .records()
+        .iter()
+        .map(|r| (r.source().data_file_span().start, r.state()))
+        .collect();
     let mut cx = Cx {
         order,
         ids: &ids,
         report: &mut report,
         cells: HashMap::new(),
+        stacks: &stacks,
     };
     state.player_level = u16::try_from(save.header.level.max(1)).unwrap_or(1);
     if let Some(g) = save.global_data(3) {
@@ -268,6 +287,9 @@ struct Cx<'a, 'b> {
     report: &'a mut Report,
     /// The cells of each worldspace by grid square, loaded when needed.
     cells: HashMap<FormId, Option<crate::WorldGrid>>,
+    /// The inventory source's record for each reference, by the file
+    /// offset of its data.
+    stacks: &'a HashMap<usize, &'a RecordState>,
 }
 
 impl Cx<'_, '_> {
@@ -714,8 +736,26 @@ fn reference(
             _ => {}
         }
     }
-    if let Some(items) = &data.inventory {
-        inventory(cx, state, id, cf.flags & 0x0800_0000 != 0, items);
+    if data.inventory.is_some() {
+        // The same record, read again with its stacks' bytes kept
+        // (`fos::inventory_source`).
+        let stacks = cx.stacks;
+        match stacks.get(&cf.data_offset) {
+            Some(RecordState::Decoded(items)) => {
+                let leveled_resolved = cf.flags & 0x0800_0000 != 0;
+                inventory(cx, state, id, leveled_resolved, cf.version, items);
+            }
+            other => {
+                let why = match other {
+                    Some(RecordState::PreservedUndecoded(f)) => format!("{f:?}"),
+                    Some(_) => "no inventory".to_string(),
+                    None => "no record".to_string(),
+                };
+                cx.report
+                    .failures
+                    .push(format!("inventory of {id}: stacks not read ({why})"));
+            }
+        }
     }
 }
 
@@ -728,15 +768,55 @@ fn template_of(cx: &Cx<'_, '_>, data: &decode::ReferenceData<'_>) -> Option<Form
     })
 }
 
+/// One saved item change as nv-rs keeps it: its identity resolved into
+/// nv-rs's load order, its count delta, and each stack's count, raw
+/// health bits and worn state, other extras as their original bytes.
+fn saved_item(cx: &Cx<'_, '_>, e: &ItemEnvelope) -> SavedItem {
+    let (resolution, form) = match e.identity().resolution() {
+        Resolution::Null => (SavedResolution::Null, None),
+        Resolution::ResolvedInSave(raw) => (SavedResolution::InSave(raw), cx.ids.form(raw)),
+        Resolution::MissingIndex { index } => (SavedResolution::Missing(index), None),
+    };
+    let stacks = e
+        .stacks()
+        .iter()
+        .map(|s| SavedStack {
+            extras: s
+                .extras()
+                .iter()
+                .map(|x| match x.decoded() {
+                    Extra::Count(n) => SavedExtra::Count(*n),
+                    Extra::Health(h) => SavedExtra::Health(h.to_bits()),
+                    Extra::Worn => SavedExtra::Worn,
+                    _ => SavedExtra::Opaque {
+                        kind: x.kind(),
+                        bytes: x.original_payload().to_vec(),
+                    },
+                })
+                .collect(),
+        })
+        .collect();
+    SavedItem {
+        saved: e.identity().saved().0,
+        resolution,
+        form,
+        count_delta: e.count_delta(),
+        stacks,
+    }
+}
+
 /// A holder's items: its record's (leveled lists rolled by nv-rs unless
-/// the game resolved them) and the save's changes; stacks worn are
-/// equipped, and weapons' health becomes their condition.
+/// the game resolved them) and the save's changes, kept stack by stack;
+/// from those, the counts, stacks worn are equipped, and weapons' health
+/// becomes their condition (the last stack's with health, as before the
+/// stacks were kept: which stack's condition the game shows isn't traced).
 fn inventory(
     cx: &mut Cx<'_, '_>,
     state: &mut GameState,
     holder: FormId,
     leveled_resolved: bool,
-    changes: &[decode::ItemChange],
+    version: u8,
+    changes: &[ItemEnvelope],
 ) {
     state.items.retain(|(h, _), _| *h != holder);
     state.stocked.insert(holder);
@@ -752,16 +832,21 @@ fn inventory(
         }
     }
     state.equipped.remove(&holder);
-    for c in changes {
-        let Some(item) = cx.ids.of(c.item) else {
+    let saved = SavedInventory {
+        version,
+        items: changes.iter().map(|e| saved_item(cx, e)).collect(),
+    };
+    for c in &saved.items {
+        let Some(item) = c.form else {
             continue;
         };
-        *state.items.entry((holder, item)).or_insert(0) += c.count;
+        *state.items.entry((holder, item)).or_insert(0) += c.count_delta;
         for stack in &c.stacks {
-            for e in stack {
+            for e in &stack.extras {
                 match e {
-                    Extra::Worn => state.equipped.entry(holder).or_default().push(item),
-                    Extra::Health(h) => {
+                    SavedExtra::Worn => state.equipped.entry(holder).or_default().push(item),
+                    SavedExtra::Health(bits) => {
+                        let h = f32::from_bits(*bits);
                         if let Some(w) = crate::combat::Weapon::load(cx.order, item) {
                             if w.health > 0 {
                                 state
@@ -776,6 +861,7 @@ fn inventory(
         }
     }
     state.items.retain(|_, n| *n > 0);
+    state.inventory_stacks.insert(holder, saved);
     cx.report.add("inventories");
 }
 

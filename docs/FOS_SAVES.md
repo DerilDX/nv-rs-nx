@@ -548,7 +548,8 @@ keep their ids. Change forms are applied in file order, references last
 | `discovered`, `map_markers` | `MAPMARKER` extra data | Flags 0x3 where the record hasn't them: found; 0x1 alone: shown. |
 | `set_by_scripts.owners` | `OWNERSHIP` with `CHANGE_REFR_EXTRA_OWNERSHIP` | |
 | `more.ghosts`, `faction_changes` | `GHOST`, `FACTION_CHANGES` extra data | |
-| `items`, `stocked`, `equipped`, `weapon_health` | Inventories | The record's items plus the saved changes; the record's leveled lists rolled by nv-rs unless `CHANGE_REFR_LEVELED_INVENTORY` says the game already did (its picks are among the changes); `WORN` stacks equipped; a weapon's `HEALTH` over its `DATA` health. |
+| `inventory_stacks` | Inventories, through `fos::inventory_source` | Each holder's item changes in saved order: saved id and its resolution, the nv-rs form, the signed count delta, and per stack `COUNT`, raw `HEALTH` bits and `WORN`; other extras kept as their original bytes. Kept by nv-rs's own saves; gameplay doesn't change them ([ENGINE_STATE.md](ENGINE_STATE.md), "World inventory stacks"). |
+| `items`, `stocked`, `equipped`, `weapon_health` | Derived from `inventory_stacks` | The record's items plus the saved changes; the record's leveled lists rolled by nv-rs unless `CHANGE_REFR_LEVELED_INVENTORY` says the game already did (its picks are among the changes); `WORN` stacks equipped; a weapon's `HEALTH` over its `DATA` health (the last stack with health, when there are several). |
 | `dead`, `unconscious`, `set_by_scripts.restrained` | `ACTOR_LIFESTATE` | Dying (1) and dead (2), 3, 5. |
 | `teammates`, `set_by_scripts.ignoring_crime`, `more.forced_sneak`, `more.critical_stage` | Actor fields `bPlayerTeammate`, `bIgnoreCrime`, `bForceSneak`, `eCriticalStage` | |
 | `more.dispositions` | `ACTOR_DISPOSITION_MODIFIERS` toward the player | |

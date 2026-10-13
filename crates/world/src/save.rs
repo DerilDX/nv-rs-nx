@@ -484,6 +484,7 @@ pub fn save(state: &GameState, player: Option<PlayerPlace>) -> String {
     crate::casino::save_lines(state, &mut line);
     crate::tutorial::save_lines(state, &mut line);
     crate::weapon_mods::save_lines(state, &mut line);
+    crate::inventory_stacks::save_lines(&state.inventory_stacks, &mut line);
     out
 }
 
@@ -909,6 +910,7 @@ pub fn load(text: &str) -> Result<(GameState, Option<PlayerPlace>), String> {
                 .or_else(|| crate::casino::load_line(&mut state, raw))
                 .or_else(|| crate::tutorial::load_line(&mut state, raw))
                 .or_else(|| crate::weapon_mods::load_line(&mut state, raw))
+                .or_else(|| crate::inventory_stacks::load_line(&mut state.inventory_stacks, raw))
             {
                 Some(Ok(())) => {}
                 Some(Err(_)) | None => return Err(bad()),

@@ -244,6 +244,11 @@ pub struct GameState {
     /// Holders whose contents are kept in `items` (copied from their
     /// record the first time something changes them).
     pub stocked: HashSet<FormId>,
+    /// The original game's inventory stacks of holders imported from a
+    /// `.fos` save (`world::inventory_stacks`), kept through nv-rs's own
+    /// saves. `items`, `equipped` and `weapon_health` were derived from
+    /// them on import; gameplay changes those views, not these stacks.
+    pub inventory_stacks: crate::inventory_stacks::SavedInventories,
     /// Scripted items' own scripts (the game's `ExtraScript` on each
     /// scripted item, `004821a0` adding them one at a time): holder, item,
     /// variables and the events waiting for the holder's next script run

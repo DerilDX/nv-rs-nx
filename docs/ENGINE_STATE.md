@@ -105,6 +105,57 @@ records and 168,638 preserved items with zero invalid captures; all eighteen
 original targets pass both the envelope comparison and the engine bridge,
 with the same three decode failures and three unresolved holders.
 
+## World inventory stacks (Phase 2 step B), 2026-10-13
+
+`GameState::inventory_stacks` (`world::inventory_stacks`) now holds each
+imported holder's saved inventory changes as plain owned data, built from
+`fos::inventory_source` envelopes in `world::fos_import`. Per holder: the
+change form's version and its items in saved order. Per item
+(`ItemChange`, `004bed60`): the saved id, its resolution through the
+save's own form-ID array (null, in save, or missing index), the nv-rs
+form it maps to, the signed count delta, and its stacks in order. Per
+stack: `ExtraCount` (signed 16-bit), `ExtraHealth` as raw bits and
+`ExtraWorn`; every other extra keeps its kind and complete original
+bytes, uninterpreted. Explicit Count 0 and absent Count stay distinct;
+empty stacks are kept. Exe path: `TESObjectREFR::LoadGame_ov2` (`005623d0`,
+vtable `0102f5b8`) loads the inventory per item through `004d4160` when
+change flag 0x08000020 is set; `SaveGame_ov2` (`00562230`) writes it
+through `004d4090` (names Xbox PDB).
+
+The existing views are derived from the stacks on import, with the same
+rules as before: `items` is the record's contents plus each delta,
+`equipped` gets each worn stack, and `weapon_health` takes the last stack
+with health over the weapon's `DATA` health. Gameplay still changes only
+those views, so after play the stacks describe the save as imported, not
+the live inventory. nv-rs's own saves write the stacks (`invholder`,
+`invitem`, `invstack`, `invextra` lines) and read them back exactly.
+A holder whose record decodes but has no captured stacks is reported as an
+import failure instead of being imported a second way.
+
+Generated-save tests cover a container and the player: three stacks with
+explicit Count 0, a signaling-NaN health's bits, opaque Poison and HotKey
+bytes, an empty stack, a worn stack, a Cannot-wear opaque extra, a
+missing-index item and a null item, through import and nv-rs's own save
+and load. A private probe imported the eight original saves used above
+with the official load order. For every holder the decoders read
+(2,481 to 2,667 per save; 85 to 92 items with several stacks each), the
+kept stacks match the decoder's items in order: identity, delta, each
+stack's Count, raw Health bits, Worn, and the kinds of the other extras.
+Per-item count sums match. nv-rs's own save and load then reproduce the
+stacks, counts, equipped items and weapon conditions exactly. No import
+reported missing stacks. The three known record decode failures are the
+only decode failures, and holders whose plugin is not loaded are dropped
+as before. The probe and its output stay private.
+
+Open: one live inventory (the stacks becoming the authority that
+gameplay edits, without a second mutable copy); how the item menus show
+several stacks of one item. `ContainerMenu::UpdateLists` (`0075c280`)
+adds its rows through `00719ef0`; whether that gives one row per stack is
+not traced, so the Pip-Boy, trade and container menus still show one row
+per item with the old condition rule. Writing a `.fos` from the stacks is
+also open: Count, Health and Worn are kept as values, not their original
+bytes.
+
 ## Script-extra follow-on
 
 The current normal-registry debug and release probes load one original script-bearing

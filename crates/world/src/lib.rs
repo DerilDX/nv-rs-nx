@@ -62,6 +62,7 @@ pub mod head_track;
 pub mod idles;
 mod image_space;
 pub mod impacts;
+pub mod inventory_stacks;
 pub mod iron_sights;
 pub mod item_card;
 pub mod items;

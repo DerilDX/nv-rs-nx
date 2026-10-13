@@ -170,7 +170,7 @@ fn plugins_are_matched_by_name_and_unknown_ones_dropped() {
     assert_eq!(ids.of(RefId(1)), Some(FormId(QUEST)));
     assert_eq!(ids.of(RefId(2)), None);
     assert_eq!(ids.of(RefId(3)), Some(FormId(0xFF00_0007)));
-    let import = import_save(&order, &save).unwrap();
+    let import = import(&order, &bytes).unwrap();
     assert!(import.state.running.contains(&FormId(QUEST)));
     assert_eq!(import.report.dropped, 1);
 }
@@ -440,4 +440,163 @@ fn factions_challenges_reputations_and_seen_cells_are_taken() {
     assert_eq!(s.reputations.get(&FormId(LAMP_REF)), Some(&(10.0, 2.0)));
     let key = crate::local_map::SeenKey::Interior(FormId(ROOM), -1, 1);
     assert_eq!(s.seen.bits.get(&key).map(|b| b[0]), Some(0x81));
+}
+
+use crate::inventory_stacks::{SavedExtra as X, SavedInventory, SavedItem, SavedResolution};
+use fos::decode::extra_kind as k;
+
+/// The gun's stacks: an explicit count of 0, a signaling NaN's health and
+/// two extras nv-rs doesn't read (a poison and a hot key); an empty
+/// stack; two at health 100, worn.
+fn gun_change(w: &mut PipeWriter) {
+    w.ref_id(refid(GUN)).i32(1).vsval(3);
+    w.vsval(4)
+        .u8(k::COUNT)
+        .u16(0)
+        .u8(k::HEALTH)
+        .u32(0x7F80_0001);
+    w.u8(k::POISON).ref_id(refid(ITEM)).u8(k::HOT_KEY).u8(3);
+    w.vsval(0);
+    w.vsval(3).u8(k::COUNT).u16(2).u8(k::HEALTH).f32(100.0);
+    w.u8(k::WORN);
+}
+
+fn gun_stacks() -> SavedItem {
+    let poison = PipeWriter::new().u8(k::POISON).ref_id(refid(ITEM)).finish();
+    let hot_key = PipeWriter::new().u8(k::HOT_KEY).u8(3).finish();
+    SavedItem {
+        saved: refid(GUN),
+        resolution: SavedResolution::InSave(GUN),
+        form: Some(FormId(GUN)),
+        count_delta: 1,
+        stacks: vec![
+            crate::inventory_stacks::SavedStack {
+                extras: vec![
+                    X::Count(0),
+                    X::Health(0x7F80_0001),
+                    X::Opaque {
+                        kind: k::POISON,
+                        bytes: poison,
+                    },
+                    X::Opaque {
+                        kind: k::HOT_KEY,
+                        bytes: hot_key,
+                    },
+                ],
+            },
+            crate::inventory_stacks::SavedStack::default(),
+            crate::inventory_stacks::SavedStack {
+                extras: vec![X::Count(2), X::Health(100f32.to_bits()), X::Worn],
+            },
+        ],
+    }
+}
+
+/// What a save of the state and loading it back keeps of the inventory.
+fn through_own_save(s: &GameState) -> GameState {
+    let text = crate::save::save(s, None);
+    crate::save::load(&text).unwrap().0
+}
+
+#[test]
+fn holders_keep_their_stacks_raw_health_and_worn_state() {
+    // The chest's inventory: the gun's three stacks, and one Thing fewer
+    // in a stack that can't be worn.
+    let mut c = PipeWriter::new();
+    c.vsval(2);
+    gun_change(&mut c);
+    c.ref_id(refid(ITEM)).i32(-1).vsval(1);
+    c.vsval(1).u8(k::CANNOT_WEAR);
+    let chest = Form::new(refid(CHEST_REF), 0x20, fos::save_type::REFR, c.finish());
+    let version = chest.version;
+    let i = run(vec![chest], Vec::new());
+    let s = &i.state;
+    let holder = FormId(CHEST_REF);
+    let expected = SavedInventory {
+        version,
+        items: vec![
+            gun_stacks(),
+            SavedItem {
+                saved: refid(ITEM),
+                resolution: SavedResolution::InSave(ITEM),
+                form: Some(FormId(ITEM)),
+                count_delta: -1,
+                stacks: vec![crate::inventory_stacks::SavedStack {
+                    extras: vec![X::Opaque {
+                        kind: k::CANNOT_WEAR,
+                        bytes: vec![k::CANNOT_WEAR, b'|'],
+                    }],
+                }],
+            },
+        ],
+    };
+    assert_eq!(s.inventory_stacks.get(&holder), Some(&expected));
+    // The views nv-rs plays with, as before: the record's three Things
+    // one fewer, the leveled list rolled, the gun's delta; the last
+    // stack's health is its condition and the worn stack equips it.
+    assert_eq!(s.items.get(&(holder, FormId(ITEM))), Some(&2));
+    assert_eq!(s.items.get(&(holder, FormId(PICKED))), Some(&1));
+    assert_eq!(s.items.get(&(holder, FormId(GUN))), Some(&1));
+    assert_eq!(s.weapon_health.get(&(holder, FormId(GUN))), Some(&0.5));
+    assert_eq!(s.equipped.get(&holder), Some(&vec![FormId(GUN)]));
+
+    let back = through_own_save(s);
+    assert_eq!(back.inventory_stacks, s.inventory_stacks);
+    assert_eq!(back.items, s.items);
+    assert_eq!(back.weapon_health, s.weapon_health);
+    assert_eq!(back.equipped, s.equipped);
+    let gun = &back.inventory_stacks[&holder].items[0];
+    assert_eq!(gun.stacks[0].health_bits(), Some(0x7F80_0001));
+    assert_eq!(gun.stacks[0].count(), Some(0));
+    assert_eq!(gun.stacks[1].count(), None);
+    assert!(gun.stacks[2].worn());
+}
+
+#[test]
+fn the_players_stacks_keep_unresolved_items_out_of_the_counts() {
+    // The player's inventory: the gun, an item whose refID is past the
+    // save's form id array, and one saved as refID 0.
+    let mut inv = PipeWriter::new();
+    inv.vsval(3);
+    gun_change(&mut inv);
+    inv.ref_id(0x50).i32(4).vsval(0);
+    inv.ref_id(0).i32(1).vsval(1).vsval(1).u8(k::WORN);
+    let mut head = PipeWriter::new();
+    head.player_head(&[]).u8(0xFF);
+    let mut data = head.finish();
+    data.extend(inv.finish());
+    let mut tail = PipeWriter::new();
+    tail.mobile_tail()
+        .actor_fixed()
+        .still_mover(true)
+        .u8(0)
+        .u8(0)
+        .player_tail(&[], 0, [0; 8]);
+    data.extend(tail.finish());
+    let player = Form::new(refid(0x14), 0x20, fos::save_type::ACHR, data);
+    let i = run(vec![player], Vec::new());
+    let s = &i.state;
+    let saved = &s.inventory_stacks[&PLAYER_REF];
+    assert_eq!(saved.items.len(), 3);
+    assert_eq!(saved.items[0], gun_stacks());
+    let missing = &saved.items[1];
+    assert_eq!(
+        (
+            missing.saved,
+            missing.resolution,
+            missing.form,
+            missing.count_delta
+        ),
+        (0x50, SavedResolution::Missing(0x50), None, 4)
+    );
+    let null = &saved.items[2];
+    assert_eq!((null.resolution, null.form), (SavedResolution::Null, None));
+    assert!(null.stacks[0].worn());
+    // Only the gun reaches the counts and the worn items.
+    assert_eq!(s.items.get(&(PLAYER_REF, FormId(GUN))), Some(&1));
+    assert_eq!(s.equipped.get(&PLAYER_REF), Some(&vec![FormId(GUN)]));
+    assert_eq!(s.weapon_health.get(&(PLAYER_REF, FormId(GUN))), Some(&0.5));
+    let back = through_own_save(s);
+    assert_eq!(back.inventory_stacks, s.inventory_stacks);
+    assert_eq!(back.items, s.items);
 }
