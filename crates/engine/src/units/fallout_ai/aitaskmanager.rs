@@ -12,33 +12,21 @@
 //! The movement tasklet's `iUpdated` is Xbox PDB +0x58 and PC +0x38.
 //!
 //! The thread manager, its ten-entry PC task ring, worker semaphore helpers,
-//! and linked message queue are also translated in this unit. The actor
-//! scheduling body (`008c94e0`) and parallel scheduling body (`008ca070`)
-//! remain fail-closed. `008c94e0` leaves open its `005be5c0`/`00717e50`/
-//! `00968670` process-list traversal, the task-record conditions
-//! (`00408d60`, `0043d4d0`), six manager-tasklet queues, synchronous
-//! `008c8240` runs, and worker wake path (`008c9f70`, `008c9fd0`).
-//! `008ca070` leaves open its process-list traversal, four task-record
-//! gates, two synchronous `008c8240` branches, and parallel queue/wake/finish
-//! protocol (`008ca2e0`, manager flag +0x10180). In `008c94e0`, worker-start
-//! and final-setting branches surrounding that body run when reached; only
-//! the actor-package branch fails closed. `008c9c70` consequently fails
-//! immediately at `008c9d70`; startup and shutdown still lack the exact
-//! thread-local memory-router/file-registration and procedure-index
-//! save/restore calls (`008c9d70`, `008c9e40`).
-//! Batch completeness: 28 functions have translated behavior; 12 are
-//! partial, not complete: fail-closed behavior gaps are `008c94e0`,
-//! `008c9c70`, `008c9d70`, `008c9e40`, `008ca070`; translated normal paths
-//! with unimplemented compiler cleanup are `008c9330`, `008c9430`,
-//! `008c9ae0`, `008c9bd0`, `008c9ef0`, `008ca350`, `008ca480`. None skipped.
+//! the scheduling bodies (`008c94e0`, `008ca070`), the worker startup and
+//! shutdown (`008c9d70`, `008c9e40`) and the message queue with its node
+//! pool (`BSTFreeList<MobileObjectMessage>`: lock word +4, free-list head
+//! +8, 0x1000 nodes of 0x10 bytes at +0xC, a node's next link at +0xC) are
+//! also translated in this unit. The scheduling bodies read the process
+//! lists' actor list through `00717e50` / `005be5c0` / `00968670` and the
+//! tasklet settings through `00408d60` / `0043d4d0`; they queue count, mob
+//! and end messages to the tasklets and either put the tasklets on the worker
+//! ring (settings threaded) or run them to completion.
+//! Every function of the unit is translated. The compiler's exception
+//! frames (`FS:[0]` chains) are not translated anywhere in the unit.
 //!
 //! Layouts: the PC class is 0x38 bytes where the Xbox one is 0x58 (the Xbox
 //! timing fields `StartTime`, `EndTime`, ... and `iThread` are not in the PC
 //! build), so the subclass fields start at +0x38 here.
-//!
-//! Not translated: the compiler's exception-unwinding frames (`FS:[0]`
-//! chains) in the constructors, the destructor `83a0` and
-//! `PackageUpdateTaskData::HandleMobMessage`.
 //!
 //! The critical sections the count and end handlers enter and leave are
 //! globals of other units; their roles are not named here.
@@ -428,6 +416,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008ca540, message_queue_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x008ca570, mobile_message_queue_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x008ca5a0, common_ll_message_queue_try_push(Ptr, Ptr) -> bool),
+        entry!(0x008ca620, mobile_message_queue_do_try_pop(Ptr, Ptr) -> bool),
+        entry!(0x008ca680, ai_task_message_pool_constructor(Ptr) -> Ptr),
+        entry!(
+            0x008ca710,
+            common_message_queue_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x008ca740, message_queue_constructor(Ptr) -> Ptr),
+        entry!(0x008ca770, message_pool_release_node(Ptr, Ptr)),
+        entry!(0x008ca7a0, message_queue_base_constructor(Ptr) -> Ptr),
+        entry!(0x008ca7c0, message_pool_allocate(Ptr, Ptr, Ptr) -> bool),
+        entry!(0x008ca800, message_pool_base_constructor(Ptr) -> Ptr),
+        entry!(0x008ca830, message_pool_link_nodes(Ptr, u32, Ptr)),
+        entry!(0x008ca8d0, message_pool_push_free_node(Ptr, Ptr)),
+        entry!(0x008ca940, message_pool_pop_free_node(Ptr, Ptr) -> bool),
+        entry!(0x008ca9e0, message_construct_copy(Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -1435,31 +1438,175 @@ pub fn ai_task_manager_destructor(e: &mut Engine, this: Ptr) {
 }
 
 // Translated from 008c94e0 (decompiled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 008c94e0 - actor-package scheduling body
-/// Runs the manager's frame of package work, creates its worker threads
-/// once, queues task records in executable order, and either drains the
-/// tasklets synchronously or wakes the workers according to the globals.
-/// `BaseProcess` and timing/settings calls remain address calls because
-/// they belong to other source units.
-// open: actor-package scheduling when global `011f1220` is set.
+/// The manager's per-frame scheduling (`AITaskManager::Process`): creates the
+/// worker threads once (processors 1, 3 and 5, when the threading setting
+/// `011dfb68` is on), and, when the actor-package global `011f1220` is set
+/// and the process list has entries, queues one count message, one mob
+/// message per actor and one end message to each tasklet whose setting
+/// allows it (Detection `011dfc70` is skipped when set; Animation +
+/// ActorUpdate only when `011c3ea4` is 1; Movement `011dfb88` is skipped when
+/// set), then either hands the tasklets to the worker ring and wakes the
+/// workers or runs them to completion here. The tail passes setting
+/// `011d10d4` to `007034c0` and calls `00703490` when `011c3ea4` is 1.
+/// The actor list is `ProcessLists + 4` (`00717e50`), its count the word at
+/// +0x20 (`005be5c0`) and its entries read with `00968670`. The compiler's
+/// exception frames are not translated.
 pub fn ai_task_manager_process(e: &mut Engine, this: Ptr) {
     if e.mem.u8(0x011a_34e7) != 0 {
-        if setting_byte(e, 0x011d_fb68) != 0 {
+        if setting_byte(e, SETTING_THREADED) != 0 {
             for processor in [1, 3, 5] {
-                ai_task_thread_manager_add_thread(e, Ptr::new(0x011d_fc24), processor);
+                ai_task_thread_manager_add_thread(e, Ptr::new(THREAD_MANAGER), processor);
             }
         }
         e.mem.set_u8(0x011a_34e7, 0);
     }
-    if e.mem.u8(0x011f_1220) != 0 {
-        ai_task_manager_process_body(e, this);
+    if e.mem.u8(ACTOR_PACKAGES_ACTIVE) != 0 && actor_count(e) > 0 {
+        let count = actor_count(e);
+        let detection = this;
+        let animation = Ptr::new(this.addr() + 0x40);
+        let package = Ptr::new(this.addr() + 0x78);
+        let actor_update = Ptr::new(this.addr() + 0xbc);
+        let script = Ptr::new(this.addr() + 0xf8);
+        let movement = Ptr::new(this.addr() + 0x138);
+
+        // One count message to every tasklet that takes part.
+        if setting_byte(e, SETTING_NO_DETECTION) == 0 {
+            push_count_message(e, detection, count);
+        }
+        push_count_message(e, package, count);
+        if setting_value(e, SETTING_SPLIT_UPDATE) == 1 {
+            push_count_message(e, actor_update, count);
+            push_count_message(e, animation, count);
+        }
+        push_count_message(e, script, count);
+        if setting_byte(e, SETTING_NO_MOVEMENT) == 0 {
+            push_count_message(e, movement, count);
+        }
+
+        // One mob message per actor.
+        let mut index = 0u32;
+        loop {
+            if setting_byte(e, SETTING_NO_DETECTION) == 0 {
+                push_mob_message(e, detection, index);
+            }
+            push_mob_message(e, package, index);
+            if setting_value(e, SETTING_SPLIT_UPDATE) == 1 {
+                push_mob_message(e, actor_update, index);
+                push_mob_message(e, animation, index);
+            }
+            push_mob_message(e, script, index);
+            if setting_byte(e, SETTING_NO_MOVEMENT) == 0 {
+                push_mob_message(e, movement, index);
+            }
+            index = index.wrapping_add(1);
+            if index >= actor_count(e) {
+                break;
+            }
+        }
+
+        // The end messages.
+        if setting_byte(e, SETTING_NO_DETECTION) == 0 {
+            ai_task_queue_push_end(e, detection);
+        }
+        ai_task_queue_push_end(e, package);
+        if setting_value(e, SETTING_SPLIT_UPDATE) == 1 {
+            ai_task_queue_push_end(e, animation);
+            ai_task_queue_push_end(e, actor_update);
+        }
+        ai_task_queue_push_end(e, script);
+        if setting_byte(e, SETTING_NO_MOVEMENT) == 0 {
+            ai_task_queue_push_end(e, movement);
+        }
+
+        if setting_byte(e, SETTING_THREADED) != 0 {
+            // The workers take the tasklets from the ten-slot ring.
+            let ring = Ptr::new(TASK_RING);
+            if setting_value(e, SETTING_SPLIT_UPDATE) == 1 {
+                ai_task_queue_enqueue(e, ring, actor_update.addr());
+            }
+            ai_task_queue_enqueue(e, ring, package.addr());
+            ai_task_queue_enqueue(e, ring, script.addr());
+            if setting_byte(e, SETTING_NO_DETECTION) == 0 {
+                ai_task_queue_enqueue(e, ring, detection.addr());
+            }
+            if setting_byte(e, SETTING_NO_MOVEMENT) == 0 {
+                ai_task_queue_enqueue(e, ring, movement.addr());
+                ai_task_queue_enqueue(e, ring, animation.addr());
+            }
+            ai_task_thread_manager_release_semaphores(e, Ptr::new(THREAD_MANAGER));
+            ai_task_thread_manager_wake_threads(e, Ptr::new(THREAD_MANAGER));
+        } else {
+            if setting_byte(e, SETTING_NO_DETECTION) == 0 {
+                mobile_object_tasklet_data_run_to_completion(e, detection.cast(), 0);
+            }
+            mobile_object_tasklet_data_run_to_completion(e, package.cast(), 0);
+            mobile_object_tasklet_data_run_to_completion(e, script.cast(), 0);
+            if setting_value(e, SETTING_SPLIT_UPDATE) == 1 {
+                mobile_object_tasklet_data_run_to_completion(e, animation.cast(), 0);
+                mobile_object_tasklet_data_run_to_completion(e, actor_update.cast(), 0);
+            }
+            if setting_byte(e, SETTING_NO_MOVEMENT) == 0 {
+                mobile_object_tasklet_data_run_to_completion(e, movement.cast(), 0);
+            }
+        }
     }
-    // This call is reached regardless of whether actor packages were queued.
-    if setting_value(e, 0x011c_3ea4) == 1 {
+    if setting_value(e, SETTING_SPLIT_UPDATE) == 1 {
         let value = setting_value(e, 0x011d_10d4) as u32;
         e.call(0x0070_34c0, &args![value]);
         e.call(0x0070_3490, &[]);
     }
+}
+
+/// The global task ring (`011dfb98`, `AITaskQueue`) and the thread manager
+/// (`011dfc24`) used by the scheduling functions.
+const TASK_RING: u32 = 0x011d_fb98;
+const THREAD_MANAGER: u32 = 0x011d_fc24;
+/// Byte global: actor packages are being scheduled this frame.
+const ACTOR_PACKAGES_ACTIVE: u32 = 0x011f_1220;
+/// Setting bytes read with `00408d60` (a pointer to the setting's value):
+/// worker threads on, Detection tasklet off, Movement tasklet off. Setting
+/// `011c3ea4` (an int read with `0043d4d0`) is 1 when the Animation and
+/// ActorUpdate tasklets run. Their names are not in the exe's symbols.
+const SETTING_THREADED: u32 = 0x011d_fb68;
+const SETTING_NO_DETECTION: u32 = 0x011d_fc70;
+const SETTING_NO_MOVEMENT: u32 = 0x011d_fb88;
+const SETTING_SPLIT_UPDATE: u32 = 0x011c_3ea4;
+
+/// The actor list of the process lists: `ProcessLists + 4` (`00717e50`,
+/// `this` only).
+fn actor_list(e: &mut Engine) -> u32 {
+    e.call(0x0071_7e50, &args![PROCESS_LISTS]).u32()
+}
+
+/// The list's entry count (`005be5c0` with index 0).
+fn actor_count(e: &mut Engine) -> u32 {
+    let list = actor_list(e);
+    e.call(0x005b_e5c0, &args![list, 0u32]).u32()
+}
+
+/// Entry `index` of the actor list (`00968670`).
+fn actor_at(e: &mut Engine, index: u32) -> u32 {
+    let list = actor_list(e);
+    e.call(0x0096_8670, &args![list, index]).u32()
+}
+
+/// Builds a count message (`008c9a20`) on the stack and pushes it
+/// (`008ca010`) to the tasklet.
+fn push_count_message(e: &mut Engine, tasklet: Ptr, count: u32) {
+    e.with_stack(12, |e, item| {
+        task_queue_item_new(e, item, count);
+        ai_task_queue_push(e, tasklet, item);
+    });
+}
+
+/// Builds a mob message (`008c9a50`) for the actor at `index` and pushes it
+/// to the tasklet.
+fn push_mob_message(e: &mut Engine, tasklet: Ptr, index: u32) {
+    let actor = actor_at(e, index);
+    e.with_stack(12, |e, item| {
+        task_queue_item_existing(e, item, actor);
+        ai_task_queue_push(e, tasklet, item);
+    });
 }
 
 fn setting_byte(e: &mut Engine, setting: u32) -> u8 {
@@ -1506,11 +1653,9 @@ pub fn ai_task_queue_enqueue(e: &mut Engine, this: Ptr, value: u32) {
 }
 
 // Translated from 008c9c70 (decompiled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 008c9c70 - depends on open worker startup
 /// Runs the worker loop: wait on its start semaphore, drain the global task
 /// ring through `RunToCompletion`, release the completion semaphore, and
 /// stop when the kill byte is set.
-// open: worker startup and shutdown setup.
 pub fn ai_task_thread_thread_proc(e: &mut Engine, this: Ptr) -> u32 {
     ai_task_thread_on_startup(e, this);
     loop {
@@ -1532,39 +1677,141 @@ pub fn ai_task_thread_thread_proc(e: &mut Engine, this: Ptr) -> u32 {
     0
 }
 
+/// The worker thread's Havok memory router (embedded at +0x50) and the
+/// 0x16800-byte scratch block (pointer at +0x74) the startup allocates.
+const THREAD_ROUTER: u32 = 0x50;
+const THREAD_SCRATCH: u32 = 0x74;
+const THREAD_SCRATCH_SIZE: u32 = 0x16800;
+/// The name string (`01085820`) `threadInit` is given.
+const THREAD_NAME: u32 = 0x0108_5820;
+/// `hkMemorySystem::getInstance` (`00cbbfc0`), `hkBaseSystem::initThread`
+/// (`00cbb930`, cdecl) and `hkBaseSystem::quitThread` (`00cbb990`).
+const MEMORY_SYSTEM_GET_INSTANCE: u32 = 0x00cb_bfc0;
+const HK_INIT_THREAD: u32 = 0x00cb_b930;
+const HK_QUIT_THREAD: u32 = 0x00cb_b990;
+/// Accessors of the router: its word +0x10 (`0044edb0`), setters of its
+/// words +0xC (`0041fd00`) and +0x18 (`00984f60`), and the call that gives it
+/// the scratch block and size (`008c70c0`).
+const ROUTER_WORD: u32 = 0x0044_edb0;
+const ROUTER_SET_WORD_C: u32 = 0x0041_fd00;
+const ROUTER_SET_WORD_18: u32 = 0x0098_4f60;
+const ROUTER_SET_BLOCK: u32 = 0x008c_70c0;
+/// `TESDataHandler::CreateThreadSafeFiles` (Xbox PDB, `00462ee0`) and the
+/// global holding its `this`.
+const CREATE_THREAD_SAFE_FILES: u32 = 0x0046_2ee0;
+const THREAD_SAFE_FILES_OWNER: u32 = 0x011c_3f2c;
+
 // Translated from 008c9d70 (decompiled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 008c9d70 - worker startup protocol
-/// Worker startup setup is left open because its Havok memory-router and
-/// thread-local procedure-index protocol has not yet been translated.
-// open: thread-local allocator setup, thread-safe file registration, and
-// procedure-index save/restore calls.
-pub fn ai_task_thread_on_startup(_e: &mut Engine, _this: Ptr) {
-    panic!("open function 008c9d70: worker startup setup");
+/// `AITaskThread::OnStartup` (Xbox PDB): sets up the worker's Havok memory
+/// router and scratch memory. Calls `hkMemorySystem::threadInit` (slot +0xC
+/// of `hkMemorySystem::getInstance`, `00cbbfc0`) with the thread's router at
+/// +0x50, a name string (`01085820`) and flags 1, `hkBaseSystem::initThread`
+/// (`00cbb930`), copies the router's word +0x10 (`0044edb0`) to its +0xC
+/// (`0041fd00`) and +0x18 (`00984f60`), allocates 0x16800 bytes of scratch
+/// memory from the object at that word (vtable slot +4) into this+0x74,
+/// hands the block to the router (`008c70c0`) and creates the thread-safe
+/// files (`00462ee0`, `this` = the global at `011c3f2c`).
+pub fn ai_task_thread_on_startup(e: &mut Engine, this: Ptr) {
+    let router = this.addr() + THREAD_ROUTER;
+    let memory_system = e.call(MEMORY_SYSTEM_GET_INSTANCE, &[]).u32();
+    e.vcall(memory_system, 0x0c, &args![router, THREAD_NAME, 1u32]);
+    e.call(HK_INIT_THREAD, &args![router]);
+    let word = e.call(ROUTER_WORD, &args![router]).u32();
+    e.call(ROUTER_SET_WORD_C, &args![router, word]);
+    let word = e.call(ROUTER_WORD, &args![router]).u32();
+    e.call(ROUTER_SET_WORD_18, &args![router, word]);
+    let allocator = e.call(ROUTER_WORD, &args![router]).u32();
+    let block = e.vcall(allocator, 0x04, &args![THREAD_SCRATCH_SIZE]).u32();
+    e.mem.set_u32(this.addr() + THREAD_SCRATCH, block);
+    let router_again = e.call(RETURN_THIS, &args![router]).u32();
+    e.call(
+        ROUTER_SET_BLOCK,
+        &args![router_again, block, THREAD_SCRATCH_SIZE],
+    );
+    let files = e.global::<u32>(THREAD_SAFE_FILES_OWNER);
+    e.call(CREATE_THREAD_SAFE_FILES, &args![files]);
 }
 
 // Translated from 008c9e40 (decompiled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 008c9e40 - worker shutdown protocol
-/// Worker shutdown setup is left open because its Havok memory-router and
-/// thread-local procedure-index protocol has not yet been translated.
-// open: thread-local allocator teardown and procedure-index restoration.
-pub fn ai_task_thread_on_shutdown(_e: &mut Engine, _this: Ptr) {
-    panic!("open function 008c9e40: worker shutdown setup");
-}
-
-/// The actor-package scheduling and per-frame task queueing path.
-// open: translation of the 1,340-byte process scheduling body, including
-// the package/process-list calls and its conditional task records.
-fn ai_task_manager_process_body(_e: &mut Engine, _this: Ptr) {
-    panic!("open function 008c94e0: actor-package scheduling body");
+/// `AITaskThread::OnShutdown` (Xbox PDB): frees the scratch memory with the
+/// allocator at the router's word +0x10 (vtable slot +8: block, size),
+/// `hkBaseSystem::quitThread` (`00cbb990`), `hkMemorySystem::threadQuit`
+/// (slot +0x10 with the router and flags 1) and clears the router's block
+/// (`008c70c0` with 0 and 0).
+pub fn ai_task_thread_on_shutdown(e: &mut Engine, this: Ptr) {
+    let router = this.addr() + THREAD_ROUTER;
+    let allocator = e.call(ROUTER_WORD, &args![router]).u32();
+    let block = e.mem.u32(this.addr() + THREAD_SCRATCH);
+    e.vcall(allocator, 0x08, &args![block, THREAD_SCRATCH_SIZE]);
+    e.call(HK_QUIT_THREAD, &[]);
+    let memory_system = e.call(MEMORY_SYSTEM_GET_INSTANCE, &[]).u32();
+    e.vcall(memory_system, 0x10, &args![router, 1u32]);
+    let router_again = e.call(RETURN_THIS, &args![router]).u32();
+    e.call(ROUTER_SET_BLOCK, &args![router_again, 0u32, 0u32]);
 }
 
 // Translated from 008ca070 (decompiled, FalloutNV.exe 1.4.0.525)
-// Translation incomplete: 008ca070 - parallel task scheduling body
-/// The parallel actor-package scheduling path.
-// open: translation of its task-record gates, process-list traversal, and
-// worker wake/finish protocol.
-pub fn ai_task_manager_process_parallel(_e: &mut Engine, _this: Ptr) {
-    panic!("open function 008ca070: parallel task scheduling body");
+/// The second scheduling pass, for the Detection (`011dfc70`) and Movement
+/// (`011dfb88`) tasklets when those settings are on. Only when `011c3ea4` is
+/// 1, at least one of the two is on, `011f1220` is set and the actor list
+/// is not empty: queues a count message, one mob message per actor (the
+/// count is read once) and an end message to each enabled tasklet, then
+/// either puts them on the worker ring, releases the worker with index 2 and
+/// sets the manager's flag +0x10180 (threads on, `011dfb68`), or runs them
+/// to completion here. The compiler's exception frames are not translated.
+pub fn ai_task_manager_process_parallel(e: &mut Engine, this: Ptr) {
+    if setting_value(e, SETTING_SPLIT_UPDATE) != 1 {
+        return;
+    }
+    if setting_byte(e, SETTING_NO_DETECTION) == 0 && setting_byte(e, SETTING_NO_MOVEMENT) == 0 {
+        return;
+    }
+    if e.mem.u8(ACTOR_PACKAGES_ACTIVE) == 0 || actor_count(e) == 0 {
+        return;
+    }
+    let count = actor_count(e);
+    let detection = this;
+    let movement = Ptr::new(this.addr() + 0x138);
+    if setting_byte(e, SETTING_NO_DETECTION) != 0 {
+        push_count_message(e, detection, count);
+    }
+    if setting_byte(e, SETTING_NO_MOVEMENT) != 0 {
+        push_count_message(e, movement, count);
+    }
+    let mut index = 0u32;
+    while index < count {
+        if setting_byte(e, SETTING_NO_DETECTION) != 0 {
+            push_mob_message(e, detection, index);
+        }
+        if setting_byte(e, SETTING_NO_MOVEMENT) != 0 {
+            push_mob_message(e, movement, index);
+        }
+        index += 1;
+    }
+    if setting_byte(e, SETTING_NO_DETECTION) != 0 {
+        ai_task_queue_push_end(e, detection);
+    }
+    if setting_byte(e, SETTING_NO_MOVEMENT) != 0 {
+        ai_task_queue_push_end(e, movement);
+    }
+    if setting_byte(e, SETTING_THREADED) != 0 {
+        let ring = Ptr::new(TASK_RING);
+        if setting_byte(e, SETTING_NO_DETECTION) != 0 {
+            ai_task_queue_enqueue(e, ring, detection.addr());
+        }
+        if setting_byte(e, SETTING_NO_MOVEMENT) != 0 {
+            ai_task_queue_enqueue(e, ring, movement.addr());
+        }
+        ai_task_manager_release_semaphore(e, Ptr::new(THREAD_MANAGER), 2);
+        e.mem.set_u8(this.addr() + 0x10180, 1);
+    } else {
+        if setting_byte(e, SETTING_NO_DETECTION) != 0 {
+            mobile_object_tasklet_data_run_to_completion(e, detection.cast(), 0);
+        }
+        if setting_byte(e, SETTING_NO_MOVEMENT) != 0 {
+            mobile_object_tasklet_data_run_to_completion(e, movement.cast(), 0);
+        }
+    }
 }
 
 // Translated from 008ca350 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1856,6 +2103,233 @@ pub fn common_ll_message_queue_try_push(e: &mut Engine, this: Ptr, value: Ptr) -
     })
 }
 
+/// `0043b460`: the interlocked compare-exchange the message pool's lock word
+/// (+4) is taken and released with. `0040fbe0` is the empty debug check the
+/// game calls around the locked region. `00483710` is an empty destructor
+/// and `006815c0` returns its `this`.
+const POOL_COMPARE_EXCHANGE: u32 = 0x0043_b460;
+const POOL_DEBUG_CHECK: u32 = 0x0040_fbe0;
+const EMPTY_DESTRUCTOR: u32 = 0x0048_3710;
+const RETURN_THIS: u32 = 0x0068_15c0;
+/// `_eh_vector_constructor_iterator_` (stdcall: array, element size, count,
+/// constructor, destructor) and the element constructor `008caae0`, which
+/// clears the node's next link (+0xC).
+const VECTOR_CONSTRUCTOR_ITERATOR: u32 = 0x00ec_782f;
+const NODE_CONSTRUCTOR: u32 = 0x008c_aae0;
+/// `operator new(size, address)` placement form (`006e6da0`, cdecl): returns
+/// the address.
+const PLACEMENT_NEW: u32 = 0x006e_6da0;
+/// `MobileObjectMessage` copy constructor (`008caa70`, one argument).
+const MESSAGE_COPY: u32 = 0x008c_aa70;
+/// Vtable of the message pool with its array (`01085834`) and of its base
+/// (`0108583c`); of the derived message queue (`01085864`) and of its base
+/// (`01085884`).
+const VTABLE_MESSAGE_POOL: u32 = 0x0108_5834;
+const VTABLE_MESSAGE_POOL_BASE: u32 = 0x0108_583c;
+const VTABLE_MESSAGE_QUEUE: u32 = 0x0108_5864;
+const VTABLE_MESSAGE_QUEUE_BASE: u32 = 0x0108_5884;
+/// Number of nodes of the message pool and their size.
+const POOL_NODE_COUNT: u32 = 0x1000;
+const POOL_NODE_SIZE: u32 = 0x10;
+
+/// Takes the pool's lock word (+4): spins on the compare-exchange 0 -> 1.
+fn pool_lock(e: &mut Engine, pool: Ptr) {
+    let lock = pool.addr() + 4;
+    while e
+        .call(POOL_COMPARE_EXCHANGE, &args![lock, 0u32, 1u32])
+        .u32()
+        != 0
+    {}
+    e.call(POOL_DEBUG_CHECK, &args![]);
+}
+
+/// Releases the pool's lock word (compare-exchange 1 -> 0).
+fn pool_unlock(e: &mut Engine, pool: Ptr) {
+    e.call(POOL_DEBUG_CHECK, &args![]);
+    e.call(POOL_COMPARE_EXCHANGE, &args![pool.addr() + 4, 1u32, 0u32]);
+}
+
+// Translated from 008ca620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonLLMessageQueue<MobileObjectMessage>::DoTryPop` (Xbox PDB): takes
+/// the first node of the queue's list (+0xC), copies its message to `out`,
+/// unlinks it and gives the node back to the pool (`*(this + 8)`). False when
+/// the list is empty.
+pub fn mobile_message_queue_do_try_pop(e: &mut Engine, this: Ptr, out: Ptr) -> bool {
+    let node = e.mem.u32(this.addr() + 0x0c);
+    if node == 0 {
+        return false;
+    }
+    let source = e.call(RETURN_THIS, &args![node]).u32();
+    e.call(MESSAGE_COPY, &args![out, source]);
+    let next = e.mem.u32(node + 0x0c);
+    e.mem.set_u32(this.addr() + 0x0c, next);
+    let pool = Ptr::new(e.mem.u32(this.addr() + 8));
+    e.with_stack(4, |e, holder| {
+        e.mem.set_u32(holder.addr(), node);
+        message_pool_release_node(e, pool, holder.cast());
+    });
+    true
+}
+
+// Translated from 008ca680 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008ca680 - compiler exception cleanup path
+/// Message pool constructor: the base (`008ca800`), the pool vtable, the
+/// 0x1000 nodes of 0x10 bytes at +0xC constructed
+/// (`_eh_vector_constructor_iterator_` with the node constructor `008caae0`)
+/// and linked into the free list (`008ca830`). The compiler's exception frame
+/// is not translated.
+// open: compiler exception frame (FS:[0] chain) around the node array construction.
+pub fn ai_task_message_pool_constructor(e: &mut Engine, this: Ptr) -> Ptr {
+    message_pool_base_constructor(e, this);
+    e.mem.set_u32(this.addr(), VTABLE_MESSAGE_POOL);
+    e.call(
+        VECTOR_CONSTRUCTOR_ITERATOR,
+        &args![
+            this.addr() + 0x0c,
+            POOL_NODE_SIZE,
+            POOL_NODE_COUNT,
+            NODE_CONSTRUCTOR,
+            EMPTY_DESTRUCTOR
+        ],
+    );
+    message_pool_link_nodes(e, this, POOL_NODE_COUNT, Ptr::new(this.addr() + 0x0c));
+    this
+}
+
+// Translated from 008ca710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonLLMessageQueue<MobileObjectMessage>::scalar deleting destructor`
+/// (Xbox PDB): the queue destructor (`008ca480`), then `operator delete`
+/// when bit zero of `flags` is set. Returns `this`.
+pub fn common_message_queue_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    common_message_queue_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 008ca740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Message queue constructor: the base constructor, the derived queue vtable
+/// and the word at +4 cleared. Returns `this`.
+pub fn message_queue_constructor(e: &mut Engine, this: Ptr) -> Ptr {
+    message_queue_base_constructor(e, this);
+    e.mem.set_u32(this.addr(), VTABLE_MESSAGE_QUEUE);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 008ca770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Gives a node back to the pool: runs the node's (empty) destructor
+/// `00483710` on `*node_slot`, then pushes it on the free list
+/// (`008ca8d0`, which clears `*node_slot`).
+pub fn message_pool_release_node(e: &mut Engine, this: Ptr, node_slot: Ptr) {
+    let node = e.mem.u32(node_slot.addr());
+    e.call(EMPTY_DESTRUCTOR, &args![node]);
+    message_pool_push_free_node(e, this, node_slot);
+}
+
+// Translated from 008ca7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Message queue base constructor: only the base vtable. Returns `this`.
+pub fn message_queue_base_constructor(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), VTABLE_MESSAGE_QUEUE_BASE);
+    this
+}
+
+// Translated from 008ca7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTFreeList<MobileObjectMessage>::Allocate<MobileObjectMessage>` (Xbox
+/// PDB): takes a free node into `*out` (`008ca940`) and, if there was one,
+/// constructs a copy of the message `value` in it (`008ca9e0`). False when
+/// the pool is exhausted.
+pub fn message_pool_allocate(e: &mut Engine, this: Ptr, out: Ptr, value: Ptr) -> bool {
+    if !message_pool_pop_free_node(e, this, out) {
+        return false;
+    }
+    let node = Ptr::new(e.mem.u32(out.addr()));
+    message_construct_copy(e, node, value);
+    true
+}
+
+// Translated from 008ca800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Message pool base constructor: base vtable, lock word (+4) and free-list
+/// head (+8) cleared. Returns `this`.
+pub fn message_pool_base_constructor(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), VTABLE_MESSAGE_POOL_BASE);
+    e.mem.set_u32(this.addr() + 4, 0);
+    e.mem.set_u32(this.addr() + 8, 0);
+    this
+}
+
+// Translated from 008ca830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Makes `array` (`count` nodes of 0x10 bytes) the free list: stores it as
+/// the head (+8), then, holding the lock, links every node's next word
+/// (+0xC) to the following node and ends the last with zero.
+pub fn message_pool_link_nodes(e: &mut Engine, this: Ptr, count: u32, array: Ptr) {
+    e.mem.set_u32(this.addr() + 8, array.addr());
+    pool_lock(e, this);
+    let mut node = array.addr();
+    let mut index = 0u32;
+    while index < count.wrapping_sub(1) {
+        e.mem
+            .set_u32(node + 0x0c, node.wrapping_add(POOL_NODE_SIZE));
+        index += 1;
+        node = node.wrapping_add(POOL_NODE_SIZE);
+    }
+    e.mem.set_u32(node + 0x0c, 0);
+    pool_unlock(e, this);
+}
+
+// Translated from 008ca8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Pushes the node `*node_slot` on the free list under the lock and clears
+/// `*node_slot`.
+pub fn message_pool_push_free_node(e: &mut Engine, this: Ptr, node_slot: Ptr) {
+    pool_lock(e, this);
+    let node = e.mem.u32(node_slot.addr());
+    let head = e.mem.u32(this.addr() + 8);
+    e.mem.set_u32(node + 0x0c, head);
+    e.mem.set_u32(this.addr() + 8, node);
+    e.mem.set_u32(node_slot.addr(), 0);
+    pool_unlock(e, this);
+}
+
+// Translated from 008ca940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Pops the first free node under the lock into `*out` (its next link is
+/// cleared); when the free list is empty `*out` is zero and the result false.
+pub fn message_pool_pop_free_node(e: &mut Engine, this: Ptr, out: Ptr) -> bool {
+    pool_lock(e, this);
+    let head = e.mem.u32(this.addr() + 8);
+    let found = head != 0;
+    if found {
+        e.mem.set_u32(out.addr(), head);
+        let next = e.mem.u32(head + 0x0c);
+        e.mem.set_u32(this.addr() + 8, next);
+        e.mem.set_u32(head + 0x0c, 0);
+    } else {
+        e.mem.set_u32(out.addr(), 0);
+    }
+    pool_unlock(e, this);
+    found
+}
+
+// Translated from 008ca9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008ca9e0 - compiler exception cleanup path
+/// Constructs a copy of the `MobileObjectMessage` `value` in the node `this`:
+/// the empty destructor-style call `00483710`, placement `operator new`
+/// (`006e6da0`, size 0xC) and, if that gave an address, the copy
+/// constructor (`008caa70`). Returns the constructed message or zero. The
+/// compiler's exception frame is not translated.
+// open: compiler exception frame (FS:[0] chain) around the placement-new copy construction.
+pub fn message_construct_copy(e: &mut Engine, this: Ptr, value: Ptr) -> Ptr {
+    e.call(EMPTY_DESTRUCTOR, &args![this]);
+    let place = e.call(PLACEMENT_NEW, &args![0xcu32, this]).u32();
+    if place == 0 {
+        return Ptr::NULL;
+    }
+    e.call(MESSAGE_COPY, &args![place, value]).ptr()
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3495,38 +3969,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "open function 008c94e0: actor-package scheduling body")]
-    fn manager_process_fails_closed_when_actor_scheduling_is_enabled() {
-        let mut e = engine();
-        e.map(0x011a_3000, 0x1000);
-        e.map(0x011f_1000, 0x1000);
-        e.mem.set_u8(0x011a_34e7, 0);
-        e.mem.set_u8(0x011f_1220, 1);
-        e.call(0x008c_94e0, &args![0x7100_0000u32]);
-    }
-
-    #[test]
-    #[should_panic(expected = "open function 008ca070: parallel task scheduling body")]
-    fn parallel_process_fails_closed_until_its_schedule_is_translated() {
-        let mut e = engine();
-        e.call(0x008c_a070, &args![0x7100_0000u32]);
-    }
-
-    #[test]
-    #[should_panic(expected = "open function 008c9d70: worker startup setup")]
-    fn worker_startup_fails_closed_until_thread_local_state_is_translated() {
-        let mut e = engine();
-        e.call(0x008c_9d70, &args![0x7100_0000u32]);
-    }
-
-    #[test]
-    #[should_panic(expected = "open function 008c9e40: worker shutdown setup")]
-    fn worker_shutdown_fails_closed_until_thread_local_state_is_translated() {
-        let mut e = engine();
-        e.call(0x008c_9e40, &args![0x7100_0000u32]);
-    }
-
-    #[test]
     fn thread_manager_adds_at_most_three_workers_and_initializes_the_new_one() {
         let mut e = engine();
         quiet(
@@ -3580,14 +4022,6 @@ mod tests {
                 vec![this.addr() + 0x3c, 0, 10]
             ]
         );
-    }
-
-    #[test]
-    #[should_panic(expected = "open function 008c9d70: worker startup setup")]
-    fn worker_thread_proc_fails_at_its_open_startup_stage() {
-        let mut e = engine();
-        let this: Ptr = Ptr::new(e.mem.alloc(0x78));
-        e.call(0x008c_9c70, &args![this]);
     }
 
     #[test]
@@ -3902,5 +4336,835 @@ mod tests {
         e.mem.set_u32(queue.addr() + 8, 0);
         assert!(!e.call(0x008c_a5a0, &args![queue, 0x5678u32]).bool());
         assert_eq!(calls_to(&e, 0x008c_a7c0).len(), 1);
+    }
+    // ---- scheduling (008c94e0, 008ca070) ----
+
+    const PUSH_SLOT: u32 = 0x7000_0040;
+    const SETTING_BYTE: u32 = 0x0040_8d60;
+    const SETTING_INT: u32 = 0x0043_d4d0;
+    const ACTOR_LIST: u32 = 0x7200_0000;
+    /// The offsets of the six embedded tasklets in the manager.
+    const TASKLET_OFFSETS: [u32; 6] = [0x00, 0x40, 0x78, 0xbc, 0xf8, 0x138];
+
+    /// One message a tasklet's queue received: the tasklet's offset in the
+    /// manager, message type, count and mob.
+    type Received = (u32, u32, u32, u32);
+
+    struct Schedule {
+        manager: Ptr,
+        received: Rc<RefCell<Vec<Received>>>,
+    }
+
+    /// A manager whose six tasklets have a queue with a push slot (logging the
+    /// messages), a run slot and a drain slot; settings (bytes by setting
+    /// address, ints by setting address), and an actor list of `count`
+    /// entries whose actor `i` is `0x5000 + i`.
+    fn schedule(e: &mut Engine, bytes: &[(u32, u8)], ints: &[(u32, i32)], count: u32) -> Schedule {
+        e.map(0x011a_3000, 0x1000);
+        e.map(0x011f_1000, 0x1000);
+        e.map(0x011c_3000, 0x1000);
+        e.map(0x011d_1000, 0x1000);
+        e.mem.set_u8(0x011a_34e7, 0);
+        e.mem.set_u8(0x011f_1220, 1);
+        let manager: Ptr = Ptr::new(e.mem.alloc(0x10184));
+        let table = e.mem.alloc(0x40);
+        e.mem.set_u32(table + 4, PUSH_SLOT);
+        e.mem.set_u32(table + 0xc, QUEUE_RUN);
+        e.mem.set_u32(table + 0x10, QUEUE_DRAIN);
+        for offset in TASKLET_OFFSETS {
+            e.mem.set_u32(manager.addr() + offset + 0x1c, table);
+        }
+        let received = Rc::new(RefCell::new(Vec::new()));
+        let log = received.clone();
+        let base = manager.addr();
+        e.register_double(PUSH_SLOT, move |e, a| {
+            let message = a[1];
+            log.borrow_mut().push((
+                a[0] - 0x1c - base,
+                e.mem.u32(message),
+                e.mem.u32(message + 4),
+                e.mem.u32(message + 8),
+            ));
+            ok(1)
+        });
+        e.register(QUEUE_RUN, |_, _| ok(0));
+        let mut cells = Vec::new();
+        for (setting, value) in bytes {
+            let cell = e.mem.alloc(1);
+            e.mem.set_u8(cell, *value);
+            cells.push((*setting, cell));
+        }
+        let byte_cells = cells.clone();
+        e.register_double(SETTING_BYTE, move |_, a| {
+            ok(byte_cells.iter().find(|(s, _)| *s == a[0]).unwrap().1)
+        });
+        let mut int_cells = Vec::new();
+        for (setting, value) in ints {
+            let cell = e.mem.alloc(4);
+            e.mem.set_i32(cell, *value);
+            int_cells.push((*setting, cell));
+        }
+        e.register_double(SETTING_INT, move |_, a| {
+            ok(int_cells.iter().find(|(s, _)| *s == a[0]).unwrap().1)
+        });
+        e.register(0x0071_7e50, |_, a| {
+            assert_eq!(a, &[PROCESS_LISTS]);
+            ok(ACTOR_LIST)
+        });
+        e.register_double(0x005b_e5c0, move |_, a| {
+            assert_eq!(a, &[ACTOR_LIST, 0]);
+            ok(count)
+        });
+        e.register(0x0096_8670, |_, a| {
+            assert_eq!(a[0], ACTOR_LIST);
+            ok(0x5000 + a[1])
+        });
+        quiet(e, &[0x0070_34c0, 0x0070_3490]);
+        Schedule { manager, received }
+    }
+
+    const BYTE_SETTINGS_ON: [(u32, u8); 3] = [
+        (SETTING_THREADED, 0),
+        (SETTING_NO_DETECTION, 0),
+        (SETTING_NO_MOVEMENT, 0),
+    ];
+
+    #[test]
+    fn manager_process_queues_every_tasklet_and_runs_them_here_without_threads() {
+        let mut e = engine();
+        let s = schedule(
+            &mut e,
+            &BYTE_SETTINGS_ON,
+            &[(SETTING_SPLIT_UPDATE, 1), (0x011d_10d4, 7)],
+            2,
+        );
+        log_calls(&mut e);
+        e.call(0x008c_94e0, &args![s.manager]);
+        let mut expected: Vec<Received> = Vec::new();
+        // Counts: detection, package, actor update, animation, script, movement.
+        for offset in [0x00, 0x78, 0xbc, 0x40, 0xf8, 0x138] {
+            expected.push((offset, 0, 2, 0));
+        }
+        for actor in [0x5000, 0x5001] {
+            for offset in [0x00, 0x78, 0xbc, 0x40, 0xf8, 0x138] {
+                expected.push((offset, 1, 0, actor));
+            }
+        }
+        // Ends: detection, package, animation, actor update, script, movement.
+        for offset in [0x00, 0x78, 0x40, 0xbc, 0xf8, 0x138] {
+            expected.push((offset, 2, 0, 0));
+        }
+        assert_eq!(*s.received.borrow(), expected);
+        // The tasklets run to completion: detection, package, script,
+        // animation, actor update, movement.
+        let runs: Vec<u32> = calls_to(&e, QUEUE_RUN)
+            .iter()
+            .map(|args| args[0] - 0x1c - s.manager.addr())
+            .collect();
+        assert_eq!(runs, vec![0x00, 0x78, 0xf8, 0x40, 0xbc, 0x138]);
+        assert_eq!(calls_to(&e, 0x0070_34c0), vec![vec![7]]);
+        assert_eq!(calls_to(&e, 0x0070_3490), vec![vec![]]);
+        // Nothing went to the worker ring.
+        assert_eq!(e.mem.i32(TASK_RING + 0x40), 0);
+    }
+
+    #[test]
+    fn manager_process_skips_disabled_tasklets() {
+        let mut e = engine();
+        let s = schedule(
+            &mut e,
+            &[
+                (SETTING_THREADED, 0),
+                (SETTING_NO_DETECTION, 1),
+                (SETTING_NO_MOVEMENT, 1),
+            ],
+            &[(SETTING_SPLIT_UPDATE, 0)],
+            1,
+        );
+        log_calls(&mut e);
+        e.call(0x008c_94e0, &args![s.manager]);
+        // Only the package and script tasklets take part.
+        assert_eq!(
+            *s.received.borrow(),
+            vec![
+                (0x78, 0, 1, 0),
+                (0xf8, 0, 1, 0),
+                (0x78, 1, 0, 0x5000),
+                (0xf8, 1, 0, 0x5000),
+                (0x78, 2, 0, 0),
+                (0xf8, 2, 0, 0),
+            ]
+        );
+        assert_eq!(calls_to(&e, QUEUE_RUN).len(), 2);
+        // The final branch needs the setting to be 1.
+        assert!(calls_to(&e, 0x0070_34c0).is_empty());
+    }
+
+    #[test]
+    fn manager_process_hands_the_tasklets_to_the_workers_with_threads() {
+        let mut e = engine();
+        let s = schedule(
+            &mut e,
+            &[
+                (SETTING_THREADED, 1),
+                (SETTING_NO_DETECTION, 0),
+                (SETTING_NO_MOVEMENT, 0),
+            ],
+            &[(SETTING_SPLIT_UPDATE, 1), (0x011d_10d4, 3)],
+            1,
+        );
+        // One registered worker.
+        let thread = e.mem.alloc(0x78);
+        e.mem.set_u32(THREAD_MANAGER, thread);
+        e.mem.set_i32(THREAD_MANAGER + 0x0c, 1);
+        quiet(&mut e, &[0x0044_2550, 0x008c_7490]);
+        e.mem.set_i32(TASK_RING + 0x40, 0);
+        e.mem.set_i32(TASK_RING + 0x44, 0);
+        log_calls(&mut e);
+        e.call(0x008c_94e0, &args![s.manager]);
+        let base = s.manager.addr();
+        // The ring holds: actor update, package, script, detection, movement,
+        // animation.
+        assert_eq!(e.mem.i32(TASK_RING + 0x40), 6);
+        let ring: Vec<u32> = (0..6)
+            .map(|i| e.mem.u32(TASK_RING + 0x18 + i * 4))
+            .collect();
+        assert_eq!(
+            ring,
+            vec![
+                base + 0xbc,
+                base + 0x78,
+                base + 0xf8,
+                base,
+                base + 0x138,
+                base + 0x40
+            ]
+        );
+        // No tasklet runs here; the worker is released and woken.
+        assert!(calls_to(&e, QUEUE_RUN).is_empty());
+        assert_eq!(calls_to(&e, 0x0044_2550), vec![vec![thread + 0x30]]);
+        assert_eq!(calls_to(&e, 0x008c_7490), vec![vec![thread]]);
+        assert_eq!(calls_to(&e, 0x0070_34c0), vec![vec![3]]);
+    }
+
+    #[test]
+    fn manager_process_does_nothing_for_an_empty_actor_list_or_without_the_flag() {
+        let mut e = engine();
+        let s = schedule(&mut e, &BYTE_SETTINGS_ON, &[(SETTING_SPLIT_UPDATE, 0)], 0);
+        e.call(0x008c_94e0, &args![s.manager]);
+        assert!(s.received.borrow().is_empty());
+        let mut e = engine();
+        let s = schedule(&mut e, &BYTE_SETTINGS_ON, &[(SETTING_SPLIT_UPDATE, 0)], 3);
+        e.mem.set_u8(0x011f_1220, 0);
+        e.call(0x008c_94e0, &args![s.manager]);
+        assert!(s.received.borrow().is_empty());
+        assert_eq!(e.mem.i32(TASK_RING + 0x40), 0);
+    }
+
+    #[test]
+    fn manager_process_creates_three_workers_once() {
+        let mut e = engine();
+        let s = schedule(
+            &mut e,
+            &[
+                (SETTING_THREADED, 1),
+                (SETTING_NO_DETECTION, 0),
+                (SETTING_NO_MOVEMENT, 0),
+            ],
+            &[(SETTING_SPLIT_UPDATE, 0)],
+            0,
+        );
+        e.mem.set_u8(0x011a_34e7, 1);
+        e.mem.set_i32(THREAD_MANAGER + 0x0c, 0);
+        quiet(
+            &mut e,
+            &[
+                0x00aa_6360,
+                0x0086_c6a0,
+                0x00c8_5770,
+                0x00aa_6430,
+                0x00aa_6540,
+                0x00aa_6550,
+            ],
+        );
+        e.register_double(OPERATOR_NEW, |e, _| ok(e.mem.alloc(0x78)));
+        log_calls(&mut e);
+        e.call(0x008c_94e0, &args![s.manager]);
+        let processors: Vec<u32> = calls_to(&e, 0x00aa_6550)
+            .iter()
+            .map(|args| args[1])
+            .collect();
+        assert_eq!(processors, vec![1, 3, 5]);
+        assert_eq!(e.mem.i32(THREAD_MANAGER + 0x0c), 3);
+        assert_eq!(e.mem.u8(0x011a_34e7), 0);
+    }
+
+    #[test]
+    fn parallel_process_handles_only_the_tasklets_the_first_pass_skipped() {
+        let mut e = engine();
+        let s = schedule(
+            &mut e,
+            &[
+                (SETTING_THREADED, 0),
+                (SETTING_NO_DETECTION, 1),
+                (SETTING_NO_MOVEMENT, 0),
+            ],
+            &[(SETTING_SPLIT_UPDATE, 1)],
+            2,
+        );
+        log_calls(&mut e);
+        e.call(0x008c_a070, &args![s.manager]);
+        assert_eq!(
+            *s.received.borrow(),
+            vec![
+                (0x00, 0, 2, 0),
+                (0x00, 1, 0, 0x5000),
+                (0x00, 1, 0, 0x5001),
+                (0x00, 2, 0, 0),
+            ]
+        );
+        let runs: Vec<u32> = calls_to(&e, QUEUE_RUN)
+            .iter()
+            .map(|args| args[0] - 0x1c - s.manager.addr())
+            .collect();
+        assert_eq!(runs, vec![0x00]);
+        assert_eq!(e.mem.u8(s.manager.addr() + 0x10180), 0);
+    }
+
+    #[test]
+    fn parallel_process_with_threads_queues_both_and_releases_worker_two() {
+        let mut e = engine();
+        let s = schedule(
+            &mut e,
+            &[
+                (SETTING_THREADED, 1),
+                (SETTING_NO_DETECTION, 1),
+                (SETTING_NO_MOVEMENT, 1),
+            ],
+            &[(SETTING_SPLIT_UPDATE, 1)],
+            1,
+        );
+        let worker = e.mem.alloc(0x78);
+        e.mem.set_u32(THREAD_MANAGER + 8, worker);
+        quiet(&mut e, &[0x0044_2550]);
+        e.mem.set_i32(TASK_RING + 0x40, 0);
+        e.mem.set_i32(TASK_RING + 0x44, 0);
+        log_calls(&mut e);
+        e.call(0x008c_a070, &args![s.manager]);
+        let base = s.manager.addr();
+        assert_eq!(
+            *s.received.borrow(),
+            vec![
+                (0x00, 0, 1, 0),
+                (0x138, 0, 1, 0),
+                (0x00, 1, 0, 0x5000),
+                (0x138, 1, 0, 0x5000),
+                (0x00, 2, 0, 0),
+                (0x138, 2, 0, 0),
+            ]
+        );
+        assert_eq!(e.mem.i32(TASK_RING + 0x40), 2);
+        assert_eq!(e.mem.u32(TASK_RING + 0x18), base);
+        assert_eq!(e.mem.u32(TASK_RING + 0x1c), base + 0x138);
+        assert_eq!(calls_to(&e, 0x0044_2550), vec![vec![worker + 0x30]]);
+        assert_eq!(e.mem.u8(base + 0x10180), 1);
+        assert!(calls_to(&e, QUEUE_RUN).is_empty());
+    }
+
+    #[test]
+    fn parallel_process_needs_the_setting_a_tasklet_and_actors() {
+        // Setting not 1.
+        let mut e = engine();
+        let s = schedule(
+            &mut e,
+            &[
+                (SETTING_THREADED, 0),
+                (SETTING_NO_DETECTION, 1),
+                (SETTING_NO_MOVEMENT, 1),
+            ],
+            &[(SETTING_SPLIT_UPDATE, 0)],
+            2,
+        );
+        e.call(0x008c_a070, &args![s.manager]);
+        assert!(s.received.borrow().is_empty());
+        // Neither tasklet is switched on.
+        let mut e = engine();
+        let s = schedule(&mut e, &BYTE_SETTINGS_ON, &[(SETTING_SPLIT_UPDATE, 1)], 2);
+        e.call(0x008c_a070, &args![s.manager]);
+        assert!(s.received.borrow().is_empty());
+        // No actors.
+        let mut e = engine();
+        let s = schedule(
+            &mut e,
+            &[
+                (SETTING_THREADED, 0),
+                (SETTING_NO_DETECTION, 1),
+                (SETTING_NO_MOVEMENT, 1),
+            ],
+            &[(SETTING_SPLIT_UPDATE, 1)],
+            0,
+        );
+        e.call(0x008c_a070, &args![s.manager]);
+        assert!(s.received.borrow().is_empty());
+        // Flag cleared.
+        let mut e = engine();
+        let s = schedule(
+            &mut e,
+            &[
+                (SETTING_THREADED, 0),
+                (SETTING_NO_DETECTION, 1),
+                (SETTING_NO_MOVEMENT, 1),
+            ],
+            &[(SETTING_SPLIT_UPDATE, 1)],
+            2,
+        );
+        e.mem.set_u8(0x011f_1220, 0);
+        e.call(0x008c_a070, &args![s.manager]);
+        assert!(s.received.borrow().is_empty());
+    }
+
+    // ---- worker startup and shutdown (008c9d70, 008c9e40, 008c9c70) ----
+
+    const MEMORY_SYSTEM_INIT: u32 = 0x7000_0100;
+    const MEMORY_SYSTEM_QUIT: u32 = 0x7000_0110;
+    const ALLOCATE: u32 = 0x7000_0120;
+    const FREE: u32 = 0x7000_0130;
+
+    /// What the Havok doubles hand out.
+    struct ThreadEnvironment {
+        memory_system: u32,
+        allocator: u32,
+        block: u32,
+    }
+
+    /// Doubles for the Havok and file calls of the worker startup and
+    /// shutdown.
+    fn thread_environment(e: &mut Engine) -> ThreadEnvironment {
+        e.map(0x011c_3000, 0x1000);
+        e.set_global(THREAD_SAFE_FILES_OWNER, 0x7300_0000u32);
+        let memory_system = object_with_slots(
+            e,
+            0x10,
+            &[(0x0c, MEMORY_SYSTEM_INIT), (0x10, MEMORY_SYSTEM_QUIT)],
+        )
+        .addr();
+        let allocator = object_with_slots(e, 0x10, &[(0x04, ALLOCATE), (0x08, FREE)]).addr();
+        let block = e.mem.alloc(0x20);
+        e.register_double(MEMORY_SYSTEM_GET_INSTANCE, move |_, _| ok(memory_system));
+        e.register_double(ROUTER_WORD, move |_, _| ok(allocator));
+        e.register(RETURN_THIS, |_, a| ok(a[0]));
+        e.register_double(ALLOCATE, move |_, _| ok(block));
+        quiet(
+            e,
+            &[
+                MEMORY_SYSTEM_INIT,
+                MEMORY_SYSTEM_QUIT,
+                FREE,
+                HK_INIT_THREAD,
+                HK_QUIT_THREAD,
+                ROUTER_SET_WORD_C,
+                ROUTER_SET_WORD_18,
+                ROUTER_SET_BLOCK,
+                CREATE_THREAD_SAFE_FILES,
+            ],
+        );
+        ThreadEnvironment {
+            memory_system,
+            allocator,
+            block,
+        }
+    }
+
+    #[test]
+    fn worker_startup_sets_up_the_router_and_scratch_memory() {
+        let mut e = engine();
+        let env = thread_environment(&mut e);
+        let this: Ptr = Ptr::new(e.mem.alloc(0x78));
+        let router = this.addr() + 0x50;
+        log_calls(&mut e);
+        e.call(0x008c_9d70, &args![this]);
+        assert_eq!(e.mem.u32(this.addr() + 0x74), env.block);
+        let wanted = [
+            MEMORY_SYSTEM_INIT,
+            HK_INIT_THREAD,
+            ROUTER_SET_WORD_C,
+            ROUTER_SET_WORD_18,
+            ALLOCATE,
+            ROUTER_SET_BLOCK,
+            CREATE_THREAD_SAFE_FILES,
+        ];
+        let log: Vec<(u32, Vec<u32>)> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| wanted.contains(a))
+            .cloned()
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                (
+                    MEMORY_SYSTEM_INIT,
+                    vec![env.memory_system, router, 0x0108_5820, 1]
+                ),
+                (HK_INIT_THREAD, vec![router]),
+                (ROUTER_SET_WORD_C, vec![router, env.allocator]),
+                (ROUTER_SET_WORD_18, vec![router, env.allocator]),
+                (ALLOCATE, vec![env.allocator, 0x16800]),
+                (ROUTER_SET_BLOCK, vec![router, env.block, 0x16800]),
+                (CREATE_THREAD_SAFE_FILES, vec![0x7300_0000]),
+            ]
+        );
+    }
+
+    #[test]
+    fn worker_shutdown_frees_the_scratch_memory_and_quits_the_thread() {
+        let mut e = engine();
+        let env = thread_environment(&mut e);
+        let this: Ptr = Ptr::new(e.mem.alloc(0x78));
+        let router = this.addr() + 0x50;
+        e.mem.set_u32(this.addr() + 0x74, env.block);
+        log_calls(&mut e);
+        e.call(0x008c_9e40, &args![this]);
+        let wanted = [FREE, HK_QUIT_THREAD, MEMORY_SYSTEM_QUIT, ROUTER_SET_BLOCK];
+        let log: Vec<(u32, Vec<u32>)> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| wanted.contains(a))
+            .cloned()
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                (FREE, vec![env.allocator, env.block, 0x16800]),
+                (HK_QUIT_THREAD, vec![]),
+                (MEMORY_SYSTEM_QUIT, vec![env.memory_system, router, 1]),
+                (ROUTER_SET_BLOCK, vec![router, 0, 0]),
+            ]
+        );
+    }
+
+    #[test]
+    fn worker_thread_proc_runs_queued_tasklets_until_the_kill_flag() {
+        let mut e = engine();
+        thread_environment(&mut e);
+        let this: Ptr = Ptr::new(e.mem.alloc(0x78));
+        e.mem.set_u32(this.addr() + 0x4c, 5);
+        quiet(
+            &mut e,
+            &[CRITICAL_SECTION_ENTER, CRITICAL_SECTION_LEAVE, 0x0044_2550],
+        );
+        // One tasklet waits in the ring.
+        let tasklet: Ptr = tasklet(&mut e, 0x38, &standard_handlers());
+        quiet(&mut e, &[QUEUE_RUN]);
+        e.mem.set_i32(TASK_RING + 0x40, 1);
+        e.mem.set_i32(TASK_RING + 0x44, 0);
+        e.mem.set_u32(TASK_RING + 0x18, tasklet.addr());
+        // The first wait returns with the flag clear, the second with it set.
+        let waits = Rc::new(RefCell::new(0u32));
+        let counter = waits.clone();
+        let kill = this.addr() + 0x48;
+        let wait_arg = this.addr() + 0x30;
+        e.register_double(0x0044_24e0, move |e, a| {
+            assert_eq!(a, &[wait_arg]);
+            *counter.borrow_mut() += 1;
+            if *counter.borrow() == 2 {
+                e.mem.set_u8(kill, 1);
+            }
+            ok(0)
+        });
+        log_calls(&mut e);
+        assert_eq!(e.call(0x008c_9c70, &args![this]).u32(), 0);
+        assert_eq!(*waits.borrow(), 2);
+        // The tasklet ran to completion with the worker's index.
+        assert_eq!(calls_to(&e, QUEUE_RUN).len(), 1);
+        assert_eq!(e.mem.u32(tasklet.addr() + 0x34), 5);
+        assert_eq!(e.mem.i32(TASK_RING + 0x40), 0);
+    }
+
+    // ---- message pool and queue (008ca620 .. 008ca9e0) ----
+
+    /// A pool object (0x20 bytes) whose free list holds `nodes` fresh nodes,
+    /// chained through their next word (+0xC); returns the pool and the nodes.
+    fn pool_with_nodes(e: &mut Engine, nodes: usize) -> (Ptr, Vec<u32>) {
+        let pool: Ptr = Ptr::new(e.mem.alloc(0x20));
+        let nodes: Vec<u32> = (0..nodes).map(|_| e.mem.alloc(0x10)).collect();
+        for pair in nodes.windows(2) {
+            e.mem.set_u32(pair[0] + 0x0c, pair[1]);
+        }
+        e.mem
+            .set_u32(pool.addr() + 8, nodes.first().copied().unwrap_or(0));
+        (pool, nodes)
+    }
+
+    fn lock_calls(e: &Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == POOL_COMPARE_EXCHANGE || *a == POOL_DEBUG_CHECK)
+            .cloned()
+            .collect()
+    }
+
+    fn lock_sequence(pool: Ptr) -> Vec<(u32, Vec<u32>)> {
+        vec![
+            (POOL_COMPARE_EXCHANGE, vec![pool.addr() + 4, 0, 1]),
+            (POOL_DEBUG_CHECK, vec![]),
+            (POOL_DEBUG_CHECK, vec![]),
+            (POOL_COMPARE_EXCHANGE, vec![pool.addr() + 4, 1, 0]),
+        ]
+    }
+
+    /// Doubles for the lock calls and the message copy helpers.
+    fn pool_environment(e: &mut Engine) {
+        quiet(
+            e,
+            &[POOL_COMPARE_EXCHANGE, POOL_DEBUG_CHECK, EMPTY_DESTRUCTOR],
+        );
+        e.register(RETURN_THIS, |_, a| ok(a[0]));
+        e.register(PLACEMENT_NEW, |_, a| {
+            assert_eq!(a[0], 0xc);
+            ok(a[1])
+        });
+        e.register(MESSAGE_COPY, |e, a| {
+            for offset in [0, 4, 8] {
+                let word = e.mem.u32(a[1] + offset);
+                e.mem.set_u32(a[0] + offset, word);
+            }
+            ok(a[0])
+        });
+    }
+
+    #[test]
+    fn pool_pop_takes_the_first_free_node_under_the_lock() {
+        let mut e = engine();
+        pool_environment(&mut e);
+        let (pool, nodes) = pool_with_nodes(&mut e, 2);
+        let out = e.mem.alloc(4);
+        log_calls(&mut e);
+        assert!(e.call(0x008c_a940, &args![pool, out]).bool());
+        assert_eq!(e.mem.u32(out), nodes[0]);
+        assert_eq!(e.mem.u32(pool.addr() + 8), nodes[1]);
+        assert_eq!(e.mem.u32(nodes[0] + 0x0c), 0);
+        assert_eq!(lock_calls(&e), lock_sequence(pool));
+        assert!(e.call(0x008c_a940, &args![pool, out]).bool());
+        assert_eq!(e.mem.u32(out), nodes[1]);
+        // The list is empty now: no node, and the output is cleared.
+        assert!(!e.call(0x008c_a940, &args![pool, out]).bool());
+        assert_eq!(e.mem.u32(out), 0);
+        assert_eq!(e.mem.u32(pool.addr() + 8), 0);
+    }
+
+    #[test]
+    fn pool_lock_spins_until_the_compare_exchange_succeeds() {
+        let mut e = engine();
+        pool_environment(&mut e);
+        let (pool, _) = pool_with_nodes(&mut e, 1);
+        let out = e.mem.alloc(4);
+        let busy = Rc::new(RefCell::new(2u32));
+        let remaining = busy.clone();
+        e.register_double(POOL_COMPARE_EXCHANGE, move |_, a| {
+            if a[1] == 0 && *remaining.borrow() > 0 {
+                *remaining.borrow_mut() -= 1;
+                return ok(1);
+            }
+            ok(0)
+        });
+        log_calls(&mut e);
+        assert!(e.call(0x008c_a940, &args![pool, out]).bool());
+        let acquires = calls_to(&e, POOL_COMPARE_EXCHANGE)
+            .iter()
+            .filter(|args| args[1] == 0)
+            .count();
+        assert_eq!(acquires, 3);
+        assert_eq!(*busy.borrow(), 0);
+    }
+
+    #[test]
+    fn pool_push_puts_the_node_on_top_of_the_free_list() {
+        let mut e = engine();
+        pool_environment(&mut e);
+        let (pool, nodes) = pool_with_nodes(&mut e, 1);
+        let node = e.mem.alloc(0x10);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, node);
+        log_calls(&mut e);
+        e.call(0x008c_a8d0, &args![pool, slot]);
+        assert_eq!(e.mem.u32(pool.addr() + 8), node);
+        assert_eq!(e.mem.u32(node + 0x0c), nodes[0]);
+        assert_eq!(e.mem.u32(slot), 0);
+        assert_eq!(lock_calls(&e), lock_sequence(pool));
+    }
+
+    #[test]
+    fn pool_release_runs_the_node_destructor_then_pushes() {
+        let mut e = engine();
+        pool_environment(&mut e);
+        let (pool, _) = pool_with_nodes(&mut e, 0);
+        let node = e.mem.alloc(0x10);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, node);
+        log_calls(&mut e);
+        e.call(0x008c_a770, &args![pool, slot]);
+        assert_eq!(calls_to(&e, EMPTY_DESTRUCTOR), vec![vec![node]]);
+        assert_eq!(e.mem.u32(pool.addr() + 8), node);
+        assert_eq!(e.mem.u32(slot), 0);
+    }
+
+    #[test]
+    fn pool_link_chains_the_array_and_ends_it_with_zero() {
+        let mut e = engine();
+        pool_environment(&mut e);
+        let pool: Ptr = Ptr::new(e.mem.alloc(0x20));
+        let array = e.mem.alloc(0x30);
+        log_calls(&mut e);
+        e.call(0x008c_a830, &args![pool, 3u32, array]);
+        assert_eq!(e.mem.u32(pool.addr() + 8), array);
+        assert_eq!(e.mem.u32(array + 0x0c), array + 0x10);
+        assert_eq!(e.mem.u32(array + 0x1c), array + 0x20);
+        assert_eq!(e.mem.u32(array + 0x2c), 0);
+        assert_eq!(lock_calls(&e), lock_sequence(pool));
+        // A single node is just terminated.
+        let single = e.mem.alloc(0x10);
+        e.mem.set_u32(single + 0x0c, 0xdead);
+        e.call(0x008c_a830, &args![pool, 1u32, single]);
+        assert_eq!(e.mem.u32(single + 0x0c), 0);
+    }
+
+    #[test]
+    fn pool_allocate_copies_the_message_into_a_free_node() {
+        let mut e = engine();
+        pool_environment(&mut e);
+        let (pool, nodes) = pool_with_nodes(&mut e, 1);
+        let out = e.mem.alloc(4);
+        let message = e.mem.alloc(0xc);
+        e.mem.set_u32(message, 1);
+        e.mem.set_u32(message + 4, 2);
+        e.mem.set_u32(message + 8, 0x3333);
+        log_calls(&mut e);
+        assert!(e.call(0x008c_a7c0, &args![pool, out, message]).bool());
+        assert_eq!(e.mem.u32(out), nodes[0]);
+        assert_eq!(e.mem.u32(nodes[0]), 1);
+        assert_eq!(e.mem.u32(nodes[0] + 4), 2);
+        assert_eq!(e.mem.u32(nodes[0] + 8), 0x3333);
+        assert_eq!(calls_to(&e, MESSAGE_COPY), vec![vec![nodes[0], message]]);
+        // The pool is empty now: nothing is constructed.
+        let copies = calls_to(&e, MESSAGE_COPY).len();
+        assert!(!e.call(0x008c_a7c0, &args![pool, out, message]).bool());
+        assert_eq!(calls_to(&e, MESSAGE_COPY).len(), copies);
+    }
+
+    #[test]
+    fn construct_copy_returns_zero_when_placement_new_gives_no_address() {
+        let mut e = engine();
+        pool_environment(&mut e);
+        let node = e.mem.alloc(0x10);
+        let message = e.mem.alloc(0xc);
+        log_calls(&mut e);
+        assert_eq!(e.call(0x008c_a9e0, &args![node, message]).u32(), node);
+        assert_eq!(calls_to(&e, EMPTY_DESTRUCTOR), vec![vec![node]]);
+        e.register(PLACEMENT_NEW, |_, _| ok(0));
+        let copies = calls_to(&e, MESSAGE_COPY).len();
+        assert_eq!(e.call(0x008c_a9e0, &args![node, message]).u32(), 0);
+        assert_eq!(calls_to(&e, MESSAGE_COPY).len(), copies);
+    }
+
+    #[test]
+    fn queue_try_pop_copies_the_first_message_and_frees_its_node() {
+        let mut e = engine();
+        pool_environment(&mut e);
+        let (pool, _) = pool_with_nodes(&mut e, 0);
+        let queue: Ptr = Ptr::new(e.mem.alloc(0x20));
+        let first = e.mem.alloc(0x10);
+        let second = e.mem.alloc(0x10);
+        e.mem.set_u32(first, 1);
+        e.mem.set_u32(first + 4, 2);
+        e.mem.set_u32(first + 8, 0x4444);
+        e.mem.set_u32(first + 0x0c, second);
+        e.mem.set_u32(queue.addr() + 8, pool.addr());
+        e.mem.set_u32(queue.addr() + 0x0c, first);
+        let out = e.mem.alloc(0xc);
+        log_calls(&mut e);
+        assert!(e.call(0x008c_a620, &args![queue, out]).bool());
+        assert_eq!(
+            [e.mem.u32(out), e.mem.u32(out + 4), e.mem.u32(out + 8)],
+            [1, 2, 0x4444]
+        );
+        assert_eq!(e.mem.u32(queue.addr() + 0x0c), second);
+        // The node went back to the pool.
+        assert_eq!(e.mem.u32(pool.addr() + 8), first);
+        assert_eq!(e.mem.u32(first + 0x0c), 0);
+        assert_eq!(calls_to(&e, EMPTY_DESTRUCTOR), vec![vec![first]]);
+        // An empty queue pops nothing.
+        e.mem.set_u32(queue.addr() + 0x0c, 0);
+        assert!(!e.call(0x008c_a620, &args![queue, out]).bool());
+        assert_eq!(e.mem.u32(pool.addr() + 8), first);
+    }
+
+    #[test]
+    fn pool_constructor_builds_the_node_array_and_links_it() {
+        let mut e = engine();
+        pool_environment(&mut e);
+        e.register(VECTOR_CONSTRUCTOR_ITERATOR, |_, _| Ret::default());
+        let pool: Ptr = Ptr::new(e.mem.alloc(0x1000c));
+        e.mem.set_u32(pool.addr() + 4, 0x99);
+        log_calls(&mut e);
+        assert_eq!(e.call(0x008c_a680, &args![pool]).u32(), pool.addr());
+        assert_eq!(e.mem.u32(pool.addr()), 0x0108_5834);
+        assert_eq!(e.mem.u32(pool.addr() + 4), 0);
+        assert_eq!(
+            calls_to(&e, VECTOR_CONSTRUCTOR_ITERATOR),
+            vec![vec![
+                pool.addr() + 0x0c,
+                0x10,
+                0x1000,
+                NODE_CONSTRUCTOR,
+                EMPTY_DESTRUCTOR
+            ]]
+        );
+        assert_eq!(e.mem.u32(pool.addr() + 8), pool.addr() + 0x0c);
+        assert_eq!(e.mem.u32(pool.addr() + 0x0c + 0x0c), pool.addr() + 0x1c);
+        let last = pool.addr() + 0x0c + 0xfff * 0x10;
+        assert_eq!(e.mem.u32(last + 0x0c), 0);
+        assert_eq!(e.mem.u32(last - 4), last);
+    }
+
+    #[test]
+    fn small_constructors_set_their_vtables_and_clear_their_words() {
+        let mut e = engine();
+        let pool: Ptr = Ptr::new(e.mem.alloc(0x20));
+        e.mem.set_u32(pool.addr() + 4, 7);
+        e.mem.set_u32(pool.addr() + 8, 7);
+        assert_eq!(e.call(0x008c_a800, &args![pool]).u32(), pool.addr());
+        assert_eq!(e.mem.u32(pool.addr()), 0x0108_583c);
+        assert_eq!(e.mem.u32(pool.addr() + 4), 0);
+        assert_eq!(e.mem.u32(pool.addr() + 8), 0);
+        let queue: Ptr = Ptr::new(e.mem.alloc(0x20));
+        e.mem.set_u32(queue.addr() + 4, 7);
+        assert_eq!(e.call(0x008c_a740, &args![queue]).u32(), queue.addr());
+        assert_eq!(e.mem.u32(queue.addr()), 0x0108_5864);
+        assert_eq!(e.mem.u32(queue.addr() + 4), 0);
+        let base: Ptr = Ptr::new(e.mem.alloc(0x20));
+        assert_eq!(e.call(0x008c_a7a0, &args![base]).u32(), base.addr());
+        assert_eq!(e.mem.u32(base.addr()), 0x0108_5884);
+    }
+
+    #[test]
+    fn queue_scalar_deleting_destructor_drains_and_deletes_on_bit_zero() {
+        let mut e = engine();
+        e.register(0x006e_c390, |_, _| ok(0));
+        quiet(&mut e, &[OPERATOR_DELETE]);
+        let queue: Ptr = Ptr::new(e.mem.alloc(0x20));
+        log_calls(&mut e);
+        assert_eq!(e.call(0x008c_a710, &args![queue, 0u32]).u32(), queue.addr());
+        assert_eq!(e.mem.u32(queue.addr()), 0x0108_5884);
+        assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(calls_to(&e, 0x006e_c390).len(), 1);
+        e.call(0x008c_a710, &args![queue, 1u32]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![queue.addr()]]);
     }
 }
