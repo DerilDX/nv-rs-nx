@@ -36,12 +36,29 @@ pub fn fn_004013e0(e: &mut Engine, this: Ptr) -> bool {
     e.mem.u32(this.addr().wrapping_add(8)) & 8 != 0
 }
 
+// Translated from 004010b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004010b0 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
+/// Constructor of the form `CreateFormOfType` (`00465110`) makes for form type 0x76 (0x20 bytes); `ECX` is the object.
+/// The engine map gives it no name; the RTTI name of the vtable it stores at `+0` (`0x0101_144c`) is `BGSDehydrationStage`, so this is the constructor of `BGSDehydrationStage`.
+/// It runs the base and component constructors by address, stores the vtable pointers and sets the fields to their start values.
+/// The exception-unwinding frame is not translated.
+pub fn fn_004010b0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0048_3370, &args![this]);
+    e.mem.set_u32(base, 0x0101_144c);
+    e.call(0x0040_19f0, &args![base + 0x18]);
+    e.call(0x004f_15a0, &args![this, 0x76u32]);
+    e.call(0x0040_1b20, &args![this]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00401050, fn_00401050(u32, u32, i32, u32)),
         entry!(0x00401170, fn_00401170(Ptr) -> u8),
         entry!(0x004013e0, fn_004013e0(Ptr) -> bool),
+        entry!(0x0040_10b0, fn_004010b0(Ptr) -> Ptr),
     ]
 }
 
@@ -102,5 +119,27 @@ mod tests {
             assert_eq!(e.call(0x004013e0, &[block + 4]).bool(), value & 8 != 0);
             assert_eq!(e.mem.bytes(block, 20), before);
         }
+    }
+}
+
+#[cfg(test)]
+mod ctor_tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_004010b0_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0040_10b0,
+            size: 0x20,
+            globals: &[],
+            returns: &[],
+            calls: &[
+                (0x0048_3370, &[A::T(0x0)]),
+                (0x0040_19f0, &[A::T(0x18)]),
+                (0x004f_15a0, &[A::T(0x0), A::V(0x76)]),
+                (0x0040_1b20, &[A::T(0x0)]),
+            ],
+            stores: &[(0x0, 4, 0x0101_144c)],
+        });
     }
 }

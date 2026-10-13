@@ -7,6 +7,50 @@ machinery runs.
 
 ## Resume here
 
+### Claude lead, 2026-10-12 to 2026-10-13 (current; supersedes the Codex section below)
+
+The Codex handoff below was audited against the user's takeover prompt and
+found accurate. Since then:
+
+- **Merged:** #147 to #160.
+  Highlights: task-queue return fix (#147); inventory source, replay and
+  world stacks (#148, #156, #154: 28,279 saved inventories reproduce byte
+  for byte through 004d4160/004d4090); Phase 1 PR 8, buffered controls and
+  menus at the interface idle (#152); the game's script interpreter in the
+  engine, S0 to S3 (#157: 163 of 322 quest scripts run to completion in an
+  opt-in test); S4, the engine host started in the viewer with the
+  1.4.0.525 exe check (#160); contributor guide (#150). Rolling translation
+  batches #149, #151, #153, #155, #158, #159.
+- **Open:** rolling #162; S5 (#161, ScriptLocals bridge, being rebased by
+  the wiring agent in `%USERPROFILE%/nv-re/work/wt-script`).
+- **Translated:** 12,478 at #162 (18.8 % of 66,259); later collections
+  are on the lead, gated (16,320 engine tests).
+- **Maintainer decisions:** the wired engine reads the player's own
+  FalloutNV.exe read-only from the install with Data and refuses anything
+  but 1.4.0.525 (GOG/Epic later). Translation is the maintainer's work only
+  (CONTRIBUTING.md). Stop rule: 95 % weekly usage.
+
+**Pipeline (private, `%USERPROFILE%/nv-re/work/phase0`, details in
+STATE.md):** up to about ten agents; Sonnet for translation slots, one Opus
+agent for wiring. `bin/heavy.sh` is a two-slot, first-come compiler queue
+(slot 2 only with 12 GB free commit memory; stale locks clear after two
+minutes); compile only, never probes or routes. Agents compile once
+(focused tests plus hygiene); the lead collects ready slots with
+`SKIP_CHECKS=1 ADVANCE_PARTIAL_ONLY=1 bin/cycle.sh NN 0 0`, then runs
+`bin/heavy.sh bin/check-lead.sh` once (fmt, name grep, clippy, full engine
+suite, hygiene) and fixes trivial lints itself. Before collecting, compare
+the slot's files with the lead since its base: if the lead changed one,
+merge by hand. Ship rolling PRs with `HOLD_LATER_PUSH=1 bin/ship.sh N`,
+then regenerate the ledger, gate and push. Compiler-only gaps (FS:[0]
+frames, /GS cookie 00ec408c) always carry `Translation incomplete`
+markers; float comparisons and x87 copies match the exe, NaN included.
+
+**Next:** script wiring S6 (quest scripts through the game's interpreter in
+the live game) once the remaining form constructors are on main (a11's
+batches added about 125; package and topic constructors exist; actor
+references go through CreateReference, already translated). Then Build 42.
+Phase 2 step C (inventory section rebuild compared per change form).
+
 ### Final Codex handoff requested, 2026-10-11 evening
 
 The user asked to finish current work, start nothing else, and hand off to

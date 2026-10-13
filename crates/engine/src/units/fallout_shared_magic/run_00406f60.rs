@@ -45,11 +45,61 @@ pub fn fn_00407000(e: &mut Engine, buffer: Ptr, format: Ptr, arguments: Ptr) -> 
     e.call(VSPRINTF, &args![buffer, format, arguments]).u32()
 }
 
+// Translated from 00407020 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00407020 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
+/// Constructor of the form `CreateFormOfType` (`00465110`) makes for form type 0x10 (0xb0 bytes); `ECX` is the object.
+/// The engine map gives it no name; the RTTI name of the vtable it stores at `+0` (`0x0101_2834`) is `EffectSetting`, so this is the constructor of `EffectSetting`.
+/// It runs the base and component constructors by address, stores the vtable pointers and sets the fields to their start values. It sets `+0x5c` to 0.0 and `+0x74` to 1.0, and fills `+0x90` and `+0x94` from the floats the settings at `011c36c0` and `011c37e8` give (`00403e20` returns a pointer to the value).
+/// The exception-unwinding frame is not translated.
+pub fn fn_00407020(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0048_3370, &args![this]);
+    e.call(0x0048_8f50, &args![base + 0x18]);
+    e.call(0x0048_2c50, &args![base + 0x30]);
+    e.call(0x0040_2d00, &args![base + 0x38]);
+    e.call(0x0040_2c20, &args![base + 0x44]);
+    e.mem.set_u32(base, 0x0101_2834);
+    e.mem.set_u32(base + 0x18, 0x0101_280c);
+    e.mem.set_u32(base + 0x30, 0x0101_27f4);
+    e.mem.set_u32(base + 0x38, 0x0101_27e0);
+    e.mem.set_u32(base + 0x44, 0x0101_27c0);
+    e.call(0x0096_a2d0, &args![base + 0xa0]);
+    e.mem.set_u32(base + 0x58, 0x0);
+    e.mem.set_f32(base + 0x5c, 0.0);
+    e.mem.set_u32(base + 0x60, 0x0);
+    e.mem.set_u32(base + 0x9c, 0xffff_ffff);
+    e.mem.set_u32(base + 0x64, 0xffff_ffff);
+    e.mem.set_u32(base + 0x68, 0xffff_ffff);
+    e.mem.set_u16(base + 0x6c, 0x0);
+    e.mem.set_u32(base + 0x70, 0x0);
+    e.mem.set_u32(base + 0x78, 0x0);
+    e.mem.set_u32(base + 0x7c, 0x0);
+    e.mem.set_f32(base + 0x74, 1.0);
+    e.mem.set_u32(base + 0x80, 0x0);
+    e.mem.set_u32(base + 0x84, 0x0);
+    e.mem.set_u32(base + 0x88, 0x0);
+    e.mem.set_u32(base + 0x8c, 0x0);
+    let v7 = e.call(0x0040_3e20, &args![0x011c_36c0u32]).u32();
+    let f1 = e.mem.f32(v7);
+    e.mem.set_f32(base + 0x90, f1);
+    let v8 = e.call(0x0040_3e20, &args![0x011c_37e8u32]).u32();
+    let f2 = e.mem.f32(v8);
+    e.mem.set_f32(base + 0x94, f2);
+    e.mem.set_u32(base + 0x98, 0x0);
+    e.mem.set_u32(base + 0xa8, 0x0);
+    e.mem.set_u32(base + 0xac, 0x0);
+    e.mem.set_u32(base + 0x50, 0x0);
+    e.mem.set_u32(base + 0x54, 0x0);
+    e.call(0x004f_15a0, &args![this, 0x10u32]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         (0x00406f60, fn_00406f60_uniform as AbiFn),
         entry!(0x00407000, fn_00407000(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x0040_7020, fn_00407020(Ptr) -> Ptr),
     ]
 }
 
@@ -94,5 +144,60 @@ mod tests {
             ..Ret::default()
         });
         assert_ne!(e.call(0x0040_6f60, &args![1u32, 2u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod ctor_tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_00407020_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0040_7020,
+            size: 0xb0,
+            globals: &[(0x2000_2000, 0x0200_0002)],
+            returns: &[(0x0040_3e20, 0x2000_2000)],
+            calls: &[
+                (0x0048_3370, &[A::T(0x0)]),
+                (0x0048_8f50, &[A::T(0x18)]),
+                (0x0048_2c50, &[A::T(0x30)]),
+                (0x0040_2d00, &[A::T(0x38)]),
+                (0x0040_2c20, &[A::T(0x44)]),
+                (0x0096_a2d0, &[A::T(0xa0)]),
+                (0x0040_3e20, &[A::V(0x011c_36c0)]),
+                (0x0040_3e20, &[A::V(0x011c_37e8)]),
+                (0x004f_15a0, &[A::T(0x0), A::V(0x10)]),
+            ],
+            stores: &[
+                (0x0, 4, 0x0101_2834),
+                (0x18, 4, 0x0101_280c),
+                (0x30, 4, 0x0101_27f4),
+                (0x38, 4, 0x0101_27e0),
+                (0x44, 4, 0x0101_27c0),
+                (0x58, 4, 0x0),
+                (0x5c, 4, 0x0),
+                (0x60, 4, 0x0),
+                (0x9c, 4, 0xffff_ffff),
+                (0x64, 4, 0xffff_ffff),
+                (0x68, 4, 0xffff_ffff),
+                (0x6c, 2, 0x0),
+                (0x70, 4, 0x0),
+                (0x78, 4, 0x0),
+                (0x7c, 4, 0x0),
+                (0x74, 4, 0x3f80_0000),
+                (0x80, 4, 0x0),
+                (0x84, 4, 0x0),
+                (0x88, 4, 0x0),
+                (0x8c, 4, 0x0),
+                (0x90, 4, 0x0200_0002),
+                (0x94, 4, 0x0200_0002),
+                (0x98, 4, 0x0),
+                (0xa8, 4, 0x0),
+                (0xac, 4, 0x0),
+                (0x50, 4, 0x0),
+                (0x54, 4, 0x0),
+            ],
+        });
     }
 }

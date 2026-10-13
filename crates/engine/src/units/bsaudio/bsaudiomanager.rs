@@ -420,6 +420,20 @@ const PLAYING_TEXT: u32 = 0x010a_3534;
 const STOP_TEXT: u32 = 0x0106_39ec;
 const PLAY_TEXT: u32 = 0x0106_3958;
 const BACKSLASH_TEXT: u32 = 0x0101_3444;
+/// `strcpy` (CRT, cdecl: destination, source).
+const STRCPY: u32 = 0x00ec_6370;
+/// The vtables of the three pointer-map pairs the manager owns. Each map
+/// class has a `NiTMapBase<NiTPointerAllocator<unsigned int>, int, T>` base
+/// vtable and an `NiTPointerMap<int, T>` vtable over it (the names are the
+/// RTTI type descriptors of these vtables): `T` is `BSGameSound *`
+/// (`010a3370` over `010a3348`), `BSSoundInfo *` (`010a3390` over
+/// `010a3328`) and `NiPointer<NiAVObject>` (`010a33b0` over `010a3308`).
+const SOUND_MAP_BASE_VTABLE: u32 = 0x010a_3370;
+const SOUND_MAP_VTABLE: u32 = 0x010a_3348;
+const STATE_MAP_BASE_VTABLE: u32 = 0x010a_3390;
+const STATE_MAP_VTABLE: u32 = 0x010a_3328;
+const REFERENCE_MAP_BASE_VTABLE: u32 = 0x010a_33b0;
+const REFERENCE_MAP_VTABLE: u32 = 0x010a_3308;
 /// The comparison `GetDebugString` sorts with (`00ae5fb0`).
 const DEBUG_LINE_COMPARE: u32 = 0x00ae_5fb0;
 
@@ -546,6 +560,10 @@ layout! {
     /// `BSDebugSoundInfo` (Xbox PDB), 0x23c bytes. The PC code fills only
     /// the fields below.
     pub struct BSDebugSoundInfo: 0x23C {
+        /// `pName` (Xbox PDB): points at the name buffer at +4.
+        0x00 pName: u32,
+        /// `Name` (Xbox PDB), a 260-byte buffer.
+        0x04 Name: u8,
         /// `pFileName` (Xbox PDB): points at the name buffer that follows.
         0x108 pFileName: u32,
         /// `FileName` (Xbox PDB), a 260-byte buffer.
@@ -561,6 +579,12 @@ layout! {
         /// The word the PDB calls the third coordinate of `Location`; the
         /// PC code stores the sound's distance to the listener here.
         0x220 distanceToListener: f32,
+        /// `iStateFlags` (Xbox PDB).
+        0x224 iStateFlags: u32,
+        /// `fBeginTime` (Xbox PDB).
+        0x228 fBeginTime: f32,
+        /// `fEndTime` (Xbox PDB).
+        0x22C fEndTime: f32,
         /// `iStaticAttenuation` (Xbox PDB).
         0x230 iStaticAttenuation: u32,
         /// `iSystemAttenuation` (Xbox PDB).
@@ -1166,7 +1190,7 @@ pub fn fn_00ad9da0(e: &mut Engine, this: Ptr<BSAudioManager>) {
         (0x011f_6e54, BSAudioManager::fRadioVolume),
     ];
     for (setting, field) in defaults {
-        let value = e.global::<f32>(setting);
+        let value = x87_quiet(e.global::<f32>(setting));
         e.set(this, field, value);
     }
     for field in [
@@ -1289,7 +1313,7 @@ pub fn bs_audio_manager_update(e: &mut Engine, this: Ptr<BSAudioManager>, _unuse
 /// Stores the weather flags and the game hour (unnamed in the engine map).
 pub fn fn_00ada300(e: &mut Engine, this: Ptr<BSAudioManager>, game_hour: f32, weather_flags: u32) {
     e.set(this, BSAudioManager::iWeatherFlags, weather_flags);
-    e.set(this, BSAudioManager::fCurrentGamehour, game_hour);
+    e.set(this, BSAudioManager::fCurrentGamehour, x87_quiet(game_hour));
 }
 
 // Translated from 00ada330 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1336,9 +1360,9 @@ pub fn bs_audio_manager_synch_voice_states(e: &mut Engine, this: Ptr<BSAudioMana
 fn clamp_distance(e: &Engine, distance: f32) -> f32 {
     let limit = e.mem.f64(HUGE_DISTANCE_LIMIT);
     if distance as f64 > limit {
-        e.global::<f32>(HUGE_DISTANCE_REPLACEMENT)
+        x87_quiet(e.global::<f32>(HUGE_DISTANCE_REPLACEMENT))
     } else {
-        distance
+        x87_quiet(distance)
     }
 }
 
@@ -1371,14 +1395,14 @@ fn fill_debug_record(e: &mut Engine, record: Ptr<BSDebugSoundInfo>, sound: u32) 
             let position = e
                 .vcall(sound, SOUND_SLOT_GET_EMITTER_POSITION, &[out.addr()])
                 .u32();
-            e.mem.f32(position)
+            x87_quiet(e.mem.f32(position))
         });
         e.set(record, BSDebugSoundInfo::locationX, x);
         let y = e.with_stack(12, |e, out| {
             let position = e
                 .vcall(sound, SOUND_SLOT_GET_EMITTER_POSITION, &[out.addr()])
                 .u32();
-            e.mem.f32(position + 4)
+            x87_quiet(e.mem.f32(position + 4))
         });
         e.set(record, BSDebugSoundInfo::locationY, y);
         let minimum = clamp_distance(e, e.mem.f32(sound + SOUND_MIN_DISTANCE));
@@ -1485,9 +1509,9 @@ pub fn bs_audio_manager_set_voice_state(
                 let source = Ptr::<BSSoundInfo>::new(info);
                 let value = e.get(source, BSSoundInfo::iID);
                 e.set(record, BSSoundInfo::iID, value);
-                let value = e.get(source, BSSoundInfo::fFrequency);
+                let value = x87_quiet(e.get(source, BSSoundInfo::fFrequency));
                 e.set(record, BSSoundInfo::fFrequency, value);
-                let value = e.get(source, BSSoundInfo::fVolume);
+                let value = x87_quiet(e.get(source, BSSoundInfo::fVolume));
                 e.set(record, BSSoundInfo::fVolume, value);
                 let value = e.get(source, BSSoundInfo::uiSoundType);
                 e.set(record, BSSoundInfo::uiSoundType, value);
@@ -1619,9 +1643,9 @@ fn free_message_to(e: &mut Engine, stack: u32, message: Ptr<BSSoundMessage>) {
                 &[message_address + 0x10, empty.addr()],
             );
         });
-        e.set(message, BSSoundMessage::vector3_x, x);
-        e.set(message, BSSoundMessage::vector3_y, y);
-        e.set(message, BSSoundMessage::vector3_z, z);
+        e.set(message, BSSoundMessage::vector3_x, x87_quiet(x));
+        e.set(message, BSSoundMessage::vector3_y, x87_quiet(y));
+        e.set(message, BSSoundMessage::vector3_z, x87_quiet(z));
         e.call(MESSAGE_STACK_PUSH, &[stack, message_address]);
         // End of the temporary's scope.
         let remaining = e.mem.u32(held.addr());
@@ -1701,9 +1725,9 @@ pub fn fn_00adb1a0(
                         SMART_POINTER_ASSIGN,
                         &[message.addr() + 0x10, temporary.addr()],
                     );
-                    e.set(message, BSSoundMessage::vector3_x, x);
-                    e.set(message, BSSoundMessage::vector3_y, y);
-                    e.set(message, BSSoundMessage::vector3_z, z);
+                    e.set(message, BSSoundMessage::vector3_x, x87_quiet(x));
+                    e.set(message, BSSoundMessage::vector3_y, x87_quiet(y));
+                    e.set(message, BSSoundMessage::vector3_z, x87_quiet(z));
                     let held = e.mem.u32(temporary.addr());
                     drop_reference(e, held);
                 });
@@ -1949,9 +1973,9 @@ pub fn fn_00adbb30(
             e.mem.set_u32(local + 8, 0);
             e.mem.set_u32(local + 0xc, 0);
             e.call(SMART_POINTER_ASSIGN, &[local + 0x10, pointer_slot]);
-            e.mem.set_f32(local + 0x14, x);
-            e.mem.set_f32(local + 0x18, y);
-            e.mem.set_f32(local + 0x1c, z);
+            e.mem.set_f32(local + 0x14, x87_quiet(x));
+            e.mem.set_f32(local + 0x18, x87_quiet(y));
+            e.mem.set_f32(local + 0x1c, x87_quiet(z));
             e.call(SMART_POINTER_DESTRUCTOR, &[pointer_slot]);
             e.call(MESSAGE_ASSIGN, &[message.addr(), local]);
             e.call(MESSAGE_DESTRUCTOR, &[local]);
@@ -2176,7 +2200,7 @@ pub fn bs_audio_manager_get_volume(e: &mut Engine, this: Ptr<BSAudioManager>, id
     let (_found, record) = map_get(e, this.at(BSAudioManager::SoundStateMap), id, 0);
     leave_section(e, section);
     if record != 0 {
-        e.get(Ptr::<BSSoundInfo>::new(record), BSSoundInfo::fVolume)
+        x87_quiet(e.get(Ptr::<BSSoundInfo>::new(record), BSSoundInfo::fVolume))
     } else {
         0.0
     }
@@ -2758,9 +2782,9 @@ pub fn fn_00adddd0(e: &mut Engine, this: Ptr<BSAudioManager>) {
         BSAudioManager::iDelayTimerDelta,
         ticks.wrapping_sub(previous_delta),
     );
-    let mut speed = e.global::<f32>(TIME_MULTIPLIER);
+    let mut speed = x87_quiet(e.global::<f32>(TIME_MULTIPLIER));
     if (speed as f64) < e.mem.f64(MINIMUM_SPEED_DOUBLE) {
-        speed = e.global::<f32>(MINIMUM_SPEED);
+        speed = x87_quiet(e.global::<f32>(MINIMUM_SPEED));
     }
     if e.get(this, BSAudioManager::bIgnoreGlobalTimeMultiplier) {
         speed = 1.0;
@@ -2806,7 +2830,7 @@ fn update_sound(
         }
     }
     if state(e) & 1 != 0 && state(e) & 0x800 != 0 && state(e) & 0x100 != 0 {
-        let hour = e.get(this, BSAudioManager::fCurrentGamehour);
+        let hour = x87_quiet(e.get(this, BSAudioManager::fCurrentGamehour));
         let in_range = |e: &mut Engine| e.call(SOUND_RANGE_TEST, &args![sound, 0u32, hour]).bool();
         if state(e) & 0x10000 == 0 {
             if !in_range(e) {
@@ -3017,7 +3041,7 @@ pub fn fn_00adea90(e: &mut Engine, this: Ptr<BSAudioManager>) {
             release_followed_object(e, object_slot, object);
         } else if object == 0 {
             let id = e.mem.u32(sound + SOUND_ID);
-            let fade_x = e.global::<f32>(FADE_MESSAGE_X);
+            let fade_x = x87_quiet(e.global::<f32>(FADE_MESSAGE_X));
             fn_00adb1a0(e, this, 9, id, 0, 0x3e8, 0, fade_x, 0.0, 0.0);
             e.call(MAP_REMOVE, &[moving.addr(), key]);
             release_followed_object(e, object_slot, object);
@@ -4027,9 +4051,9 @@ pub fn bs_sound_info_operator_assign(
 ) -> Ptr<BSSoundInfo> {
     let id = e.get(other, BSSoundInfo::iID);
     e.set(this, BSSoundInfo::iID, id);
-    let frequency = e.get(other, BSSoundInfo::fFrequency);
+    let frequency = x87_quiet(e.get(other, BSSoundInfo::fFrequency));
     e.set(this, BSSoundInfo::fFrequency, frequency);
-    let volume = e.get(other, BSSoundInfo::fVolume);
+    let volume = x87_quiet(e.get(other, BSSoundInfo::fVolume));
     e.set(this, BSSoundInfo::fVolume, volume);
     let sound_type = e.get(other, BSSoundInfo::uiSoundType);
     e.set(this, BSSoundInfo::uiSoundType, sound_type);
@@ -4048,7 +4072,10 @@ pub fn bs_sound_info_operator_assign(
 /// The member-wise assignment of a `BSSoundMessage` (unnamed in the engine
 /// map): the four words, the smart pointer (`NiPointer::operator=`), the
 /// three vector floats and then the five 16-bit curve values, which lie over
-/// the first 10 bytes of the vector. Returns `this`.
+/// the first 10 bytes of the vector. The floats go through the x87 stack
+/// (a signalling NaN comes back quiet), but the 16-bit copies then overwrite
+/// the first ten bytes with the source's own, so only the last two bytes of
+/// the third float keep the quieted value. Returns `this`.
 pub fn fn_00ae7990(
     e: &mut Engine,
     this: Ptr<BSSoundMessage>,
@@ -4063,7 +4090,7 @@ pub fn fn_00ae7990(
         &[this.addr() + 0x10, other.addr() + 0x10],
     );
     for index in 0..3 {
-        let value = e.mem.f32(other.addr() + 0x14 + index * 4);
+        let value = x87_quiet(e.mem.f32(other.addr() + 0x14 + index * 4));
         e.mem.set_f32(this.addr() + 0x14 + index * 4, value);
     }
     for index in 0..5 {
@@ -4458,6 +4485,443 @@ pub fn fn_00ae8550(e: &mut Engine, _this: Ptr<BSSimpleList>, array: u32, compare
     }
 }
 
+/// What `FLD dword` followed by `FSTP dword` leaves of a float's bits: the
+/// x87 load turns a signalling NaN into a quiet one (bit 22 set); every other
+/// value, denormals included, comes back unchanged.
+fn x87_float_copy(bits: u32) -> u32 {
+    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
+        bits | 0x0040_0000
+    } else {
+        bits
+    }
+}
+
+/// A float that went through `FLD` / `FSTP`: a signalling NaN comes back
+/// quiet, every other value unchanged.
+fn x87_quiet(value: f32) -> f32 {
+    f32::from_bits(x87_float_copy(value.to_bits()))
+}
+
+/// Copies the float at `from` to `to` the way `FLD` / `FSTP` do.
+fn copy_float_x87(e: &mut Engine, from: u32, to: u32) {
+    let bits = x87_float_copy(e.mem.u32(from));
+    e.mem.set_u32(to, bits);
+}
+
+// Translated from 00ae8650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of a `BSSoundMessage` (unnamed in the engine map): the
+/// smart pointer at +0x10 is set to null (the inlined smart-pointer
+/// constructor's reference increment can never run, the pointer having just
+/// been cleared), the four words at +0 to +0xc are cleared and the three
+/// vector floats at +0x14 are set to 0.0. Returns `this`.
+pub fn fn_00ae8650(e: &mut Engine, this: Ptr<BSSoundMessage>) -> Ptr<BSSoundMessage> {
+    e.set(this, BSSoundMessage::spData, 0);
+    e.set(this, BSSoundMessage::msg, 0);
+    e.set(this, BSSoundMessage::iID, 0);
+    e.set(this, BSSoundMessage::iData, 0);
+    e.set(this, BSSoundMessage::pData, 0);
+    e.set(this, BSSoundMessage::vector3_x, 0.0);
+    e.set(this, BSSoundMessage::vector3_y, 0.0);
+    e.set(this, BSSoundMessage::vector3_z, 0.0);
+    this
+}
+
+// Translated from 00ae86d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ae86d0 - the exception-unwinding frame (FS:[0] handler, state 0 then -1) is not modelled; the ordinary behaviour is complete
+/// `BSSoundMessage::~BSSoundMessage` (Xbox PDB): when the smart pointer at
+/// +0x10 is not null its object is handed to `00c45830`; then the smart
+/// pointer's destructor drops the reference and, at zero, calls the
+/// object's virtual method at +4.
+pub fn bs_sound_message_destructor(e: &mut Engine, this: Ptr<BSSoundMessage>) {
+    let object = e.get(this, BSSoundMessage::spData);
+    if object != 0 {
+        e.call(RELEASE_MESSAGE_POINTER, &[object]);
+    }
+    let object = e.get(this, BSSoundMessage::spData);
+    drop_reference(e, object);
+}
+
+// Translated from 00ae8770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSDebugSoundInfo::BSDebugSoundInfo` (Xbox PDB): both name buffers start
+/// empty and their pointers (+0 and +0x108) point at them (+4 and +0x10c),
+/// the radii, times and attenuations are 0, the location is the default
+/// vector at `011f426c` (copied as words) and the state flags are 0.
+/// Returns `this`.
+pub fn bs_debug_sound_info_constructor(
+    e: &mut Engine,
+    this: Ptr<BSDebugSoundInfo>,
+) -> Ptr<BSDebugSoundInfo> {
+    let base = this.addr();
+    e.mem.set_u8(base + 0x04, 0);
+    e.mem.set_u8(base + 0x10c, 0);
+    e.set(this, BSDebugSoundInfo::pName, base + 0x04);
+    e.set(this, BSDebugSoundInfo::pFileName, base + 0x10c);
+    e.set(this, BSDebugSoundInfo::fRadiusMin, 0.0);
+    e.set(this, BSDebugSoundInfo::fRadiusMax, 0.0);
+    for index in 0..3 {
+        let word = e.mem.u32(DEFAULT_MESSAGE_VECTOR + index * 4);
+        e.mem.set_u32(base + 0x218 + index * 4, word);
+    }
+    e.set(this, BSDebugSoundInfo::iStateFlags, 0);
+    e.set(this, BSDebugSoundInfo::fBeginTime, 0.0);
+    e.set(this, BSDebugSoundInfo::fEndTime, 0.0);
+    e.set(this, BSDebugSoundInfo::iStaticAttenuation, 0);
+    e.set(this, BSDebugSoundInfo::iSystemAttenuation, 0);
+    e.set(this, BSDebugSoundInfo::iDistanceAttenuation, 0);
+    this
+}
+
+// Translated from 00ae8830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSDebugSoundInfo::~BSDebugSoundInfo` (Xbox PDB): clears the two name
+/// pointers, the radii, the state flags, the times and the three
+/// attenuations (the location and the name buffers stay as they are).
+pub fn bs_debug_sound_info_destructor(e: &mut Engine, this: Ptr<BSDebugSoundInfo>) {
+    e.set(this, BSDebugSoundInfo::pName, 0);
+    e.set(this, BSDebugSoundInfo::pFileName, 0);
+    e.set(this, BSDebugSoundInfo::fRadiusMin, 0.0);
+    e.set(this, BSDebugSoundInfo::fRadiusMax, 0.0);
+    e.set(this, BSDebugSoundInfo::iStateFlags, 0);
+    e.set(this, BSDebugSoundInfo::fBeginTime, 0.0);
+    e.set(this, BSDebugSoundInfo::fEndTime, 0.0);
+    e.set(this, BSDebugSoundInfo::iStaticAttenuation, 0);
+    e.set(this, BSDebugSoundInfo::iSystemAttenuation, 0);
+    e.set(this, BSDebugSoundInfo::iDistanceAttenuation, 0);
+}
+
+// Translated from 00ae88c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSDebugSoundInfo::operator=` (Xbox PDB): the first byte of both of this
+/// record's name buffers is cleared, then each of the two names is copied
+/// with `strcpy` (to this record's own name pointers) when the other
+/// record's pointer is not null. The radii and times are copied as floats
+/// through the x87 stack, the location, state flags and attenuations as
+/// words. Returns `this`.
+pub fn bs_debug_sound_info_operator_assign(
+    e: &mut Engine,
+    this: Ptr<BSDebugSoundInfo>,
+    other: Ptr<BSDebugSoundInfo>,
+) -> Ptr<BSDebugSoundInfo> {
+    let (to, from) = (this.addr(), other.addr());
+    e.mem.set_u8(to + 0x04, 0);
+    e.mem.set_u8(to + 0x10c, 0);
+    let source = e.mem.u32(from);
+    if source != 0 {
+        let destination = e.mem.u32(to);
+        e.call(STRCPY, &[destination, source]);
+    }
+    let source = e.mem.u32(from + 0x108);
+    if source != 0 {
+        let destination = e.mem.u32(to + 0x108);
+        e.call(STRCPY, &[destination, source]);
+    }
+    copy_float_x87(e, from + 0x210, to + 0x210);
+    copy_float_x87(e, from + 0x214, to + 0x214);
+    for offset in [0x218, 0x21c, 0x220, 0x224] {
+        let word = e.mem.u32(from + offset);
+        e.mem.set_u32(to + offset, word);
+    }
+    copy_float_x87(e, from + 0x228, to + 0x228);
+    copy_float_x87(e, from + 0x22c, to + 0x22c);
+    for offset in [0x230, 0x234, 0x238] {
+        let word = e.mem.u32(from + offset);
+        e.mem.set_u32(to + offset, word);
+    }
+    this
+}
+
+// Translated from 00ae89f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSoundInfo::BSSoundInfo` (Xbox PDB): constructs the debug record at
+/// +0x18, then clears the id, the frequency (0.0), the type, the duration
+/// and the playing byte (the volume at +8 is not set). Returns `this`.
+pub fn bs_sound_info_constructor(e: &mut Engine, this: Ptr<BSSoundInfo>) -> Ptr<BSSoundInfo> {
+    e.call(DEBUG_SOUND_INFO_CONSTRUCTOR, &[this.addr() + 0x18]);
+    e.set(this, BSSoundInfo::iID, 0);
+    e.set(this, BSSoundInfo::fFrequency, 0.0);
+    e.set(this, BSSoundInfo::uiSoundType, 0);
+    e.set(this, BSSoundInfo::uiDuration, 0);
+    e.set(this, BSSoundInfo::bIsPlaying, 0);
+    this
+}
+
+// Translated from 00ae8a40 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ae8a40 - the exception-unwinding frame (FS:[0] handler, state -1 then 0 then -1) is not modelled; the ordinary behaviour is complete
+/// `BSSoundInfo::BSSoundInfo` overload 2 (Xbox PDB), the copy constructor:
+/// constructs the debug record at +0x18, copies the id, the two floats (x87
+/// load and store), the type, the duration and the playing byte of `other`
+/// and assigns its debug record. Returns `this`.
+pub fn bs_sound_info_copy_constructor(
+    e: &mut Engine,
+    this: Ptr<BSSoundInfo>,
+    other: Ptr<BSSoundInfo>,
+) -> Ptr<BSSoundInfo> {
+    e.call(DEBUG_SOUND_INFO_CONSTRUCTOR, &[this.addr() + 0x18]);
+    let (to, from) = (this.addr(), other.addr());
+    let id = e.mem.u32(from);
+    e.mem.set_u32(to, id);
+    copy_float_x87(e, from + 0x04, to + 0x04);
+    copy_float_x87(e, from + 0x08, to + 0x08);
+    for offset in [0x0c, 0x10] {
+        let word = e.mem.u32(from + offset);
+        e.mem.set_u32(to + offset, word);
+    }
+    let playing = e.mem.u8(from + 0x14);
+    e.mem.set_u8(to + 0x14, playing);
+    e.call(DEBUG_SOUND_INFO_ASSIGN, &[to + 0x18, from + 0x18]);
+    this
+}
+
+// Translated from 00ae8af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSoundInfo::~BSSoundInfo` (Xbox PDB): clears the id, the two floats
+/// (0.0), the type, the duration and the playing byte, then runs the debug
+/// record's destructor (+0x18).
+pub fn bs_sound_info_destructor(e: &mut Engine, this: Ptr<BSSoundInfo>) {
+    e.set(this, BSSoundInfo::iID, 0);
+    e.set(this, BSSoundInfo::fFrequency, 0.0);
+    e.set(this, BSSoundInfo::fVolume, 0.0);
+    e.set(this, BSSoundInfo::uiSoundType, 0);
+    e.set(this, BSSoundInfo::uiDuration, 0);
+    e.set(this, BSSoundInfo::bIsPlaying, 0);
+    e.call(DEBUG_SOUND_INFO_DESTRUCTOR, &[this.addr() + 0x18]);
+}
+
+// Translated from 00ae8b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A getter of a `BSSoundInfo`'s debug record (unnamed in the engine map):
+/// copies the 0x23c bytes at +0x18 to `out` (`REP MOVSD`, 0x8f words) and
+/// returns `out`.
+pub fn fn_00ae8b40(e: &mut Engine, this: Ptr<BSSoundInfo>, out: u32) -> u32 {
+    for index in 0..0x8f {
+        let word = e.mem.u32(this.addr() + 0x18 + index * 4);
+        e.mem.set_u32(out + index * 4, word);
+    }
+    out
+}
+
+// Translated from 00ae8b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method that returns the constant 2 in `AL` (unnamed in the engine map;
+/// its only reference is the data word at `010a3744`, which lies in the
+/// vtable of `AudioLoadTask`, `010a3718`, as slot 11; which method that slot
+/// is, is not confirmed). `this` is not used.
+pub fn fn_00ae8b80(_e: &mut Engine, _this: u32) -> u8 {
+    2
+}
+
+// Translated from 00ae8b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A step on a sound (unnamed in the engine map; `ProcessMessage` calls it
+/// to apply a flag): sets bit 0x400 of the sound's state flags (+0x10) when
+/// the byte `flag` is not zero, clears it otherwise, then calls the sound's
+/// virtual method at +0x3c (`SetVolume`) with the current volume (+0x24,
+/// passed through the x87 stack).
+pub fn fn_00ae8b90(e: &mut Engine, sound: u32, flag: u8) {
+    let state = e.mem.u32(sound + SOUND_STATE_FLAGS);
+    let state = if flag != 0 {
+        state | 0x400
+    } else {
+        state & 0xffff_fbff
+    };
+    e.mem.set_u32(sound + SOUND_STATE_FLAGS, state);
+    let volume = x87_float_copy(e.mem.u32(sound + SOUND_CURRENT_VOLUME));
+    e.vcall(sound, SOUND_SLOT_SET_VOLUME, &args![volume]);
+}
+
+// Translated from 00ae8bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Appends a pointer to a pointer list (the engine map names this
+/// `BSAudioManager::GetFromCache`, but the body adds a node and stores the
+/// pointer in it): a node from the list's allocator (`0043a010` on
+/// `list + 8`), the word `element_slot` points at stored at node +8, the node
+/// linked at the tail (`00a11db0`).
+pub fn fn_00ae8bf0(e: &mut Engine, list: u32, element_slot: u32) {
+    let node = e.call(LIST_NEW_NODE, &[list + 8]).u32();
+    let element = e.mem.u32(element_slot);
+    e.mem.set_u32(node + 8, element);
+    e.call(LIST_ADD_NODE_TAIL, &[list, node]);
+}
+
+/// The destructor body shared by the pointer-map classes of the manager:
+/// the vtable is set to `vtable`, the items are removed (`00ae91f0`) and the
+/// bucket table (`this + 8`) freed (`00aa10f0`).
+fn map_destroy(e: &mut Engine, this: u32, vtable: u32) {
+    e.mem.set_u32(this, vtable);
+    e.call(MAP_CLEAR, &[this]);
+    let table = e.mem.u32(this + 8);
+    e.call(FREE_TABLE, &[table]);
+}
+
+/// The destructor of a derived map class: the derived part (vtable
+/// `vtable`, items removed) first, then the base's [`map_destroy`].
+fn map_destroy_derived(e: &mut Engine, this: u32, vtable: u32, base_vtable: u32) {
+    e.mem.set_u32(this, vtable);
+    e.call(MAP_CLEAR, &[this]);
+    map_destroy(e, this, base_vtable);
+}
+
+/// The deleting step of the scalar deleting destructors: the map is freed
+/// when bit 0 of `flags` is set.
+fn map_delete(e: &mut Engine, this: u32, flags: u32) {
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &[MEMORY_MANAGER, this]);
+    }
+}
+
+// Translated from 00ae8c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the `BSGameSound *` map's base class (vtable
+/// `010a3370`, `NiTMapBase<NiTPointerAllocator<unsigned int>, int,
+/// BSGameSound *>` by RTTI; unnamed in the engine map).
+pub fn fn_00ae8c30(e: &mut Engine, this: u32) {
+    map_destroy(e, this, SOUND_MAP_BASE_VTABLE);
+}
+
+// Translated from 00ae8c60 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ae8c60 - the exception-unwinding frame (FS:[0] handler) is not modelled; the ordinary behaviour is complete
+/// The destructor of the `BSGameSound *` map (`NiTPointerMap<int,
+/// BSGameSound *>` by RTTI, vtable `010a3348`; unnamed in the engine map):
+/// the derived part, then the base's.
+pub fn fn_00ae8c60(e: &mut Engine, this: u32) {
+    map_destroy_derived(e, this, SOUND_MAP_VTABLE, SOUND_MAP_BASE_VTABLE);
+}
+
+// Translated from 00ae8ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the `BSSoundInfo *` map's base class (vtable
+/// `010a3390`, `NiTMapBase<NiTPointerAllocator<unsigned int>, int,
+/// BSSoundInfo *>` by RTTI; unnamed in the engine map).
+pub fn fn_00ae8ce0(e: &mut Engine, this: u32) {
+    map_destroy(e, this, STATE_MAP_BASE_VTABLE);
+}
+
+// Translated from 00ae8d10 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ae8d10 - the exception-unwinding frame (FS:[0] handler) is not modelled; the ordinary behaviour is complete
+/// The destructor of the `BSSoundInfo *` map (`NiTPointerMap<int,
+/// BSSoundInfo *>` by RTTI, vtable `010a3328`; unnamed in the engine map):
+/// the derived part, then the base's.
+pub fn fn_00ae8d10(e: &mut Engine, this: u32) {
+    map_destroy_derived(e, this, STATE_MAP_VTABLE, STATE_MAP_BASE_VTABLE);
+}
+
+// Translated from 00ae8d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the moving-reference map's base class (vtable
+/// `010a33b0`, `NiTMapBase<NiTPointerAllocator<unsigned int>, int,
+/// NiPointer<NiAVObject>>` by RTTI; unnamed in the engine map).
+pub fn fn_00ae8d90(e: &mut Engine, this: u32) {
+    map_destroy(e, this, REFERENCE_MAP_BASE_VTABLE);
+}
+
+// Translated from 00ae8dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The key comparison of the integer-keyed maps (unnamed in the engine map;
+/// referenced from their vtables): whether the two keys are equal. `this` is
+/// not used.
+pub fn fn_00ae8dc0(_e: &mut Engine, _this: u32, key: u32, other_key: u32) -> bool {
+    key == other_key
+}
+
+// Translated from 00ae8de0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ae8de0 - the exception-unwinding frame (FS:[0] handler) is not modelled; the ordinary behaviour is complete
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, int,
+/// NiPointer<NiAVObject>>::SetValue` (Xbox PDB name): stores `key` at
+/// `node` +4 and assigns the smart pointer `value` (passed by value) to the
+/// one at `node` +8 (`NiPointer::operator=`); the by-value argument is then
+/// destroyed, dropping its reference. The code works on `node` and never
+/// reads `this`.
+pub fn ni_t_map_base_reference_set_value(
+    e: &mut Engine,
+    _this: u32,
+    node: u32,
+    key: u32,
+    value: u32,
+) {
+    e.mem.set_u32(node + 4, key);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), value);
+        e.call(SMART_POINTER_ASSIGN, &[node + 8, slot.addr()]);
+        let remaining = e.mem.u32(slot.addr());
+        drop_reference(e, remaining);
+    });
+}
+
+// Translated from 00ae8e70 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ae8e70 - the exception-unwinding frame (FS:[0] handler) is not modelled; the ordinary behaviour is complete
+/// The destructor of the moving-reference map (`NiTPointerMap<int,
+/// NiPointer<NiAVObject>>` by RTTI, vtable `010a3308`; unnamed in the engine
+/// map): the derived part, then the base's.
+pub fn fn_00ae8e70(e: &mut Engine, this: u32) {
+    map_destroy_derived(e, this, REFERENCE_MAP_VTABLE, REFERENCE_MAP_BASE_VTABLE);
+}
+
+// Translated from 00ae8ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<int, NiPointer<NiAVObject>>::DeleteItem` (Xbox PDB name):
+/// sets the smart pointer in `node` +8 to null (`0066b0d0`), then frees the
+/// node on the allocator at `this + 0xc` (`0045cee0`).
+pub fn ni_t_pointer_map_reference_delete_item(e: &mut Engine, this: u32, node: u32) {
+    e.call(SMART_POINTER_SET, &[node + 8, 0]);
+    e.call(LIST_NODE_FREE, &[this + 0xc, node]);
+}
+
+// Translated from 00ae8f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of the `BSGameSound *` map's base class
+/// (vtable `010a3370`): the destructor body, then the object is freed when
+/// bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00ae8f20(e: &mut Engine, this: u32, flags: u32) -> u32 {
+    map_destroy(e, this, SOUND_MAP_BASE_VTABLE);
+    map_delete(e, this, flags);
+    this
+}
+
+// Translated from 00ae8f70 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ae8f70 - the exception-unwinding frame (FS:[0] handler) is not modelled; the ordinary behaviour is complete
+/// The scalar deleting destructor of the `BSGameSound *` map (vtable
+/// `010a3348`): the derived and base destruction, then the free. Returns
+/// `this`.
+pub fn fn_00ae8f70(e: &mut Engine, this: u32, flags: u32) -> u32 {
+    map_destroy_derived(e, this, SOUND_MAP_VTABLE, SOUND_MAP_BASE_VTABLE);
+    map_delete(e, this, flags);
+    this
+}
+
+// Translated from 00ae9010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of the `BSSoundInfo *` map's base class
+/// (vtable `010a3390`). Returns `this`.
+pub fn fn_00ae9010(e: &mut Engine, this: u32, flags: u32) -> u32 {
+    map_destroy(e, this, STATE_MAP_BASE_VTABLE);
+    map_delete(e, this, flags);
+    this
+}
+
+// Translated from 00ae9060 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ae9060 - the exception-unwinding frame (FS:[0] handler) is not modelled; the ordinary behaviour is complete
+/// The scalar deleting destructor of the `BSSoundInfo *` map (vtable
+/// `010a3328`). Returns `this`.
+pub fn fn_00ae9060(e: &mut Engine, this: u32, flags: u32) -> u32 {
+    map_destroy_derived(e, this, STATE_MAP_VTABLE, STATE_MAP_BASE_VTABLE);
+    map_delete(e, this, flags);
+    this
+}
+
+// Translated from 00ae9100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, int,
+/// NiPointer<NiAVObject>>::_scalar_deleting_destructor_` (Xbox PDB name):
+/// the destructor body (vtable `010a33b0`), then the free when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn ni_t_map_base_reference_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    map_destroy(e, this, REFERENCE_MAP_BASE_VTABLE);
+    map_delete(e, this, flags);
+    this
+}
+
+// Translated from 00ae9150 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ae9150 - the exception-unwinding frame (FS:[0] handler) is not modelled; the ordinary behaviour is complete
+/// `NiTPointerMap<int, NiPointer<NiAVObject>>::_scalar_deleting_destructor_`
+/// (Xbox PDB name): the derived (vtable `010a3308`) and base destruction,
+/// then the free when bit 0 of `flags` is set. Returns `this`.
+pub fn ni_t_pointer_map_reference_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    map_destroy_derived(e, this, REFERENCE_MAP_VTABLE, REFERENCE_MAP_BASE_VTABLE);
+    map_delete(e, this, flags);
+    this
+}
 /// The sound `message` is about: the sound list entry (+0x54) for the
 /// message's id, when there is one that is not null.
 fn message_sound(
@@ -4526,7 +4990,7 @@ fn set_voice_state_of(e: &mut Engine, this: Ptr<BSAudioManager>, sound: u32) {
 /// `SetVolume` (sound slot 0x3c) with the sound's current volume
 /// (`fCurrentVolume`, +0x24).
 fn apply_current_volume(e: &mut Engine, sound: u32) {
-    let volume = e.mem.f32(sound + SOUND_CURRENT_VOLUME);
+    let volume = x87_quiet(e.mem.f32(sound + SOUND_CURRENT_VOLUME));
     e.vcall(sound, SOUND_SLOT_SET_VOLUME, &args![volume]);
 }
 
@@ -4770,7 +5234,7 @@ fn start_ready_sound(
     sound: u32,
     only_if_not_paused: bool,
 ) {
-    let hour = e.get(this, BSAudioManager::fCurrentGamehour);
+    let hour = x87_quiet(e.get(this, BSAudioManager::fCurrentGamehour));
     if !e.call(SOUND_RANGE_TEST, &args![sound, 0u32, hour]).bool() {
         set_state_bits(e, sound, 0x10000);
     }
@@ -6424,6 +6888,63 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ae83e0, fn_00ae83e0(Ptr<BSSimpleList>)),
         entry!(0x00ae8470, fn_00ae8470(Ptr<BSSimpleList>, u32)),
         entry!(0x00ae8550, fn_00ae8550(Ptr<BSSimpleList>, u32, u32, u32)),
+        entry!(
+            0x00ae8650,
+            fn_00ae8650(Ptr<BSSoundMessage>) -> Ptr<BSSoundMessage>
+        ),
+        entry!(0x00ae86d0, bs_sound_message_destructor(Ptr<BSSoundMessage>)),
+        entry!(
+            0x00ae8770,
+            bs_debug_sound_info_constructor(Ptr<BSDebugSoundInfo>) -> Ptr<BSDebugSoundInfo>
+        ),
+        entry!(
+            0x00ae8830,
+            bs_debug_sound_info_destructor(Ptr<BSDebugSoundInfo>)
+        ),
+        entry!(
+            0x00ae88c0,
+            bs_debug_sound_info_operator_assign(
+                Ptr<BSDebugSoundInfo>,
+                Ptr<BSDebugSoundInfo>,
+            ) -> Ptr<BSDebugSoundInfo>
+        ),
+        entry!(
+            0x00ae89f0,
+            bs_sound_info_constructor(Ptr<BSSoundInfo>) -> Ptr<BSSoundInfo>
+        ),
+        entry!(
+            0x00ae8a40,
+            bs_sound_info_copy_constructor(Ptr<BSSoundInfo>, Ptr<BSSoundInfo>) -> Ptr<BSSoundInfo>
+        ),
+        entry!(0x00ae8af0, bs_sound_info_destructor(Ptr<BSSoundInfo>)),
+        entry!(0x00ae8b40, fn_00ae8b40(Ptr<BSSoundInfo>, u32) -> u32),
+        entry!(0x00ae8b80, fn_00ae8b80(u32) -> u8),
+        entry!(0x00ae8b90, fn_00ae8b90(u32, u8)),
+        entry!(0x00ae8bf0, fn_00ae8bf0(u32, u32)),
+        entry!(0x00ae8c30, fn_00ae8c30(u32)),
+        entry!(0x00ae8c60, fn_00ae8c60(u32)),
+        entry!(0x00ae8ce0, fn_00ae8ce0(u32)),
+        entry!(0x00ae8d10, fn_00ae8d10(u32)),
+        entry!(0x00ae8d90, fn_00ae8d90(u32)),
+        entry!(0x00ae8dc0, fn_00ae8dc0(u32, u32, u32) -> bool),
+        entry!(
+            0x00ae8de0,
+            ni_t_map_base_reference_set_value(u32, u32, u32, u32)
+        ),
+        entry!(0x00ae8e70, fn_00ae8e70(u32)),
+        entry!(0x00ae8ef0, ni_t_pointer_map_reference_delete_item(u32, u32)),
+        entry!(0x00ae8f20, fn_00ae8f20(u32, u32) -> u32),
+        entry!(0x00ae8f70, fn_00ae8f70(u32, u32) -> u32),
+        entry!(0x00ae9010, fn_00ae9010(u32, u32) -> u32),
+        entry!(0x00ae9060, fn_00ae9060(u32, u32) -> u32),
+        entry!(
+            0x00ae9100,
+            ni_t_map_base_reference_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(
+            0x00ae9150,
+            ni_t_pointer_map_reference_scalar_deleting_destructor(u32, u32) -> u32
+        ),
     ]
 }
 
@@ -11055,5 +11576,536 @@ mod tests {
         let empty = chain_node(&mut e, 0, 0);
         e.call(0x00ae81e0, &[empty, compare]);
         assert_eq!(chain_items(&e, empty), vec![0]);
+    }
+
+    // ---- the functions of 00ae8650 to 00ae9150 ----
+
+    /// A zeroed block with the object layout the smart pointers expect: the
+    /// vtable at +0, the reference count at +4.
+    fn counted_object(e: &mut Engine, vtable: &FakeVtable, count: u32) -> u32 {
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, vtable.address);
+        e.mem.set_u32(object + 4, count);
+        object
+    }
+
+    /// `strcpy` that copies the bytes up to and including the terminator.
+    fn install_strcpy(e: &mut Engine) {
+        e.register(STRCPY, |e, a| {
+            let mut index = 0;
+            loop {
+                let byte = e.mem.u8(a[1] + index);
+                e.mem.set_u8(a[0] + index, byte);
+                if byte == 0 {
+                    break;
+                }
+                index += 1;
+            }
+            ret(a[0])
+        });
+    }
+
+    #[test]
+    fn a_sound_message_starts_empty() {
+        let mut e = engine();
+        let message: Ptr<BSSoundMessage> = e.new_object();
+        for offset in (0..0x20).step_by(4) {
+            e.mem.set_u32(message.addr() + offset, 0xdead_beef);
+        }
+        let result = e.call(0x00ae8650, &args![message]).u32();
+        assert_eq!(result, message.addr());
+        for offset in (0..0x20).step_by(4) {
+            assert_eq!(e.mem.u32(message.addr() + offset), 0, "+{offset:#x}");
+        }
+        // Every float of the vector is +0.0 (all bits clear).
+        assert_eq!(e.get(message, BSSoundMessage::vector3_z).to_bits(), 0);
+    }
+
+    #[test]
+    fn a_sound_message_releases_its_pointer_and_drops_the_reference() {
+        let mut e = engine();
+        let vtable = fake_vtable(&mut e, 0x7200_0000);
+        let message: Ptr<BSSoundMessage> = e.new_object();
+        // No pointer: nothing is called.
+        e.call_log = Some(vec![]);
+        e.call(0x00ae86d0, &args![message]);
+        assert_eq!(
+            e.call_log.take().unwrap(),
+            vec![(0x00ae86d0, vec![message.addr()])]
+        );
+        // A pointer with two references: released through 00c45830, one
+        // reference left, no destruction.
+        e.register(RELEASE_MESSAGE_POINTER, |_, _| ret(0));
+        let object = counted_object(&mut e, &vtable, 2);
+        e.set(message, BSSoundMessage::spData, object);
+        e.call_log = Some(vec![]);
+        e.call(0x00ae86d0, &args![message]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(RELEASE_MESSAGE_POINTER, vec![object])));
+        assert_eq!(e.mem.u32(object + 4), 1);
+        assert!(vtable.calls(4).is_empty());
+        // The last reference: the object's virtual method at +4 runs.
+        e.call(0x00ae86d0, &args![message]);
+        assert_eq!(e.mem.u32(object + 4), 0);
+        assert_eq!(vtable.calls(4), vec![vec![object]]);
+    }
+
+    #[test]
+    fn a_debug_record_starts_with_empty_names_and_the_default_location() {
+        let mut e = engine();
+        let record: Ptr<BSDebugSoundInfo> = e.new_object();
+        let base = record.addr();
+        for offset in (0..0x23c).step_by(4) {
+            e.mem.set_u32(base + offset, 0xdead_beef);
+        }
+        let result = e.call(0x00ae8770, &args![record]).u32();
+        assert_eq!(result, base);
+        assert_eq!(e.mem.u32(base), base + 4);
+        assert_eq!(e.mem.u32(base + 0x108), base + 0x10c);
+        assert_eq!(e.mem.u8(base + 4), 0);
+        assert_eq!(e.mem.u8(base + 0x10c), 0);
+        assert_eq!(e.get(record, BSDebugSoundInfo::fRadiusMin), 0.0);
+        assert_eq!(e.get(record, BSDebugSoundInfo::fRadiusMax), 0.0);
+        assert_eq!(e.get(record, BSDebugSoundInfo::locationX), 1.0);
+        assert_eq!(e.get(record, BSDebugSoundInfo::locationY), 2.0);
+        assert_eq!(e.get(record, BSDebugSoundInfo::distanceToListener), 3.0);
+        for offset in [0x224, 0x228, 0x22c, 0x230, 0x234, 0x238] {
+            assert_eq!(e.mem.u32(base + offset), 0, "+{offset:#x}");
+        }
+        // The bytes between the fields stay as they were.
+        assert_eq!(e.mem.u32(base + 0x8), 0xdead_beef);
+    }
+
+    #[test]
+    fn a_debug_record_clears_its_pointers_and_counters_but_not_the_location() {
+        let mut e = engine();
+        let record: Ptr<BSDebugSoundInfo> = e.new_object();
+        let base = record.addr();
+        for offset in (0..0x23c).step_by(4) {
+            e.mem.set_u32(base + offset, 0xdead_beef);
+        }
+        e.call(0x00ae8830, &args![record]);
+        for offset in [
+            0x0, 0x108, 0x210, 0x214, 0x224, 0x228, 0x22c, 0x230, 0x234, 0x238,
+        ] {
+            assert_eq!(e.mem.u32(base + offset), 0, "+{offset:#x}");
+        }
+        for offset in [0x218, 0x21c, 0x220, 0x4, 0x10c] {
+            assert_eq!(e.mem.u32(base + offset), 0xdead_beef, "+{offset:#x}");
+        }
+    }
+
+    #[test]
+    fn a_debug_record_assignment_copies_names_and_values() {
+        let mut e = engine();
+        install_strcpy(&mut e);
+        let to: Ptr<BSDebugSoundInfo> = e.new_object();
+        let from: Ptr<BSDebugSoundInfo> = e.new_object();
+        e.call(0x00ae8770, &args![to]);
+        e.call(0x00ae8770, &args![from]);
+        e.mem.set_cstr(to.addr() + 4, b"stale");
+        e.mem.set_cstr(to.addr() + 0x10c, b"stale");
+        e.mem.set_cstr(from.addr() + 4, b"sound");
+        e.mem.set_cstr(from.addr() + 0x10c, b"data\\file.wav");
+        e.set(from, BSDebugSoundInfo::fRadiusMin, 5.0);
+        e.set(from, BSDebugSoundInfo::fRadiusMax, 50.0);
+        e.set(from, BSDebugSoundInfo::iStateFlags, 0x1234);
+        e.set(from, BSDebugSoundInfo::iStaticAttenuation, 7);
+        e.set(from, BSDebugSoundInfo::iSystemAttenuation, 8);
+        e.set(from, BSDebugSoundInfo::iDistanceAttenuation, 9);
+        e.set(from, BSDebugSoundInfo::locationX, 10.0);
+        // A signalling NaN loaded through the x87 stack comes back quiet.
+        e.mem.set_u32(from.addr() + 0x228, 0x7f80_0001);
+        e.mem.set_u32(from.addr() + 0x22c, 0x7fc0_0123);
+        let result = e.call(0x00ae88c0, &args![to, from]).u32();
+        assert_eq!(result, to.addr());
+        assert_eq!(e.mem.cstr(to.addr() + 4), b"sound");
+        assert_eq!(e.mem.cstr(to.addr() + 0x10c), b"data\\file.wav");
+        assert_eq!(e.get(to, BSDebugSoundInfo::fRadiusMin), 5.0);
+        assert_eq!(e.get(to, BSDebugSoundInfo::fRadiusMax), 50.0);
+        assert_eq!(e.get(to, BSDebugSoundInfo::iStateFlags), 0x1234);
+        assert_eq!(e.get(to, BSDebugSoundInfo::locationX), 10.0);
+        assert_eq!(e.get(to, BSDebugSoundInfo::locationY), 2.0);
+        assert_eq!(e.get(to, BSDebugSoundInfo::iStaticAttenuation), 7);
+        assert_eq!(e.get(to, BSDebugSoundInfo::iSystemAttenuation), 8);
+        assert_eq!(e.get(to, BSDebugSoundInfo::iDistanceAttenuation), 9);
+        assert_eq!(e.mem.u32(to.addr() + 0x228), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(to.addr() + 0x22c), 0x7fc0_0123);
+    }
+
+    #[test]
+    fn a_debug_record_assignment_skips_the_names_of_a_record_without_pointers() {
+        let mut e = engine();
+        let copies = Rc::new(RefCell::new(0));
+        let counter = copies.clone();
+        e.register_double(STRCPY, move |_, _| {
+            *counter.borrow_mut() += 1;
+            ret(0)
+        });
+        let to: Ptr<BSDebugSoundInfo> = e.new_object();
+        let from: Ptr<BSDebugSoundInfo> = e.new_object();
+        e.call(0x00ae8770, &args![to]);
+        e.mem.set_u8(to.addr() + 4, b'x');
+        e.call(0x00ae88c0, &args![to, from]);
+        // Both name pointers of `from` are null: no copy, but this record's
+        // buffers are cleared.
+        assert_eq!(*copies.borrow(), 0);
+        assert_eq!(e.mem.u8(to.addr() + 4), 0);
+        // Only the file name pointer set: one copy.
+        e.mem.set_u32(from.addr() + 0x108, from.addr() + 0x10c);
+        e.call(0x00ae88c0, &args![to, from]);
+        assert_eq!(*copies.borrow(), 1);
+    }
+
+    #[test]
+    fn a_sound_info_starts_cleared_around_its_debug_record() {
+        let mut e = engine();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        e.register_double(DEBUG_SOUND_INFO_CONSTRUCTOR, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            ret(a[0])
+        });
+        let info: Ptr<BSSoundInfo> = e.new_object();
+        let base = info.addr();
+        for offset in (0..0x18).step_by(4) {
+            e.mem.set_u32(base + offset, 0xdead_beef);
+        }
+        let result = e.call(0x00ae89f0, &args![info]).u32();
+        assert_eq!(result, base);
+        assert_eq!(*seen.borrow(), vec![vec![base + 0x18]]);
+        for offset in [0x0, 0x4, 0xc, 0x10] {
+            assert_eq!(e.mem.u32(base + offset), 0, "+{offset:#x}");
+        }
+        assert_eq!(e.mem.u8(base + 0x14), 0);
+        // The volume is not touched by the constructor.
+        assert_eq!(e.mem.u32(base + 0x8), 0xdead_beef);
+    }
+
+    #[test]
+    fn a_sound_info_copy_constructs_its_debug_record_and_copies_the_values() {
+        let mut e = engine();
+        e.register(DEBUG_SOUND_INFO_CONSTRUCTOR, |_, a| ret(a[0]));
+        let assigned = Rc::new(RefCell::new(Vec::new()));
+        let log = assigned.clone();
+        e.register_double(DEBUG_SOUND_INFO_ASSIGN, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            ret(a[0])
+        });
+        let to: Ptr<BSSoundInfo> = e.new_object();
+        let from: Ptr<BSSoundInfo> = e.new_object();
+        e.set(from, BSSoundInfo::iID, 12);
+        e.set(from, BSSoundInfo::fFrequency, 1.5);
+        e.mem.set_u32(from.addr() + 8, 0x7f80_0042);
+        e.set(from, BSSoundInfo::uiSoundType, 3);
+        e.set(from, BSSoundInfo::uiDuration, 4000);
+        e.set(from, BSSoundInfo::bIsPlaying, 1);
+        let result = e.call(0x00ae8a40, &args![to, from]).u32();
+        assert_eq!(result, to.addr());
+        assert_eq!(e.get(to, BSSoundInfo::iID), 12);
+        assert_eq!(e.get(to, BSSoundInfo::fFrequency), 1.5);
+        assert_eq!(e.mem.u32(to.addr() + 8), 0x7fc0_0042);
+        assert_eq!(e.get(to, BSSoundInfo::uiSoundType), 3);
+        assert_eq!(e.get(to, BSSoundInfo::uiDuration), 4000);
+        assert_eq!(e.get(to, BSSoundInfo::bIsPlaying), 1);
+        assert_eq!(
+            *assigned.borrow(),
+            vec![vec![to.addr() + 0x18, from.addr() + 0x18]]
+        );
+    }
+
+    #[test]
+    fn a_sound_info_clears_itself_and_runs_the_debug_destructor_last() {
+        let mut e = engine();
+        e.register(DEBUG_SOUND_INFO_DESTRUCTOR, |_, _| ret(0));
+        let info: Ptr<BSSoundInfo> = e.new_object();
+        let base = info.addr();
+        for offset in (0..0x18).step_by(4) {
+            e.mem.set_u32(base + offset, 0xdead_beef);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00ae8af0, &args![info]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log,
+            vec![
+                (0x00ae8af0, vec![base]),
+                (DEBUG_SOUND_INFO_DESTRUCTOR, vec![base + 0x18])
+            ]
+        );
+        for offset in (0..0x14).step_by(4) {
+            assert_eq!(e.mem.u32(base + offset), 0, "+{offset:#x}");
+        }
+        assert_eq!(e.mem.u8(base + 0x14), 0);
+    }
+
+    #[test]
+    fn the_debug_record_getter_copies_the_whole_record() {
+        let mut e = engine();
+        let info: Ptr<BSSoundInfo> = e.new_object();
+        let out = e.mem.alloc(0x23c + 8);
+        for index in 0..0x8f {
+            e.mem.set_u32(info.addr() + 0x18 + index * 4, 0x100 + index);
+        }
+        e.mem.set_u32(out + 0x23c, 0x5555);
+        let result = e.call(0x00ae8b40, &args![info, out]).u32();
+        assert_eq!(result, out);
+        for index in 0..0x8f {
+            assert_eq!(e.mem.u32(out + index * 4), 0x100 + index);
+        }
+        assert_eq!(e.mem.u32(out + 0x23c), 0x5555);
+    }
+
+    #[test]
+    fn the_constant_method_answers_two() {
+        let mut e = engine();
+        assert_eq!(e.call(0x00ae8b80, &[0]).u8(), 2);
+    }
+
+    #[test]
+    fn the_sound_flag_step_sets_or_clears_bit_0x400_and_resends_the_volume() {
+        let mut e = engine();
+        let vtable = fake_vtable(&mut e, 0x7200_0000);
+        let sound = fake_sound(&mut e, &vtable, 1);
+        e.mem.set_u32(sound + SOUND_STATE_FLAGS, 0x0000_0101);
+        e.mem.set_f32(sound + SOUND_CURRENT_VOLUME, 0.75);
+        e.call(0x00ae8b90, &[sound, 1]);
+        assert_eq!(e.mem.u32(sound + SOUND_STATE_FLAGS), 0x0000_0501);
+        assert_eq!(
+            vtable.calls(SOUND_SLOT_SET_VOLUME),
+            vec![vec![sound, 0.75f32.to_bits()]]
+        );
+        // Only the low byte of the argument counts.
+        e.call(0x00ae8b90, &[sound, 0x100]);
+        assert_eq!(e.mem.u32(sound + SOUND_STATE_FLAGS), 0x0000_0101);
+        // A signalling NaN volume is passed on quiet.
+        e.mem.set_u32(sound + SOUND_CURRENT_VOLUME, 0x7f80_0001);
+        e.call(0x00ae8b90, &[sound, 0xff]);
+        assert_eq!(e.mem.u32(sound + SOUND_STATE_FLAGS), 0x0000_0501);
+        assert_eq!(
+            vtable.calls(SOUND_SLOT_SET_VOLUME).last().unwrap(),
+            &vec![sound, 0x7fc0_0001]
+        );
+    }
+
+    #[test]
+    fn appending_a_pointer_takes_a_node_stores_the_pointer_and_links_it() {
+        let mut e = engine();
+        let list = e.mem.alloc(0x14);
+        let node = e.mem.alloc(12);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        e.register_double(LIST_NEW_NODE, move |_, a| {
+            log.borrow_mut().push((LIST_NEW_NODE, a.to_vec()));
+            ret(node)
+        });
+        let log = seen.clone();
+        e.register_double(LIST_ADD_NODE_TAIL, move |_, a| {
+            log.borrow_mut().push((LIST_ADD_NODE_TAIL, a.to_vec()));
+            ret(0)
+        });
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0xabcd);
+        e.call(0x00ae8bf0, &[list, slot]);
+        assert_eq!(e.mem.u32(node + 8), 0xabcd);
+        assert_eq!(
+            *seen.borrow(),
+            vec![
+                (LIST_NEW_NODE, vec![list + 8]),
+                (LIST_ADD_NODE_TAIL, vec![list, node])
+            ]
+        );
+    }
+
+    /// Doubles for `MAP_CLEAR` and `FREE_TABLE` that log the vtable the map
+    /// has when it is cleared and the table freed.
+    fn install_map_doubles(e: &mut Engine) -> Rc<RefCell<Vec<(&'static str, u32)>>> {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        e.register_double(MAP_CLEAR, move |e, a| {
+            log.borrow_mut().push(("clear", e.mem.u32(a[0])));
+            ret(0)
+        });
+        let log = seen.clone();
+        e.register_double(FREE_TABLE, move |_, a| {
+            log.borrow_mut().push(("free", a[0]));
+            ret(0)
+        });
+        seen
+    }
+
+    #[test]
+    fn the_map_destructors_clear_under_each_vtable_in_turn() {
+        // (address, vtables the map is cleared under, in order)
+        let cases: [(u32, &[u32]); 6] = [
+            (0x00ae8c30, &[0x010a_3370]),
+            (0x00ae8c60, &[0x010a_3348, 0x010a_3370]),
+            (0x00ae8ce0, &[0x010a_3390]),
+            (0x00ae8d10, &[0x010a_3328, 0x010a_3390]),
+            (0x00ae8d90, &[0x010a_33b0]),
+            (0x00ae8e70, &[0x010a_3308, 0x010a_33b0]),
+        ];
+        for (address, vtables) in cases {
+            let mut e = engine();
+            let seen = install_map_doubles(&mut e);
+            let map = e.mem.alloc(0x10);
+            e.mem.set_u32(map + 8, 0x4242);
+            e.call(address, &[map]);
+            let mut expected: Vec<(&str, u32)> =
+                vtables.iter().map(|vtable| ("clear", *vtable)).collect();
+            expected.push(("free", 0x4242));
+            assert_eq!(*seen.borrow(), expected, "{address:08x}");
+            assert_eq!(e.mem.u32(map), *vtables.last().unwrap());
+        }
+    }
+
+    #[test]
+    fn the_scalar_deleting_map_destructors_free_the_map_only_when_asked() {
+        let cases: [(u32, &[u32]); 5] = [
+            (0x00ae8f20, &[0x010a_3370]),
+            (0x00ae8f70, &[0x010a_3348, 0x010a_3370]),
+            (0x00ae9010, &[0x010a_3390]),
+            (0x00ae9060, &[0x010a_3328, 0x010a_3390]),
+            (0x00ae9100, &[0x010a_33b0]),
+        ];
+        let mut all = cases.to_vec();
+        all.push((0x00ae9150, &[0x010a_3308, 0x010a_33b0]));
+        for (address, vtables) in all {
+            let mut e = engine();
+            let seen = install_map_doubles(&mut e);
+            let map = e.mem.alloc(0x10);
+            e.mem.set_u32(map + 8, 0x4242);
+            // Without the delete flag the map stays allocated.
+            let result = e.call(address, &[map, 0]).u32();
+            assert_eq!(result, map);
+            assert_eq!(e.mem.block_size(map), Some(0x10), "{address:08x}");
+            assert_eq!(seen.borrow().len(), vtables.len() + 1);
+            assert_eq!(e.mem.u32(map), *vtables.last().unwrap());
+            // With it (any word with bit 0 set) the map is deallocated.
+            let result = e.call(address, &[map, 3]).u32();
+            assert_eq!(result, map);
+            assert_eq!(e.mem.block_size(map), None, "{address:08x}");
+        }
+    }
+
+    #[test]
+    fn the_integer_key_comparison_tests_equality() {
+        let mut e = engine();
+        assert!(e.call(0x00ae8dc0, &[0, 5, 5]).bool());
+        assert!(!e.call(0x00ae8dc0, &[0, 5, 6]).bool());
+    }
+
+    #[test]
+    fn set_value_stores_the_key_assigns_the_pointer_and_drops_the_argument() {
+        let mut e = engine();
+        let vtable = fake_vtable(&mut e, 0x7200_0000);
+        let assigned = Rc::new(RefCell::new(Vec::new()));
+        let log = assigned.clone();
+        e.register_double(SMART_POINTER_ASSIGN, move |e, a| {
+            let value = e.mem.u32(a[1]);
+            log.borrow_mut().push((a[0], value));
+            e.mem.set_u32(a[0], value);
+            ret(a[0])
+        });
+        let node = e.mem.alloc(12);
+        // Two references: the assignment keeps one, the argument's goes.
+        let object = counted_object(&mut e, &vtable, 2);
+        e.call(0x00ae8de0, &[0, node, 77, object]);
+        assert_eq!(e.mem.u32(node + 4), 77);
+        assert_eq!(e.mem.u32(node + 8), object);
+        assert_eq!(*assigned.borrow(), vec![(node + 8, object)]);
+        assert_eq!(e.mem.u32(object + 4), 1);
+        assert!(vtable.calls(4).is_empty());
+        // The argument held the last reference: destroyed.
+        let lone = counted_object(&mut e, &vtable, 1);
+        e.call(0x00ae8de0, &[0, node, 78, lone]);
+        assert_eq!(e.mem.u32(lone + 4), 0);
+        assert_eq!(vtable.calls(4), vec![vec![lone]]);
+        // A null pointer is assigned and nothing is dropped.
+        e.call(0x00ae8de0, &[0, node, 79, 0]);
+        assert_eq!(e.mem.u32(node + 4), 79);
+        assert_eq!(e.mem.u32(node + 8), 0);
+        assert_eq!(vtable.calls(4).len(), 1);
+    }
+
+    #[test]
+    fn delete_item_nulls_the_pointer_and_frees_the_node_on_the_allocator() {
+        let mut e = engine();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        e.register_double(SMART_POINTER_SET, move |_, a| {
+            log.borrow_mut().push((SMART_POINTER_SET, a.to_vec()));
+            ret(0)
+        });
+        let log = seen.clone();
+        e.register_double(LIST_NODE_FREE, move |_, a| {
+            log.borrow_mut().push((LIST_NODE_FREE, a.to_vec()));
+            ret(0)
+        });
+        e.call(0x00ae8ef0, &[0x1000, 0x2000]);
+        assert_eq!(
+            *seen.borrow(),
+            vec![
+                (SMART_POINTER_SET, vec![0x2008, 0]),
+                (LIST_NODE_FREE, vec![0x100c, 0x2000])
+            ]
+        );
+    }
+
+    #[test]
+    fn floats_that_pass_through_the_x87_stack_come_back_quiet() {
+        const SIGNALLING: u32 = 0x7f80_0001;
+        const QUIET: u32 = 0x7fc0_0001;
+        const ONE: u32 = 0x3f80_0000;
+        // The helper: only a signalling NaN changes.
+        assert_eq!(x87_float_copy(SIGNALLING), QUIET);
+        assert_eq!(x87_float_copy(0xffa0_0000), 0xffe0_0000);
+        assert_eq!(x87_float_copy(QUIET), QUIET);
+        assert_eq!(x87_float_copy(0x7f80_0000), 0x7f80_0000);
+        assert_eq!(x87_float_copy(ONE), ONE);
+        assert_eq!(x87_float_copy(0x0000_0001), 0x0000_0001);
+        // SetPosition: the queued message's vector (FLD / FSTP in the exe).
+        let mut f = Fixture::new();
+        f.call(0x00adb970, &[3, SIGNALLING, ONE, SIGNALLING]);
+        let message = f.queued.borrow()[0];
+        assert_eq!(f.e.mem.u32(message + 0x14), QUIET);
+        assert_eq!(f.e.mem.u32(message + 0x18), ONE);
+        assert_eq!(f.e.mem.u32(message + 0x1c), QUIET);
+        // The game hour.
+        let this: Ptr<BSAudioManager> = f.e.new_object();
+        f.e.call(0x00ada300, &[this.addr(), SIGNALLING, 5]);
+        assert_eq!(f.e.mem.u32(this.addr() + 0xa8), QUIET);
+        // The volume resent to a sound.
+        let vtable = fake_vtable(&mut f.e, 0x7200_0000);
+        let sound = fake_sound(&mut f.e, &vtable, 1);
+        f.e.mem.set_u32(sound + SOUND_CURRENT_VOLUME, SIGNALLING);
+        apply_current_volume(&mut f.e, sound);
+        assert_eq!(
+            vtable.calls(SOUND_SLOT_SET_VOLUME),
+            vec![vec![sound, QUIET]]
+        );
+        // BSSoundInfo::operator= copies the frequency and volume the same way.
+        f.e.register(DEBUG_SOUND_INFO_ASSIGN, |_, a| ret(a[0]));
+        let to: Ptr<BSSoundInfo> = f.e.new_object();
+        let from: Ptr<BSSoundInfo> = f.e.new_object();
+        f.e.mem.set_u32(from.addr() + 4, SIGNALLING);
+        f.e.mem.set_u32(from.addr() + 8, ONE);
+        f.e.call(0x00ae7920, &args![to, from]);
+        assert_eq!(f.e.mem.u32(to.addr() + 4), QUIET);
+        assert_eq!(f.e.mem.u32(to.addr() + 8), ONE);
+        // BSSoundMessage assignment copies the vector the same way.
+        f.e.register(SMART_POINTER_ASSIGN, |_, a| ret(a[0]));
+        let target: Ptr<BSSoundMessage> = f.e.new_object();
+        let source: Ptr<BSSoundMessage> = f.e.new_object();
+        f.e.mem.set_u32(source.addr() + 0x14, ONE);
+        f.e.mem.set_u32(source.addr() + 0x18, SIGNALLING);
+        f.e.mem.set_u32(source.addr() + 0x1c, SIGNALLING);
+        f.e.call(0x00ae7990, &args![target, source]);
+        assert_eq!(f.e.mem.u32(target.addr() + 0x14), ONE);
+        // The 16-bit copies that follow overwrite the first ten bytes with the
+        // source's own bytes, so only the last two bytes of the third float
+        // keep what the x87 store made of it.
+        assert_eq!(f.e.mem.u32(target.addr() + 0x18), SIGNALLING);
+        assert_eq!(f.e.mem.u32(target.addr() + 0x1c), QUIET);
     }
 }

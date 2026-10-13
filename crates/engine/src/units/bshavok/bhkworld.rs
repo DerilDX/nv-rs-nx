@@ -166,7 +166,7 @@ pub fn bhk_world_increment_batch_remove(e: &mut Engine, this: Ptr) {
 // Translated from 00c66320 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkQuaternion::setMul` (Xbox PDB): stores the product of `left` and
 /// `right` in `this`, using the PC build's SSE single-precision operations.
-// Translation incomplete:  - .
+// Translation incomplete: 00c66320 - the /GS security-cookie check (00ec408c) is not translated.
 pub fn hk_quaternion_set_mul(
     e: &mut Engine,
     this: Ptr<HkQuaternion>,
@@ -306,7 +306,7 @@ pub fn hk_memory_allocator_delete(e: &mut Engine, this: Ptr, _unused_0: u32) -> 
 /// Performs the thread-local Havok startup callback at `01268450` with
 /// argument 1, temporarily setting the TLS Havok memory state to 0x10.
 /// Structured exception unwinding is not modeled.
-// Translation incomplete:  - .
+// Translation incomplete: 00c66570 - C++ exception unwinding (the frame registered at FS:[0]) is not translated.
 pub fn bhk_on_startup_callback_invoke(e: &mut Engine) {
     let tls = e.tls();
     let previous = e.mem.u32(tls + 0x2b4);
@@ -359,7 +359,7 @@ pub fn bhk_on_startup_callback_delete_adjustor_20(e: &mut Engine, this: Ptr, fla
 // Translated from 00c66670 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Tears down the Havok globals in the order used by the executable.
 /// Structured exception unwinding is not modeled.
-// Translation incomplete:  - .
+// Translation incomplete: 00c66670 - C++ exception unwinding (the frame registered at FS:[0]) is not translated.
 pub fn bhk_world_shutdown(e: &mut Engine) {
     bhk_on_startup_callback_invoke(e);
     e.call(0x00c6_d340, &[]);
@@ -556,7 +556,7 @@ pub fn bhk_world_scale_origin(e: &mut Engine, this: Ptr<BhkWorld>, input: Ptr) {
 // Translated from 00c66c00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Shifts the Havok broad phase to the requested origin and stores the
 /// resulting origin on the `bhkWorld`.
-// Translation incomplete:  - .
+// Translation incomplete: 00c66c00 - the /GS security-cookie check (00ec408c) is not translated.
 pub fn bhk_world_shift_broad_phase(e: &mut Engine, this: Ptr<BhkWorld>, requested: Ptr) {
     let target = e.mem.bytes(requested.addr(), 16);
     let origin = e.mem.bytes(this.addr() + 0x60, 16);
@@ -589,7 +589,7 @@ pub fn bhk_world_shift_broad_phase(e: &mut Engine, this: Ptr<BhkWorld>, requeste
 /// Havok world, installs its game vtable, attaches the optional collision
 /// filter, then invokes the world's setup virtuals. The trailing stack word
 /// is the construction-info pointer. Structured exception unwinding is not modeled.
-// Translation incomplete:  - .
+// Translation incomplete: 00c66c90 - C++ exception unwinding (the frame registered at FS:[0]) is not translated.
 pub fn bhk_world_init(e: &mut Engine, this: Ptr<BhkWorld>, cinfo: Ptr) {
     let tls = e.tls();
     let saved_tls = e.mem.u32(tls + 0x2b4);
@@ -657,7 +657,7 @@ pub fn bhk_world_set_solver_value(e: &mut Engine, this: Ptr<BhkWorld>, value: f3
 /// `bhkWorld::KillCinfo` (Xbox PDB): when requested, destroys the
 /// `hkSerializableCinfo` base at `pInfo - 0xF0` and clears `pInfo`.
 /// Structured exception unwinding is not modeled.
-// Translation incomplete:  - .
+// Translation incomplete: 00c66e70 - C++ exception unwinding (the frame registered at FS:[0]) is not translated.
 pub fn bhk_world_kill_cinfo(e: &mut Engine, this: Ptr<BhkWorld>, destroy: u8) {
     let tls = e.tls();
     let saved_tls = e.mem.u32(tls + 0x2b4);
@@ -807,7 +807,7 @@ pub fn bhk_collision_agent_update(e: &mut Engine, agent: Ptr, filter: Ptr) {
 /// Updates a Havok shape's transform from the four-float vector at
 /// `transform + 0xC`; scales it by an optional property and skips a redundant
 /// near-zero offset before calling shape slots `+0xD4` and `+0xDC`.
-// Translation incomplete:  - .
+// Translation incomplete: 00c67320 - the /GS security-cookie check (00ec408c) is not translated.
 pub fn bhk_collision_agent_update_shape_transform(e: &mut Engine, agent: Ptr, transform: Ptr) {
     let material = e.vcall(agent.addr(), 0x3c, &[]).u32();
     let shape_owner = e.mem.u32(agent.addr() + 0x10);

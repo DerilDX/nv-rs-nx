@@ -12,9 +12,48 @@ pub fn fn_00590d00(e: &mut Engine, this: Ptr) -> bool {
     e.mem.u32(this.addr() + 0x38) & 1 != 0
 }
 
+// Translated from 00591200 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00591200 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
+/// Constructor of the form `CreateFormOfType` (`00465110`) makes for form type 0x66 (0x34 bytes); `ECX` is the object.
+/// The engine map gives it no name; the RTTI name of the vtable it stores at `+0` (`0x0103_397c`) is `BGSMusicType`, so this is the constructor of `BGSMusicType`.
+/// It runs the base and component constructors by address, stores the vtable pointers and sets the fields to their start values. It copies the float at `0103395c` into `+0x24`.
+/// The exception-unwinding frame is not translated.
+pub fn fn_00591200(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0048_3370, &args![this]);
+    e.call(0x0059_12d0, &args![base + 0x18]);
+    e.mem.set_u32(base, 0x0103_397c);
+    e.mem.set_u32(base + 0x18, 0x0103_3964);
+    e.call(0x0096_a2d0, &args![base + 0x28]);
+    e.call(0x004f_15a0, &args![this, 0x66u32]);
+    let f1 = e.global::<f32>(0x0103_395c);
+    e.mem.set_f32(base + 0x24, f1);
+    this
+}
+
+// Translated from 00591b70 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00591b70 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
+/// Constructor of the form `CreateFormOfType` (`00465110`) makes for form type 0x5a (0x20 bytes); `ECX` is the object.
+/// The engine map gives it no name; the RTTI name of the vtable it stores at `+0` (`0x0103_3b34`) is `BGSRadiationStage`, so this is the constructor of `BGSRadiationStage`.
+/// It runs the base and component constructors by address, stores the vtable pointers and sets the fields to their start values.
+/// The exception-unwinding frame is not translated.
+pub fn fn_00591b70(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0048_3370, &args![this]);
+    e.mem.set_u32(base, 0x0103_3b34);
+    e.call(0x0040_19f0, &args![base + 0x18]);
+    e.call(0x004f_15a0, &args![this, 0x5au32]);
+    e.call(0x0040_1b20, &args![this]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00590d00, fn_00590d00(Ptr) -> bool)]
+    vec![
+        entry!(0x00590d00, fn_00590d00(Ptr) -> bool),
+        entry!(0x0059_1200, fn_00591200(Ptr) -> Ptr),
+        entry!(0x0059_1b70, fn_00591b70(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -30,5 +69,48 @@ mod tests {
         assert!(!e.call(0x0059_0d00, &args![object]).bool());
         e.mem.set_u32(object + 0x38, 0xffff_ffff);
         assert!(e.call(0x0059_0d00, &args![object]).bool());
+    }
+}
+
+#[cfg(test)]
+mod ctor_tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_00591200_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0059_1200,
+            size: 0x34,
+            globals: &[(0x0103_395c, 0x0100_0001)],
+            returns: &[],
+            calls: &[
+                (0x0048_3370, &[A::T(0x0)]),
+                (0x0059_12d0, &[A::T(0x18)]),
+                (0x0096_a2d0, &[A::T(0x28)]),
+                (0x004f_15a0, &[A::T(0x0), A::V(0x66)]),
+            ],
+            stores: &[
+                (0x0, 4, 0x0103_397c),
+                (0x18, 4, 0x0103_3964),
+                (0x24, 4, 0x0100_0001),
+            ],
+        });
+    }
+
+    #[test]
+    fn fn_00591b70_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0059_1b70,
+            size: 0x20,
+            globals: &[],
+            returns: &[],
+            calls: &[
+                (0x0048_3370, &[A::T(0x0)]),
+                (0x0040_19f0, &[A::T(0x18)]),
+                (0x004f_15a0, &[A::T(0x0), A::V(0x5a)]),
+                (0x0040_1b20, &[A::T(0x0)]),
+            ],
+            stores: &[(0x0, 4, 0x0103_3b34)],
+        });
     }
 }
