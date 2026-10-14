@@ -7,57 +7,85 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-14 early (current; read before the section below)
+### Claude lead, 2026-10-14 (current; give this to the next account first)
 
-Stopped near the weekly usage limit (95 % rule). State:
+The maintainer alternates two Claude Max accounts on this one machine, never
+both at once. This session stopped at the weekly limit (95-96 % rule); the
+next account continues from here. Talk to the maintainer in plain language.
 
-- **Merged since #163:** #161 (ScriptLocals bridge, S5), #164 and #165
-  (rolling translation batches), #166 (S6a: `Host::start` runs the 17,736
-  static initializers through a generated table, `research/initgen`), #167
-  (S6: a real FalloutNV.esm quest script runs through the game's own
-  interpreter in `Host`; 297 of 301 scripted quests finish their first pass
-  in the opt-in survey).
-- **Open:** rolling #168 (lead `claude/engine-crate`, rebased on #167, gated
-  locally). Merge with `HOLD_LATER_PUSH=1 bin/ship.sh 168` once both checks
-  pass; later lead commits are pushed after a fresh gate.
-- **Ledger:** hand-translated and table-run static initializers are counted
-  separately: about 15,500 translated (23.4 %) and 15,762 static init
-  (table) (23.8 %).
-- **Shared now:** `crate::x87::{x87_quiet, x87_quiet_bits}` in the prelude
-  (never quiet a NaN through an f32->f64->f32 cast); 13 KERNEL32 stand-ins
-  in `units/platform.rs` with a handle table on `Engine::kernel`.
+**State:**
+- **Build 42 is in the play copy** (`Desktop\nv-rs-play`, main 95144b1):
+  16 command-free quests run through the game's own translated script
+  interpreter (`QuestVm` hook, #170); `Host::start` runs the 15,762
+  static initializers; the startup line and F12 report count interpreter runs.
+- **Merged this session:** #161, #164 to #174: quest loaders (#169, #171:
+  stages, `SetDone`, targets, conditions, condition items, objectives,
+  topics and responses, TESFile chunks, CRT `sprintf`/`_snprintf`), the
+  QuestVm hook (#170), lockfile hash (#172), CI build cache (#173), rolling
+  batch and `docs/SYSTEMS.md` (#174).
+- **Open:** #175 (S6c: quests load through the game's own `TESQuest::Load`
+  via BSFile stand-ins; rebased, merge when green) and the final rolling PR
+  of this session if one is open. Check `gh pr list`.
+- **Ledger:** about 16,450 hand-translated (24.8 %) plus 15,762 table-run
+  static initializers. Engine tests: about 20,600.
 
-**Decisions for the maintainer:**
-- **Game threads.** `BSThread::Initialize` (00aa6430) always starts its
-  thread; the stand-ins stop the engine at thread start and at INFINITE
-  waits that only another thread could signal (IO thread, audio thread, AI
-  linear task threads, BSTaskManager, FAM thread, interface manager). Choose
-  cooperative stepping of thread bodies or real threads before those
-  systems go live.
-- **Build 42.** Not built. Wiring #167 into the viewer is about 200 lines
-  (an optional `QuestVm` hook in `crates/world/src/scripting.rs`, a new
-  `crates/host/src/quest_vm.rs`, viewer plumbing) but only command-free
-  quests could use it, so play would look like Build 40. Recommended first:
-  translate the quest loaders and connect script commands to the world.
+**Maintainer decisions (2026-10-14):**
+- **Order:** movement and physics, then animation, audio, renderer, then the
+  gameplay layer (AI, combat, quests, menus, VATS, magic, progression,
+  crafting, minigames), then saves and the rest. The goal is about a month for
+  the bulk. **docs/SYSTEMS.md is the master list of every system; keep it
+  current and leave nothing out.**
+- **Threads:** step game threads cooperatively on the main thread at fixed
+  frame points, behind one seam in `units/platform.rs`
+  (CreateThread/ResumeThread/waits/events/semaphores dispatch through a
+  thread-host trait), so real OS threads can replace it later to replicate the
+  original. Never bake single-thread assumptions into translations.
+- **After the port:** an optional fixes layer (original behaviour always
+  available for comparison; data fixes like YUP stay installed mods), and
+  xNVSE / JIP LN compatibility (check licenses first). GOG/Epic exe support
+  later. Optional real-time shadows off by default. Bevy upgrade one version
+  per PR before the renderer phase.
+- **Never copy code from other New Vegas reimplementations** (NVForever is
+  GPL-3.0; nv-rs is MIT/Apache).
+
+**Correction:** the Havok SDK (5,081 functions) is NOT ported; only the B1
+solver work (79 functions in `crates/physics`). Phase A (movement, physics,
+animation, faces, audio) is about 8,000-9,000 functions of new translation.
 
 **Next work, in order:**
-1. Quest loading so stages work (removes the #167 bridge): TESFile reading
-   00401660, 004726f0, 00401680, 00401080, 00401500; scriptable form
-   0048cd90, 006ecd40; conditions 005f5760, 00680960, 00680a20; stages
-   0060f240, 0060f6a0, 0060fa10, 0060f4a0, 00717e50, 0060fb60
-   (`SetStage`); objectives 005ec090, 005ec210, 005ec280, 005ec370; targets
-   0060ff70, 00610120; name/icon 00487050, 0048e3d0; item script 0048d150.
-2. Script commands bridged to the world (the world's `seconds_passed` must
-   feed the game's timers); `PlayerCharacter` and `BSAudio` singletons for
-   the three survey stops; SCRO reference resolution.
-3. `TES::TES` callees: 00c44980, 004ba280, 00528cb0, 00626fd0, 0084fc70,
-   00856380, 00c3da50, 00624bf0; also 00af26c0 and a `vsprintf_s` stand-in.
-4. Then Build 42 with the `QuestVm` hook.
-5. Shared layouts agents keep asking for: Setting, NiNode (children
-   +0x9C), BSThread (PC 0x30), ActorPackageData, NiExtraData,
-   EffectSetting, ActiveEffect, ListBox, NiTPointerList node, PathBuilder,
-   AStarSearch<NavMeshSearchNode,...>, hkVector4 and an SSE helper set.
-   Six misnamed array constants in `pathbuilder.rs` (see its doc comments).
+1. Everything finished this session is collected, including the whole
+   bhkCharacterController (98 functions, the first finished movement unit).
+   Continuation points: combatstate 0099cb70, projectile 009c3d90 (24
+   left), middlehighprocess 0091db40, fonts 00a1c130 (3 left).
+   **Ghidra pitfall:** it prints both `FMUL ST(0),ST(1)` and
+   `FMUL ST(1),ST(0)` as `FMUL ST1`. Check the instruction bytes whenever
+   such an x87 operation matters (now in slot_rules.txt).
+2. Phase A translation: the rest of bhkcharactercontroller and
+   middlehighprocess, then `Havok SDK` (largest), `BSHavok`, `NiCollision`,
+   `fallout shared/havok`, `NiAnimation`, FaceGen, BSAudio/fallout audio.
+   Use `bin/assign.sh` only for units on this path; write custom task
+   messages naming the unit, as this session did.
+3. Quests (#175, real `TESQuest::Load` through BSFile stand-ins, all 300
+   scripted quests load with their stages): stage items stop inside
+   `TESQuestStage::SetDone` (0060fb60). Translate 004b0fc0, 004b10f0,
+   0060da90, 0060ca30, 005ec060, 00681050, 00682320 (about 650 bytes);
+   then stage effects need the player object in the host. Plugins with
+   masters (DLC) and zlib-compressed records still fall back.
+4. The thread-host seam in `units/platform.rs` (small, needed before audio).
+5. Wiring for Build 43: switch the player's movement onto the translated
+   character controller in the viewer (as `QuestVm` did for quests), with an
+   acceptance route comparison.
+6. `RSQRTSS` uses the host CPU's estimate (`tesobjectrefr::rsqrt_estimate`,
+   used by camera caster and character point collector), which differs
+   between Intel and AMD. Decide whether to emulate one CPU's table so
+   movement is the same on every machine.
+7. Consolidate the private x87 NaN helpers (they disagree) into
+   `crate::x87` against real-CPU recordings.
+8. Shared layouts agents keep asking for: Setting, NiNode, BSThread,
+   ActorPackageData, NiExtraData, EffectSetting, ActiveEffect, ListBox,
+   NiTPointerList node, PathBuilder, AStarSearch, hkVector4 and SSE helpers,
+   LockFreeMap, ContainerObject/TESContainer, BGSListForm, TesResponse
+   (two declarations).
 
 **Pipeline notes learned this session:** after any Windows restart run
 `phase0/bin/start-srv.ps1` (Ghidra 8090 does not come back by itself).

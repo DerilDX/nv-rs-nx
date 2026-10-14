@@ -31,15 +31,15 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 16126 | 24.3% |
+| translated | 16487 | 24.9% |
 | static init (table) | 15762 | 23.8% |
-| traced | 3834 | 5.8% |
-| platform | 3356 | 5.1% |
-| library | 6176 | 9.3% |
-| open | 21005 | 31.7% |
+| traced | 3817 | 5.8% |
+| platform | 3353 | 5.1% |
+| library | 6175 | 9.3% |
+| open | 20665 | 31.2% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **1173** engine functions
+Translation totals count markers, not complete behavior. **1255** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -339,6 +339,13 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `0061e780` | `crates/engine/src/units/fallout_shared/testopicinfo.rs:245` |
 | `0061f5d0` | `crates/engine/src/units/fallout_shared_havok/bgsacousticspacelistener.rs:63` |
 | `0061fae0` | `crates/engine/src/units/fallout_shared_havok/bgsacousticspacelistener.rs:313` |
+| `00620850` | `crates/engine/src/units/fallout_shared_havok/cameracaster.rs:76` |
+| `006208d0` | `crates/engine/src/units/fallout_shared_havok/cameracaster.rs:92` |
+| `00620930` | `crates/engine/src/units/fallout_shared_havok/cameracaster.rs:122` |
+| `00620bc0` | `crates/engine/src/units/fallout_shared_havok/cameracaster.rs:178` |
+| `00620ff0` | `crates/engine/src/units/fallout_shared_havok/cameracaster.rs:306` |
+| `006211b0` | `crates/engine/src/units/fallout_shared_havok/cameracaster.rs:399` |
+| `00621bc0` | `crates/engine/src/units/fallout_shared_havok/cameracaster.rs:479` |
 | `00621dc0` | `crates/engine/src/units/fallout_shared_havok/cellmopp.rs:134` |
 | `00621f60` | `crates/engine/src/units/fallout_shared_havok/cellmopp.rs:209` |
 | `00622310` | `crates/engine/src/units/fallout_shared_havok/cellmopp.rs:331` |
@@ -867,6 +874,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `008ca680` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:2175` |
 | `008ca9e0` | `crates/engine/src/units/fallout_ai/aitaskmanager.rs:2318` |
 | `008d1740` | `crates/engine/src/units/fallout_ai/bsplayerdistancecheckcontroller.rs:184` |
+| `008d1820` | `crates/engine/src/units/fallout_ai/camerashake.rs:60` |
 | `008d1d30` | `crates/engine/src/units/fallout_ai/character.rs:62` |
 | `008d1f40` | `crates/engine/src/units/fallout_ai/character.rs:244` |
 | `008d2060` | `crates/engine/src/units/fallout_ai/character.rs:275` |
@@ -877,6 +885,14 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `008d43a0` | `crates/engine/src/units/fallout_ai/creature.rs:8` |
 | `008d4500` | `crates/engine/src/units/fallout_ai/creature.rs:35` |
 | `008d6050` | `crates/engine/src/units/fallout_ai/followerbarks.rs:382` |
+| `00913a20` | `crates/engine/src/units/fallout_ai/middlehighprocess.rs:927` |
+| `00913fe0` | `crates/engine/src/units/fallout_ai/middlehighprocess.rs:1198` |
+| `00914610` | `crates/engine/src/units/fallout_ai/middlehighprocess.rs:1361` |
+| `00914ae0` | `crates/engine/src/units/fallout_ai/middlehighprocess.rs:1129` |
+| `00914c60` | `crates/engine/src/units/fallout_ai/middlehighprocess.rs:1489` |
+| `00915950` | `crates/engine/src/units/fallout_ai/middlehighprocess.rs:1902` |
+| `00918860` | `crates/engine/src/units/fallout_ai/middlehighprocess.rs:3673` |
+| `0091c810` | `crates/engine/src/units/fallout_ai/middlehighprocess.rs:5833` |
 | `0092ec40` | `crates/engine/src/units/fallout_ai/mobileobject.rs:331` |
 | `0092f260` | `crates/engine/src/units/fallout_ai/mobileobject.rs:555` |
 | `00930c70` | `crates/engine/src/units/fallout_ai/mobileobject.rs:1215` |
@@ -904,12 +920,24 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00981d00` | `crates/engine/src/units/fallout_ai/combatcontroller.rs:2522` |
 | `00982480` | `crates/engine/src/units/fallout_ai/combatcontroller.rs:2771` |
 | `00982530` | `crates/engine/src/units/fallout_ai/combatcontroller.rs:2789` |
+| `0098fdf0` | `crates/engine/src/units/fallout_ai/combatgroupstrategy.rs:191` |
+| `009900f0` | `crates/engine/src/units/fallout_ai/combatgroupstrategy.rs:298` |
+| `00990250` | `crates/engine/src/units/fallout_ai/combatgroupstrategy.rs:345` |
+| `00990320` | `crates/engine/src/units/fallout_ai/combatgroupstrategy.rs:373` |
+| `00990640` | `crates/engine/src/units/fallout_ai/combatgroupstrategy.rs:498` |
 | `00990f20` | `crates/engine/src/units/fallout_ai/run_00990f20.rs:161` |
 | `00991080` | `crates/engine/src/units/fallout_ai/run_00990f20.rs:217` |
 | `00991150` | `crates/engine/src/units/fallout_ai/run_00990f20.rs:241` |
 | `009911c0` | `crates/engine/src/units/fallout_ai/run_00990f20.rs:253` |
 | `00991500` | `crates/engine/src/units/fallout_ai/run_00990f20.rs:323` |
 | `00991770` | `crates/engine/src/units/fallout_ai/run_00990f20.rs:425` |
+| `00997600` | `crates/engine/src/units/fallout_ai/combatstate.rs:605` |
+| `00997aa0` | `crates/engine/src/units/fallout_ai/combatstate.rs:702` |
+| `00998a50` | `crates/engine/src/units/fallout_ai/combatstate.rs:1253` |
+| `009993c0` | `crates/engine/src/units/fallout_ai/combatstate.rs:1569` |
+| `0099ac20` | `crates/engine/src/units/fallout_ai/combatstate.rs:2403` |
+| `0099b8e0` | `crates/engine/src/units/fallout_ai/combatstate.rs:2961` |
+| `0099c230` | `crates/engine/src/units/fallout_ai/combatstate.rs:3324` |
 | `009a44e0` | `crates/engine/src/units/fallout_ai/combatthreatmap.rs:327` |
 | `009a45e0` | `crates/engine/src/units/fallout_ai/combatthreatmap.rs:370` |
 | `009a4fb0` | `crates/engine/src/units/fallout_ai/combatthreatmap.rs:651` |
@@ -942,6 +970,22 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `009ba660` | `crates/engine/src/units/fallout_ai/run_009ba550.rs:228` |
 | `009bacb0` | `crates/engine/src/units/fallout_ai/run_009ba550.rs:466` |
 | `009badc0` | `crates/engine/src/units/fallout_ai/muzzleflash.rs:179` |
+| `009bbc70` | `crates/engine/src/units/fallout_ai/projectile.rs:459` |
+| `009bbef0` | `crates/engine/src/units/fallout_ai/projectile.rs:501` |
+| `009bc470` | `crates/engine/src/units/fallout_ai/projectile.rs:656` |
+| `009bca60` | `crates/engine/src/units/fallout_ai/projectile.rs:1540` |
+| `009bd5c0` | `crates/engine/src/units/fallout_ai/projectile.rs:813` |
+| `009bd860` | `crates/engine/src/units/fallout_ai/projectile.rs:902` |
+| `009bda10` | `crates/engine/src/units/fallout_ai/projectile.rs:1810` |
+| `009be0a0` | `crates/engine/src/units/fallout_ai/projectile.rs:1993` |
+| `009becc0` | `crates/engine/src/units/fallout_ai/projectile.rs:2347` |
+| `009bf5a0` | `crates/engine/src/units/fallout_ai/projectile.rs:1157` |
+| `009c0090` | `crates/engine/src/units/fallout_ai/projectile.rs:2611` |
+| `009c03f0` | `crates/engine/src/units/fallout_ai/projectile.rs:2749` |
+| `009c0d80` | `crates/engine/src/units/fallout_ai/projectile.rs:3007` |
+| `009c1b70` | `crates/engine/src/units/fallout_ai/projectile.rs:3411` |
+| `009c20e0` | `crates/engine/src/units/fallout_ai/projectile.rs:3635` |
+| `009c2e80` | `crates/engine/src/units/fallout_ai/projectile.rs:4058` |
 | `009c6c30` | `crates/engine/src/units/fallout_ai/vats.rs:686` |
 | `009c8f20` | `crates/engine/src/units/fallout_ai/vats.rs:1294` |
 | `009ca1f0` | `crates/engine/src/units/fallout_ai/vats.rs:2021` |
@@ -1200,6 +1244,42 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00c6aac0` | `crates/engine/src/units/bshavok/bhkworld.rs:3193` |
 | `00c6aca0` | `crates/engine/src/units/bshavok/bhkworld.rs:3269` |
 | `00c6b3c0` | `crates/engine/src/units/bshavok/bhkworld.rs:3606` |
+| `00c6c890` | `crates/engine/src/units/bshavok/bhkcharacterlistener.rs:227` |
+| `00c6ca30` | `crates/engine/src/units/bshavok/bhkcharacterlistener.rs:259` |
+| `00c6ce80` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:847` |
+| `00c6cf30` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:885` |
+| `00c6d040` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:924` |
+| `00c6d1e0` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1024` |
+| `00c6d290` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1056` |
+| `00c6d340` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1093` |
+| `00c6d4d0` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1180` |
+| `00c6d620` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1231` |
+| `00c6da50` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1466` |
+| `00c6de10` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1566` |
+| `00c6df60` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1621` |
+| `00c6e180` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1737` |
+| `00c6e300` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1815` |
+| `00c6e390` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1846` |
+| `00c6e420` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1885` |
+| `00c6e680` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:1946` |
+| `00c6e820` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:2009` |
+| `00c6eb00` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:2179` |
+| `00c6f280` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:2444` |
+| `00c6f500` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:2529` |
+| `00c6fa20` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:2704` |
+| `00c6fd80` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:2830` |
+| `00c6ffc0` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:2917` |
+| `00c70060` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:3014` |
+| `00c70550` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:3073` |
+| `00c705c0` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:3131` |
+| `00c70940` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:3262` |
+| `00c70de0` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:3516` |
+| `00c71120` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:3585` |
+| `00c711d0` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:3638` |
+| `00c72250` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:4784` |
+| `00c72410` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:4357` |
+| `00c73170` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:4914` |
+| `00c73ed0` | `crates/engine/src/units/bshavok/bhkcharactercontroller.rs:5390` |
 | `00ca0dc0` | `crates/engine/src/units/bshavok/bhkragdollpenetrationutil.rs:532` |
 | `00ca11e0` | `crates/engine/src/units/bshavok/bhkragdollpenetrationutil.rs:727` |
 | `00ca1410` | `crates/engine/src/units/bshavok/bhkragdollpenetrationutil.rs:816` |
@@ -1214,13 +1294,15 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00cac520` | `crates/engine/src/units/bshavok/bhkcharacterproxy.rs:438` |
 | `00cac5e0` | `crates/engine/src/units/bshavok/bhkcharacterproxy.rs:470` |
 | `00cac6b0` | `crates/engine/src/units/bshavok/bhkcharacterproxy.rs:515` |
-| `00ec408c` | `crates/engine/src/units/bsaudio/bsaudiomanager.rs:2528, crates/engine/src/units/bsaudio/bsaudiomanager.rs:2545, crates/engine/src/units/bsaudio/bsaudiomanager.rs:2574, crates/engine/src/units/bsaudio/bsaudiomanager.rs:3161, crates/engine/src/units/bsaudio/bsaudiomanager.rs:3198, crates/engine/src/units/bsaudio/bsaudiomanager.rs:3445, crates/engine/src/units/bsaudio/bsaudiomanager.rs:3736, crates/engine/src/units/bsaudio/bsaudiomanager.rs:4329, crates/engine/src/units/bshavok/bhkworld.rs:169, crates/engine/src/units/bshavok/bhkworld.rs:559, crates/engine/src/units/bshavok/bhkworld.rs:810, crates/engine/src/units/bsmain/bsmultiboundaabb.rs:526, crates/engine/src/units/bsmain/bsocclusionplane.rs:932, crates/engine/src/units/bsmain/bsscenegraph.rs:254, crates/engine/src/units/bsmain/bsutilities.rs:312, crates/engine/src/units/bsmain/run_00c5d2b0.rs:206, crates/engine/src/units/bsmain/xregsetting.rs:123, crates/engine/src/units/bsmain/xregsetting.rs:172, crates/engine/src/units/bsmenu/font.rs:2000, crates/engine/src/units/bsmenu/font.rs:2592, crates/engine/src/units/bsmenu/font.rs:2665, crates/engine/src/units/bsmenu/font.rs:3116, crates/engine/src/units/bsmenu/menu.rs:578, crates/engine/src/units/bsmenu/menu.rs:802, crates/engine/src/units/fallout_ai/ailineartaskthreadmanager.rs:234, crates/engine/src/units/fallout_ai/combatutilities.rs:1121, crates/engine/src/units/fallout_ai/combatutilities.rs:1503, crates/engine/src/units/fallout_ai/detailedactorpathhandler.rs:3982, crates/engine/src/units/fallout_ai/detailedactorpathhandler.rs:4641, crates/engine/src/units/fallout_ai/detailedactorpathhandler.rs:5374, crates/engine/src/units/fallout_ai/vats.rs:1294, crates/engine/src/units/fallout_audio/falloutaudiomedia.rs:1104, crates/engine/src/units/fallout_audio/falloutaudiomedia.rs:691, crates/engine/src/units/fallout_interface/messagemenu.rs:1301, crates/engine/src/units/fallout_interface/messagemenu.rs:1539, crates/engine/src/units/fallout_interface/messagemenu.rs:691, crates/engine/src/units/fallout_interface/messagemenu.rs:896, crates/engine/src/units/fallout_interface/racesexmenu.rs:4130, crates/engine/src/units/fallout_interface/startmenu.rs:4663, crates/engine/src/units/fallout_interface/vatsmenu.rs:2012, crates/engine/src/units/fallout_interface/vatsmenu.rs:3323, crates/engine/src/units/fallout_interface/vatsmenu.rs:3981, crates/engine/src/units/fallout_interface/vatsmenu.rs:4813, crates/engine/src/units/fallout_interface/vatsmenu.rs:6764, crates/engine/src/units/fallout_interface/vatsmenu.rs:6881, crates/engine/src/units/fallout_magic/magictarget.rs:1415, crates/engine/src/units/fallout_magic/magictarget.rs:1595, crates/engine/src/units/fallout_magic/magictarget.rs:909, crates/engine/src/units/fallout_misc/bgssaveloadfile.rs:328, crates/engine/src/units/fallout_misc/bgssaveloadheader.rs:156, crates/engine/src/units/fallout_misc/bgssaveloadheader.rs:278, crates/engine/src/units/fallout_misc/bgssaveloadheader.rs:344, crates/engine/src/units/fallout_misc/bgssaveloadhistory.rs:134, crates/engine/src/units/fallout_misc/bgssaveloadinitialdata.rs:511, crates/engine/src/units/fallout_misc/bgssaveloadinitialdata.rs:532, crates/engine/src/units/fallout_misc/bgssaveloadstructs.rs:233, crates/engine/src/units/fallout_misc/bgssaveloadstructs.rs:412, crates/engine/src/units/fallout_misc/run_0087a6b0.rs:113, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:123, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:135, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:147, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:162, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:169, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:179, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:200, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:214, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:228, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:248, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:262, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:282, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:302, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:323, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:337, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:358, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:379, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:404, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:418, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:436, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:449, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:469, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:478, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:487, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:497, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:517, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:532, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:547, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:560, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:581, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:598, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:615, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:624, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:633, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:646, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:663, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:676, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:690, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:709, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:724, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:741, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:754, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:767, crates/engine/src/units/fallout_shared/actorvalue.rs:8, crates/engine/src/units/fallout_shared/bgsbodypart.rs:215, crates/engine/src/units/fallout_shared/bgsbodypartdata.rs:366, crates/engine/src/units/fallout_shared/bgsencounterzone.rs:264, crates/engine/src/units/fallout_shared/bgsexplosion.rs:560, crates/engine/src/units/fallout_shared/bgslistform.rs:226, crates/engine/src/units/fallout_shared/bgsprojectile.rs:680, crates/engine/src/units/fallout_shared/bgsquestobjective.rs:162, crates/engine/src/units/fallout_shared/run_00487050.rs:22, crates/engine/src/units/fallout_shared/run_0060d720.rs:18, crates/engine/src/units/fallout_shared/tesconditionitem.rs:332, crates/engine/src/units/fallout_shared/tesfile.rs:1610, crates/engine/src/units/fallout_shared/tesfurniture.rs:246, crates/engine/src/units/fallout_shared/tesobject.rs:1256, crates/engine/src/units/fallout_shared/tesobject.rs:742, crates/engine/src/units/fallout_shared/tesquest.rs:417, crates/engine/src/units/fallout_shared/tesqueststage.rs:192, crates/engine/src/units/fallout_shared/tesresponse.rs:306, crates/engine/src/units/fallout_shared/testexture.rs:20, crates/engine/src/units/fallout_shared/testopicinfo.rs:245, crates/engine/src/units/fallout_shared_distant_terrain_system/run_006fc490.rs:94, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:142, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:211, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:244, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:283, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:295, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:457, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1317, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1413, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1655, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1668, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1686, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1724, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1732, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1741, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1750, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1765, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1776, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:700, crates/engine/src/units/fallout_shared_magic/alchemyitem.rs:347, crates/engine/src/units/fallout_shared_magic/effectsetting.rs:348, crates/engine/src/units/fallout_shared_magic/run_00406f60.rs:57, crates/engine/src/units/fallout_shared_pathfinding/navmesh_loadsave.rs:987, crates/engine/src/units/fallout_shared_pathfinding/pathingsearchraycast.rs:669, crates/engine/src/units/fallout_shared_tempeffects/bstempeffectsimpledecal.rs:1954, crates/engine/src/units/fallout_shared_tempeffects/bstempeffectsimpledecal.rs:2172, crates/engine/src/units/nimain/niobjectnet.rs:538, crates/engine/src/units/platform.rs:71, crates/engine/src/units/unplaced/run_00471400.rs:87, crates/engine/src/units/unplaced/run_006271b0.rs:122, crates/engine/src/units/unplaced/run_006271b0.rs:356, crates/engine/src/units/unplaced/run_006271b0.rs:376, crates/engine/src/units/unplaced/run_006271b0.rs:536, crates/engine/src/units/unplaced/run_006271b0.rs:663, crates/engine/src/units/unplaced/run_006271b0.rs:684, crates/engine/src/units/unplaced/run_00af3bd0.rs:215, crates/engine/src/units/unplaced/run_00af3bd0.rs:53` |
+| `00cd3490` | `crates/engine/src/units/bshavok/bhkcharacterpointcollector.rs:355` |
+| `00cd36a0` | `crates/engine/src/units/bshavok/bhkcharacterpointcollector.rs:380` |
+| `00ec408c` | `crates/engine/src/units/bsaudio/bsaudiomanager.rs:2528, crates/engine/src/units/bsaudio/bsaudiomanager.rs:2545, crates/engine/src/units/bsaudio/bsaudiomanager.rs:2574, crates/engine/src/units/bsaudio/bsaudiomanager.rs:3161, crates/engine/src/units/bsaudio/bsaudiomanager.rs:3198, crates/engine/src/units/bsaudio/bsaudiomanager.rs:3445, crates/engine/src/units/bsaudio/bsaudiomanager.rs:3736, crates/engine/src/units/bsaudio/bsaudiomanager.rs:4329, crates/engine/src/units/bshavok/bhkcharacterlistener.rs:227, crates/engine/src/units/bshavok/bhkcharacterlistener.rs:259, crates/engine/src/units/bshavok/bhkcharacterpointcollector.rs:380, crates/engine/src/units/bshavok/bhkworld.rs:169, crates/engine/src/units/bshavok/bhkworld.rs:559, crates/engine/src/units/bshavok/bhkworld.rs:810, crates/engine/src/units/bsmain/bsmultiboundaabb.rs:526, crates/engine/src/units/bsmain/bsocclusionplane.rs:932, crates/engine/src/units/bsmain/bsscenegraph.rs:254, crates/engine/src/units/bsmain/bsutilities.rs:312, crates/engine/src/units/bsmain/run_00c5d2b0.rs:206, crates/engine/src/units/bsmain/xregsetting.rs:123, crates/engine/src/units/bsmain/xregsetting.rs:172, crates/engine/src/units/bsmenu/font.rs:2000, crates/engine/src/units/bsmenu/font.rs:2592, crates/engine/src/units/bsmenu/font.rs:2665, crates/engine/src/units/bsmenu/font.rs:3116, crates/engine/src/units/bsmenu/menu.rs:578, crates/engine/src/units/bsmenu/menu.rs:802, crates/engine/src/units/fallout_ai/ailineartaskthreadmanager.rs:234, crates/engine/src/units/fallout_ai/camerashake.rs:60, crates/engine/src/units/fallout_ai/combatgroupstrategy.rs:345, crates/engine/src/units/fallout_ai/combatgroupstrategy.rs:498, crates/engine/src/units/fallout_ai/combatutilities.rs:1121, crates/engine/src/units/fallout_ai/combatutilities.rs:1503, crates/engine/src/units/fallout_ai/detailedactorpathhandler.rs:3982, crates/engine/src/units/fallout_ai/detailedactorpathhandler.rs:4641, crates/engine/src/units/fallout_ai/detailedactorpathhandler.rs:5374, crates/engine/src/units/fallout_ai/projectile.rs:1993, crates/engine/src/units/fallout_ai/projectile.rs:2347, crates/engine/src/units/fallout_ai/projectile.rs:2611, crates/engine/src/units/fallout_ai/projectile.rs:2749, crates/engine/src/units/fallout_ai/projectile.rs:3007, crates/engine/src/units/fallout_ai/projectile.rs:4058, crates/engine/src/units/fallout_ai/vats.rs:1294, crates/engine/src/units/fallout_audio/falloutaudiomedia.rs:1104, crates/engine/src/units/fallout_audio/falloutaudiomedia.rs:691, crates/engine/src/units/fallout_interface/messagemenu.rs:1301, crates/engine/src/units/fallout_interface/messagemenu.rs:1539, crates/engine/src/units/fallout_interface/messagemenu.rs:691, crates/engine/src/units/fallout_interface/messagemenu.rs:896, crates/engine/src/units/fallout_interface/racesexmenu.rs:4130, crates/engine/src/units/fallout_interface/startmenu.rs:4663, crates/engine/src/units/fallout_interface/vatsmenu.rs:2012, crates/engine/src/units/fallout_interface/vatsmenu.rs:3323, crates/engine/src/units/fallout_interface/vatsmenu.rs:3981, crates/engine/src/units/fallout_interface/vatsmenu.rs:4813, crates/engine/src/units/fallout_interface/vatsmenu.rs:6764, crates/engine/src/units/fallout_interface/vatsmenu.rs:6881, crates/engine/src/units/fallout_magic/magictarget.rs:1415, crates/engine/src/units/fallout_magic/magictarget.rs:1595, crates/engine/src/units/fallout_magic/magictarget.rs:909, crates/engine/src/units/fallout_misc/bgssaveloadfile.rs:328, crates/engine/src/units/fallout_misc/bgssaveloadheader.rs:156, crates/engine/src/units/fallout_misc/bgssaveloadheader.rs:278, crates/engine/src/units/fallout_misc/bgssaveloadheader.rs:344, crates/engine/src/units/fallout_misc/bgssaveloadhistory.rs:134, crates/engine/src/units/fallout_misc/bgssaveloadinitialdata.rs:511, crates/engine/src/units/fallout_misc/bgssaveloadinitialdata.rs:532, crates/engine/src/units/fallout_misc/bgssaveloadstructs.rs:233, crates/engine/src/units/fallout_misc/bgssaveloadstructs.rs:412, crates/engine/src/units/fallout_misc/run_0087a6b0.rs:113, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:123, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:135, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:147, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:162, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:169, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:179, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:200, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:214, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:228, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:248, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:262, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:282, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:302, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:323, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:337, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:358, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:379, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:404, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:418, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:436, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:449, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:469, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:478, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:487, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:497, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:517, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:532, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:547, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:560, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:581, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:598, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:615, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:624, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:633, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:646, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:663, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:676, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:690, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:709, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:724, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:741, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:754, crates/engine/src/units/fallout_misc/taskqueueinterface.rs:767, crates/engine/src/units/fallout_shared/actorvalue.rs:8, crates/engine/src/units/fallout_shared/bgsbodypart.rs:215, crates/engine/src/units/fallout_shared/bgsbodypartdata.rs:366, crates/engine/src/units/fallout_shared/bgsencounterzone.rs:264, crates/engine/src/units/fallout_shared/bgsexplosion.rs:560, crates/engine/src/units/fallout_shared/bgslistform.rs:226, crates/engine/src/units/fallout_shared/bgsprojectile.rs:680, crates/engine/src/units/fallout_shared/bgsquestobjective.rs:162, crates/engine/src/units/fallout_shared/run_00487050.rs:22, crates/engine/src/units/fallout_shared/run_0060d720.rs:18, crates/engine/src/units/fallout_shared/tesconditionitem.rs:332, crates/engine/src/units/fallout_shared/tesfile.rs:1610, crates/engine/src/units/fallout_shared/tesfurniture.rs:246, crates/engine/src/units/fallout_shared/tesobject.rs:1256, crates/engine/src/units/fallout_shared/tesobject.rs:742, crates/engine/src/units/fallout_shared/tesquest.rs:417, crates/engine/src/units/fallout_shared/tesqueststage.rs:192, crates/engine/src/units/fallout_shared/tesresponse.rs:306, crates/engine/src/units/fallout_shared/testexture.rs:20, crates/engine/src/units/fallout_shared/testopicinfo.rs:245, crates/engine/src/units/fallout_shared_distant_terrain_system/run_006fc490.rs:94, crates/engine/src/units/fallout_shared_havok/cameracaster.rs:178, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:142, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:211, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:244, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:283, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:295, crates/engine/src/units/fallout_shared_havok/teshavokutilities.rs:457, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1317, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1413, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1655, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1668, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1686, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1724, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1732, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1741, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1750, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1765, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:1776, crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs:700, crates/engine/src/units/fallout_shared_magic/alchemyitem.rs:347, crates/engine/src/units/fallout_shared_magic/effectsetting.rs:348, crates/engine/src/units/fallout_shared_magic/run_00406f60.rs:57, crates/engine/src/units/fallout_shared_pathfinding/navmesh_loadsave.rs:987, crates/engine/src/units/fallout_shared_pathfinding/pathingsearchraycast.rs:669, crates/engine/src/units/fallout_shared_tempeffects/bstempeffectsimpledecal.rs:1954, crates/engine/src/units/fallout_shared_tempeffects/bstempeffectsimpledecal.rs:2172, crates/engine/src/units/nimain/niobjectnet.rs:538, crates/engine/src/units/platform.rs:71, crates/engine/src/units/unplaced/run_00471400.rs:87, crates/engine/src/units/unplaced/run_006271b0.rs:122, crates/engine/src/units/unplaced/run_006271b0.rs:356, crates/engine/src/units/unplaced/run_006271b0.rs:376, crates/engine/src/units/unplaced/run_006271b0.rs:536, crates/engine/src/units/unplaced/run_006271b0.rs:663, crates/engine/src/units/unplaced/run_006271b0.rs:684, crates/engine/src/units/unplaced/run_00af3bd0.rs:215, crates/engine/src/units/unplaced/run_00af3bd0.rs:53` |
 | `00ec5ec0` | `crates/engine/src/units/fallout_shared/bgslistform.rs:226, crates/engine/src/units/fallout_shared_magic/effectsetting.rs:348, crates/engine/src/units/unplaced/run_00471400.rs:87` |
 | `00ec8660` | `crates/engine/src/units/fallout_misc/bgssaveloadstructs.rs:412` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 19512 (48.2%) are translated, run from the static-initializer table, or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 19852 (49.0%) are translated, run from the static-initializer table, or traced.
 
-Rust cites 37730 distinct `.text` addresses; 1285 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 38088 distinct `.text` addresses; 1290 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -1251,24 +1333,24 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | static init (table) | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 15762 | 22 | 0 | 5550 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 7487 | 0 | 729 | 0 | 0 | 2254 | 78.5% |
-| Havok SDK | 6591 | 1555 | 3499 | 54 | 0 | 127 | 0 | 0 | 6410 | 2.7% |
-| fallout/ai | 4849 | 1475 | 1888 | 3017 | 0 | 474 | 0 | 0 | 1358 | 72.0% |
+| fallout shared | 10470 | 2065 | 3149 | 7487 | 0 | 730 | 0 | 0 | 2253 | 78.5% |
+| Havok SDK | 6591 | 1555 | 3499 | 54 | 0 | 133 | 0 | 0 | 6404 | 2.8% |
+| fallout/ai | 4849 | 1475 | 1888 | 3241 | 0 | 453 | 0 | 0 | 1155 | 76.2% |
 | fallout/interface | 2645 | 991 | 1247 | 1307 | 0 | 589 | 0 | 0 | 749 | 71.7% |
-| (unplaced) | 2353 | 470 | 0 | 384 | 0 | 404 | 4 | 0 | 1561 | 33.5% |
-| fallout shared/pathfinding | 1788 | 365 | 452 | 1182 | 0 | 145 | 0 | 0 | 461 | 74.2% |
-| NiMain | 1619 | 261 | 1134 | 134 | 0 | 110 | 0 | 0 | 1375 | 15.1% |
-| BSHavok | 1615 | 316 | 1134 | 162 | 0 | 128 | 0 | 0 | 1325 | 18.0% |
-| BSShader | 1549 | 608 | 350 | 0 | 0 | 161 | 1388 | 0 | 0 | - |
+| (unplaced) | 2353 | 470 | 0 | 384 | 0 | 413 | 4 | 0 | 1552 | 33.9% |
+| fallout shared/pathfinding | 1788 | 365 | 452 | 1182 | 0 | 147 | 0 | 0 | 459 | 74.3% |
+| NiMain | 1619 | 261 | 1134 | 134 | 0 | 111 | 0 | 0 | 1374 | 15.1% |
+| BSHavok | 1615 | 316 | 1134 | 274 | 0 | 114 | 0 | 0 | 1227 | 24.0% |
+| BSShader | 1549 | 608 | 350 | 0 | 0 | 164 | 1385 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 26 | 0 | 37 | 0 | 0 | 1216 | 4.9% |
 | fallout/misc | 1045 | 171 | 353 | 754 | 0 | 60 | 0 | 0 | 231 | 77.9% |
 | BSMain | 991 | 192 | 478 | 283 | 0 | 72 | 0 | 0 | 636 | 35.8% |
 | NiXenonRenderer | 965 | 172 | 298 | 1 | 0 | 20 | 944 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 0 | 122 | 610 | 0 | 0 | - |
-| fallout/magic | 705 | 162 | 378 | 42 | 0 | 78 | 0 | 0 | 585 | 17.0% |
-| LIBCMT | 682 | 124 | 503 | 0 | 0 | 35 | 36 | 611 | 0 | - |
+| fallout/magic | 705 | 162 | 378 | 42 | 0 | 79 | 0 | 0 | 584 | 17.2% |
+| LIBCMT | 682 | 124 | 503 | 0 | 0 | 36 | 36 | 610 | 0 | - |
 | NiParticle | 649 | 89 | 540 | 0 | 0 | 68 | 0 | 0 | 581 | 10.5% |
-| fallout shared/havok | 478 | 60 | 110 | 161 | 0 | 67 | 0 | 0 | 250 | 47.7% |
+| fallout shared/havok | 478 | 60 | 110 | 186 | 0 | 61 | 0 | 0 | 231 | 51.7% |
 | FaceGen | 474 | 164 | 51 | 0 | 0 | 11 | 0 | 0 | 463 | 2.3% |
 | fallout shared/facegen | 433 | 63 | 91 | 4 | 0 | 60 | 0 | 0 | 369 | 14.8% |
 | BSMenu | 361 | 136 | 221 | 319 | 0 | 16 | 0 | 0 | 26 | 92.8% |
@@ -1310,8 +1392,8 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
 | 1 | 143 | 117 | 128 | 0 | 9 | 3 | 0 | 3 |
-| 2 | 1575 | 583 | 1364 | 0 | 167 | 22 | 0 | 22 |
-| 3 | 4973 | 1303 | 4255 | 0 | 472 | 141 | 26 | 79 |
+| 2 | 1575 | 583 | 1366 | 0 | 167 | 22 | 0 | 20 |
+| 3 | 4973 | 1303 | 4263 | 0 | 464 | 141 | 26 | 79 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
