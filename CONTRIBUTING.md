@@ -8,7 +8,8 @@ work can actually be merged. Read it, then give it and
 The short version:
 
 1. Work from the latest `main`, in a fork, on a topic branch.
-2. Claim the work on GitHub before you start (issues titled `[task] …`).
+2. Open an issue saying what you want to do, and wait for the maintainer's
+   go-ahead before you start.
 3. Trace every behaviour in the original game. No invented behaviour.
 4. Open a small pull request against `main` that passes the checks and
    the acceptance routes.
@@ -35,26 +36,23 @@ Where help is useful, in order:
    that don't have them yet needs only your own copy of the game. Commit
    the test cases and addresses, never the executable or its output.
    Report a mismatch as an issue with the address and the inputs.
-2. **Compare with the original game.** Several systems are implemented
-   and traced but have never been compared with the running game
-   (terminals, menu fades, mods and plugins; see
-   [docs/MILESTONES.md](docs/MILESTONES.md)). Recording the original game
-   and comparing automatically is the comparison harness task (#22); a
-   complete opening-to-Goodsprings recording is #3.
-3. **Platforms.** The Linux port (#61) and the macOS/Metal port are open.
+2. **Play test builds and report differences.** Each play build switches a
+   system over to the original's code
+   ([docs/MILESTONES.md](docs/MILESTONES.md)). Anything that behaves
+   differently from the original game is a bug worth an issue: say where,
+   what you did, and what the original does.
+3. **Compare with the original game.** Recording the original game and
+   comparing it with nv-rs automatically is the most valuable check the
+   port can have. Propose a plan in an issue before building tools for
+   it.
+4. **Platforms.** The Linux port (#61) and the macOS/Metal port are open.
    Check the open pull requests first and build on them.
-4. **Coverage and routes.** The `[task]` issues for quest, creature and
-   weapon coverage and acceptance routes (#13–#24) are still open. Their
-   value now is mostly the routes and the lists of what's missing, which
-   become checks for the port.
 
 Not open for contributions, because the maintainer's sessions are doing
 them and parallel versions would conflict: translating the executable
-(all of the ledger), the frame order (Phase 1,
-[docs/FRAME_SKELETON.md](docs/FRAME_SKELETON.md)), the game-state model
-and original saves (Phase 2), and wiring translated systems into the
-running game (the script engine first). Bug reports from playing are
-always welcome as issues.
+(all of the ledger), the game-state model and original saves, and
+switching translated systems on in the running game
+([docs/SYSTEMS.md](docs/SYSTEMS.md) lists them all, in order).
 
 ## Updating an older fork
 
@@ -115,7 +113,9 @@ pull request.
 ## Areas
 
 Who owns what. Ask the owner on GitHub before changing their area in a
-large way; small fixes anywhere are welcome with a test.
+large way; small fixes anywhere are welcome with a test. The hand-written
+areas below stay with their owners until the engine port switches that
+system over to the translated code.
 
 | Area | Owner | Notes |
 | --- | --- | --- |
@@ -134,7 +134,7 @@ large way; small fixes anywhere are welcome with a test.
 | Linux port | open | #61; pull requests #62 and #91 are starts. |
 | Engine port: translating the executable, frame order, game-state model and saves, wiring systems into the game | maintainer | ENGINE_PORT_PLAN, ENGINE_CRATE, FRAME_SKELETON, ENGINE_STATE. Not open for contributions. |
 
-Everything else is open through the `[task]` issues.
+For anything else, open an issue first.
 
 ## What every pull request must show
 
@@ -173,8 +173,8 @@ Everything else is open through the `[task]` issues.
 5. **Tests.** A regression test for each behaviour fix, with inputs built
    from scratch by the `testdata` crate. Tests never need game files.
 6. **Docs.** The system's topic page in `docs/` says what is done, what is
-   traced and what is missing. Add a short line to
-   [docs/MILESTONES.md](docs/MILESTONES.md).
+   traced and what is missing. The maintainer updates
+   [docs/MILESTONES.md](docs/MILESTONES.md) when a milestone moves.
 7. **AI assistance.** Say which tools helped and with what. You remain
    responsible for the change: review the code and the claims, and run
    the checks yourself.
@@ -209,4 +209,4 @@ merged ([docs/GOVERNANCE.md](docs/GOVERNANCE.md)).
 
 If you stop partway, leave the next person (or agent) a short note in the
 system's topic page: what works, what's traced, what's left, and one next
-action. Update the milestone tracker with evidence, not just claims.
+action, with evidence rather than claims.
