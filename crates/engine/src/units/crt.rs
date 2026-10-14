@@ -292,6 +292,25 @@ pub fn sqrt(_e: &mut Engine, v: f64) -> f64 {
     v.sqrt()
 }
 
+// Platform: replaces 00ec782f (`eh vector constructor iterator', MSVC runtime;
+// stdcall: array, element size, count, constructor, destructor): runs the
+// constructor (`thiscall`) on each element in order. The destructor is only
+// for unwinding after an exception, which the engine doesn't raise.
+pub fn eh_vector_constructor_iterator(
+    e: &mut Engine,
+    array: u32,
+    size: u32,
+    count: i32,
+    constructor: u32,
+    _destructor: u32,
+) {
+    let mut element = array;
+    for _ in 0..count.max(0) {
+        e.call(constructor, &[element]);
+        element = element.wrapping_add(size);
+    }
+}
+
 // Platform: replaces 00ec9f70 (_CIcos, LIBCMT): argument in ST0.
 pub fn ci_cos(_e: &mut Engine, v: f64) -> f64 {
     v.cos()
@@ -911,6 +930,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec62c0, ftol2(f64) -> u64),
         entry!(0x00ec6040, ci_sqrt(f64) -> f64),
         entry!(0x00ec6054, sqrt(f64) -> f64),
+        entry!(
+            0x00ec782f,
+            eh_vector_constructor_iterator(u32, u32, i32, u32, u32)
+        ),
         entry!(0x00ec9f70, ci_cos(f64) -> f64),
         entry!(0x00eca0a0, ci_sin(f64) -> f64),
         entry!(0x00ec9f30, cos(f64) -> f64),
@@ -1032,6 +1055,24 @@ mod tests {
         let p = e.mem.alloc(s.len() as u32 + 1);
         e.mem.set_cstr(p, s);
         Ptr::new(p)
+    }
+
+    #[test]
+    fn the_vector_constructor_iterator_constructs_each_element_in_order() {
+        let mut e = Engine::new();
+        e.register(0x0090_0000, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00ec782f, &[0x1000, 0xc, 3, 0x0090_0000, 0x0090_1000]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log[1..].iter().map(|(a, w)| (*a, w.clone())).collect();
+        assert_eq!(
+            calls,
+            [
+                (0x0090_0000, vec![0x1000]),
+                (0x0090_0000, vec![0x100c]),
+                (0x0090_0000, vec![0x1018]),
+            ]
+        );
     }
 
     #[test]

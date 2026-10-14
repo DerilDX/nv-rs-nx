@@ -20,14 +20,34 @@ pub fn fn_00822600(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `operator new` (`00401000`, `cdecl` (size)).
+const OPERATOR_NEW: u32 = 0x0040_1000;
+
+// Translated from 008225d0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// A map's bucket-array allocator (`thiscall`, `RET 4`; `this` unused):
+/// `operator new` of `count * 4` bytes.
+pub fn fn_008225d0(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    e.call(OPERATOR_NEW, &args![count << 2]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00822600, fn_00822600(Ptr) -> Ptr)]
+    vec![
+        entry!(0x00822600, fn_00822600(Ptr) -> Ptr),
+        entry!(0x008225d0, fn_008225d0(Ptr, u32) -> u32),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bucket_array_is_four_bytes_a_bucket() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_NEW, |_, a| (0x5000 + a[0]).into_ret());
+        assert_eq!(e.call(0x008225d0, &[0, 37]).u32(), 0x5000 + 37 * 4);
+    }
 
     #[test]
     fn stores_the_vtable_then_builds_an_empty_array() {

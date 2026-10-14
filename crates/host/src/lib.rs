@@ -17,6 +17,7 @@
 //! ("In the running game").
 
 pub mod global_form;
+pub mod quest_form;
 pub mod script_form;
 
 use engine::Engine;
@@ -38,7 +39,8 @@ impl Host {
     /// `engine::exe::verify` makes) and mapped; then the static initializers
     /// ([`engine::static_init::run`], in `__cinit`'s order, the untranslated
     /// ones skipped and counted), the memory manager's among them replaced by
-    /// [`start_allocator`] ([`STAND_INS`]). The error says which file and why (missing,
+    /// [`start_allocator`] ([`STAND_INS`]); then the game objects forms need
+    /// when they are made ([`start_game_objects`]). The error says which file and why (missing,
     /// not a PE file, another build).
     pub fn start(data: &Path) -> Result<Host, String> {
         let exe = engine::exe::installed_exe(data);
@@ -51,6 +53,7 @@ impl Host {
         }
         let mut engine = Engine::with_exe(&exe)?;
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
+        start_game_objects(&mut engine);
         Ok(Host {
             engine,
             exe,
@@ -72,6 +75,19 @@ impl Host {
             self.static_init.skipped()
         )
     }
+}
+
+/// The objects of the game's start-up (`WinMain`) that making forms needs,
+/// made by the game's own code. Today one: `BGSSaveLoadGame::Create`
+/// (Xbox PDB, `00847480`), which `TES::TES` (`0044fb20`) calls: the save/load
+/// game singleton at `011ddf38`, which every form constructor that records a
+/// change (`TESForm` `00484b60`/`00484b90` → `BGSSaveLoadGame::AddChange`
+/// `0084a690`) reads; the game makes it before it loads any form. The rest
+/// of `TES::TES` doesn't run: eight of its callees aren't translated
+/// (`00c44980`, `004ba280`, `00528cb0`, `00626fd0`, `0084fc70`, `00856380`,
+/// `00c3da50`, `00624bf0`).
+pub fn start_game_objects(e: &mut Engine) {
+    e.call(0x0084_7480, &[]);
 }
 
 /// The static initializers nv-rs runs its own code for. Entry `00fb66a0`

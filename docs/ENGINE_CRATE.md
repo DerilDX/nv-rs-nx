@@ -214,19 +214,48 @@ them) and carries its value to and from the float at +0x24 that the
 interpreter reads (`00526ac0`); the same ignored test checks every global
 of `FalloutNV.esm`.
 
-Open: the quest half (a quest's locals at `TESQuest` +0x5c, read by
-`0059e300` and `0060d4d0`). The `TESQuest` constructor (`0060c4b0`) flags
-a change through `TESForm::ForceChange` and `BGSSaveLoadGame::AddChange`
-(`0084a690`), which needs the save/load game singleton (`011ddf38`,
-made by `BGSSaveLoadGame::Create` `00847480` in the `TES` constructor).
-`Create` stops at `006b3eb0`; measured by answering each untranslated
-callee with 0 (so later paths are approximate), it reaches eight more
-(`007d6bd0`, `00845550`, `00852a70`, `008651d0`, `00822600`, `0084b5c0`,
-`008433d0`, `008535e0`), and the quest constructor then `009a4250`.
-(`008c71b0`, the one-word store `ForceChange` builds its flags with, is
-translated in `fallout_misc/bgschangeflags.rs`.) S6 (quest scripts
-through the game's interpreter in the live game) needs the quest forms
-and the other referenced forms (see the script track plan).
+`host::quest_form` (step S6) makes a quest with the game's constructor
+(`CreateFormOfType(0x47)`, `TESQuest` `0060c4b0`) and runs its script
+through the game's interpreter: `0060d4d0` → `Script::Run` →
+`ScriptRunManager::Run` → `ScriptRunner::Run` → `EvaluateLine` /
+`CExpression::Eval`, on the record's compiled code (`SCDA`), with the
+quest's `ScriptLocals` in the game's memory. Bridged, and why:
+
+- `TESQuest::Load` (`0060ceb0`) is translated but reads through `TESFile`,
+  whose chunk reading isn't (`00401660`, `004726f0`, `00401680`), nor are
+  the stage, stage item, objective, target and condition loaders it calls.
+  The record's `DATA` is put where `Load` puts it; the quest has no stages,
+  objectives or conditions.
+- The quest's `InitItem` (`0060cba0`) is translated, but the script
+  component's `InitItem` (`0048cd90`, resolving `SCRI` through the form map)
+  and the condition list's (`005f5760`, `00680a20`) aren't. The script is
+  stored resolved, as `0048cd90` leaves it, and the script branch of
+  `InitItem` runs through its translated callees in its order.
+
+Start-up makes the save/load game singleton the constructor needs
+(`BGSSaveLoadGame::Create` `00847480`, from `TES::TES`; the rest of
+`TES::TES` doesn't run: `00c44980`, `004ba280`, `00528cb0`, `00626fd0`,
+`0084fc70`, `00856380`, `00c3da50`, `00624bf0` are open).
+
+The acceptance test runs `VMS49Timer` (`VMS49TimerSCRIPT`): its first
+GameMode run sets `bInitialized` to 1 and `fTimer` to 1.0; with `fTimer`
+then 0.5, a second run keeps it. A survey runs every scripted quest of
+`FalloutNV.esm` once: 297 of 301 run to the end, 13 change variables on
+their first run. The four that stop need game objects the host doesn't
+have yet: the player (`GetPlayerControlsDisabled`,
+`DisablePlayerControls`), the `BSAudio` singleton (`PlayBink`) and
+`BSDLCSystemUtility` (`00af26c0`). Referenced forms (`SCRO`) are still
+unresolved, so a line that uses one fails as the game fails on an
+unresolved object.
+
+```sh
+NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test live_quest_script -- --ignored --nocapture
+NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test live_quest_survey -- --ignored --nocapture
+```
+
+Not yet: the world doesn't run quest scripts through this (they still run
+through `crates/script`), stages (`SetStage`/`GetStage` need the stage
+list), and the frame's call site (`00455490` at PostSwapProcess).
 
 ### Static initializers
 
