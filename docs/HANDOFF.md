@@ -18,16 +18,25 @@ next account continues from here. Talk to the maintainer in plain language.
   16 command-free quests run through the game's own translated script
   interpreter (`QuestVm` hook, #170); `Host::start` runs the 15,762
   static initializers; the startup line and F12 report count interpreter runs.
-- **Merged this session:** #161, #164 to #174: quest loaders (#169, #171:
+- **Merged this session:** #161, #164 to #180: quest loaders (#169, #171:
   stages, `SetDone`, targets, conditions, condition items, objectives,
   topics and responses, TESFile chunks, CRT `sprintf`/`_snprintf`), the
   QuestVm hook (#170), lockfile hash (#172), CI build cache (#173), rolling
-  batch and `docs/SYSTEMS.md` (#174).
-- **Open:** #175 (S6c: quests load through the game's own `TESQuest::Load`
-  via BSFile stand-ins; rebased, merge when green) and the final rolling PR
-  of this session if one is open. Check `gh pr list`.
-- **Ledger:** about 16,450 hand-translated (24.8 %) plus 15,762 table-run
-  static initializers. Engine tests: about 20,600.
+  batch and `docs/SYSTEMS.md` (#174), real `TESQuest::Load` through BSFile
+  stand-ins (#175), the movement batch with all of bhkCharacterController
+  (#176), README, contributing and milestones rewrites with screenshots,
+  progress bar and logo (#177 to #180). The task list (docs/TASKS.md) and
+  all `[task]` issues are retired; only the Linux issue #61 stays open.
+- **Open:** nothing of ours. The contributor PRs (#29, #48, #50, #59, #62,
+  #87, #91, #93, #108) are untouched and need the maintainer's review: keep
+  platform and route PRs (ask for rebases), check the license of the
+  research source in #48, and #93 changes original behaviour.
+- **Ledger:** about 16,500 hand-translated (24.9 %) plus 15,762 table-run
+  static initializers. Engine tests: about 20,700. Main is fully gated; the
+  lead branch `claude/engine-crate` equals main.
+- **Social preview:** `docs/media/social-preview.png` is made, but GitHub
+  has no API for it. The maintainer uploads it in the repo settings (or
+  Claude in Chrome does, once connected).
 
 **Maintainer decisions (2026-10-14):**
 - **Order:** movement and physics, then animation, audio, renderer, then the
@@ -86,6 +95,28 @@ animation, faces, audio) is about 8,000-9,000 functions of new translation.
    NiTPointerList node, PathBuilder, AStarSearch, hkVector4 and SSE helpers,
    LockFreeMap, ContainerObject/TESContainer, BGSListForm, TesResponse
    (two declarations).
+9. **Look-alike families (speed-up, from a review of decomp.wtf).** Many
+   exe functions are near-identical template instantiations (BSSimpleArray,
+   BSScrapArray, NiTMap, LockFreeMap, NiTPointerList helpers, scalar
+   deleting destructors, constructor and destructor pairs). Build a tool in
+   `research/` that groups functions by normalised instruction shape
+   (opcodes and operand kinds, addresses and constants masked) and lists
+   each family with its translated members. Give translators the family
+   and an already-translated sibling as the template in their task, and
+   assign whole families at once. Measure functions per batch before and
+   after.
+10. **Automatic oracle check for every pure translation.** `nv-call`
+    (`research/nv-oracle`) runs a function on the real CPU. Classify
+    translated functions that are pure (no globals written, no calls out, or
+    only calls to other pure functions) and generate differential tests that
+    run both the exe and the Rust on many inputs, NaN and edge cases
+    included. Add it as a gate step, so a wrong translation fails by itself
+    the way decomp.wtf's byte-for-byte judge does. Commit test inputs and
+    addresses only, never exe bytes or outputs.
+11. **Not adopted:** decomp.wtf itself. It does matching decompilation
+    (C that recompiles to identical bytes), supports PC games only through
+    existing community projects, and would still leave a Windows x86 exe to
+    port. Behaviour translation into Rust stays the method.
 
 **Pipeline notes learned this session:** after any Windows restart run
 `phase0/bin/start-srv.ps1` (Ghidra 8090 does not come back by itself).
