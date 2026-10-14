@@ -123,6 +123,23 @@ cargo run --release -- "<path to Fallout New Vegas\Data>" GSDocMitchellHouse
 
 ---
 
+## How it's made
+
+To be upfront: nv-rs is built almost entirely with AI coding agents (mainly
+Claude, with some Codex). The maintainer directs the project: setting the plan
+and priorities, playtesting builds and deciding what gets merged. The agents
+write nearly all of the code.
+
+What keeps it honest is the method. Agents don't get to invent behaviour:
+every ported piece of logic is traced to the original game's code and marked
+with where it came from. It is then checked by more than 20,000 automated
+tests, by automated play-throughs of the opening and the Goodsprings quests on
+every change, and against the original game itself. Anything that can't be
+traced to the original doesn't go in. Everything is in the open, so judge it by
+how it plays.
+
+---
+
 ## Get involved
 
 Contributions are welcome, from people and their AI agents alike:
