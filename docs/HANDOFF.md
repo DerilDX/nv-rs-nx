@@ -105,7 +105,10 @@ animation, faces, audio) is about 8,000-9,000 functions of new translation.
    and an already-translated sibling as the template in their task, and
    assign whole families at once. Measure functions per batch before and
    after.
-10. **Automatic oracle check for every pure translation.** `nv-call`
+10. **Taken by contributor MeatisOmalley (issue #182, branch
+    `oracle/pure-diff`, approved 2026-10-14). Don't duplicate it. Review their
+    PR and wire the local check into `check-lead.sh` when it lands.**
+    **Automatic oracle check for every pure translation.** `nv-call`
     (`research/nv-oracle`) runs a function on the real CPU. Classify
     translated functions that are pure (no globals written, no calls out, or
     only calls to other pure functions) and generate differential tests that
