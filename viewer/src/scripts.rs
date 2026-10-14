@@ -986,6 +986,9 @@ type Starting<'w> = (
     (
         ResMut<'w, crate::combat::ObjectShots>,
         ResMut<'w, crate::swaps::TextureSwaps>,
+        // The game's own code (`host`): its interpreter runs the quests it
+        // takes (`host::quest_vm`). Main thread only.
+        Option<NonSendMut<'w, host::Host>>,
     ),
 );
 
@@ -1006,7 +1009,7 @@ pub fn run_scripts(
         player,
         mut pending,
         mut pending_exterior,
-        (mut object_shots, mut texture_swaps),
+        (mut object_shots, mut texture_swaps, mut game_code),
     ): Starting,
     mut start_commands: ResMut<StartCommands>,
     here_now: HereNow,
@@ -1250,9 +1253,11 @@ pub fn run_scripts(
             tan_half_fov,
             aspect,
         };
-        Runner::new(order, &scripts.0, state)
-            .with_sight(&sight)
-            .update(dt);
+        let mut runner = Runner::new(order, &scripts.0, state).with_sight(&sight);
+        if let Some(game_code) = game_code.as_deref_mut() {
+            runner = runner.with_quest_vm(game_code);
+        }
+        runner.update(dt);
         // Someone coming to warn the trespassing player off
         // (`world::living::trespass`).
         let now_warner = state.living.trespass.as_ref().map(|w| w.warner);

@@ -109,6 +109,8 @@ pub fn report_key(
     player: Res<Player>,
     mut notices: ResMut<Notices>,
     cameras: Query<(&Transform, &FlyCamera)>,
+    // The game's own code: how many quests its interpreter ran.
+    game_code: Option<NonSend<host::Host>>,
 ) {
     if !keys.just_pressed(KeyCode::F12) {
         return;
@@ -143,7 +145,13 @@ pub fn report_key(
         heading: s.heading.to_radians(),
     });
     let written = std::fs::create_dir_all(&folder)
-        .and_then(|()| std::fs::write(folder.join("report.txt"), describe(&place, world, &s, hour)))
+        .and_then(|()| {
+            let mut report = describe(&place, world, &s, hour);
+            if let Some(game_code) = &game_code {
+                report.push_str(&format!("\n{}\n", game_code.quests.summary()));
+            }
+            std::fs::write(folder.join("report.txt"), report)
+        })
         .and_then(|()| std::fs::write(folder.join("state.txt"), world::save::save(state, saved)))
         .and_then(|()| {
             std::fs::write(

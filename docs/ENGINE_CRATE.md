@@ -253,9 +253,31 @@ NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test live_
 NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test live_quest_survey -- --ignored --nocapture
 ```
 
-Not yet: the world doesn't run quest scripts through this (they still run
-through `crates/script`), stages (`SetStage`/`GetStage` need the stage
-list), and the frame's call site (`00455490` at PostSwapProcess).
+In the viewer, quests run through it (`host::quest_vm`, the world's
+`world::scripting::QuestVm` hook on `Runner`): each frame's quest
+`GameMode` runs (`Runner::update`) offer each quest to the host, which
+takes those whose script has `GameMode` blocks only, no `ref` variables,
+only its own variables and no function but `GetSecondsPassed`
+(`host::quest_vm::takes`; 16 of 465 scripted quests with the DLCs, all of
+them variable holders today); the rest run through `crates/script` as
+before. A taken quest is made on its first run (`host::quest_vm::make_quest`,
+the one place to swap in the real `TESQuest::Load` and `InitItem` when they
+are translated), its variables are copied into its `ScriptLocals` before
+each run and back after, and the world's `seconds_passed` is the frame's
+elapsed time `GetSecondsPassed` reads (`011f6394` +0xC, `0084d030`, through
+`0059c430`) with the script's own delay and get-seconds buffer (`Script`
++0x38, +0x3C) cleared: the world keeps the quests' run schedule. A quest
+whose making or run stops goes back to `crates/script` for good. The
+startup prints `Game's interpreter: runs N of M scripted quests`, and the
+F12 report how many quests ran (and how many went back). Opt-in check:
+`live_quest_vm` (a new game's taken quests run through it; `VMS49Timer`,
+taken by the test though the viewer doesn't, counts down with the world's
+time exactly as `crates/script` does, run by run).
+
+Not yet: commands (the handlers aren't connected to the world, so
+scripts that call one stay on `crates/script`), stages (`SetStage`/
+`GetStage` need the stage list), and the frame's call site (`00455490` at
+PostSwapProcess).
 
 ### Static initializers
 

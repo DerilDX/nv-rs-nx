@@ -18,6 +18,7 @@
 
 pub mod global_form;
 pub mod quest_form;
+pub mod quest_vm;
 pub mod script_form;
 
 use engine::Engine;
@@ -30,6 +31,9 @@ pub struct Host {
     pub exe: PathBuf,
     /// What the static initializers' run did (entries run, skipped).
     pub static_init: engine::static_init::Report,
+    /// The quests run through the game's interpreter for the world
+    /// ([`quest_vm`]).
+    pub quests: quest_vm::QuestVm,
 }
 
 impl Host {
@@ -58,6 +62,7 @@ impl Host {
             engine,
             exe,
             static_init,
+            quests: quest_vm::QuestVm::default(),
         })
     }
 

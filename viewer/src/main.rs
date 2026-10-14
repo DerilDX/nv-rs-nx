@@ -179,6 +179,14 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // Which quests the game's own interpreter runs (`host::quest_vm`):
+    // command-free quests and those whose only function is GetSecondsPassed.
+    let (taken, scripted) =
+        host::quest_vm::eligible(&game.order, &world::scripting::ScriptCache::default());
+    println!(
+        "Game's interpreter: runs {taken} of {scripted} scripted quests (the rest through \
+         crates/script)."
+    );
     // `--load-fos`: an original save gives the state and the place.
     let mut from_save = match args.load_fos.as_deref().map(|p| fos_start::open(&game, p)) {
         Some(Ok(start)) => Some(start),

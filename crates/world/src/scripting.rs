@@ -2794,6 +2794,26 @@ impl ScriptCache {
     }
 }
 
+/// A runner of quest scripts other than this crate's interpreter (the
+/// game's own, `host::quest_vm`). [`Runner::update`] offers it each
+/// quest's `GameMode` run; the quests it declines run as before.
+pub trait QuestVm {
+    /// Runs the quest `quest`'s script `script` (the world's parse of its
+    /// source: `parsed`) once, as a quest's script runs while the game
+    /// runs, with `locals` its variables (read before, written after) and
+    /// `seconds_passed` what `GetSecondsPassed` gives. False when it
+    /// doesn't take this quest: then it changed nothing.
+    fn run_quest(
+        &mut self,
+        order: &LoadOrder,
+        quest: FormId,
+        script: FormId,
+        parsed: &Script,
+        locals: &mut Locals,
+        seconds_passed: f32,
+    ) -> bool;
+}
+
 /// Runs scripts against the game state.
 pub struct Runner<'a> {
     pub order: &'a LoadOrder,
@@ -2816,6 +2836,10 @@ pub struct Runner<'a> {
     /// The viewer's camera and collision, for `GetLineOfSight`
     /// ([`crate::sight`]); none headless.
     pub sight: Option<&'a dyn crate::sight::Sight>,
+    /// Another runner of quest scripts' `GameMode` runs: the game's own
+    /// interpreter (`host::quest_vm`), for the quests it takes; none:
+    /// every quest runs through this crate's interpreter.
+    quest_vm: Option<&'a mut dyn QuestVm>,
     /// A scripted item's own run: its holder and the item (`RemoveMe`),
     /// and whether `RemoveMe` took it.
     item: Option<(FormId, FormId)>,
@@ -2848,6 +2872,7 @@ impl<'a> Runner<'a> {
             seconds_passed: 0.0,
             references_changed: false,
             sight: None,
+            quest_vm: None,
             item: None,
             removed: false,
             dropped: None,
@@ -2859,6 +2884,37 @@ impl<'a> Runner<'a> {
     pub fn with_sight(mut self, sight: &'a dyn crate::sight::Sight) -> Self {
         self.sight = Some(sight);
         self
+    }
+
+    /// With another runner for the quests it takes ([`QuestVm`]).
+    pub fn with_quest_vm(mut self, vm: &'a mut dyn QuestVm) -> Self {
+        self.quest_vm = Some(vm);
+        self
+    }
+
+    /// One `GameMode` run of the quest `q`'s script: through the
+    /// [`QuestVm`] when there is one and it takes the quest, with the
+    /// quest's variables; else (or when it declines) through this crate's
+    /// interpreter ([`Runner::run_blocks`]).
+    fn run_quest_gamemode(&mut self, q: FormId) {
+        if let Some(vm) = self.quest_vm.take() {
+            let script = script_of(self.order, q)
+                .and_then(|id| Some((id, self.scripts.script(self.order, id)?)));
+            let mut ran = false;
+            if let Some((id, parsed)) = script {
+                if parsed.blocks.iter().any(|b| b.kind == "gamemode") {
+                    let mut locals = self.take_locals(Some(q));
+                    ran =
+                        vm.run_quest(self.order, q, id, &parsed, &mut locals, self.seconds_passed);
+                    self.put_locals(Some(q), locals);
+                }
+            }
+            self.quest_vm = Some(vm);
+            if ran {
+                return;
+            }
+        }
+        self.run_blocks(q, None, "gamemode", |_| true);
     }
 
     /// The scripted items' own runs (`004d2480` for each holder's scripted
@@ -3140,7 +3196,7 @@ impl<'a> Runner<'a> {
             } else {
                 passed
             };
-            self.run_blocks(q, None, "gamemode", |_| true);
+            self.run_quest_gamemode(q);
         }
     }
 

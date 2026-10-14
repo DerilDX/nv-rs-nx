@@ -2298,3 +2298,106 @@ fn a_stage_set_from_the_quests_script_keeps_the_variables_it_sets() {
         timer(&state)
     );
 }
+
+/// Another runner of quest scripts ([`world::scripting::QuestVm`], the
+/// game's own interpreter in the viewer): a quest it takes runs through it,
+/// with the quest's variables and the frame's `GetSecondsPassed`, and the
+/// world's interpreter doesn't run it; a quest it declines runs as before.
+#[test]
+fn a_quest_vm_runs_the_quests_it_takes_and_declines_the_rest() {
+    use script::interp::Locals;
+    use testdata::{group, record, sub, zstr};
+    use world::scripting::QuestVm;
+
+    struct Fake {
+        take: bool,
+        seen: Vec<(FormId, FormId, f32)>,
+    }
+    impl QuestVm for Fake {
+        fn run_quest(
+            &mut self,
+            _order: &LoadOrder,
+            quest: FormId,
+            script: FormId,
+            parsed: &script::Script,
+            locals: &mut Locals,
+            seconds_passed: f32,
+        ) -> bool {
+            assert!(parsed.blocks.iter().any(|b| b.kind == "gamemode"));
+            self.seen.push((quest, script, seconds_passed));
+            if !self.take {
+                return false;
+            }
+            let runs = locals.get("nRuns").unwrap_or(0.0);
+            locals.set("nRuns", runs + 10.0);
+            locals.set("fSeen", f64::from(seconds_passed) * 100.0);
+            true
+        }
+    }
+
+    let data = testdata::TempData::empty("quest-vm");
+    let mut script = sub(b"EDID", &zstr("TestVmScript"));
+    script.extend(sub(b"SCHR", &[0; 20]));
+    script.extend(sub(
+        b"SCTX",
+        b"scn TestVmScript\nfloat fSeen\nshort nRuns\nBegin GameMode\nset fSeen to GetSecondsPassed\nset nRuns to nRuns + 1\nEnd",
+    ));
+    let mut quest = sub(b"EDID", &zstr("TestVm"));
+    quest.extend(sub(b"SCRI", &0x900u32.to_le_bytes()));
+    let mut qdata = vec![0x01, 50, 0, 0];
+    qdata.extend(0.1f32.to_le_bytes());
+    quest.extend(sub(b"DATA", &qdata));
+    let mut hedr = 1.34f32.to_le_bytes().to_vec();
+    hedr.extend([0; 8]);
+    let mut plugin = record(b"TES4", 0, &sub(b"HEDR", &hedr));
+    plugin.extend(group(*b"SCPT", 0, &record(b"SCPT", 0x900, &script)));
+    plugin.extend(group(*b"QUST", 0, &record(b"QUST", 0x901, &quest)));
+    data.write("FalloutNV.esm", &plugin);
+    let order = LoadOrder::from_data_dir(data.path(), &ActivePlugins::OfficialOnly).unwrap();
+    let scripts = ScriptCache::default();
+    let var = |state: &GameState, name: &str| {
+        state
+            .variables
+            .get(&FormId(0x901))
+            .and_then(|l| l.iter().find(|v| v.0 == name).map(|v| v.2))
+            .unwrap_or(0.0)
+    };
+
+    // Taken: the hook's writes are the quest's variables; the world's
+    // interpreter (which would add 1) doesn't run.
+    let mut state = GameState::new(&order);
+    let mut vm = Fake {
+        take: true,
+        seen: vec![],
+    };
+    Runner::new(&order, &scripts, &mut state)
+        .with_quest_vm(&mut vm)
+        .update(0.0625);
+    assert_eq!(vm.seen, [(FormId(0x901), FormId(0x900), 0.0625)]);
+    assert_eq!(var(&state, "nruns"), 10.0);
+    assert_eq!(var(&state, "fseen"), 6.25);
+    // The world's own delay still decides when it runs; the second run
+    // gets the time gathered since the first, and starts from its values.
+    Runner::new(&order, &scripts, &mut state)
+        .with_quest_vm(&mut vm)
+        .update(0.0625);
+    assert_eq!(vm.seen.len(), 1);
+    Runner::new(&order, &scripts, &mut state)
+        .with_quest_vm(&mut vm)
+        .update(0.0625);
+    assert_eq!(vm.seen[1], (FormId(0x901), FormId(0x900), 0.125));
+    assert_eq!(var(&state, "nruns"), 20.0);
+
+    // Declined: the world's interpreter runs it, as without a hook.
+    let mut state = GameState::new(&order);
+    let mut vm = Fake {
+        take: false,
+        seen: vec![],
+    };
+    Runner::new(&order, &scripts, &mut state)
+        .with_quest_vm(&mut vm)
+        .update(0.0625);
+    assert_eq!(vm.seen.len(), 1);
+    assert_eq!(var(&state, "nruns"), 1.0);
+    assert_eq!(var(&state, "fseen"), 0.0625);
+}

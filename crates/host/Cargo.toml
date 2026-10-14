@@ -12,3 +12,6 @@ engine = { path = "../engine" }
 # script instance.
 esm = { path = "../esm" }
 script = { path = "../script" }
+# The world's quest runner hook (`world::scripting::QuestVm`) the host
+# implements; the world doesn't depend on the engine.
+world = { path = "../world" }

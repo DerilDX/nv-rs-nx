@@ -70,6 +70,7 @@ dependencies = [
  "engine",
  "esm",
  "script",
+ "world",
 ]
 
 [[package]]
