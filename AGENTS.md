@@ -7,9 +7,9 @@ and an architecture that supports VR.
 Read `docs/MILESTONES.md` first. Read only relevant source and reference
 sections. For research work, `docs/METHODOLOGY.md` describes the method and
 `research/*/README.md` the tools. `README.md` documents features and commands. Previous instructions
-are preserved verbatim in `docs/ENGINE_REFERENCE.md` and
-`docs/CLAUDE_REFERENCE.md`; their relevant rules still apply, but their
-historical next-step lists do not determine current priorities.
+are preserved in `docs/ENGINE_REFERENCE.md`; its relevant rules
+still apply, but its historical next-step lists do not determine current
+priorities.
 
 ## Working rules
 

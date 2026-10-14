@@ -5,7 +5,7 @@ the character controller's ground and air states. Read from
 `FalloutNV.exe` 1.4.0.525 (unpacked image) with Ghidra; names marked
 (Xbox PDB) come from the Xbox 360 prototype symbols (ADR-0002). Earlier
 controller facts (shape, step, slope, gravity, fall damage) are in
-`CLAUDE_REFERENCE.md`/`ENGINE_REFERENCE.md` and the private
+`ENGINE_REFERENCE.md` and the private
 `findings/physics.md`; they are not repeated here.
 
 Status words: **implemented** (code exists), **tested** (regression test),

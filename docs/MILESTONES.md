@@ -10,7 +10,7 @@ V.A.T.S. and custom saves. Many corresponding source modules exist.
 The first foundations batch built and tested both workspaces and ran the
 opening to Doc's instruction to use the vigor tester. Missing cutscene and
 menu behavior prevents calling that a faithful opening. Evidence remains in
-ENGINE_REFERENCE.md, CLAUDE_REFERENCE.md and %USERPROFILE%\nv-re\findings.
+ENGINE_REFERENCE.md and %USERPROFILE%\nv-re\findings.
 The clean public source history was prepared on 2026-10-03. Earlier private
 history is retained separately; do not publish its build outputs.
 

@@ -1,4 +1,4 @@
-# nv-rs: notes for Codex
+# nv-rs: engine reference
 
 An engine reimplementation of Fallout: New Vegas in Rust, in the spirit of
 OpenMW: original engine code that loads the game's data at runtime from
