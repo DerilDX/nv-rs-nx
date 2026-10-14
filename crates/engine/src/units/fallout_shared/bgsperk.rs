@@ -27,14 +27,33 @@ pub fn fn_005eaab0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 005eb680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 16-bit word at `this + 8`, zero-extended. The engine map has no
+/// name for it; the condition item's `InitItem` (`006819e0`) calls it.
+pub fn fn_005eb680(e: &mut Engine, this: Ptr) -> u32 {
+    u32::from(e.mem.u16(this.addr() + 8))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005e_aab0, fn_005eaab0(Ptr) -> Ptr)]
+    vec![
+        entry!(0x005e_aab0, fn_005eaab0(Ptr) -> Ptr),
+        entry!(0x005e_b680, fn_005eb680(Ptr) -> u32),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::prelude::*;
     use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_005eb680_answers_the_word_at_8() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0xc);
+        e.mem.set_u32(object + 8, 0xffff_8001);
+        assert_eq!(e.call(0x005e_b680, &[object]).u32(), 0x8001);
+    }
 
     #[test]
     fn fn_005eaab0_builds_the_object() {

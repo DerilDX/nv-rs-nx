@@ -1,8 +1,12 @@
 //! `fallout shared/tescondition.cpp` (Xbox PDB source unit), subsystem `fallout shared`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 //!
-//! Only `TESCondition::IsTrue_ov2` (`00680c60`) so far: the evaluation of a
-//! condition list with its AND/OR grouping.
+//! The evaluation of a condition list with its AND/OR grouping
+//! (`TESCondition::IsTrue_ov2`, `00680c60`), and the list's record
+//! handling: one `CTDA` chunk loaded into a new item appended to the list
+//! (`00680960`), the items' `InitItem` (`00680a20`) and `Save`
+//! (`00680910`), the item constructor (`006811e0`) and the append
+//! (`0067e420`).
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -26,6 +30,34 @@ const ITEM_IS_OR: u32 = 0x005e_c040;
 const ITEM_EVALUATE: u32 = 0x0068_1600;
 /// The next list node (`00726070`).
 const NODE_NEXT: u32 = 0x0072_6070;
+/// `TESFile::GetTESChunk` (`004726b0`, `ECX` = file): the current chunk's
+/// tag.
+const GET_TES_CHUNK: u32 = 0x0047_26b0;
+/// The chunk tag `CTDA` (one condition item).
+const CHUNK_CTDA: u32 = 0x4144_5443;
+/// `operator new` (`00401000`, cdecl, one word: the size).
+const OPERATOR_NEW: u32 = 0x0040_1000;
+/// The size of a `TESConditionItem` (Xbox PDB `0x1c`; the PC code allocates
+/// the same).
+const CONDITION_ITEM_SIZE: u32 = 0x1c;
+/// The game's `memset` wrapper (`00403d30`, cdecl: destination, value,
+/// count).
+const MEMSET: u32 = 0x0040_3d30;
+/// `00681220` (`ECX` = item, one stack word; `RET 4`): called by the item
+/// constructor with 0x1048 (unnamed in the map, not translated here).
+const ITEM_SETUP: u32 = 0x0068_1220;
+/// The word the item constructor hands to `00681220`.
+const ITEM_SETUP_VALUE: u32 = 0x1048;
+/// `TESConditionItem::Load` (`00681950`, `ECX` = item, one stack word: the
+/// file).
+const ITEM_LOAD: u32 = 0x0068_1950;
+/// `TESConditionItem::InitItem` (`006819e0`, `ECX` = item, one stack word).
+const ITEM_INIT_ITEM: u32 = 0x0068_19e0;
+/// `TESConditionItem::Save` (`00681840`, `ECX` = item, no stack words).
+const ITEM_SAVE: u32 = 0x0068_1840;
+/// The list append (`00905820`, `ECX` = head node, one stack word: the
+/// address of the item word; nothing is added for a null item).
+const LIST_APPEND: u32 = 0x0090_5820;
 
 // Translated from 00680c60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TESCondition::IsTrue_ov2` (Xbox PDB): evaluates the condition list at
@@ -156,9 +188,98 @@ pub fn tes_condition_is_true_ov2(
     all_true
 }
 
+// Translated from 0067e420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleList<TESConditionItem_P>::AddTail` (Xbox PDB): appends `item`
+/// to the list whose head node is `this` (`ECX`; `RET 4`). The item word
+/// stays in the caller's stack slot and its address is handed to the
+/// append `00905820`, on the head that `006815c0(this)` answers.
+pub fn bs_simple_list_tes_condition_item_add_tail(e: &mut Engine, this: Ptr, item: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), item);
+        let head = e.call(LIST_NODE_ITEM_SLOT, &args![this]).u32();
+        e.call(LIST_APPEND, &args![head, slot]);
+    });
+}
+
+// Translated from 00680910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESCondition::Save` (Xbox PDB): runs `TESConditionItem::Save`
+/// (`00681840`) on every item of the list at `this` (`ECX`, no stack
+/// words), from the head until a null node or the empty end node.
+pub fn tes_condition_save(e: &mut Engine, this: Ptr) {
+    let mut node = e.call(LIST_NODE_ITEM_SLOT, &args![this]).u32();
+    while node != 0 && !e.call(NODE_IS_END, &args![node]).bool() {
+        let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        e.call(ITEM_SAVE, &args![item]);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 00680960 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00680960 - the exception-unwinding frame (FS:[0]) around the item allocation and the security-cookie bookkeeping are not translated.
+/// `TESCondition::Load` (Xbox PDB): with a `file` (`RET 4`) whose current
+/// chunk is `CTDA`, allocates a 0x1c-byte item (`operator new`, then the
+/// item constructor `006811e0`; null when the allocation fails), has
+/// `TESConditionItem::Load` (`00681950`) read it from the file, and appends
+/// it to the list at `this` (`0067e420`). Any other chunk, or no file,
+/// does nothing. The item's `Load` runs on the allocation result even when
+/// it is null, as in the exe.
+pub fn tes_condition_load(e: &mut Engine, this: Ptr, file: Ptr) {
+    if file.is_null() {
+        return;
+    }
+    if e.call(GET_TES_CHUNK, &args![file]).u32() != CHUNK_CTDA {
+        return;
+    }
+    let memory = e.call(OPERATOR_NEW, &args![CONDITION_ITEM_SIZE]).u32();
+    let item = if memory != 0 {
+        fn_006811e0(e, Ptr::new(memory)).addr()
+    } else {
+        0
+    };
+    e.call(ITEM_LOAD, &args![item, file]);
+    bs_simple_list_tes_condition_item_add_tail(e, this, item);
+}
+
+// Translated from 00680a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESCondition::InitItem` (Xbox PDB): runs `TESConditionItem::InitItem`
+/// (`006819e0`) with `owner` (the one stack word, `RET 4`; the quest when a
+/// quest calls it) on every item of the list at `this`, from the head until
+/// a null node or the empty end node.
+pub fn tes_condition_init_item(e: &mut Engine, this: Ptr, owner: u32) {
+    let mut node = e.call(LIST_NODE_ITEM_SLOT, &args![this]).u32();
+    while node != 0 && !e.call(NODE_IS_END, &args![node]).bool() {
+        let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        e.call(ITEM_INIT_ITEM, &args![item, owner]);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 006811e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The condition item constructor (unnamed in the map; `ECX` = item, no
+/// stack words): clears the item's 0x1c bytes (`memset`), stores 0 at
+/// `+0x18`, hands 0x1048 to `00681220` and returns `this`.
+pub fn fn_006811e0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(MEMSET, &args![this, 0u32, CONDITION_ITEM_SIZE]);
+    e.mem.set_u32(this.addr() + 0x18, 0);
+    e.call(ITEM_SETUP, &args![this, ITEM_SETUP_VALUE]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00680c60, tes_condition_is_true_ov2(Ptr, u32, u32, Ptr, u8) -> bool)]
+    vec![
+        entry!(
+            0x0067e420,
+            bs_simple_list_tes_condition_item_add_tail(Ptr, u32)
+        ),
+        entry!(0x00680910, tes_condition_save(Ptr)),
+        entry!(0x00680960, tes_condition_load(Ptr, Ptr)),
+        entry!(0x00680a20, tes_condition_init_item(Ptr, u32)),
+        entry!(0x00680c60, tes_condition_is_true_ov2(Ptr, u32, u32, Ptr, u8) -> bool),
+        entry!(0x006811e0, fn_006811e0(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -302,6 +423,159 @@ mod tests {
         let af = item(&mut e, true, false, true, 0x50);
         let bf = item(&mut e, false, false, true, 0x50);
         assert_eq!(run(&mut e, &[af, bf], 0), (false, 1));
+    }
+
+    /// Doubles for the record functions: a file's current chunk tag is its
+    /// first word; `operator new` answers null when `fail_new` is set.
+    fn record_setup_with(fail_new: bool) -> Engine {
+        let mut e = Engine::new();
+        e.register(LIST_NODE_ITEM_SLOT, |_, a| ret(a[0]));
+        e.register(NODE_IS_END, |e, a| {
+            ret((e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32)
+        });
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(GET_TES_CHUNK, |e, a| ret(e.mem.u32(a[0])));
+        e.register_double(OPERATOR_NEW, move |e, a| {
+            ret(if fail_new { 0 } else { e.mem.alloc(a[0]) })
+        });
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            ret(a[0])
+        });
+        e.register(ITEM_SETUP, |_, _| ret(0));
+        e.register(ITEM_LOAD, |_, _| ret(0));
+        e.register(ITEM_INIT_ITEM, |_, _| ret(0));
+        e.register(ITEM_SAVE, |_, _| ret(0));
+        // The append records the item word it is handed.
+        e.register(LIST_APPEND, |e, a| {
+            let item = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0] + 0x100, item);
+            ret(0)
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn record_setup() -> Engine {
+        record_setup_with(false)
+    }
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn add_tail_hands_the_address_of_the_item_word_to_the_append() {
+        let mut e = record_setup();
+        let list = e.mem.alloc(0x200);
+        e.call(0x0067_e420, &args![Ptr::<()>::new(list), 0x1234u32]);
+        let appends = calls_to(&e, LIST_APPEND);
+        assert_eq!(appends.len(), 1);
+        assert_eq!(appends[0][0], list);
+        assert_eq!(e.mem.u32(list + 0x100), 0x1234);
+    }
+
+    #[test]
+    fn load_reads_one_ctda_chunk_into_a_new_item() {
+        let mut e = record_setup();
+        let list = e.mem.alloc(0x200);
+        let file = e.mem.alloc(4);
+        e.mem.set_u32(file, CHUNK_CTDA);
+        e.call(
+            0x0068_0960,
+            &args![Ptr::<()>::new(list), Ptr::<()>::new(file)],
+        );
+        let news = calls_to(&e, OPERATOR_NEW);
+        assert_eq!(news, vec![vec![0x1c]]);
+        let loads = calls_to(&e, ITEM_LOAD);
+        assert_eq!(loads.len(), 1);
+        let item = loads[0][0];
+        assert_ne!(item, 0);
+        assert_eq!(loads[0][1], file);
+        // The constructor ran on it, and the item went into the list.
+        assert_eq!(calls_to(&e, ITEM_SETUP), vec![vec![item, 0x1048]]);
+        assert_eq!(calls_to(&e, MEMSET), vec![vec![item, 0, 0x1c]]);
+        assert_eq!(e.mem.u32(list + 0x100), item);
+    }
+
+    #[test]
+    fn load_ignores_other_chunks_and_a_null_file() {
+        let mut e = record_setup();
+        let list = e.mem.alloc(0x200);
+        let file = e.mem.alloc(4);
+        e.mem.set_u32(file, 0x4d414e4e);
+        e.call(
+            0x0068_0960,
+            &args![Ptr::<()>::new(list), Ptr::<()>::new(file)],
+        );
+        e.call(0x0068_0960, &args![Ptr::<()>::new(list), 0u32]);
+        assert!(calls_to(&e, OPERATOR_NEW).is_empty());
+        assert!(calls_to(&e, ITEM_LOAD).is_empty());
+        assert_eq!(calls_to(&e, GET_TES_CHUNK).len(), 1);
+    }
+
+    #[test]
+    fn load_with_a_failed_allocation_loads_and_appends_a_null_item() {
+        let mut e = record_setup_with(true);
+        let list = e.mem.alloc(0x200);
+        e.mem.set_u32(list + 0x100, 0xffff);
+        let file = e.mem.alloc(4);
+        e.mem.set_u32(file, CHUNK_CTDA);
+        e.call(
+            0x0068_0960,
+            &args![Ptr::<()>::new(list), Ptr::<()>::new(file)],
+        );
+        assert!(calls_to(&e, ITEM_SETUP).is_empty());
+        assert_eq!(calls_to(&e, ITEM_LOAD), vec![vec![0, file]]);
+        assert_eq!(e.mem.u32(list + 0x100), 0);
+    }
+
+    #[test]
+    fn init_item_and_save_visit_every_item_until_the_end_node() {
+        let mut e = record_setup();
+        // Two nodes with items, then an empty end node.
+        let end = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(second, 0x22);
+        e.mem.set_u32(second + 4, end);
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(first, 0x11);
+        e.mem.set_u32(first + 4, second);
+        e.call(0x0068_0a20, &args![Ptr::<()>::new(first), 0x77u32]);
+        assert_eq!(
+            calls_to(&e, ITEM_INIT_ITEM),
+            vec![vec![0x11, 0x77], vec![0x22, 0x77]]
+        );
+        e.call(0x0068_0910, &args![Ptr::<()>::new(first)]);
+        assert_eq!(calls_to(&e, ITEM_SAVE), vec![vec![0x11], vec![0x22]]);
+        // An empty list (its head is the end node) visits nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0068_0a20, &args![Ptr::<()>::new(end), 0x77u32]);
+        e.call(0x0068_0910, &args![Ptr::<()>::new(end)]);
+        assert!(calls_to(&e, ITEM_INIT_ITEM).is_empty());
+        assert!(calls_to(&e, ITEM_SAVE).is_empty());
+    }
+
+    #[test]
+    fn the_item_constructor_clears_the_item_and_sets_it_up() {
+        let mut e = record_setup();
+        let item = e.mem.alloc(0x1c);
+        for i in 0..0x1c {
+            e.mem.set_u8(item + i, 0xaa);
+        }
+        let back = e.call(0x0068_11e0, &args![Ptr::<()>::new(item)]).u32();
+        assert_eq!(back, item);
+        assert_eq!(e.mem.u32(item + 0x18), 0);
+        assert_eq!(e.mem.u32(item), 0);
+        assert_eq!(calls_to(&e, ITEM_SETUP), vec![vec![item, 0x1048]]);
     }
 
     #[test]

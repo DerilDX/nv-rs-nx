@@ -44,6 +44,19 @@ fn sign(o: std::cmp::Ordering) -> i32 {
     o as i32
 }
 
+// Platform: replaces 00ec3bad (_byteswap_ulong, LIBCMT)
+/// Reverses the byte order of a 32-bit value (cdecl, one word).
+pub fn byteswap_ulong(_e: &mut Engine, value: u32) -> u32 {
+    value.swap_bytes()
+}
+
+// Platform: replaces 00ec3bf0 (_byteswap_uint64, LIBCMT)
+/// Reverses the byte order of a 64-bit value (cdecl, two words, low word
+/// first; the result in `EDX:EAX`).
+pub fn byteswap_uint64(_e: &mut Engine, value: u64) -> u64 {
+    value.swap_bytes()
+}
+
 // Translated from 00401000 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `operator new`: allocates through the `MemoryManager` singleton.
 pub fn operator_new(e: &mut Engine, size: u32) -> Ptr {
@@ -910,6 +923,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec7230, memmove(Ptr, Ptr, u32) -> Ptr),
         entry!(0x00ec61c0, memset(Ptr, i32, u32) -> Ptr),
         entry!(0x00ec4835, memcmp(Ptr, Ptr, u32) -> i32),
+        entry!(0x00ec3bad, byteswap_ulong(u32) -> u32),
+        entry!(0x00ec3bf0, byteswap_uint64(u64) -> u64),
         entry!(0x00ed0cdf, malloc(u32) -> Ptr),
         entry!(0x00ecd291, free(Ptr)),
         entry!(0x00ed0d24, calloc_crt(u32, u32) -> Ptr),
@@ -1073,6 +1088,20 @@ mod tests {
                 (0x0090_0000, vec![0x1018]),
             ]
         );
+    }
+
+    #[test]
+    fn byteswap_uint64_reverses_the_bytes() {
+        let mut e = Engine::new();
+        let r = e.call(0x00ec3bf0, &[0x0506_0708, 0x0102_0304]);
+        assert_eq!((r.eax, r.edx), (0x0403_0201, 0x0807_0605));
+    }
+
+    #[test]
+    fn byteswap_ulong_reverses_the_bytes() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00ec3bad, &[0x1234_5678]).u32(), 0x7856_3412);
+        assert_eq!(e.call(0x00ec3bad, &[0xff00_0001]).u32(), 0x0100_00ff);
     }
 
     #[test]

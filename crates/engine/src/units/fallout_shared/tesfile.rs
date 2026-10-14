@@ -1603,6 +1603,7 @@ pub fn tes_file_get_chunk_data_ov2(e: &mut Engine, this: Ptr<TESFile>, buffer: P
 /// of the buffer is zeroed and the truncation is reported. Answers false
 /// when a file read comes up short (reported with the system's message);
 /// the decompiler shows the function as `void`.
+// Translation incomplete: 00472890 - the /GS stack cookie check (00ec408c) is not translated.
 pub fn tes_file_get_chunk_data_ov3(
     e: &mut Engine,
     this: Ptr<TESFile>,

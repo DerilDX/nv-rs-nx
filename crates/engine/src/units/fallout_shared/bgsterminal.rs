@@ -12,14 +12,71 @@ pub fn fn_00500940(_e: &mut Engine, this: Ptr) -> Ptr {
     Ptr::new(this.addr().wrapping_add(0x18))
 }
 
+/// The string constructor (`004037b0`).
+const STRING_CONSTRUCT: u32 = 0x0040_37b0;
+/// The thread-local word `004fffe0` stores (`+0x2b8` of the TLS block).
+const TLS_WORD: u32 = 0x2b8;
+
+// Translated from 004fffe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the word at `+0x2b8` of the calling thread's TLS block
+/// (`*(FS:[0x2c])[_tls_index] + 0x2b8`). cdecl, one word. The quest stage
+/// item's `InitItem` (`0060fa10`) calls it.
+pub fn fn_004fffe0(e: &mut Engine, value: u32) {
+    let tls = e.tls();
+    e.mem.set_u32(tls + TLS_WORD, value);
+}
+
+// Translated from 00500910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs an object of the `SCRIPT_REFERENCED_OBJECT` layout (Xbox PDB):
+/// the editor ID string at `+0` (`004037b0`), then `pForm` (`+8`) and
+/// `uiVariableID` (`+0xc`) zeroed. Returns `this`. The engine map's name
+/// (`BSSimpleList<SCRIPT_REFERENCED_OBJECT_P>::AddTail`) belongs to folded
+/// code; the body is a constructor. The stage item loader `0060f6a0` calls it.
+pub fn fn_00500910(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(STRING_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr() + 8, 0);
+    e.mem.set_u32(this.addr() + 0xc, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00500940, fn_00500940(Ptr) -> Ptr)]
+    vec![
+        entry!(0x004fffe0, fn_004fffe0(u32)),
+        entry!(0x00500910, fn_00500910(Ptr) -> Ptr),
+        entry!(0x00500940, fn_00500940(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tls_word_takes_the_value() {
+        let mut e = Engine::new();
+        e.call(0x004f_ffe0, &[0x1234_5678]);
+        let tls = e.tls();
+        assert_eq!(e.mem.u32(tls + TLS_WORD), 0x1234_5678);
+        e.call(0x004f_ffe0, &[0]);
+        assert_eq!(e.mem.u32(tls + TLS_WORD), 0);
+    }
+
+    #[test]
+    fn referenced_object_constructor_builds_the_string_and_zeroes() {
+        let mut e = Engine::new();
+        e.register(STRING_CONSTRUCT, |_, _| Ret::default());
+        let object = e.mem.alloc(0x10);
+        for offset in [8, 0xc] {
+            e.mem.set_u32(object + offset, 0xffff_ffff);
+        }
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0050_0910, &[object]).u32(), object);
+        assert_eq!(e.mem.u32(object + 8), 0);
+        assert_eq!(e.mem.u32(object + 0xc), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1..], [(STRING_CONSTRUCT, vec![object])]);
+    }
 
     #[test]
     fn header_address_matches_native_without_dereferencing_receiver() {

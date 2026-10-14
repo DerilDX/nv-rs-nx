@@ -4,6 +4,20 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// The CRT's `_byteswap_ulong` (`00ec3bad`, cdecl, one word).
+const BYTESWAP_ULONG: u32 = 0x00ec_3bad;
+
+// Translated from 00401080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reverses the byte order of the `u32` at `value` in place through the
+/// CRT's `_byteswap_ulong` (`00ec3bad`, cdecl). `cdecl`; its callers push a
+/// second word (a flag byte) that the body never reads. The engine map gives
+/// it no name.
+pub fn fn_00401080(e: &mut Engine, value: Ptr, _unused_1: u32) {
+    let word = e.mem.u32(value.addr());
+    let swapped = e.call(BYTESWAP_ULONG, &args![word]).u32();
+    e.mem.set_u32(value.addr(), swapped);
+}
+
 // Translated from 00401050 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The compiler's "vector constructor iterator" (`__stdcall`, four words):
 /// calls the `__thiscall` constructor at `constructor` once for each of
@@ -56,6 +70,7 @@ pub fn fn_004010b0(e: &mut Engine, this: Ptr) -> Ptr {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00401050, fn_00401050(u32, u32, i32, u32)),
+        entry!(0x00401080, fn_00401080(Ptr, u32)),
         entry!(0x00401170, fn_00401170(Ptr) -> u8),
         entry!(0x004013e0, fn_004013e0(Ptr) -> bool),
         entry!(0x0040_10b0, fn_004010b0(Ptr) -> Ptr),
@@ -90,6 +105,23 @@ mod tests {
     fn constructs_nothing_for_zero_or_negative_counts() {
         assert!(constructed(0).is_empty());
         assert!(constructed(-2).is_empty());
+    }
+
+    #[test]
+    fn swaps_the_word_in_place() {
+        let mut e = Engine::new();
+        e.register(BYTESWAP_ULONG, |_, a| a[0].swap_bytes().into_ret());
+        let block = e.mem.alloc(8);
+        e.mem.set_u32(block, 0x1122_3344);
+        e.mem.set_u32(block + 4, 0xaabb_ccdd);
+        e.call_log = Some(vec![]);
+        e.call(0x0040_1080, &args![block, 1u32]);
+        assert_eq!(e.mem.u32(block), 0x4433_2211);
+        assert_eq!(e.mem.u32(block + 4), 0xaabb_ccdd);
+        let log = e.call_log.take().unwrap();
+        let swaps: Vec<_> = log.iter().filter(|(a, _)| *a == BYTESWAP_ULONG).collect();
+        assert_eq!(swaps.len(), 1);
+        assert_eq!(swaps[0].1, vec![0x1122_3344]);
     }
 
     #[test]

@@ -4,6 +4,15 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+// Translated from 005f5760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address 0x54 bytes into the object (`ECX`, no stack words). The
+/// engine map gives it no name. `TESQuest`'s `InitItem` (`0060cba0`),
+/// `Save` and `Load` (`0060ceb0`) use it for the quest's condition list
+/// (`TESCondition` at `quest + 0x54`); other functions call it as well.
+pub fn fn_005f5760(_e: &mut Engine, this: Ptr) -> Ptr {
+    this.byte_add(0x54)
+}
+
 // Translated from 005f65d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Whether the singly linked list starting at node `this` (value word at
 /// `+0`, next node at `+4`; `this` may be null) contains a node whose value
@@ -42,6 +51,7 @@ pub fn fn_005f6610(e: &mut Engine, this: Ptr) -> Ptr {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005f5760, fn_005f5760(Ptr) -> Ptr),
         entry!(0x005f65d0, fn_005f65d0(Ptr, Ptr) -> bool),
         entry!(0x005f_6610, fn_005f6610(Ptr) -> Ptr),
     ]
@@ -56,6 +66,13 @@ mod tests {
         let p: Ptr = Ptr::new(e.mem.alloc(4));
         e.mem.set_u32(p.addr(), value);
         p
+    }
+
+    #[test]
+    fn the_condition_list_is_0x54_bytes_in() {
+        let mut e = Engine::new();
+        let object: Ptr = Ptr::new(0x0040_0000);
+        assert_eq!(e.call(0x005f_5760, &args![object]).u32(), 0x0040_0054);
     }
 
     #[test]
