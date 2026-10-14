@@ -16,6 +16,11 @@ faithful 1:1 match, down to the original's quirks. The goal is not to make a
 "remake" that feels close. It's to make the same game, on a modern,
 open-source engine that can be fixed, ported and extended.
 
+<p align="center">
+  <img src="docs/media/goodsprings-aerial.jpg" alt="Goodsprings from above, rendered by nv-rs" width="100%">
+  <br><sub><i>Goodsprings, rendered by nv-rs from the game's own files.</i></sub>
+</p>
+
 > [!IMPORTANT]
 > nv-rs is an independent project, not affiliated with or endorsed by
 > Bethesda Softworks, ZeniMax Media, Obsidian Entertainment or Microsoft. It
@@ -51,25 +56,43 @@ Experimental, but already playable in places:
   carefully ported so far. Since Build 42 it runs inside the game, starting
   with quests, which now load and run on the original's own logic.
 
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/doc-mitchell.jpg" alt="Doc Mitchell in his chair"></td>
+    <td width="50%"><img src="docs/media/ghost-town-gunfight.jpg" alt="Ghost Town Gunfight"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><i>Waking up in Doc Mitchell's house.</i></sub></td>
+    <td align="center"><sub><i>Ghost Town Gunfight: the Powder Gangers come to town.</i></sub></td>
+  </tr>
+</table>
+
 Not yet: a full playthrough, loading original saves, script-extender (NVSE)
 plugins, Linux and macOS, and VR.
 
-## What's next
+## Progress
 
-The original game's systems are switched on one at a time, each in its own
+<p align="center">
+  <img src="docs/media/progress.svg" alt="Engine port progress: 48.7% of the original program's functions covered" width="100%">
+</p>
+
+The original game's systems switch over one at a time, each in its own
 playable build:
 
-1. **Movement and physics:** how walking, jumping and collisions feel.
-2. **Animation and faces.**
-3. **Audio.**
-4. **Graphics:** lighting, weather and effects matching the original.
-5. **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks,
-   crafting and minigames.
-6. **Saves and the open world.**
+| | System | Status |
+| :---: | --- | --- |
+| ✅ | **Foundations:** the map of the original program, the frame order, the engine running in play | Done (Build 42) |
+| 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: the character controller is done |
+| ⬜ | **Animation and faces** | Next |
+| ⬜ | **Audio:** sounds, music and the radio | About two-thirds translated |
+| ⬜ | **Graphics:** lighting, weather and effects matching the original | Planned |
+| ⬜ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting and minigames | Mostly translated, not yet switched on |
+| ⬜ | **Saves and the open world:** original saves, world streaming | Planned |
 
 After that come optional bug fixes, script-extender compatibility and more
-platforms. The full list of every system is in
-[docs/SYSTEMS.md](docs/SYSTEMS.md).
+platforms. Every system, with numbers, is in
+[docs/SYSTEMS.md](docs/SYSTEMS.md), and the milestones are in
+[docs/MILESTONES.md](docs/MILESTONES.md).
 
 ---
 

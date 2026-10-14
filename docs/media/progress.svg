@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="96" viewBox="0 0 800 96" role="img" aria-label="Engine port progress: 24.9% translated by hand, 23.8% start-up table, 48.7% covered in all">
+  <title>Engine port progress (2026-10-14)</title>
+  <rect x="0" y="0" width="800" height="96" rx="10" fill="#14110b"/>
+  <text x="20" y="30" font-family="Consolas, 'Courier New', monospace" font-size="15" fill="#f2c14e">ENGINE PORT · FalloutNV.exe 1.4.0.525</text>
+  <text x="780" y="30" text-anchor="end" font-family="Consolas, 'Courier New', monospace" font-size="15" fill="#f2c14e">48.7%</text>
+  <rect x="20" y="42" width="760" height="18" rx="4" fill="#2b2418"/>
+  <rect x="20" y="42" width="189" height="18" rx="4" fill="#f2c14e"/>
+  <rect x="205" y="42" width="185" height="18" fill="#a77d2a"/>
+  <rect x="20" y="42" width="760" height="18" rx="4" fill="none" stroke="#5c4a26" stroke-width="1"/>
+  <rect x="20" y="72" width="10" height="10" fill="#f2c14e"/>
+  <text x="36" y="81" font-family="Consolas, 'Courier New', monospace" font-size="12" fill="#d9c9a3">16,487 translated by hand (24.9%)</text>
+  <rect x="300" y="72" width="10" height="10" fill="#a77d2a"/>
+  <text x="316" y="81" font-family="Consolas, 'Courier New', monospace" font-size="12" fill="#d9c9a3">15,762 start-up table (23.8%)</text>
+  <text x="780" y="81" text-anchor="end" font-family="Consolas, 'Courier New', monospace" font-size="12" fill="#8c7d5c">of 66,259 functions</text>
+</svg>
