@@ -77,9 +77,8 @@ before anything else:
    the maintainer's working branches; pull requests built on them will be
    closed.
 3. **Check that your work isn't already in `main`**: search the code,
-   including `crates/engine` for the exe address you traced, and
-   [docs/TASKS.md](docs/TASKS.md) ("Landed").
-4. **Claim it.** Find the matching `[task]` issue, or open one, and
+   including `crates/engine` for the exe address you traced.
+4. **Claim it.** Find the matching issue, or open one, and
    comment `Claiming this` with your branch name, even if you started
    before claiming. If someone else already claimed it, say what you have
    on the issue and agree who continues; don't open a competing PR.
@@ -98,25 +97,20 @@ out, and say in the pull request which parts are traced.
 
 ## Claiming a task
 
-Open work is listed in [docs/TASKS.md](docs/TASKS.md) and as GitHub
-issues titled `[task] …` (major systems, open to everyone). The
-maintainer's list in TASKS.md (items `B1`, `B2`, …) is not open for
-claiming; report new bugs as issues instead.
+There is no open task list right now. To work on something, open an
+issue describing what you want to do and wait for the maintainer's go-ahead
+before starting; ongoing claims are tracked on their issues.
 
-1. Pick an issue nobody has claimed (no assignee, no claim comment).
-2. Comment `Claiming this` with the branch name you'll use. The
-   maintainer assigns you. First claim wins; don't start on a claimed
-   task.
-3. One task per person at a time (two if they're small). Big tasks say
-   how to split them; claim one part at a time.
-4. Post a short progress comment at least once a day. A claim with no
+1. Once the maintainer agrees, comment `Claiming this` on the issue with
+   the branch name you'll use. First claim wins; don't start on work
+   someone else has claimed.
+2. Post a short progress comment at least once a day. A claim with no
    comment or pull request for 48 hours can be released.
-5. Link the pull request to the issue (`Closes #N`). If you give up, say
+3. Link the pull request to the issue (`Closes #N`). If you give up, say
    so on the issue so someone else can take it.
 
 Found a new bug? Open an issue for it; don't fix it inside an unrelated
-pull request. Something big missing that isn't listed? Open an issue
-proposing it as a `[task]`.
+pull request.
 
 ## Areas
 

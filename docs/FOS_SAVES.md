@@ -1,6 +1,6 @@
 # The original game's saves (`.fos`)
 
-M7 research (docs/TASKS.md): the layout of Fallout: New Vegas's own save
+M7 research (the former task list): the layout of Fallout: New Vegas's own save
 files, what nv-rs needs from them to continue a game, and what nv-rs is
 missing to take it. Branch `claude/fos-saves`.
 

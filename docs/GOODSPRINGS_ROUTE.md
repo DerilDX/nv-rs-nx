@@ -257,7 +257,7 @@ Goodsprings fame and Powder Ganger infamy (Liked / Shunned). After stage
 and he starts talking (run 8, after fix 2). He opens with his first
 meeting ("That's close enough"): this route never meets him, and that
 say-once line comes before the stage-100 thanks in his `GREETING` list,
-as in the game (B26, `docs/TASKS.md`). Met first, he says "I owe you a
+as in the game (B26 on the former task list). Met first, he says "I owe you a
 huge favor" (00105D0D).
 
 Without Trudy's help (run 6) the gangers fight the player and Easy Pete;

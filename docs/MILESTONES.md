@@ -495,8 +495,8 @@ build and the fresh Doc Mitchell route passed (63 s); startup loaded
 built source binary, and WHATS-NEW uses LF. The two longer routes are
 rerunning. Next action: finish those checks and the Phase 2 adapter PR.
 
-Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
-[TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).
+Next session: start with [HANDOFF.md](HANDOFF.md) and [SYSTEMS.md](SYSTEMS.md);
+contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 Overnight 2026-10-06 → 07 (integration branch, play builds 12 onward):
 radio unification and the 2 key, death into ragdoll, Chazm's PRs #11 and

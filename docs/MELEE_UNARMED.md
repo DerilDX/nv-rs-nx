@@ -1,6 +1,6 @@
 # Melee and unarmed: reach, what a swing hits, power attacks, specials
 
-M4 weapon class (docs/TASKS.md: "unarmed and melee specials (power
+M4 weapon class (the former task list: "unarmed and melee specials (power
 attacks, V.A.T.S. specials)"), branch `claude/melee-unarmed`, 2026-10-07.
 Sources: FalloutNV.exe 1.4.0.525 (the private Ghidra export; settings'
 readers found by their addresses in the disassembly), names from the

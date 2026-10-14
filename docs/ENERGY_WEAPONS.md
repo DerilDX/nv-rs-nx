@@ -1,6 +1,6 @@
 # Energy weapons: lasers, plasma and their critical effects
 
-M4 weapon class (docs/TASKS.md), branch `claude/energy-weapons`,
+M4 weapon class (the former task list), branch `claude/energy-weapons`,
 2026-10-07. Sources: FalloutNV.exe 1.4.0.525 (the unpacked image; the
 private Ghidra export, functions Ghidra didn't split disassembled with
 capstone), class names from the Xbox 360 prototype's symbols (Xbox PDB),
