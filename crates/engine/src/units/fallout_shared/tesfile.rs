@@ -189,7 +189,11 @@ const FORM_SET_TYPE: u32 = 0x004f_15a0;
 const FORM_IS_FLAGGED: u32 = 0x0040_77c0;
 const FORM_SET_LOAD_FLAGS: u32 = 0x0040_3550;
 const FORM_FILE_FLAGS: u32 = 0x0052_24a0;
-const FORM_SKINNED_NODE: u32 = 0x008d_8ac0;
+/// The word at +0x24C of its `this` (`008d8ac0`, `RET` with no argument
+/// popped; the engine map's name for the folded body is
+/// `MiddleHighProcess::GetFaceSkinnedNode`): on a `TESFile`, the current
+/// record's form id (`m_currentform.iFormID`).
+const RECORD_FORM_ID: u32 = 0x008d_8ac0;
 const FORM_SET_FILE: u32 = 0x0048_4f50;
 /// `TESForm::FreeFormBuffer` (Xbox PDB): releases the buffer of the form
 /// that was written.
@@ -1817,8 +1821,10 @@ pub fn tes_file_start_form(e: &mut Engine, this: Ptr<TESFile>, form: Ptr) {
 /// `TESFile::LoadForm` (Xbox PDB): gives `form` the type of the current
 /// record ([`tes_file_get_tes_form`]), sets its load flags (a word taken
 /// from this file, plus `0x4000` when the form's flag test answers true),
-/// hands it a node through its virtual slot `+0x128` and records this file
-/// as its file.
+/// gives it the record's form id through its virtual slot `+0x128`
+/// (`TESForm::SetFormID(id, 1)`: the 1 pushed for the form id getter, which
+/// returns without popping it, is that call's second argument) and records
+/// this file as its file.
 pub fn tes_file_load_form(e: &mut Engine, this: Ptr<TESFile>, form: Ptr) {
     let record_type = tes_file_get_tes_form(e, this);
     e.call(FORM_SET_TYPE, &args![form, record_type]);
@@ -1828,8 +1834,8 @@ pub fn tes_file_load_form(e: &mut Engine, this: Ptr<TESFile>, form: Ptr) {
     } else {
         e.call(FORM_SET_LOAD_FLAGS, &args![form, flags]);
     }
-    let node = e.call(FORM_SKINNED_NODE, &args![this, 1u32]).u32();
-    e.vcall(form.addr(), 0x128, &args![node]);
+    let id = e.call(RECORD_FORM_ID, &args![this, 1u32]).u32();
+    e.vcall(form.addr(), 0x128, &args![id, 1u32]);
     e.call(FORM_SET_FILE, &args![form, this]);
 }
 
@@ -5033,7 +5039,7 @@ mod tests {
         e.register(FORM_SET_TYPE, |_, _| Ret::default());
         e.register(FORM_FILE_FLAGS, |_, _| ret(0x10));
         e.register(FORM_SET_LOAD_FLAGS, |_, _| Ret::default());
-        e.register(FORM_SKINNED_NODE, |_, _| ret(0x77));
+        e.register(RECORD_FORM_ID, |_, _| ret(0x77));
         e.register(FORM_SET_FILE, |_, _| Ret::default());
         e.register(FORM_IS_FLAGGED, |_, _| ret(1));
         e.call_log = Some(vec![]);
@@ -5046,11 +5052,11 @@ mod tests {
             calls_to(&log, FORM_SET_LOAD_FLAGS),
             vec![vec![form.addr(), 0x4010]]
         );
+        assert_eq!(calls_to(&log, RECORD_FORM_ID), vec![vec![file.addr(), 1]]);
         assert_eq!(
-            calls_to(&log, FORM_SKINNED_NODE),
-            vec![vec![file.addr(), 1]]
+            calls_to(&log, FAKE_SLOT_A),
+            vec![vec![form.addr(), 0x77, 1]]
         );
-        assert_eq!(calls_to(&log, FAKE_SLOT_A), vec![vec![form.addr(), 0x77]]);
         assert_eq!(
             calls_to(&log, FORM_SET_FILE),
             vec![vec![form.addr(), file.addr()]]

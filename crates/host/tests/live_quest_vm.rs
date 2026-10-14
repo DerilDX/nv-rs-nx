@@ -68,8 +68,19 @@ fn the_viewers_quests_run_through_the_games_interpreter() {
             .update(2.0);
     }
     println!("{}", host.quests.summary());
-    assert_eq!(host.quests.quests_run(), running_taken.len());
-    assert!(host.quests.stopped.is_empty(), "{:?}", host.quests.stopped);
+    // Quests of plugins with masters (the DLCs) can't be loaded yet (their
+    // form ids need the master table TESFile::OpenTES builds): they go back
+    // to crates/script, and run there. Every other one runs through the
+    // game's interpreter.
+    for (q, why) in &host.quests.stopped {
+        println!("  back to crates/script: {q:?}: {why}");
+        assert!(why.contains("has masters"), "{q:?}: {why}");
+    }
+    assert_eq!(
+        host.quests.quests_run() + host.quests.stopped.len(),
+        running_taken.len()
+    );
+    assert!(host.quests.quests_run() > 0);
     for q in &running_taken {
         let a = &before[q];
         let b = &state.variables[q];

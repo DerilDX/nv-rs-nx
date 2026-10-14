@@ -25,6 +25,7 @@
 //! making or run stops (an untranslated function, a missing object) goes
 //! back to `crates/script` for good, and is counted.
 
+use crate::game_file::GameFile;
 use crate::quest_form::{QuestForm, QuestState};
 use crate::script_form::{read_locals, write_locals, ScriptForm};
 use engine::Engine;
@@ -112,12 +113,19 @@ struct Made {
     quest: QuestForm,
 }
 
-/// Makes the quest `quest` with its script `script` in the game's memory:
-/// [`ScriptForm::load`] and [`QuestForm::load`] (which bridge the game's
-/// `Script::Load`, `TESQuest::Load` and `InitItem`). When those are
-/// translated whole, this is the one place to call them instead.
+/// The plugins' `TESFile`s in the game's memory, made on first need, by
+/// load-order index ([`GameFile::open`]).
+pub type GameFiles = HashMap<u8, GameFile>;
+
+/// Makes the quest `quest` with its script `script` in the game's memory,
+/// the one place quests are made: the script with [`ScriptForm::load`]
+/// (`Script::Load` is still bridged there) into the game's form map, then
+/// the quest from its record by the game's own loaders ([`QuestForm::load`]:
+/// `TESFile::SetOffset`, `TESQuest::Load`, `InitItem`, which resolves the
+/// script). `files` keeps the plugins' `TESFile`s.
 pub fn make_quest(
     e: &mut Engine,
+    files: &mut GameFiles,
     order: &LoadOrder,
     quest: FormId,
     script: FormId,
@@ -128,12 +136,25 @@ pub fn make_quest(
     let script_record = script_ref.record().map_err(|err| err.to_string())?;
     let plugin = script_ref.plugin;
     let script_form = ScriptForm::load(e, script, &script_record, |id| plugin.to_global(id))?;
-    let quest_record = order
+    let quest_ref = order
         .get(quest)
-        .ok_or_else(|| format!("quest {quest}: not in the load order"))?
-        .record()
-        .map_err(|err| err.to_string())?;
-    let quest_form = QuestForm::load(e, quest, &quest_record, &script_form)?;
+        .ok_or_else(|| format!("quest {quest}: not in the load order"))?;
+    let index = quest_ref.plugin.load_index;
+    let file = match files.get(&index) {
+        Some(file) => *file,
+        None => {
+            let file = GameFile::open(e, quest_ref.plugin)?;
+            files.insert(index, file);
+            file
+        }
+    };
+    let quest_form = QuestForm::load(e, &file, quest_ref.plugin, quest_ref.entry, quest)?;
+    if quest_form.script != script_form.form {
+        return Err(format!(
+            "quest {quest}: InitItem resolved its script to {:08x}, not {script}'s {:08x}",
+            quest_form.script, script_form.form
+        ));
+    }
     Ok((script_form, quest_form))
 }
 
@@ -144,6 +165,8 @@ pub struct QuestVm {
     pub accept: fn(&Script) -> bool,
     /// Each quest offered: made (or not taken: `None`).
     quests: HashMap<FormId, Option<Made>>,
+    /// The plugins' `TESFile`s ([`make_quest`]).
+    files: GameFiles,
     /// Runs through the game's interpreter.
     pub runs: u64,
     /// Quests that stopped while made or run, with why; they run through
@@ -156,6 +179,7 @@ impl Default for QuestVm {
         QuestVm {
             accept: takes,
             quests: HashMap::new(),
+            files: HashMap::new(),
             runs: 0,
             stopped: Vec::new(),
         }
@@ -186,6 +210,28 @@ impl QuestVm {
         Some(made.quest.snapshot(e, &made.script))
     }
 
+    /// Makes the quest `quest` (with its script) in the game's memory now
+    /// ([`make_quest`]), whatever [`QuestVm::accept`] says, and remembers
+    /// it: later runs of it use this one.
+    pub fn make(
+        &mut self,
+        e: &mut Engine,
+        order: &LoadOrder,
+        quest: FormId,
+    ) -> Result<(ScriptForm, QuestForm), String> {
+        let script = world::scripting::script_of(order, quest)
+            .ok_or_else(|| format!("quest {quest}: no script"))?;
+        let (script_form, quest_form) = make_quest(e, &mut self.files, order, quest, script)?;
+        self.quests.insert(
+            quest,
+            Some(Made {
+                script: script_form.clone(),
+                quest: quest_form,
+            }),
+        );
+        Ok((script_form, quest_form))
+    }
+
     /// [`world::scripting::QuestVm::run_quest`] on the engine `e`.
     #[allow(clippy::too_many_arguments)]
     pub fn run_quest(
@@ -200,7 +246,7 @@ impl QuestVm {
     ) -> bool {
         if !self.quests.contains_key(&quest) {
             let made = if (self.accept)(parsed) {
-                match guarded(|| make_quest(e, order, quest, script)) {
+                match guarded(|| make_quest(e, &mut self.files, order, quest, script)) {
                     Ok(Ok((script, quest))) => Some(Made { script, quest }),
                     Ok(Err(why)) | Err(why) => {
                         self.stopped.push((quest, why));

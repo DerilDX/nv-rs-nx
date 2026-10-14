@@ -60,6 +60,16 @@ const ITEM_SAVE: u32 = 0x0068_1840;
 /// address of the item word; nothing is added for a null item).
 const LIST_APPEND: u32 = 0x0090_5820;
 
+// Translated from 00680c30 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// `TESCondition::IsTrue` (Xbox PDB; `thiscall`, `RET 8`): [`tes_condition_is_true_ov2`]
+/// with its two arguments, the address of a byte of its own frame for the
+/// out flag (not read afterwards) and no filter.
+pub fn tes_condition_is_true(e: &mut Engine, this: Ptr, arg0: u32, reference: u32) -> bool {
+    e.with_stack(4, |e, out_flag| {
+        tes_condition_is_true_ov2(e, this, arg0, reference, out_flag, 0)
+    })
+}
+
 // Translated from 00680c60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TESCondition::IsTrue_ov2` (Xbox PDB): evaluates the condition list at
 /// `this` (`ECX`; `RET 0x10`, four stack words) and returns whether it
@@ -278,6 +288,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00680910, tes_condition_save(Ptr)),
         entry!(0x00680960, tes_condition_load(Ptr, Ptr)),
         entry!(0x00680a20, tes_condition_init_item(Ptr, u32)),
+        entry!(0x00680c30, tes_condition_is_true(Ptr, u32, u32) -> bool),
         entry!(0x00680c60, tes_condition_is_true_ov2(Ptr, u32, u32, Ptr, u8) -> bool),
         entry!(0x006811e0, fn_006811e0(Ptr) -> Ptr),
     ]
@@ -286,6 +297,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_true_is_the_unfiltered_evaluation() {
+        let mut e = setup();
+        let yes = item(&mut e, false, true, false, 0x10);
+        let no = item(&mut e, false, false, false, 0x10);
+        let holds = list(&mut e, &[yes]);
+        let fails = list(&mut e, &[yes, no]);
+        assert_eq!(e.call(0x00680c30, &[holds, 1, 0x300]).u32() & 0xff, 1);
+        assert_eq!(e.call(0x00680c30, &[fails, 1, 0x300]).u32() & 0xff, 0);
+        // Function 0x10 is below 0x44: a filter would have skipped it, so it
+        // was evaluated (no filter).
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().any(|(a, w)| *a == ITEM_EVALUATE && w[0] == no));
+    }
 
     /// An item: +0 or-joined, +1 result, +2 own flag, +4 function number.
     fn item(e: &mut Engine, or: bool, result: bool, flag: bool, function: u16) -> u32 {

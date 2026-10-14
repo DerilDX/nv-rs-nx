@@ -48,8 +48,9 @@ const HEADER_SIZE: usize = 0x14;
 const DATA: u32 = 0x30;
 const REFERENCED_OBJECTS: u32 = 0x44;
 const VARIABLES: u32 = 0x4c;
-/// `TESForm::iFormID` (Xbox PDB) +0xC.
-const FORM_ID: u32 = 0x0c;
+/// `TESForm::SetFormID(id, remove from the data handler)` (Xbox PDB,
+/// `00485c10`).
+const SET_FORM_ID: u32 = 0x0048_5c10;
 
 /// A script form made in the game's memory from its record.
 #[derive(Debug, Clone)]
@@ -125,7 +126,9 @@ impl ScriptForm {
         if form == 0 {
             return Err(format!("script {id}: CreateFormOfType gave no form"));
         }
-        e.mem.set_u32(form + FORM_ID, id.0);
+        // Its id, and into the game's form map (`TESForm::SetFormID`,
+        // `00485c10`), where `InitItem`s look scripts up.
+        e.call(SET_FORM_ID, &[form, id.0, 0]);
         e.mem
             .write(form + HEADER, &header[..header.len().min(HEADER_SIZE)]);
         let data = e.call(NEW, &[code.len() as u32]).u32();
@@ -348,7 +351,7 @@ mod tests {
             FormId(id.0 & 0x00ff_ffff)
         })
         .unwrap();
-        assert_eq!(e.mem.u32(script.form + FORM_ID), 0x0001_2345);
+        assert_eq!(e.mem.u32(script.form + 0x0c), 0x0001_2345);
         assert_eq!(e.mem.u8(script.form + 4), FORM_TYPE_SCRIPT as u8);
         let names: Vec<(u32, &str, bool)> = script
             .variables

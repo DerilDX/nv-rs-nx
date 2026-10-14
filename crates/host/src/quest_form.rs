@@ -1,31 +1,22 @@
-//! A quest in the game's memory, its script run by the game's interpreter.
+//! A quest in the game's memory, loaded and run by the game's own code.
 //!
-//! [`QuestForm::load`] makes a `TESQuest` (Xbox PDB) with the game's own
-//! constructor and leaves it as `TESQuest::Load` (`0060ceb0`) and the
-//! quest's `InitItem` (`0060cba0`) leave a quest that has a script;
-//! [`QuestForm::run`] runs its script once as the game runs a quest's script
-//! (`0060d4d0`: `Script::Run` with the quest's locals).
-//!
-//! Bridged, not translated, and why:
-//! - `TESQuest::Load` is translated, but it reads the record through
-//!   `TESFile`, whose chunk reading isn't (`00401660`, `004726f0`,
-//!   `00401680`), nor are the loaders of stages, stage items, objectives,
-//!   targets and conditions it calls. So the record's `DATA` is put where
-//!   `Load` puts it, and stages, objectives and conditions are not loaded:
-//!   the quest has none.
-//! - `InitItem` is translated, but the script component's `InitItem`
-//!   (`0048cd90`, which resolves the `SCRI` form id through the form map)
-//!   and the condition list's (`005f5760`, `00680a20`) are not. So the
-//!   script component holds the script already resolved, with its
-//!   "initialized" byte set, as `0048cd90` leaves it, and the script branch
-//!   of `InitItem` runs through its translated callees in its order. With
-//!   no stages, objectives or conditions, the rest of `InitItem` does
-//!   nothing but the two flag updates at its end, which run too.
+//! [`QuestForm::load`] makes a `TESQuest` (Xbox PDB) with the game's
+//! constructor (`CreateFormOfType(0x47)`, `0060c4b0`), goes to its record in
+//! its plugin's `TESFile` (`TESFile::SetOffset`, [`GameFile::supply`]), and
+//! runs `TESQuest::Load` (`0060ceb0`, which reads the record's chunks
+//! through `TESFile`: the quest data, its script, stages and their items
+//! with result scripts, objectives and their targets, conditions) and the
+//! quest's `InitItem` (`0060cba0`: the script resolved through the form
+//! map, its `ScriptLocals`, stages, objectives, conditions). Only the file's
+//! bytes are platform (`BSFile`, [`crate::game_file`]).
+//! [`QuestForm::run`] runs its script once as the game runs a quest's
+//! script (`0060d4d0`: `Script::Run` with the quest's locals).
 
+use crate::game_file::GameFile;
 use crate::script_form::ScriptForm;
 use engine::units::fallout_shared::run_0060bef0::TESQuest;
 use engine::{Engine, Ptr};
-use esm::{FormId, FourCC, Record};
+use esm::{FormId, LoadedPlugin, RecordEntry};
 
 /// `TESDataHandler::CreateFormOfType` (Xbox PDB, `00465110`).
 const CREATE_FORM_OF_TYPE: u32 = 0x0046_5110;
@@ -33,44 +24,31 @@ const CREATE_FORM_OF_TYPE: u32 = 0x0046_5110;
 const FORM_TYPE_QUEST: u32 = 0x47;
 /// `TESForm::iFormID` (Xbox PDB) +0xC.
 const FORM_ID: u32 = 0x0c;
-/// The quest's `TESScriptableForm` (Xbox PDB) component: the script (+4 of
-/// it) and its "initialized" byte (+8 of it).
-const SCRIPTABLE: u32 = 0x18;
-const SCRIPTABLE_SCRIPT: u32 = SCRIPTABLE + 4;
-const SCRIPTABLE_INITIALIZED: u32 = SCRIPTABLE + 8;
-/// `QUEST_DATA` (Xbox PDB) +0x3C, 8 bytes, as `TESForm::LoadData`
-/// (`004861f0`) copies `DATA`.
-const DATA: u32 = 0x3c;
-const DATA_SIZE: usize = 8;
-
-/// The callees of the script branch of `InitItem` (`0060cba0`), in its
-/// order: the script's new `ScriptLocals` (`005abf60`), the script's owner
-/// (`0087ce80`, `thiscall` on the script), `TESForm::ForceChange`
-/// (`00484b90`) with the script-locals change flag, the INI setting
-/// (`0040_8d60` on `011cb81c`) that enables the quest (`0060c9c0`), then the
-/// quest's enabled flag (`00455620`) copied to bit 4 of its data
-/// (`0060cd00`) and the form's changed flag (`00484ab0` with 1).
-const NEW_LOCALS: u32 = 0x005a_bf60;
-const SCRIPT_SET_OWNER: u32 = 0x0087_ce80;
-const FORCE_CHANGE: u32 = 0x0048_4b90;
-const CHANGE_SCRIPT_LOCALS: u32 = 0x4000_0000;
-const SETTING_BOOL: u32 = 0x0040_8d60;
-const SETTING_ENABLE_QUESTS: u32 = 0x011c_b81c;
-const SET_ENABLED: u32 = 0x0060_c9c0;
-const QUEST_ENABLED: u32 = 0x0045_5620;
-const COPY_ENABLED_TO_FLAGS: u32 = 0x0060_cd00;
-const SET_FORM_FLAG_CHANGED: u32 = 0x0048_4ab0;
+/// `TESQuest::Load` (Xbox PDB, `0060ceb0`) and the quest's `InitItem`
+/// (`0060cba0`).
+const QUEST_LOAD: u32 = 0x0060_ceb0;
+const QUEST_INIT_ITEM: u32 = 0x0060_cba0;
+/// The quest's `TESScriptableForm` (Xbox PDB) component's script (+4 of it,
+/// at +0x18).
+const SCRIPTABLE_SCRIPT: u32 = 0x18 + 4;
 /// Runs the quest's script (`0060d4d0`).
 const RUN_QUEST_SCRIPT: u32 = 0x0060_d4d0;
 /// `ScriptLocals::GetVariable(id, script)` (Xbox PDB, `005a9140`).
 const GET_VARIABLE: u32 = 0x005a_9140;
+/// The quest's stage list as `TESQuest::SetStageDone` walks it: the list
+/// (`005d43c0`), a node's item slot (`006815c0`), next node (`00726070`), empty node test
+/// (`008256d0`), a stage's index byte (`+0`).
+const STAGE_LIST: u32 = 0x005d_43c0;
+const NODE_ITEM: u32 = 0x0068_15c0;
+const NODE_NEXT: u32 = 0x0072_6070;
+const NODE_IS_EMPTY: u32 = 0x0082_56d0;
 
 /// A quest made in the game's memory.
 #[derive(Debug, Clone, Copy)]
 pub struct QuestForm {
     pub form: u32,
     pub id: FormId,
-    /// Its script form.
+    /// Its script form, as `InitItem` resolved it (0: none).
     pub script: u32,
 }
 
@@ -83,44 +61,46 @@ pub struct QuestState {
 }
 
 impl QuestForm {
-    /// Makes the quest `id` from its `record`, its script `script` already
-    /// made ([`ScriptForm::load`]); see the module for what is bridged.
+    /// Makes the quest whose record is `entry` in `plugin` (form id `id` in
+    /// the load order) from its record, as the game loads a form: the
+    /// constructor, `TESFile::SetOffset`, `TESQuest::Load`, `InitItem`. Its
+    /// script must already be in the game's form map ([`ScriptForm::load`]).
     pub fn load(
         e: &mut Engine,
+        file: &GameFile,
+        plugin: &LoadedPlugin,
+        entry: &RecordEntry,
         id: FormId,
-        record: &Record,
-        script: &ScriptForm,
     ) -> Result<QuestForm, String> {
         let form = e.call(CREATE_FORM_OF_TYPE, &[FORM_TYPE_QUEST]).u32();
         if form == 0 {
             return Err(format!("quest {id}: CreateFormOfType gave no form"));
         }
-        e.mem.set_u32(form + FORM_ID, id.0);
-        if let Some(data) = record.get(FourCC(*b"DATA")) {
-            let n = data.data.len().min(DATA_SIZE);
-            e.mem.write(form + DATA, &data.data[..n]);
+        file.supply(e, plugin, entry)?;
+        if !e.call(QUEST_LOAD, &[form, file.file]).bool() {
+            return Err(format!("quest {id}: TESQuest::Load failed"));
         }
-        e.mem.set_u32(form + SCRIPTABLE_SCRIPT, script.form);
-        e.mem.set_u8(form + SCRIPTABLE_INITIALIZED, 1);
-        let quest = Ptr::<TESQuest>::new(form);
-        let locals = e.call(NEW_LOCALS, &[script.form]).u32();
-        e.set(quest, TESQuest::pScriptLocals, Ptr::new(locals));
-        e.call(SCRIPT_SET_OWNER, &[script.form, form]);
-        if locals != 0 {
-            e.call(FORCE_CHANGE, &[form, CHANGE_SCRIPT_LOCALS]);
+        let loaded = FormId(e.mem.u32(form + FORM_ID));
+        if loaded != id {
+            return Err(format!("quest {id}: loaded as {loaded}"));
         }
-        let setting = e.call(SETTING_BOOL, &[SETTING_ENABLE_QUESTS]).u32();
-        if e.mem.u8(setting) != 0 {
-            e.call(SET_ENABLED, &[form, 1]);
+        e.call(QUEST_INIT_ITEM, &[form]);
+        let script = e.mem.u32(form + SCRIPTABLE_SCRIPT);
+        Ok(QuestForm { form, id, script })
+    }
+
+    /// The stage indices the quest has (its `INDX` stages, as loaded), in
+    /// the list's order.
+    pub fn stages(&self, e: &mut Engine) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut node = e.call(STAGE_LIST, &[self.form]).u32();
+        while node != 0 && !e.call(NODE_IS_EMPTY, &[node]).bool() {
+            let stage = e.call(NODE_ITEM, &[node]).u32();
+            let stage = e.mem.u32(stage);
+            out.push(e.mem.u8(stage));
+            node = e.call(NODE_NEXT, &[node]).u32();
         }
-        let enabled = e.call(QUEST_ENABLED, &[form]).u32() & 0xff;
-        e.call(COPY_ENABLED_TO_FLAGS, &[form, enabled]);
-        e.call(SET_FORM_FLAG_CHANGED, &[form, 1]);
-        Ok(QuestForm {
-            form,
-            id,
-            script: script.form,
-        })
+        out
     }
 
     /// The quest's `ScriptLocals`.

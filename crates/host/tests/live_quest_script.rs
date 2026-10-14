@@ -28,9 +28,7 @@
 //!     --test live_quest_script -- --ignored --nocapture
 //! ```
 
-use esm::{FormId, FourCC, Plugin};
-use host::quest_form::QuestForm;
-use host::script_form::ScriptForm;
+use esm::{ActivePlugins, FourCC, LoadOrder};
 use std::path::PathBuf;
 
 fn variable(state: &host::quest_form::QuestState, name: &str) -> f64 {
@@ -47,26 +45,16 @@ fn variable(state: &host::quest_form::QuestState, name: &str) -> f64 {
 fn vms49_timer_initializes_through_the_games_interpreter() {
     let data = PathBuf::from(std::env::var("NV_DATA").expect("NV_DATA: the game's Data folder"));
     let mut host = host::Host::start(&data).unwrap_or_else(|e| panic!("{e}"));
-    let plugin = Plugin::open(data.join("FalloutNV.esm")).expect("FalloutNV.esm");
-    let entry = plugin
-        .find_by_editor_id("VMS49Timer", Some(FourCC(*b"QUST")))
-        .expect("read FalloutNV.esm")
-        .expect("quest VMS49Timer");
-    let record = plugin.record(entry).expect("QUST");
-    let script_id = record
-        .get(FourCC(*b"SCRI"))
-        .map(|s| FormId(u32::from_le_bytes(s.data[..4].try_into().unwrap())))
-        .expect("VMS49Timer has a script");
-    let script_record = plugin
-        .record(plugin.get(script_id).expect("its SCPT"))
-        .expect("SCPT");
-    assert_eq!(
-        script_record.editor_id().as_deref(),
-        Some("VMS49TimerSCRIPT")
-    );
+    let order = LoadOrder::from_data_dir(&data, &ActivePlugins::OfficialOnly).expect("load order");
+    let id = order
+        .records_of_type(FourCC(*b"QUST"))
+        .find(|rr| rr.editor_id().ok().flatten().as_deref() == Some("VMS49Timer"))
+        .expect("quest VMS49Timer")
+        .form_id;
     let e = &mut host.engine;
-    let script = ScriptForm::load(e, script_id, &script_record, |id| id).expect("script");
-    let quest = QuestForm::load(e, record.header.form_id, &record, &script).expect("quest");
+    let (script, quest) = host.quests.make(e, &order, id).expect("VMS49Timer");
+    // TESQuest::Load read its stages; VMS49Timer has none.
+    println!("stages: {:?}", quest.stages(e));
 
     let before = quest.snapshot(e, &script);
     assert_eq!(variable(&before, "bInitialized"), 0.0);

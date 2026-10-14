@@ -217,6 +217,18 @@ impl Plugin {
         &self.bytes[entry.data_range()]
     }
 
+    /// The record as it is in the file: its header and its data as stored
+    /// (compressed if it is), starting at [`RecordEntry::offset`].
+    pub fn record_bytes(&self, entry: &RecordEntry) -> &[u8] {
+        &self.bytes[entry.offset..entry.data_range().end]
+    }
+
+    /// The file's bytes in `range`, cut at the end of the file.
+    pub fn file_bytes(&self, range: Range<usize>) -> &[u8] {
+        let end = range.end.min(self.bytes.len());
+        &self.bytes[range.start.min(end)..end]
+    }
+
     /// The record's data, decompressed if necessary.
     pub fn data(&self, entry: &RecordEntry) -> Result<Cow<'_, [u8]>> {
         decompress_record(&entry.header, self.raw_data(entry))

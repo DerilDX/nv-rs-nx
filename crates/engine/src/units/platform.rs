@@ -85,8 +85,143 @@ pub fn bs_system_utility_q_instance(e: &mut Engine) -> Ptr {
     Ptr::new(SYSTEM_UTILITY)
 }
 
+// ---- Files ----------------------------------------------------------------------
+
+/// `BSFile` (Xbox PDB, `BSSystem/bsfile_xenon.cpp`, platform): the game's
+/// file object, a Gamebryo `NiFile` with a read buffer (data +0x20, size
+/// +0x10, bytes held +0x14, cursor +0x18, `FILE*` +0x24, "ready" byte
+/// +0x2C) and two copies of its position (+0x38, +0x150; `004720a0`,
+/// `00472380` read them). Its size, 0x158 bytes, and its vtable.
+pub const BSFILE_SIZE: u32 = 0x158;
+pub const BSFILE_VTABLE: u32 = 0x010a_4764;
+const BSFILE_READY: u32 = 0x2c;
+const BSFILE_POSITION: u32 = 0x38;
+const BSFILE_POSITION_COPY: u32 = 0x150;
+
+/// A file the host supplies in memory, behind a `BSFile`: its name, its
+/// size, and the byte ranges supplied, at their offsets in the real file.
+/// Only what the host has supplied can be read; a read of anything else
+/// stops (the engine panics with the range), it never reads zeros.
+#[derive(Debug, Clone)]
+pub struct MemoryFile {
+    pub name: String,
+    pub size: u32,
+    pieces: std::collections::BTreeMap<u32, Vec<u8>>,
+}
+
+impl MemoryFile {
+    /// The `n` bytes at `at`, when supplied.
+    fn bytes(&self, at: u32, n: u32) -> Option<Vec<u8>> {
+        let mut out = Vec::with_capacity(n as usize);
+        let mut pos = at;
+        let end = at + n;
+        while pos < end {
+            let (&start, piece) = self.pieces.range(..=pos).next_back()?;
+            let offset = (pos - start) as usize;
+            if offset >= piece.len() {
+                return None;
+            }
+            let take = (piece.len() - offset).min((end - pos) as usize);
+            out.extend_from_slice(&piece[offset..offset + take]);
+            pos += take as u32;
+        }
+        Some(out)
+    }
+}
+
+/// Opens an in-memory file (`name`, `size` bytes in the real file) as a
+/// `BSFile` and answers the object. Stands in for what the `BSFile`
+/// constructor (`00b00260`) and its open (vtable +0x20, `00aff300`) leave
+/// after a buffered read: an object with the game's `BSFile` vtable, ready
+/// (+0x2C), at position 0. Its reads and seeks go through [`bsfile_read_f`]
+/// and [`bsfile_seek`]; supply its bytes with [`supply_file_bytes`].
+pub fn open_memory_file(e: &mut Engine, name: &str, size: u32) -> u32 {
+    let file = e.mem.alloc(BSFILE_SIZE);
+    e.mem.set_u32(file, BSFILE_VTABLE);
+    e.mem.set_u8(file + BSFILE_READY, 1);
+    e.mem.set_u32(file + BSFILE_POSITION, 0);
+    e.mem.set_u32(file + BSFILE_POSITION_COPY, 0);
+    e.kernel.files.insert(
+        file,
+        MemoryFile {
+            name: name.to_string(),
+            size,
+            pieces: std::collections::BTreeMap::new(),
+        },
+    );
+    file
+}
+
+/// Supplies `bytes` of the in-memory file behind `file`, at `offset`.
+pub fn supply_file_bytes(e: &mut Engine, file: u32, offset: u32, bytes: &[u8]) {
+    let f = e
+        .kernel
+        .files
+        .get_mut(&file)
+        .unwrap_or_else(|| panic!("{file:08x}: not an in-memory file"));
+    f.pieces.insert(offset, bytes.to_vec());
+}
+
+fn file_position(e: &Engine, file: u32) -> u32 {
+    e.mem.u32(file + BSFILE_POSITION_COPY)
+}
+
+fn set_file_position(e: &mut Engine, file: u32, position: u32) {
+    e.mem.set_u32(file + BSFILE_POSITION, position);
+    e.mem.set_u32(file + BSFILE_POSITION_COPY, position);
+}
+
+// Platform: replaces 00b00650 (BSFile::ReadF (Xbox PDB), FalloutNV.exe 1.4.0.525)
+/// Reads `size` bytes at the file's position into `buffer` and moves the
+/// position on (+0x150, and +0x38 with it), answering how many were read:
+/// fewer at the end of the file. The game's reads its `NiFile` buffer and
+/// refills it with `fread` (`00aa1750`); this one reads the in-memory file.
+/// A range the host hasn't supplied stops with the file's name and range.
+pub fn bsfile_read_f(e: &mut Engine, this: Ptr, buffer: Ptr, size: u32) -> u32 {
+    let file = this.addr();
+    let position = file_position(e, file);
+    let f = e
+        .kernel
+        .files
+        .get(&file)
+        .unwrap_or_else(|| panic!("BSFile {file:08x}: not an in-memory file"));
+    let n = size.min(f.size.saturating_sub(position));
+    let bytes = f.bytes(position, n).unwrap_or_else(|| {
+        panic!(
+            "BSFile {}: bytes {position:#x}..{:#x} not supplied",
+            f.name,
+            position + n
+        )
+    });
+    e.mem.write(buffer.addr(), &bytes);
+    set_file_position(e, file, position + n);
+    n
+}
+
+// Platform: replaces 00b00590 (BSFile seek, vtable +0x14, FalloutNV.exe 1.4.0.525)
+/// Moves the file's position: `whence` 0 to `offset`, 1 by `offset`, 2 to
+/// the size less `offset` (as the game's computes it), else nowhere. The
+/// game's seeks its `NiFile` (`00aa16d0`) when the position changes; this
+/// one only sets it.
+pub fn bsfile_seek(e: &mut Engine, this: Ptr, offset: i32, whence: i32) {
+    let file = this.addr();
+    let position = file_position(e, file);
+    let size = e.kernel.files.get(&file).map_or(0, |f| f.size);
+    let target = match whence {
+        0 => offset as u32,
+        1 => position.wrapping_add(offset as u32),
+        2 => size.wrapping_sub(offset as u32),
+        _ => position,
+    };
+    if target != position {
+        set_file_position(e, file, target);
+    }
+}
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b00650, bsfile_read_f(Ptr, Ptr, u32) -> u32),
+        entry!(0x00b00590, bsfile_seek(Ptr, i32, i32)),
         entry!(0x00401020, get_memory_manager() -> Ptr),
         entry!(0x00401030, operator_delete(Ptr)),
         entry!(0x00af2640, bs_system_utility_q_instance() -> Ptr),
@@ -244,6 +379,9 @@ pub struct Kernel {
     last_handle: u32,
     threads_created: u32,
     regions: std::collections::BTreeMap<u32, Region>,
+    /// The in-memory files behind `BSFile`s ([`open_memory_file`]), by the
+    /// `BSFile`'s address.
+    files: std::collections::BTreeMap<u32, MemoryFile>,
 }
 
 impl Kernel {
@@ -797,6 +935,47 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_memory_file_reads_and_seeks_what_was_supplied() {
+        let mut e = Engine::new();
+        // The vtable is in the exe's data; its seek slot (+0x14).
+        e.put_vtable(BSFILE_VTABLE, &[0, 0, 0, 0, 0, 0x00b0_0590]);
+        let f = open_memory_file(&mut e, "Test.esm", 0x100);
+        assert_eq!(e.mem.u32(f), BSFILE_VTABLE);
+        assert_eq!(e.mem.u8(f + 0x2c), 1);
+        supply_file_bytes(&mut e, f, 0x10, b"abcdefgh");
+        supply_file_bytes(&mut e, f, 0x18, b"ijkl");
+        let buffer = e.mem.alloc(0x20);
+        // Seek through the vtable's slot +0x14, as TESFile does.
+        e.vcall(f, 0x14, &[0x12, 0]);
+        assert_eq!(e.mem.u32(f + 0x150), 0x12);
+        // Across two supplied pieces.
+        assert_eq!(e.call(0x00b00650, &[f, buffer, 8]).u32(), 8);
+        assert_eq!(e.mem.bytes(buffer, 8), b"cdefghij");
+        assert_eq!(e.mem.u32(f + 0x150), 0x1a);
+        assert_eq!(e.mem.u32(f + 0x38), 0x1a);
+        // Relative seek.
+        e.vcall(f, 0x14, &[(-2i32) as u32, 1]);
+        assert_eq!(e.mem.u32(f + 0x150), 0x18);
+        // At the end of the file, fewer.
+        supply_file_bytes(&mut e, f, 0xfc, b"wxyz");
+        e.vcall(f, 0x14, &[0xfe, 0]);
+        assert_eq!(e.call(0x00b00650, &[f, buffer, 8]).u32(), 2);
+        assert_eq!(e.mem.bytes(buffer, 2), b"yz");
+    }
+
+    #[test]
+    #[should_panic(expected = "not supplied")]
+    fn bytes_not_supplied_stop() {
+        let mut e = Engine::new();
+        e.put_vtable(BSFILE_VTABLE, &[0, 0, 0, 0, 0, 0x00b0_0590]);
+        let f = open_memory_file(&mut e, "Test.esm", 0x100);
+        supply_file_bytes(&mut e, f, 0x10, b"abcd");
+        let buffer = e.mem.alloc(8);
+        e.vcall(f, 0x14, &[0x12, 0]);
+        e.call(0x00b00650, &[f, buffer, 4]);
+    }
 
     #[test]
     fn allocate_then_delete_through_the_game_calls() {

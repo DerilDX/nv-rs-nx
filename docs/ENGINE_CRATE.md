@@ -214,23 +214,46 @@ them) and carries its value to and from the float at +0x24 that the
 interpreter reads (`00526ac0`); the same ignored test checks every global
 of `FalloutNV.esm`.
 
-`host::quest_form` (step S6) makes a quest with the game's constructor
-(`CreateFormOfType(0x47)`, `TESQuest` `0060c4b0`) and runs its script
-through the game's interpreter: `0060d4d0` → `Script::Run` →
+`host::quest_form` (step S6) makes a quest the way the game loads a form:
+the constructor (`CreateFormOfType(0x47)`, `TESQuest` `0060c4b0`), then its
+record read by the game's own code through the plugin's `TESFile`
+(`host::game_file`): `TESFile::SetOffset` (`004723a0`: seek to the record,
+read its header), `TESQuest::Load` (`0060ceb0`: every chunk through
+`GetTESChunk`/`GetChunkData`/`NextChunk`, `TESFile::LoadForm` giving it
+its form id and file, the stages and their items with result scripts,
+objectives and targets, conditions), and the quest's `InitItem`
+(`0060cba0`: the script resolved through the game's form map, its
+`ScriptLocals`, stages, objectives, conditions). Its script runs through
+the game's interpreter: `0060d4d0` → `Script::Run` →
 `ScriptRunManager::Run` → `ScriptRunner::Run` → `EvaluateLine` /
-`CExpression::Eval`, on the record's compiled code (`SCDA`), with the
-quest's `ScriptLocals` in the game's memory. Bridged, and why:
+`CExpression::Eval`.
 
-- `TESQuest::Load` (`0060ceb0`) is translated but reads through `TESFile`,
-  whose chunk reading isn't (`00401660`, `004726f0`, `00401680`), nor are
-  the stage, stage item, objective, target and condition loaders it calls.
-  The record's `DATA` is put where `Load` puts it; the quest has no stages,
-  objectives or conditions.
-- The quest's `InitItem` (`0060cba0`) is translated, but the script
-  component's `InitItem` (`0048cd90`, resolving `SCRI` through the form map)
-  and the condition list's (`005f5760`, `00680a20`) aren't. The script is
-  stored resolved, as `0048cd90` leaves it, and the script branch of
-  `InitItem` runs through its translated callees in its order.
+Only the file's bytes are platform. `BSFile` (`bsfile_xenon.cpp`) is
+platform: `units::platform::open_memory_file` makes a `BSFile` (the game's
+vtable, ready, position 0) over an in-memory copy of the parts of the file
+the host supplies, at their real offsets (the record and the 0x18 bytes
+after it, from `esm`); `BSFile::ReadF` (`00b00650`) and its seek (vtable
++0x14, `00b00590`) are stand-ins that read and move in it, and a read of
+anything not supplied stops loudly. Bridged: `TESFile::OpenTES`
+(`00470c70`, which finds the file, constructs the `BSFile` and reads the
+file's `TES4` header and masters); `host::game_file::GameFile::open`
+constructs the `TESFile` with the game's constructor (no name: it opens
+nothing) and sets what `OpenTES` leaves (`m_pFile`, `m_filesize`,
+`cCompileIndex`). So plugins with masters aren't supported yet, and
+compressed records (zlib, `TESFile::DecompressCurrentForm`) are refused
+with a message. `Script::Load` is still bridged (`host::script_form`, the
+record's bytes put where it puts them); its form goes into the form map
+through `TESForm::SetFormID`.
+
+All 300 scripted quests of `FalloutNV.esm` load this way: 126 have stages
+(913 in all), each matching the record's `INDX` list. `SetStage`'s path
+(`TESQuest::SetStageDone` `0060d510` → the stage's mark-done `0060f4a0` →
+`TESQuestStage::SetDone` `0060fb60` for each item) runs: on a stage without
+items it completes and `GetStage` (`TESQuest::GetCurrentStage` `0060d700`)
+reads the new stage; on a stage with items `SetDone` stops at the first of
+its untranslated callees (`004b0fc0`, `004b10f0`, `0060da90`, `0060ca30`,
+`005ec060`, `00681050`, `00682320`) and beyond them needs game objects the
+host doesn't have (the player).
 
 Start-up makes the save/load game singleton the constructor needs
 (`BGSSaveLoadGame::Create` `00847480`, from `TES::TES`; the rest of
@@ -239,8 +262,8 @@ Start-up makes the save/load game singleton the constructor needs
 
 The acceptance test runs `VMS49Timer` (`VMS49TimerSCRIPT`): its first
 GameMode run sets `bInitialized` to 1 and `fTimer` to 1.0; with `fTimer`
-then 0.5, a second run keeps it. A survey runs every scripted quest of
-`FalloutNV.esm` once: 297 of 301 run to the end, 13 change variables on
+then 0.5, a second run keeps it. A survey loads and runs every scripted quest of
+`FalloutNV.esm` once: 296 of 300 run to the end, 13 change variables on
 their first run. The four that stop need game objects the host doesn't
 have yet: the player (`GetPlayerControlsDisabled`,
 `DisablePlayerControls`), the `BSAudio` singleton (`PlayBink`) and
@@ -251,6 +274,7 @@ unresolved object.
 ```sh
 NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test live_quest_script -- --ignored --nocapture
 NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test live_quest_survey -- --ignored --nocapture
+NV_DATA="<...>/Fallout New Vegas/Data" cargo test -p host --release --test live_quest_stages -- --ignored --nocapture
 ```
 
 In the viewer, quests run through it (`host::quest_vm`, the world's
