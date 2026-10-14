@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/logo.png" alt="nv-rs logo: an NCR Ranger in front of a Mojave sunset, inside a gear" width="260">
+  <img src="docs/media/logo.png" alt="nv-rs logo: a Mojave sunset and a road to the horizon, inside a gear" width="260">
 </p>
 
 <h1 align="center">nv-rs</h1>
