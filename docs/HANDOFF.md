@@ -7,7 +7,69 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-12 to 2026-10-13 (current; supersedes the Codex section below)
+### Claude lead, 2026-10-14 early (current; read before the section below)
+
+Stopped near the weekly usage limit (95 % rule). State:
+
+- **Merged since #163:** #161 (ScriptLocals bridge, S5), #164 and #165
+  (rolling translation batches), #166 (S6a: `Host::start` runs the 17,736
+  static initializers through a generated table, `research/initgen`), #167
+  (S6: a real FalloutNV.esm quest script runs through the game's own
+  interpreter in `Host`; 297 of 301 scripted quests finish their first pass
+  in the opt-in survey).
+- **Open:** rolling #168 (lead `claude/engine-crate`, rebased on #167, gated
+  locally). Merge with `HOLD_LATER_PUSH=1 bin/ship.sh 168` once both checks
+  pass; later lead commits are pushed after a fresh gate.
+- **Ledger:** hand-translated and table-run static initializers are counted
+  separately: about 15,500 translated (23.4 %) and 15,762 static init
+  (table) (23.8 %).
+- **Shared now:** `crate::x87::{x87_quiet, x87_quiet_bits}` in the prelude
+  (never quiet a NaN through an f32->f64->f32 cast); 13 KERNEL32 stand-ins
+  in `units/platform.rs` with a handle table on `Engine::kernel`.
+
+**Decisions for the maintainer:**
+- **Game threads.** `BSThread::Initialize` (00aa6430) always starts its
+  thread; the stand-ins stop the engine at thread start and at INFINITE
+  waits that only another thread could signal (IO thread, audio thread, AI
+  linear task threads, BSTaskManager, FAM thread, interface manager). Choose
+  cooperative stepping of thread bodies or real threads before those
+  systems go live.
+- **Build 42.** Not built. Wiring #167 into the viewer is about 200 lines
+  (an optional `QuestVm` hook in `crates/world/src/scripting.rs`, a new
+  `crates/host/src/quest_vm.rs`, viewer plumbing) but only command-free
+  quests could use it, so play would look like Build 40. Recommended first:
+  translate the quest loaders and connect script commands to the world.
+
+**Next work, in order:**
+1. Quest loading so stages work (removes the #167 bridge): TESFile reading
+   00401660, 004726f0, 00401680, 00401080, 00401500; scriptable form
+   0048cd90, 006ecd40; conditions 005f5760, 00680960, 00680a20; stages
+   0060f240, 0060f6a0, 0060fa10, 0060f4a0, 00717e50, 0060fb60
+   (`SetStage`); objectives 005ec090, 005ec210, 005ec280, 005ec370; targets
+   0060ff70, 00610120; name/icon 00487050, 0048e3d0; item script 0048d150.
+2. Script commands bridged to the world (the world's `seconds_passed` must
+   feed the game's timers); `PlayerCharacter` and `BSAudio` singletons for
+   the three survey stops; SCRO reference resolution.
+3. `TES::TES` callees: 00c44980, 004ba280, 00528cb0, 00626fd0, 0084fc70,
+   00856380, 00c3da50, 00624bf0; also 00af26c0 and a `vsprintf_s` stand-in.
+4. Then Build 42 with the `QuestVm` hook.
+5. Shared layouts agents keep asking for: Setting, NiNode (children
+   +0x9C), BSThread (PC 0x30), ActorPackageData, NiExtraData,
+   EffectSetting, ActiveEffect, ListBox, NiTPointerList node, PathBuilder,
+   AStarSearch<NavMeshSearchNode,...>, hkVector4 and an SSE helper set.
+   Six misnamed array constants in `pathbuilder.rs` (see its doc comments).
+
+**Pipeline notes learned this session:** after any Windows restart run
+`phase0/bin/start-srv.ps1` (Ghidra 8090 does not come back by itself).
+Agents follow `phase0/slot_rules.txt`: check pushed
+arguments against the callee's RET size; filter `call_log` by address;
+several cargo test filters go after `--`; poll heavy.sh logs instead of
+waiting on monitors. An agent continuing a unit whose first part is not
+collected yet resumes on its own commit (`git reset --hard <its commit>`),
+and both commits are collected by hash. Check every collection for
+duplicate `entry!` addresses.
+
+### Claude lead, 2026-10-12 to 2026-10-13 (supersedes the Codex section below)
 
 The Codex handoff below was audited against the user's takeover prompt and
 found accurate. Since then:

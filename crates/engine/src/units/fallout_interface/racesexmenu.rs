@@ -7,8 +7,10 @@
 //! and sliders, and a rendered 3D view of the player. `pMe`
 //! (`011da634`) is the open menu.
 //!
-//! Translated so far, in address order, up to `007b3af0` (the 60th function
-//! of the unit); the next session continues with `007b3b80`. The unit holds
+//! Every function of the unit is translated (83; the 84th, `00f74f70`, is
+//! a library initializer). The earlier functions call the later ones (the
+//! `MenuOptionList` methods, `SliderRelease`, ...) by address, which keeps
+//! their tests' doubles; the later ones call each other directly. The unit holds
 //! three classes: `RaceSexMenu` (+ the compiler's deleting destructors),
 //! `MenuOption` and `MenuOptionList`; the layouts below declare the fields
 //! used so far. The first part of the file has the layouts, the exe
@@ -754,6 +756,79 @@ const TRAIT_WIDTH: u32 = 0x0000_0fb1;
 const TRAIT_0X1004: u32 = 0x0000_1004;
 /// trait id.
 const TRAIT_0X1772: u32 = 0x0000_1772;
+
+// Added with the `MenuOptionList` functions (007b3b80 on). The option lists
+// are `NiTPointerList`s; their small helpers live in other units.
+/// The node after `node` (`+0`), or 0 for no node (`007b52d0`).
+const LIST_NODE_NEXT: u32 = 0x007b_52d0;
+/// The node before `node` (`+4`), or 0 for no node (`007b5300`).
+const LIST_NODE_PREVIOUS: u32 = 0x007b_5300;
+/// The address of a node's item (`node + 8`, `006317a0`).
+const LIST_NODE_DATA: u32 = 0x0063_17a0;
+/// The address of the first node's item (`0073ac90`).
+const LIST_HEAD_DATA: u32 = 0x0073_ac90;
+/// The address of the last node's item (`007b5370`).
+const LIST_TAIL_DATA: u32 = 0x007b_5370;
+/// The node holding the item a pointer points at, searched from a node or
+/// the head (`0049c680`).
+const LIST_FIND_NODE: u32 = 0x0049_c680;
+/// Puts an item in a new node (`0049fa80`) and links it through
+/// `00559a70` (`004ed8c0`).
+const LIST_INSERT_ITEM: u32 = 0x004e_d8c0;
+/// `NiTPointerListBase<..>::InsertBefore` (map name, folded): a new node
+/// for the item before a node (`007b5330`).
+const LIST_INSERT_BEFORE: u32 = 0x007b_5330;
+/// Removes the node holding the item a pointer points at (`0057c730`).
+const LIST_REMOVE_ITEM: u32 = 0x0057_c730;
+/// `NiTPointerListBase<..>::RemoveAll` (map name, folded) (`004ed900`).
+const LIST_REMOVE_ALL: u32 = 0x004e_d900;
+/// `Tile::GetString` (map name): a tile's string trait.
+const TILE_GET_STRING: u32 = 0x00a0_11f0;
+/// Constructs a `BSStringT` from a text (`0040c0e0`).
+const STRING_FROM_TEXT: u32 = 0x0040_c0e0;
+/// Compares two texts (`00469880`, which calls `_mbscmp`); 0 when equal.
+const STRING_COMPARE: u32 = 0x0046_9880;
+/// `Tile::PlayTileSound` (map name).
+const PLAY_TILE_SOUND: u32 = 0x00a0_b110;
+/// `BSFaceGenManager::InitFaceGenCoord` (map name).
+const INIT_FACE_GEN_COORD: u32 = 0x0065_21f0;
+/// Reads one float of a face coordinate array (`00652440`, cdecl: array,
+/// two indices).
+const FACE_COORD_GET: u32 = 0x0065_2440;
+/// Writes one float of a face coordinate array (`00652470`, cdecl: array,
+/// two indices, the float).
+const FACE_COORD_SET: u32 = 0x0065_2470;
+/// A `bsfacegenmanager.cpp` check of a face coordinate array against a
+/// second value (`00652900`, cdecl, answers a byte).
+const FACE_COORD_CHECK_652900: u32 = 0x0065_2900;
+/// `BSFaceGenManager::CopyFaceGenCoord` (map name).
+const COPY_FACE_GEN_COORD: u32 = 0x0065_29a0;
+/// The address of entry `index` of an array whose data pointer is at
+/// `+4` (`00877a30`).
+const ARRAY_ENTRY: u32 = 0x0087_7a30;
+/// A `TESNPC` method (`tesnpc.cpp`) taking a preset entry (`00603790`).
+const NPC_METHOD_603790: u32 = 0x0060_3790;
+/// A method of the player base form that `Randomize` calls with
+/// `(1, 0, 1)` (`00601830`).
+const NPC_METHOD_601830: u32 = 0x0060_1830;
+/// `RSM_slider_option_template`.
+const SLIDER_TEMPLATE: u32 = 0x0107_5b68;
+/// `_top_bound`.
+const TOP_BOUND_TRAIT_NAME: u32 = 0x0107_5b84;
+/// a float (2.0 in the exe): the trait value of the highlighted option.
+const HIGHLIGHT_VALUE: u32 = 0x0101_62c0;
+/// a double (5.55 in the exe): the scale of the preset slider value.
+const SHAPE_SCALE_DOUBLE: u32 = 0x0107_5ba0;
+/// a double (5.6 in the exe): the offset of the preset slider value.
+const SHAPE_OFFSET_DOUBLE: u32 = 0x0107_5b98;
+/// a double (15.0 in the exe): the lower bound of the two face values.
+const LOWER_BOUND_DOUBLE: u32 = 0x0101_5a38;
+/// a double (65.0 in the exe): the upper bound of the two face values.
+const UPPER_BOUND_DOUBLE: u32 = 0x0107_5b90;
+/// a float (15.0 in the exe): the lower bound stored.
+const LOWER_BOUND: u32 = 0x0101_e580;
+/// a float (65.0 in the exe): the upper bound stored.
+const UPPER_BOUND: u32 = 0x0102_243c;
 /// The settings whose text captions the four numbered lists in
 /// `_Create` (the first four).
 const NUMBERED_SETTINGS: [u32; 4] = [0x011d_1f38, 0x011d_20dc, 0x011d_2058, 0x011d_43d8];
@@ -835,14 +910,26 @@ layout! {
 
     /// `RaceSexMenu::MenuOptionList` (Xbox PDB), 0x24 bytes on PC.
     pub struct MenuOptionList: 0x24 {
-        /// The list that `Back` goes to (`0084e3a0`); 0x14 for none.
+        /// `m_pkHead` (Xbox PDB, `NiTPointerList` base): the first node
+        /// (`NiTListItem`: `+0` next, `+4` previous, `+8` the option).
+        0x00 m_pkHead: u32,
+        /// `m_pkTail` (Xbox PDB): the last node.
+        0x04 m_pkTail: u32,
+        /// The list that `Back` goes to (`0084e3a0`); 0x14 for none
+        /// (`eBackLink`, Xbox PDB).
         0x0C iBackTarget: u32,
-        /// The list after this one (`0044edb0`); 0x14 for none.
+        /// The list after this one (`0044edb0`); 0x14 for none
+        /// (`eForwardLink`, Xbox PDB).
         0x10 iParentTarget: u32,
-        /// The rendered template tile.
+        /// The rendered template tile (`pHeader`, Xbox PDB).
         0x14 pTemplateTile: u32,
-        /// The callback `0050f9a0` stores.
+        /// `fScrollDelta` (Xbox PDB): the largest option height, the step
+        /// `ScrollBy` moves the options by.
+        0x18 fScrollDelta: f32,
+        /// The callback `0050f9a0` stores (`pfSelectionTest`, Xbox PDB).
         0x1C pCallback: u32,
+        /// `pHighlighted` (Xbox PDB): the highlighted option.
+        0x20 pHighlighted: u32,
     }
 }
 
@@ -4434,6 +4521,955 @@ pub fn fn_007b3af0(e: &mut Engine, this: Ptr<MenuOptionList>) {
     e.call(OPTION_LIST_BASE_DESTRUCT, &args![this]);
 }
 
+/// The loop `AddMenuOption` and `RemoveMenuOption` end with: from the node
+/// in `cursor` (a word on the game's stack) on, places each option's tile
+/// (float trait `0xfa2`) below the option before it (that option's `0xfa2`
+/// plus its height `0xfb0`) or, for the first option, at the parent tile's
+/// user trait `_top_bound`, and updates the tile.
+fn place_options_from(e: &mut Engine, list: u32, cursor: u32) {
+    while e.mem.u32(cursor) != 0 {
+        let node = e.mem.u32(cursor);
+        let previous_node = e.call(LIST_NODE_PREVIOUS, &args![list, node]).u32();
+        let previous = if previous_node == 0 {
+            0
+        } else {
+            let slot = e.call(LIST_NODE_DATA, &args![list, previous_node]).u32();
+            e.mem.u32(slot)
+        };
+        let slot = e.call(LIST_ADVANCE, &args![list, cursor]).u32();
+        let option = e.mem.u32(slot);
+        // Kept as a double, then stored as a float.
+        let top = if previous != 0 {
+            let tile = e.mem.u32(previous);
+            let y = e.call(GET_FLOAT_TRAIT, &args![tile, 0xfa2u32]).f32();
+            let tile = e.mem.u32(previous);
+            let height = e.call(GET_FLOAT_TRAIT, &args![tile, 0xfb0u32]).f32();
+            height as f64 + y as f64
+        } else {
+            let trait_id = e
+                .call(ADD_USER_TRAIT, &args![TOP_BOUND_TRAIT_NAME, u32::MAX])
+                .u32();
+            let tile = e.mem.u32(option);
+            let parent = e.call(WORD_AT_0X28, &args![tile]).u32();
+            e.call(GET_FLOAT_TRAIT, &args![parent, trait_id]).f32() as f64
+        };
+        let tile = e.mem.u32(option);
+        e.call(SET_FLOAT_TRAIT, &args![tile, 0xfa2u32, top as f32, 1u32]);
+        let tile = e.mem.u32(option);
+        e.call(UPDATE_TILE, &args![tile, 0u32]);
+    }
+}
+
+// Translated from 007b3b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds an option with the template `RSM_list_item_template`, the caption
+/// and the id at the end of the list (`AddMenuOption` with no node to
+/// insert before) and returns it.
+pub fn fn_007b3b80(
+    e: &mut Engine,
+    this: Ptr<MenuOptionList>,
+    caption: u32,
+    id: u32,
+) -> Ptr<MenuOption> {
+    menu_option_list_add_menu_option(e, this, caption, LIST_ITEM_TEMPLATE, id, 0)
+}
+
+// Translated from 007b3bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds an option that opens `sub_list`: sets the sub list's back target
+/// (`+0xC`) to this list's number (its template tile's trait `0x1004`,
+/// truncated) and adds an `RSM_list_item_template` option captioned
+/// `"<caption> >"` (`%s %c`) whose id is the sub list's number. Returns
+/// the option.
+///
+/// The compiler's exception-unwinding frame is not translated.
+// Translation incomplete: 007b3bb0 - the C++ exception-unwinding frame (FS:[0]) that destroys the temporary string is not translated
+pub fn fn_007b3bb0(
+    e: &mut Engine,
+    this: Ptr<MenuOptionList>,
+    caption: u32,
+    sub_list: Ptr<MenuOptionList>,
+) -> Ptr<MenuOption> {
+    e.with_stack(8, |e, text| {
+        let text = text.addr();
+        e.call(STRING_CONSTRUCT, &args![text]);
+        e.call(
+            STRING_FORMAT,
+            &args![text, CAPTION_FORMAT, caption, 0x3eu32],
+        );
+        let tile = e.get(this, MenuOptionList::pTemplateTile);
+        let number = e.call(GET_FLOAT_TRAIT, &args![tile, 0x1004u32]).f32();
+        e.set(
+            sub_list,
+            MenuOptionList::iBackTarget,
+            fistp_truncate(number as f64) as u32,
+        );
+        let tile = e.get(sub_list, MenuOptionList::pTemplateTile);
+        let number = e.call(GET_FLOAT_TRAIT, &args![tile, 0x1004u32]).f32();
+        let id = fistp_truncate(number as f64) as u32;
+        let name = e.call(STRING_C_STR, &args![text]).u32();
+        let option = menu_option_list_add_menu_option(e, this, name, LIST_ITEM_TEMPLATE, id, 0);
+        e.call(STRING_DESTROY, &args![text]);
+        option
+    })
+}
+
+// Translated from 007b3ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RaceSexMenu::MenuOptionList::AddSliderOption` (Xbox PDB): limits
+/// `fraction` to 0..1 (below the double 0.0 becomes 0, above the double
+/// 1.0 becomes 1; NaN stays), adds an `RSM_slider_option_template` option
+/// at the end, sets its range and value, and sets its tile's float trait
+/// `0x1008` to `(max - min + 1) * fraction` rounded to a step of 1
+/// (`004bd510`). Returns the option.
+#[allow(clippy::too_many_arguments)] // The exe ABI has six stack arguments.
+pub fn menu_option_list_add_slider_option(
+    e: &mut Engine,
+    this: Ptr<MenuOptionList>,
+    caption: u32,
+    id: u32,
+    min: i32,
+    max: i32,
+    value: i32,
+    fraction: f32,
+) -> Ptr<MenuOption> {
+    let mut fraction = fraction;
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if (fraction as f64) < zero {
+        fraction = 0.0;
+    }
+    let one: f64 = e.global(ONE_DOUBLE);
+    if (fraction as f64) > one {
+        fraction = 1.0;
+    }
+    let option = menu_option_list_add_menu_option(e, this, caption, SLIDER_TEMPLATE, id, 0);
+    menu_option_set_range(e, option, min, max);
+    menu_option_set_value(e, option, value);
+    let count = max.wrapping_sub(min).wrapping_add(1);
+    let scaled = (count as f64 * fraction as f64) as f32;
+    let rounded = e.call(ROUND_TO_STEP, &args![scaled, 1.0f32]).f32();
+    let tile = e.mem.u32(option.addr());
+    e.call(SET_FLOAT_TRAIT, &args![tile, 0x1008u32, rounded, 1u32]);
+    option
+}
+
+// Translated from 007b3d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RaceSexMenu::MenuOptionList::InsertMenuOption` (Xbox PDB): with a
+/// caption, an open menu with a first tile and a template tile, adds the
+/// option before the node `index` steps after the head (at the end when
+/// the list is shorter); otherwise answers null.
+pub fn menu_option_list_insert_menu_option(
+    e: &mut Engine,
+    this: Ptr<MenuOptionList>,
+    index: i32,
+    caption: u32,
+    template: u32,
+    id: u32,
+) -> Ptr<MenuOption> {
+    let me: u32 = e.global(RACE_SEX_MENU_ME);
+    if caption == 0
+        || me == 0
+        || e.mem.u32(me + 0x78) == 0
+        || e.get(this, MenuOptionList::pTemplateTile) == 0
+    {
+        return Ptr::new(0);
+    }
+    let mut node = e.call(STRING_C_STR, &args![this]).u32();
+    let mut index = index;
+    while node != 0 && index != 0 {
+        node = e.call(LIST_NODE_NEXT, &args![this, node]).u32();
+        index = index.wrapping_sub(1);
+    }
+    menu_option_list_add_menu_option(e, this, caption, template, id, node)
+}
+
+// Translated from 007b3dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RaceSexMenu::MenuOptionList::RemoveMenuOption` (Xbox PDB): finds the
+/// first option with the id; if it is the highlighted one, highlights the
+/// option after it (or the last one) and focuses its tile; deletes the
+/// option's tile (virtual slot 0 with flag 1) and the option (`007b3fa0`)
+/// and removes it from the list. Then places the options after it again
+/// (`place_options_from`); nothing moves when no option has the id.
+pub fn menu_option_list_remove_menu_option(e: &mut Engine, this: Ptr<MenuOptionList>, id: u32) {
+    e.with_stack(8, |e, locals| {
+        let cursor = locals.addr();
+        let removed = cursor + 4;
+        let head = e.call(STRING_C_STR, &args![this]).u32();
+        e.mem.set_u32(cursor, head);
+        let mut found = false;
+        while e.mem.u32(cursor) != 0 {
+            let slot = e.call(LIST_ADVANCE, &args![this, cursor]).u32();
+            let option = e.mem.u32(slot);
+            e.mem.set_u32(removed, option);
+            if word_at_four(e, option) == id {
+                found = true;
+                break;
+            }
+        }
+        if found {
+            let option = e.mem.u32(removed);
+            if e.get(this, MenuOptionList::pHighlighted) == option {
+                let next = e.mem.u32(cursor);
+                let slot = if next != 0 {
+                    e.call(LIST_NODE_DATA, &args![this, next]).u32()
+                } else {
+                    e.call(LIST_TAIL_DATA, &args![this]).u32()
+                };
+                let replacement = e.mem.u32(slot);
+                e.set(this, MenuOptionList::pHighlighted, replacement);
+                let highlighted = e.get(this, MenuOptionList::pHighlighted);
+                let tile = e.mem.u32(highlighted);
+                e.call(SET_FOCUS_TARGET_CDECL, &args![tile]);
+            }
+            let tile = e.mem.u32(option);
+            if tile != 0 {
+                e.vcall(tile, 0, &args![1u32]);
+            }
+            if option != 0 {
+                fn_007b3fa0(e, option, 1);
+            }
+            e.call(LIST_REMOVE_ITEM, &args![this, removed]);
+        }
+        place_options_from(e, this.addr(), cursor);
+    });
+}
+
+// Translated from 007b3fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A scalar deleting destructor whose destructor is the empty member
+/// `00483710` (identical-code folding: many classes call this body; here
+/// it deletes a `MenuOption`): frees the object when bit 0 of `flags` is
+/// set and returns it.
+pub fn fn_007b3fa0(e: &mut Engine, this: u32, flags: u32) -> u32 {
+    e.call(EMPTY_MEMBER, &args![this]);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 007b3fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RaceSexMenu::MenuOptionList::Focus` (Xbox PDB): with `focus`, gives the
+/// interface focus (`00715860` with `0xfc3`, 1) to the highlighted option's
+/// tile when there is one and answers whether it did; without, takes the
+/// focus away (tile 0), clears the highlighted option and answers 1.
+pub fn menu_option_list_focus(e: &mut Engine, this: Ptr<MenuOptionList>, focus: bool) -> u8 {
+    if focus {
+        let highlighted = e.get(this, MenuOptionList::pHighlighted);
+        if highlighted == 0 || e.mem.u32(highlighted) == 0 {
+            return 0;
+        }
+        let tile = e.mem.u32(highlighted);
+        let interface = e.call(INTERFACE_SINGLETON, &args![]).u32();
+        e.call(
+            SET_CURRENT_FOCUS_TARGET,
+            &args![interface, tile, 0xfc3u32, 1u32],
+        );
+    } else {
+        let interface = e.call(INTERFACE_SINGLETON, &args![]).u32();
+        e.call(
+            SET_CURRENT_FOCUS_TARGET,
+            &args![interface, 0u32, 0xfc3u32, 1u32],
+        );
+        e.set(this, MenuOptionList::pHighlighted, 0);
+    }
+    1
+}
+
+// Translated from 007b4050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Links two lists: this list's forward target (`+0x10`) becomes `next`'s
+/// number and `next`'s back target (`+0xC`) this list's number (the
+/// template tiles' trait `0x1004`, truncated).
+pub fn fn_007b4050(e: &mut Engine, this: Ptr<MenuOptionList>, next: Ptr<MenuOptionList>) {
+    let tile = e.get(next, MenuOptionList::pTemplateTile);
+    let number = e.call(GET_FLOAT_TRAIT, &args![tile, 0x1004u32]).f32();
+    e.set(
+        this,
+        MenuOptionList::iParentTarget,
+        fistp_truncate(number as f64) as u32,
+    );
+    let tile = e.get(this, MenuOptionList::pTemplateTile);
+    let number = e.call(GET_FLOAT_TRAIT, &args![tile, 0x1004u32]).f32();
+    e.set(
+        next,
+        MenuOptionList::iBackTarget,
+        fistp_truncate(number as f64) as u32,
+    );
+}
+
+// Translated from 007b40d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RaceSexMenu::MenuOptionList::UpdateCurrentSelection` (Xbox PDB): with a
+/// selection test (`+0x1C`, cdecl, one option), marks every option
+/// selected (`007b4140`) or not (`007b4180`) by its answer.
+pub fn menu_option_list_update_current_selection(e: &mut Engine, this: Ptr<MenuOptionList>) {
+    if e.get(this, MenuOptionList::pCallback) == 0 {
+        return;
+    }
+    e.with_stack(4, |e, cursor| {
+        let head = e.call(STRING_C_STR, &args![this]).u32();
+        e.mem.set_u32(cursor.addr(), head);
+        while e.mem.u32(cursor.addr()) != 0 {
+            let slot = e.call(LIST_ADVANCE, &args![this, cursor]).u32();
+            let option = e.mem.u32(slot);
+            let test = e.get(this, MenuOptionList::pCallback);
+            if e.call(test, &args![option]).u8() != 0 {
+                fn_007b4140(e, Ptr::new(option));
+            } else {
+                fn_007b4180(e, Ptr::new(option));
+            }
+        }
+    });
+}
+
+/// Sets the option tile's user trait `_selected` to `value` (with the
+/// flag 1).
+fn set_selected_trait(e: &mut Engine, this: Ptr<MenuOption>, value: f32) {
+    let trait_id = e
+        .call(ADD_USER_TRAIT, &args![SELECTED_TRAIT_NAME, u32::MAX])
+        .u32();
+    let tile = e.mem.u32(this.addr());
+    e.call(SET_FLOAT_TRAIT, &args![tile, trait_id, value, 1u32]);
+}
+
+// Translated from 007b4140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Marks the option selected: with a tile, its user trait `_selected`
+/// becomes the float at `010162c0` (copied through the x87 stack).
+pub fn fn_007b4140(e: &mut Engine, this: Ptr<MenuOption>) {
+    if e.mem.u32(this.addr()) == 0 {
+        return;
+    }
+    let value = x87_copy_f32(e, HIGHLIGHT_VALUE);
+    set_selected_trait(e, this, value);
+}
+
+// Translated from 007b4180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Marks the option not selected: with a tile, its user trait `_selected`
+/// becomes 1.0.
+pub fn fn_007b4180(e: &mut Engine, this: Ptr<MenuOption>) {
+    if e.mem.u32(this.addr()) == 0 {
+        return;
+    }
+    set_selected_trait(e, this, 1.0);
+}
+
+// Translated from 007b41c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The first option of the list whose tile is `tile`, or 0.
+pub fn fn_007b41c0(e: &mut Engine, this: Ptr<MenuOptionList>, tile: u32) -> u32 {
+    e.with_stack(4, |e, cursor| {
+        let head = e.call(STRING_C_STR, &args![this]).u32();
+        e.mem.set_u32(cursor.addr(), head);
+        while e.mem.u32(cursor.addr()) != 0 {
+            let slot = e.call(LIST_ADVANCE, &args![this, cursor]).u32();
+            let option = e.mem.u32(slot);
+            if e.mem.u32(option) == tile {
+                return option;
+            }
+        }
+        0
+    })
+}
+
+// Translated from 007b4210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The first option of the list whose id (`+4`) is `id`, or 0.
+pub fn fn_007b4210(e: &mut Engine, this: Ptr<MenuOptionList>, id: u32) -> u32 {
+    e.with_stack(4, |e, cursor| {
+        let head = e.call(STRING_C_STR, &args![this]).u32();
+        e.mem.set_u32(cursor.addr(), head);
+        while e.mem.u32(cursor.addr()) != 0 {
+            let slot = e.call(LIST_ADVANCE, &args![this, cursor]).u32();
+            let option = e.mem.u32(slot);
+            if e.mem.u32(option + 4) == id {
+                return option;
+            }
+        }
+        0
+    })
+}
+
+// Translated from 007b4260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RaceSexMenu::MenuOptionList::DoGamepad` (Xbox PDB): button 1 (up) and
+/// 2 (down) highlight the option before / after the highlighted one (the
+/// last / first one when none is highlighted; answers false at an end),
+/// 0xF the first and 0x10 the last option; other buttons answer false.
+/// Then, while the highlighted tile is not visible (at most 100 times),
+/// asks the open menu to scroll (virtual slot `0xC` with 2 for buttons 1
+/// and 0xF, otherwise 3, and 0), and focuses the tile (`00706ff0`).
+pub fn menu_option_list_do_gamepad(e: &mut Engine, this: Ptr<MenuOptionList>, button: i32) -> bool {
+    let up = button == 1 || button == 0xf;
+    let mut handled = true;
+    match button {
+        1 | 2 => {
+            let highlighted = this.addr() + 0x20;
+            let node = e
+                .call(LIST_FIND_NODE, &args![this, highlighted, 0u32])
+                .u32();
+            let target = if node != 0 {
+                if up {
+                    e.call(LIST_NODE_PREVIOUS, &args![this, node]).u32()
+                } else {
+                    e.call(LIST_NODE_NEXT, &args![this, node]).u32()
+                }
+            } else if up {
+                word_at_four(e, this.addr())
+            } else {
+                e.call(STRING_C_STR, &args![this]).u32()
+            };
+            if target != 0 {
+                let slot = e.call(LIST_NODE_DATA, &args![this, target]).u32();
+                let option = e.mem.u32(slot);
+                e.set(this, MenuOptionList::pHighlighted, option);
+            } else {
+                handled = false;
+            }
+        }
+        0xf => {
+            let slot = e.call(LIST_HEAD_DATA, &args![this]).u32();
+            let option = e.mem.u32(slot);
+            e.set(this, MenuOptionList::pHighlighted, option);
+        }
+        0x10 => {
+            let slot = e.call(LIST_TAIL_DATA, &args![this]).u32();
+            let option = e.mem.u32(slot);
+            e.set(this, MenuOptionList::pHighlighted, option);
+        }
+        _ => return false,
+    }
+    let highlighted = e.get(this, MenuOptionList::pHighlighted);
+    if highlighted != 0 && e.mem.u32(highlighted) != 0 {
+        let mut tries = 100u32;
+        loop {
+            let left = tries;
+            tries = tries.wrapping_sub(1);
+            if left == 0 {
+                break;
+            }
+            let highlighted = e.get(this, MenuOptionList::pHighlighted);
+            let tile = e.mem.u32(highlighted);
+            if e.call(TILE_IS_VISIBLE, &args![tile]).u8() != 0 {
+                break;
+            }
+            let me: u32 = e.global(RACE_SEX_MENU_ME);
+            let direction = if up { 2u32 } else { 3u32 };
+            e.vcall(me, 0xc, &args![direction, 0u32]);
+        }
+        let highlighted = e.get(this, MenuOptionList::pHighlighted);
+        let tile = e.mem.u32(highlighted);
+        e.call(SET_FOCUS_TARGET_CDECL, &args![tile]);
+    }
+    handled
+}
+
+// Translated from 007b4410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With a gamepad in use (`004b71d0`): highlights the first option when
+/// none is and the list is not empty (`0076b610`); then, with a highlighted
+/// option, sets its tile's trait `0xfe8` to -1, focuses the tile
+/// (`00706ff0`), puts the trait's previous string back, and scrolls the
+/// list by minus the option's `_position` (`007b39b0`) until that is 0.
+///
+/// The compiler's exception-unwinding frame is not translated.
+// Translation incomplete: 007b4410 - the C++ exception-unwinding frame (FS:[0]) that destroys the temporary string is not translated
+pub fn fn_007b4410(e: &mut Engine, this: Ptr<MenuOptionList>) {
+    if e.call(GAMEPAD_IN_USE, &args![]).u8() == 0 {
+        return;
+    }
+    if e.get(this, MenuOptionList::pHighlighted) == 0
+        && e.call(SIMPLE_ARRAY_IS_EMPTY, &args![this]).u8() == 0
+    {
+        let slot = e.call(LIST_HEAD_DATA, &args![this]).u32();
+        let option = e.mem.u32(slot);
+        e.set(this, MenuOptionList::pHighlighted, option);
+    }
+    if e.get(this, MenuOptionList::pHighlighted) == 0 {
+        return;
+    }
+    e.with_stack(8, |e, text| {
+        let text = text.addr();
+        let highlighted = e.get(this, MenuOptionList::pHighlighted);
+        let tile = e.mem.u32(highlighted);
+        let previous = e.call(TILE_GET_STRING, &args![tile, 0xfe8u32]).u32();
+        e.call(STRING_FROM_TEXT, &args![text, previous]);
+        let highlighted = e.get(this, MenuOptionList::pHighlighted);
+        let tile = e.mem.u32(highlighted);
+        e.call(SET_TRAIT_FROM_INT, &args![tile, 0xfe8u32, u32::MAX]);
+        let highlighted = e.get(this, MenuOptionList::pHighlighted);
+        let tile = e.mem.u32(highlighted);
+        e.call(SET_FOCUS_TARGET_CDECL, &args![tile]);
+        let name = e.call(STRING_C_STR, &args![text]).u32();
+        let highlighted = e.get(this, MenuOptionList::pHighlighted);
+        let tile = e.mem.u32(highlighted);
+        e.call(SET_STRING_TRAIT, &args![tile, 0xfe8u32, name, 1u32]);
+        loop {
+            let highlighted = e.get(this, MenuOptionList::pHighlighted);
+            let position = fn_007b39b0(e, Ptr::new(highlighted));
+            if position == 0 {
+                break;
+            }
+            menu_option_list_scroll_by(e, this, position.wrapping_neg());
+        }
+        e.call(STRING_DESTROY, &args![text]);
+    });
+}
+
+// Translated from 007b4530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RaceSexMenu::MenuOptionList::ScrollBy` (Xbox PDB): when the scroll step
+/// (`+0x18`) is above the double 0.0 (or NaN), moves every option's tile
+/// (float trait `0xfa2`) by `delta` steps.
+pub fn menu_option_list_scroll_by(e: &mut Engine, this: Ptr<MenuOptionList>, delta: i32) {
+    let step = e.get(this, MenuOptionList::fScrollDelta) as f64;
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if step <= zero {
+        return;
+    }
+    e.with_stack(4, |e, cursor| {
+        let head = e.call(STRING_C_STR, &args![this]).u32();
+        e.mem.set_u32(cursor.addr(), head);
+        while e.mem.u32(cursor.addr()) != 0 {
+            let slot = e.call(LIST_ADVANCE, &args![this, cursor]).u32();
+            let option = e.mem.u32(slot);
+            let tile = e.mem.u32(option);
+            let y = e.call(GET_FLOAT_TRAIT, &args![tile, 0xfa2u32]).f32();
+            let step = e.get(this, MenuOptionList::fScrollDelta);
+            let moved = (delta as f64 * step as f64 + y as f64) as f32;
+            e.call(SET_FLOAT_TRAIT, &args![tile, 0xfa2u32, moved, 1u32]);
+        }
+    });
+}
+
+// Translated from 007b45b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties the list: deletes every option's tile (virtual slot 0 with flag
+/// 1) and the option (`007b3fa0`), removes all nodes (`004ed900`) and
+/// clears the highlighted option.
+pub fn fn_007b45b0(e: &mut Engine, this: Ptr<MenuOptionList>) {
+    e.with_stack(4, |e, cursor| {
+        let head = e.call(STRING_C_STR, &args![this]).u32();
+        e.mem.set_u32(cursor.addr(), head);
+        while e.mem.u32(cursor.addr()) != 0 {
+            let slot = e.call(LIST_ADVANCE, &args![this, cursor]).u32();
+            let option = e.mem.u32(slot);
+            let tile = e.mem.u32(option);
+            if tile != 0 {
+                e.vcall(tile, 0, &args![1u32]);
+            }
+            if option != 0 {
+                fn_007b3fa0(e, option, 1);
+            }
+        }
+    });
+    e.call(LIST_REMOVE_ALL, &args![this]);
+    e.set(this, MenuOptionList::pHighlighted, 0);
+}
+
+// Translated from 007b4650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RaceSexMenu::MenuOptionList::AddMenuOption` (Xbox PDB): with a caption,
+/// an open menu with a first tile and a template tile: makes an option
+/// (`007b4900`) with the id, renders `template` from the menu's first tile
+/// as its tile, gives the tile the caption (string trait `0xfc4`), the
+/// list's number (trait `0x1004`) and trait `0xfaf` = 1, inserts it before
+/// the node `before` (or through `004ed8c0`), places it and the options
+/// after it (`place_options_from`), raises the scroll step to the tile's
+/// height (`00404010`), gives the options with an id below 4 of the lists
+/// numbered below 4 the sound `UIPipBoyMode` (string trait `0xfcb`) and,
+/// when nothing is highlighted, highlights it (float trait `0xfd6` = the
+/// float at `010162c0`). Returns the option, or null.
+///
+/// The compiler's exception-unwinding frame is not translated.
+// Translation incomplete: 007b4650 - the C++ exception-unwinding frame (FS:[0]) that frees the option when its constructor throws is not translated
+pub fn menu_option_list_add_menu_option(
+    e: &mut Engine,
+    this: Ptr<MenuOptionList>,
+    caption: u32,
+    template: u32,
+    id: u32,
+    before: u32,
+) -> Ptr<MenuOption> {
+    let me: u32 = e.global(RACE_SEX_MENU_ME);
+    if caption == 0
+        || me == 0
+        || e.mem.u32(me + 0x78) == 0
+        || e.get(this, MenuOptionList::pTemplateTile) == 0
+    {
+        return Ptr::new(0);
+    }
+    let memory = e.call(ALLOCATE, &args![0xcu32]).u32();
+    let option = if memory != 0 {
+        fn_007b4900(e, memory)
+    } else {
+        0
+    };
+    let tile = e.get(this, MenuOptionList::pTemplateTile);
+    let number = e.call(GET_FLOAT_TRAIT, &args![tile, 0x1004u32]).f32();
+    let number = e.call(FTOL, &args![number as f64]).i32();
+    e.mem.set_u32(option + 4, id);
+    let me: u32 = e.global(RACE_SEX_MENU_ME);
+    let first_tile = e.mem.u32(me + 0x78);
+    let rendered = e
+        .call(RENDER_TEMPLATE, &args![me, first_tile, template, 0u32])
+        .u32();
+    e.mem.set_u32(option, rendered);
+    let tile = e.mem.u32(option);
+    e.call(SET_STRING_TRAIT, &args![tile, TRAIT_STRING, caption, 1u32]);
+    let tile = e.mem.u32(option);
+    e.call(SET_TRAIT_FROM_INT, &args![tile, 0x1004u32, number]);
+    let tile = e.mem.u32(option);
+    e.call(SET_TRAIT_FROM_INT, &args![tile, 0xfafu32, 1u32]);
+    let option = e.with_stack(8, |e, locals| {
+        let item = locals.addr();
+        let cursor = item + 4;
+        e.mem.set_u32(item, option);
+        if before != 0 {
+            e.call(LIST_INSERT_BEFORE, &args![this, before, item]);
+        } else {
+            e.call(LIST_INSERT_ITEM, &args![this, item]);
+        }
+        let node = e.call(LIST_FIND_NODE, &args![this, item, 0u32]).u32();
+        e.mem.set_u32(cursor, node);
+        place_options_from(e, this.addr(), cursor);
+        e.mem.u32(item)
+    });
+    let tile = e.mem.u32(option);
+    let height = e.call(GET_FLOAT_TRAIT, &args![tile, 0xfb0u32]).f32();
+    let step = quiet_f32(e.get(this, MenuOptionList::fScrollDelta));
+    let larger = e.call(FLOAT_MAX, &args![step, height]).f32();
+    e.set(this, MenuOptionList::fScrollDelta, larger);
+    if number < 4 && e.mem.u32(option + 4) < 4 {
+        let tile = e.mem.u32(option);
+        e.call(
+            SET_STRING_TRAIT,
+            &args![tile, 0xfcbu32, SOUND_PIPBOY_MODE, 1u32],
+        );
+    }
+    if e.get(this, MenuOptionList::pHighlighted) == 0 {
+        e.set(this, MenuOptionList::pHighlighted, option);
+        let value = x87_copy_f32(e, HIGHLIGHT_VALUE);
+        let tile = e.mem.u32(option);
+        e.call(SET_FLOAT_TRAIT, &args![tile, 0xfd6u32, value, 1u32]);
+    }
+    Ptr::new(option)
+}
+
+// Translated from 007b4900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `MenuOption` constructor: clears the tile (`+0`) and the data word
+/// (`+8`) and returns the object; the id (`+4`) is left as it is. (Ghidra
+/// matches the body to a library constructor.)
+pub fn fn_007b4900(e: &mut Engine, this: u32) -> u32 {
+    e.mem.set_u32(this, 0);
+    e.mem.set_u32(this + 8, 0);
+    this
+}
+
+/// `SetValue(value)` on the pressed option (`+0xC4`); answers whether the
+/// value changed.
+fn set_pressed_option_value(e: &mut Engine, base: u32, value: i32) -> bool {
+    let option = e.mem.u32(base + 0xc4);
+    menu_option_set_value(e, Ptr::new(option), value)
+}
+
+// Translated from 007b4930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With a pressed tile (`+0xC0`) and option (`+0xC4`): reads the tile's
+/// id (float trait `0xfaa`, `_ftol`). For the colour option (`0x1d`) the
+/// arrows 100 and 0x68 count as a change when the parent tile's string
+/// `0x1009` equals the text of the setting `011d3528`; otherwise 100 /
+/// 0x68 step the value down / up by the option's step count (`007b3900`),
+/// 0x66 / 0x67 by the parent tile's trait `0x1008`, and 0x69 counts as a
+/// change when flag 2 is set. A change runs `SliderRelease` and plays the
+/// tile's sound `0xfcb`. Then clears flag 2 and both fields.
+pub fn fn_007b4930(e: &mut Engine, this: Ptr<RaceSexMenu>) {
+    let base = this.addr();
+    if e.mem.u32(base + 0xc0) == 0 || e.mem.u32(base + 0xc4) == 0 {
+        return;
+    }
+    let tile = e.mem.u32(base + 0xc0);
+    let raw = e.call(GET_FLOAT_TRAIT, &args![tile, 0xfaau32]).f32();
+    let button = e.call(FTOL, &args![raw as f64]).i32();
+    let mut changed = false;
+    let mut decided = false;
+    let option = e.mem.u32(base + 0xc4);
+    if word_at_four(e, option) == 0x1d && (button == 100 || button == 0x68) {
+        let text = e.call(SETTING_VALUE, &args![SETTING_3528]).u32();
+        let tile = e.mem.u32(base + 0xc0);
+        let parent = e.call(WORD_AT_0X28, &args![tile]).u32();
+        let shown = e.call(TILE_GET_STRING, &args![parent, 0x1009u32]).u32();
+        if e.call(STRING_COMPARE, &args![shown, text]).u32() == 0 {
+            changed = true;
+            decided = true;
+        }
+    }
+    if !decided {
+        match button {
+            100 | 0x68 => {
+                let option = e.mem.u32(base + 0xc4);
+                let value = menu_option_get_value(e, Ptr::new(option));
+                let option = e.mem.u32(base + 0xc4);
+                let step = fn_007b3900(e, Ptr::new(option));
+                let value = if button == 100 {
+                    value.wrapping_sub(step)
+                } else {
+                    value.wrapping_add(step)
+                };
+                changed = set_pressed_option_value(e, base, value);
+            }
+            0x66 | 0x67 => {
+                let option = e.mem.u32(base + 0xc4);
+                let value = menu_option_get_value(e, Ptr::new(option));
+                let tile = e.mem.u32(base + 0xc0);
+                let parent = e.call(WORD_AT_0X28, &args![tile]).u32();
+                let raw = e.call(GET_FLOAT_TRAIT, &args![parent, 0x1008u32]).f32();
+                let step = e.call(FTOL, &args![raw as f64]).i32();
+                let value = if button == 0x66 {
+                    value.wrapping_sub(step)
+                } else {
+                    value.wrapping_add(step)
+                };
+                changed = set_pressed_option_value(e, base, value);
+            }
+            0x69 => changed = race_sex_menu_get_flag(e, this, 2),
+            _ => {}
+        }
+    }
+    if changed {
+        race_sex_menu_slider_release(e, this);
+        let tile = e.mem.u32(base + 0xc0);
+        e.call(PLAY_TILE_SOUND, &args![tile, 0xfcbu32]);
+    }
+    race_sex_menu_set_flag(e, this, 2, false);
+    e.mem.set_u32(base + 0xc0, 0);
+    e.mem.set_u32(base + 0xc4, 0);
+}
+
+/// A face value `x` (compared as a double; `copy` is its float) limited
+/// the way `SliderRelease` limits both: the float at `0101e580` unless `x`
+/// is above the double at `01015a38` (NaN takes the float), then the float
+/// at `0102243c` unless that result is below the double at `01075b90`
+/// (when it is, the first step is repeated).
+fn limit_face_value(e: &Engine, x: f64, copy: f32) -> f32 {
+    let lower_or = |e: &Engine| {
+        let low: f64 = e.global(LOWER_BOUND_DOUBLE);
+        if x > low {
+            quiet_f32(copy)
+        } else {
+            x87_copy_f32(e, LOWER_BOUND)
+        }
+    };
+    let first = lower_or(e);
+    let high: f64 = e.global(UPPER_BOUND_DOUBLE);
+    if (first as f64) < high {
+        quiet_f32(lower_or(e))
+    } else {
+        x87_copy_f32(e, UPPER_BOUND)
+    }
+}
+
+/// The face refresh `Randomize` and `SliderRelease` run on the open menu:
+/// `007b18f0` with 0x22 and 0x23, then `007b1e70(1, 1, 0)`.
+fn refresh_face_of_open_menu(e: &mut Engine) {
+    let me = Ptr::new(e.global::<u32>(RACE_SEX_MENU_ME));
+    fn_007b18f0(e, me, 0x22);
+    let me = Ptr::new(e.global::<u32>(RACE_SEX_MENU_ME));
+    fn_007b18f0(e, me, 0x23);
+    let me = Ptr::new(e.global::<u32>(RACE_SEX_MENU_ME));
+    fn_007b1e70(e, me, true, true, false);
+}
+
+/// The `0x1a` case of `SliderRelease` (see there), with the two face
+/// coordinate arrays on the game's stack (`current` at the lower address).
+fn slider_release_face_value(e: &mut Engine, base: u32, shape: i32) {
+    e.with_stack(0x100, |e, arrays| {
+        let current = arrays.addr();
+        let initial = current + 0x80;
+        for array in [current, initial] {
+            e.call(
+                EH_VECTOR_CONSTRUCTOR_ITERATOR,
+                &args![
+                    array,
+                    0x20u32,
+                    4u32,
+                    FACE_COORD_CONSTRUCT,
+                    FACE_COORD_DESTRUCT
+                ],
+            );
+        }
+        e.call(INIT_FACE_GEN_COORD, &args![initial]);
+        let player_base = e.mem.u32(base + 0xd8);
+        e.call(GET_FACE_COORD, &args![player_base, current]);
+        let player_base = e.mem.u32(base + 0xd8);
+        e.call(GET_FACE_COORD, &args![player_base, base + 0x124]);
+        let first = e.call(FACE_COORD_GET, &args![current, 0u32, 0u32]).f32();
+        let second = e.call(FACE_COORD_GET, &args![current, 0u32, 1u32]).f32();
+        let other = (second as f64 - (first as f64 - shape as f64)) as f32;
+        let limited = limit_face_value(e, shape as f64, shape as f32);
+        let shape = e.call(FTOL, &args![limited as f64]).i32();
+        let other = limit_face_value(e, other as f64, other);
+        e.call(FACE_COORD_SET, &args![current, 0u32, 0u32, shape as f32]);
+        e.call(FACE_COORD_SET, &args![current, 0u32, 1u32, other]);
+        let player_base = e.mem.u32(base + 0xd8);
+        let sex = e.call(GET_SEX, &args![player_base]).u32();
+        let player_base = e.mem.u32(base + 0xd8);
+        let race_word = word_at_four(e, player_base + 0x10c);
+        let race = e.call(FACE_VALUE_5D9FB0, &args![race_word, sex]).u32();
+        e.call(REGENERATE_FACE, &args![race, current, initial, 0u32]);
+        let player_base = e.mem.u32(base + 0xd8);
+        let face = e.call(FACE_VALUE_601800, &args![player_base]).u32();
+        if e.call(FACE_COORD_CHECK_652900, &args![initial, face]).u8() != 0 {
+            let player_base = e.mem.u32(base + 0xd8);
+            let face = e.call(FACE_VALUE_601800, &args![player_base]).u32();
+            e.call(COPY_FACE_GEN_COORD, &args![initial, face, 0u32, 0u32]);
+        }
+        let me = Ptr::new(e.global::<u32>(RACE_SEX_MENU_ME));
+        race_sex_menu_set_flag(e, me, 7, true);
+        refresh_face_of_open_menu(e);
+        let me = Ptr::new(e.global::<u32>(RACE_SEX_MENU_ME));
+        race_sex_menu_set_flag(e, me, 8, false);
+        let me = Ptr::new(e.global::<u32>(RACE_SEX_MENU_ME));
+        race_sex_menu_set_flag(e, me, 9, true);
+        for array in [initial, current] {
+            e.call(
+                EH_VECTOR_DESTRUCTOR_ITERATOR,
+                &args![array, 0x20u32, 4u32, FACE_COORD_DESTRUCT],
+            );
+        }
+    });
+}
+
+// Translated from 007b4b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RaceSexMenu::SliderRelease` (Xbox PDB): applies the dragged option
+/// (`+0xC4`):
+/// - in list 6: `OnHairColorSliderChange`;
+/// - ids `0x22` / `0x23`: `OnFaceSliderChange`, `007b18f0(id)` and, with
+///   flag 8, `007b1e70(0, 1, 0)` / `(0, 0, 1)` and clears flag 8;
+/// - id `0x18` (the preset head): passes entry `value - 1` of the array at
+///   `+0xDC` to the player base form (`00603790`), updates the selection
+///   of the 20 lists, refreshes the face (`007b18f0` 0x22 and 0x23,
+///   `007b1e70(1, 1, 0)`, `007b25a0`, `007b2b50(1)`, `007b27c0`), clears
+///   flags 8 and 9, sets the hair colour sliders, resets the colour option
+///   (`0x1d` of the list at `+0x40`: caption from the setting `011d3528`,
+///   value its minimum) and sets flag 0;
+/// - id `0x1a`: turns the value into a face value (`value * 5.55 + 5.6`,
+///   the doubles at `01075ba0` / `01075b98`, `_ftol`), reads the face
+///   coordinates, keeps the difference between coordinates `[0][0]` and
+///   `[0][1]`, limits both to the bounds (15 to 65 in the exe), writes
+///   them, regenerates the face (`00652e00`), copies the coordinates when
+///   `00652900` answers true, and on the open menu sets flag 7, runs the
+///   face refresh, clears flag 8 and sets flag 9;
+/// - other ids: nothing (flag 7 stays as it is).
+///
+/// Every applied case ends by clearing flag 7.
+///
+/// The compiler's exception-unwinding frame is not translated.
+// Translation incomplete: 007b4b50 - the C++ exception-unwinding frame (FS:[0]) that destroys the two face coordinate arrays is not translated
+pub fn race_sex_menu_slider_release(e: &mut Engine, this: Ptr<RaceSexMenu>) {
+    let base = this.addr();
+    let option = e.mem.u32(base + 0xc4);
+    if e.call(CURRENT_LIST_INDEX, &args![this]).u32() == 6 {
+        race_sex_menu_on_hair_color_slider_change(e, this, option);
+    } else if word_at_four(e, option) == 0x22 || word_at_four(e, option) == 0x23 {
+        race_sex_menu_on_face_slider_change(e, this, option);
+        let option = e.mem.u32(base + 0xc4);
+        let id = word_at_four(e, option);
+        fn_007b18f0(e, this, id);
+        if race_sex_menu_get_flag(e, this, 8) {
+            let option = e.mem.u32(base + 0xc4);
+            if word_at_four(e, option) == 0x22 {
+                fn_007b1e70(e, this, false, true, false);
+            } else {
+                fn_007b1e70(e, this, false, false, true);
+            }
+            race_sex_menu_set_flag(e, this, 8, false);
+        }
+    } else if word_at_four(e, option) == 0x18 {
+        let value = menu_option_get_value(e, Ptr::new(option));
+        let entry = e
+            .call(ARRAY_ENTRY, &args![base + 0xdc, value.wrapping_sub(1)])
+            .u32();
+        let preset = e.mem.u32(entry);
+        let player_base = e.mem.u32(base + 0xd8);
+        e.call(NPC_METHOD_603790, &args![player_base, preset]);
+        for index in 0..0x14u32 {
+            let list = e.mem.u32(base + 0x28 + 4 * index);
+            menu_option_list_update_current_selection(e, Ptr::new(list));
+        }
+        fn_007b18f0(e, this, 0x22);
+        fn_007b18f0(e, this, 0x23);
+        fn_007b1e70(e, this, true, true, false);
+        fn_007b25a0(e, this);
+        fn_007b2b50(e, this, true);
+        fn_007b27c0(e, this);
+        race_sex_menu_set_flag(e, this, 8, false);
+        race_sex_menu_set_flag(e, this, 9, false);
+        let player_base = e.mem.u32(base + 0xd8);
+        let color = e.call(HAIR_COLOR_GETTER, &args![player_base]).u32();
+        race_sex_menu_set_hair_color_sliders(e, this, color);
+        let list = e.mem.u32(base + 0x40);
+        let colour = fn_007b4210(e, Ptr::new(list), 0x1d);
+        if colour != 0 {
+            let text = e.call(SETTING_VALUE, &args![SETTING_3528]).u32();
+            fn_007b3810(e, Ptr::new(colour), text);
+            let min = e.with_stack(8, |e, range| {
+                fn_007b3840(e, Ptr::new(colour), range.addr(), range.addr() + 4);
+                e.mem.i32(range.addr())
+            });
+            menu_option_set_value(e, Ptr::new(colour), min);
+        }
+        race_sex_menu_set_flag(e, this, 0, true);
+    } else if word_at_four(e, option) == 0x1a {
+        let value = menu_option_get_value(e, Ptr::new(option));
+        let scale: f64 = e.global(SHAPE_SCALE_DOUBLE);
+        let offset: f64 = e.global(SHAPE_OFFSET_DOUBLE);
+        let shape = e.call(FTOL, &args![value as f64 * scale + offset]).i32();
+        slider_release_face_value(e, base, shape);
+    } else {
+        return;
+    }
+    race_sex_menu_set_flag(e, this, 7, false);
+}
+
+// Translated from 007b5180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RaceSexMenu::ChooseDefaultPreset` (Xbox PDB): rebuilds the preset head
+/// list, makes its option `0x18` (of the list at `+0x30`) the dragged
+/// option, sets it to its minimum, applies it (`SliderRelease`) and clears
+/// the dragged option.
+pub fn race_sex_menu_choose_default_preset(e: &mut Engine, this: Ptr<RaceSexMenu>) {
+    let base = this.addr();
+    race_sex_menu_make_preset_head_list(e, this);
+    let list = e.mem.u32(base + 0x30);
+    let option = fn_007b4210(e, Ptr::new(list), 0x18);
+    e.mem.set_u32(base + 0xc4, option);
+    let min = e.with_stack(8, |e, range| {
+        let option = e.mem.u32(base + 0xc4);
+        fn_007b3840(e, Ptr::new(option), range.addr(), range.addr() + 4);
+        e.mem.i32(range.addr())
+    });
+    let option = e.mem.u32(base + 0xc4);
+    menu_option_set_value(e, Ptr::new(option), min);
+    race_sex_menu_slider_release(e, this);
+    e.mem.set_u32(base + 0xc4, 0);
+}
+
+// Translated from 007b51f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RaceSexMenu::Randomize` (Xbox PDB): with an open menu, when the message
+/// box answered 1 (`00703fa0`) or flag 7 is set: runs `00601830(1, 0, 1)`
+/// on the player base form, sets flag 7, refreshes the face (`007b18f0`
+/// 0x22 and 0x23, `007b1e70(1, 1, 0)`, `007b25a0`) and clears flags 8
+/// and 9.
+pub fn race_sex_menu_randomize(e: &mut Engine) {
+    let me: u32 = e.global(RACE_SEX_MENU_ME);
+    if me == 0 {
+        return;
+    }
+    if e.call(GET_MESSAGE_MENU_RESULT, &args![]).u8() as i8 != 1
+        && !race_sex_menu_get_flag(e, Ptr::new(me), 7)
+    {
+        return;
+    }
+    let me: u32 = e.global(RACE_SEX_MENU_ME);
+    let player_base = e.mem.u32(me + 0xd8);
+    e.call(NPC_METHOD_601830, &args![player_base, 1u32, 0u32, 1u32]);
+    let me = Ptr::new(e.global::<u32>(RACE_SEX_MENU_ME));
+    race_sex_menu_set_flag(e, me, 7, true);
+    refresh_face_of_open_menu(e);
+    let me = Ptr::new(e.global::<u32>(RACE_SEX_MENU_ME));
+    fn_007b25a0(e, me);
+    let me = Ptr::new(e.global::<u32>(RACE_SEX_MENU_ME));
+    race_sex_menu_set_flag(e, me, 8, false);
+    let me = Ptr::new(e.global::<u32>(RACE_SEX_MENU_ME));
+    race_sex_menu_set_flag(e, me, 9, false);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4569,6 +5605,85 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             menu_option_list_menu_option_list(Ptr<MenuOptionList>, u32, u32) -> Ptr<MenuOptionList>
         ),
         entry!(0x007b3af0, fn_007b3af0(Ptr<MenuOptionList>)),
+        entry!(
+            0x007b3b80,
+            fn_007b3b80(Ptr<MenuOptionList>, u32, u32) -> Ptr<MenuOption>
+        ),
+        entry!(
+            0x007b3bb0,
+            fn_007b3bb0(Ptr<MenuOptionList>, u32, Ptr<MenuOptionList>) -> Ptr<MenuOption>
+        ),
+        entry!(
+            0x007b3ca0,
+            menu_option_list_add_slider_option(
+                Ptr<MenuOptionList>,
+                u32,
+                u32,
+                i32,
+                i32,
+                i32,
+                f32,
+            ) -> Ptr<MenuOption>
+        ),
+        entry!(
+            0x007b3d50,
+            menu_option_list_insert_menu_option(
+                Ptr<MenuOptionList>,
+                i32,
+                u32,
+                u32,
+                u32,
+            ) -> Ptr<MenuOption>
+        ),
+        entry!(
+            0x007b3dd0,
+            menu_option_list_remove_menu_option(Ptr<MenuOptionList>, u32)
+        ),
+        entry!(0x007b3fa0, fn_007b3fa0(u32, u32) -> u32),
+        entry!(
+            0x007b3fd0,
+            menu_option_list_focus(Ptr<MenuOptionList>, bool) -> u8
+        ),
+        entry!(
+            0x007b4050,
+            fn_007b4050(Ptr<MenuOptionList>, Ptr<MenuOptionList>)
+        ),
+        entry!(
+            0x007b40d0,
+            menu_option_list_update_current_selection(Ptr<MenuOptionList>)
+        ),
+        entry!(0x007b4140, fn_007b4140(Ptr<MenuOption>)),
+        entry!(0x007b4180, fn_007b4180(Ptr<MenuOption>)),
+        entry!(0x007b41c0, fn_007b41c0(Ptr<MenuOptionList>, u32) -> u32),
+        entry!(0x007b4210, fn_007b4210(Ptr<MenuOptionList>, u32) -> u32),
+        entry!(
+            0x007b4260,
+            menu_option_list_do_gamepad(Ptr<MenuOptionList>, i32) -> bool
+        ),
+        entry!(0x007b4410, fn_007b4410(Ptr<MenuOptionList>)),
+        entry!(
+            0x007b4530,
+            menu_option_list_scroll_by(Ptr<MenuOptionList>, i32)
+        ),
+        entry!(0x007b45b0, fn_007b45b0(Ptr<MenuOptionList>)),
+        entry!(
+            0x007b4650,
+            menu_option_list_add_menu_option(
+                Ptr<MenuOptionList>,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> Ptr<MenuOption>
+        ),
+        entry!(0x007b4900, fn_007b4900(u32) -> u32),
+        entry!(0x007b4930, fn_007b4930(Ptr<RaceSexMenu>)),
+        entry!(0x007b4b50, race_sex_menu_slider_release(Ptr<RaceSexMenu>)),
+        entry!(
+            0x007b5180,
+            race_sex_menu_choose_default_preset(Ptr<RaceSexMenu>)
+        ),
+        entry!(0x007b51f0, race_sex_menu_randomize()),
     ]
 }
 
@@ -4607,7 +5722,9 @@ mod tests {
     }
 
     /// Pages of the exe's data that the translations read.
-    const DATA_PAGES: [u32; 22] = [
+    const DATA_PAGES: [u32; 24] = [
+        0x0101_5000,
+        0x0102_2000,
         0x011d_a000,
         0x011d_b000,
         0x011d_e000,
@@ -4634,7 +5751,7 @@ mod tests {
 
     /// Every function outside the unit that the translations call; the
     /// engine registers a do-nothing double over each.
-    const CALLEES: [u32; 253] = [
+    const CALLEES: [u32; 275] = [
         ABSOLUTE_VALUE,
         ACTOR_GET_HEIGHT,
         ADD_USER_TRAIT,
@@ -4888,6 +6005,28 @@ mod tests {
         CHOOSE_DEFAULT_PRESET,
         RANDOMIZE,
         PLAYER_BASE_FORM,
+        LIST_NODE_NEXT,
+        LIST_NODE_PREVIOUS,
+        LIST_NODE_DATA,
+        LIST_HEAD_DATA,
+        LIST_TAIL_DATA,
+        LIST_FIND_NODE,
+        LIST_INSERT_ITEM,
+        LIST_INSERT_BEFORE,
+        LIST_REMOVE_ITEM,
+        LIST_REMOVE_ALL,
+        TILE_GET_STRING,
+        STRING_FROM_TEXT,
+        STRING_COMPARE,
+        PLAY_TILE_SOUND,
+        INIT_FACE_GEN_COORD,
+        FACE_COORD_GET,
+        FACE_COORD_SET,
+        FACE_COORD_CHECK_652900,
+        COPY_FACE_GEN_COORD,
+        ARRAY_ENTRY,
+        NPC_METHOD_603790,
+        NPC_METHOD_601830,
     ];
 
     const PLAYER_VTABLE: u32 = 0x0f40_0000;
@@ -7468,15 +8607,841 @@ mod tests {
         assert_eq!(calls(&e, OPTION_LIST_CLEAR).len(), 1);
     }
 
+    const TILE_VTABLE: u32 = 0x0f54_0000;
+    const TILE_SLOTS: u32 = 0x0f55_0000;
+
+    /// Where the test model keeps a tile's float trait `id`: in the tile's
+    /// own memory.
+    fn trait_at(tile: u32, id: u32) -> u32 {
+        tile + 0x40 + 4 * (id & 0xff)
+    }
+
+    /// A tile of the test model: a vtable (slot doubles at `TILE_SLOTS`)
+    /// and `parent` at `+0x28`.
+    fn model_tile(e: &mut Engine, parent: u32) -> u32 {
+        let tile = e.mem.alloc(0x440);
+        e.mem.set_u32(tile, TILE_VTABLE);
+        e.mem.set_u32(tile + 0x28, parent);
+        tile
+    }
+
+    /// Tiles keep their float traits in their memory (`trait_at`); the
+    /// user traits `_top_bound`, `_selected` and `_position` are 0x7c0,
+    /// 0x7c1 and 0x7c2.
+    fn model_traits(e: &mut Engine) {
+        object_with_vtable(e, 0x10, TILE_VTABLE, TILE_SLOTS);
+        e.register(GET_FLOAT_TRAIT, |e, a| {
+            float(e.mem.f32(trait_at(a[0], a[1])) as f64)
+        });
+        e.register(SET_FLOAT_TRAIT, |e, a| {
+            e.mem.set_f32(trait_at(a[0], a[1]), f32::from_bits(a[2]));
+            Ret::default()
+        });
+        e.register(SET_TRAIT_FROM_INT, |e, a| {
+            e.mem.set_f32(trait_at(a[0], a[1]), a[2] as i32 as f32);
+            Ret::default()
+        });
+        e.register(ADD_USER_TRAIT, |_, a| {
+            word(match a[0] {
+                TOP_BOUND_TRAIT_NAME => 0x7c0,
+                SELECTED_TRAIT_NAME => 0x7c1,
+                POSITION_TRAIT_NAME => 0x7c2,
+                _ => 0x7c3,
+            })
+        });
+    }
+
+    /// Appends a node (`NiTListItem`: next, previous, item) for `item`.
+    fn append_node(e: &mut Engine, list: u32, item: u32) -> u32 {
+        let node = e.mem.alloc(0xc);
+        let tail = e.mem.u32(list + 4);
+        e.mem.set_u32(node, 0);
+        e.mem.set_u32(node + 4, tail);
+        e.mem.set_u32(node + 8, item);
+        if tail == 0 {
+            e.mem.set_u32(list, node);
+        } else {
+            e.mem.set_u32(tail, node);
+        }
+        e.mem.set_u32(list + 4, node);
+        node
+    }
+
+    /// The items of the list, head first.
+    fn items_of(e: &Engine, list: u32) -> Vec<u32> {
+        let mut items = vec![];
+        let mut node = e.mem.u32(list);
+        while node != 0 {
+            items.push(e.mem.u32(node + 8));
+            node = e.mem.u32(node);
+        }
+        items
+    }
+
+    /// The list helpers of other units, working on real `NiTListItem`s.
+    fn real_lists(e: &mut Engine) {
+        e.register(LIST_ADVANCE, |e, a| {
+            let node = e.mem.u32(a[1]);
+            let next = e.mem.u32(node);
+            e.mem.set_u32(a[1], next);
+            word(node + 8)
+        });
+        e.register(LIST_NODE_NEXT, |e, a| word(e.mem.u32(a[1])));
+        e.register(LIST_NODE_PREVIOUS, |e, a| word(e.mem.u32(a[1] + 4)));
+        e.register(LIST_NODE_DATA, |_, a| word(a[1] + 8));
+        e.register(LIST_HEAD_DATA, |e, a| word(e.mem.u32(a[0]) + 8));
+        e.register(LIST_TAIL_DATA, |e, a| word(e.mem.u32(a[0] + 4) + 8));
+        e.register(LIST_FIND_NODE, |e, a| {
+            let item = e.mem.u32(a[1]);
+            let mut node = if a[2] != 0 { a[2] } else { e.mem.u32(a[0]) };
+            while node != 0 {
+                if e.mem.u32(node + 8) == item {
+                    return word(node);
+                }
+                node = e.mem.u32(node);
+            }
+            word(0)
+        });
+        e.register(LIST_INSERT_ITEM, |e, a| {
+            let item = e.mem.u32(a[1]);
+            append_node(e, a[0], item);
+            Ret::default()
+        });
+        e.register(LIST_INSERT_BEFORE, |e, a| {
+            let (list, before) = (a[0], a[1]);
+            let node = e.mem.alloc(0xc);
+            let previous = e.mem.u32(before + 4);
+            let item = e.mem.u32(a[2]);
+            e.mem.set_u32(node, before);
+            e.mem.set_u32(node + 4, previous);
+            e.mem.set_u32(node + 8, item);
+            e.mem.set_u32(before + 4, node);
+            if previous == 0 {
+                e.mem.set_u32(list, node);
+            } else {
+                e.mem.set_u32(previous, node);
+            }
+            Ret::default()
+        });
+        e.register(LIST_REMOVE_ITEM, |e, a| {
+            let (list, item) = (a[0], e.mem.u32(a[1]));
+            let mut node = e.mem.u32(list);
+            while node != 0 && e.mem.u32(node + 8) != item {
+                node = e.mem.u32(node);
+            }
+            if node != 0 {
+                let (next, previous) = (e.mem.u32(node), e.mem.u32(node + 4));
+                if previous == 0 {
+                    e.mem.set_u32(list, next);
+                } else {
+                    e.mem.set_u32(previous, next);
+                }
+                if next == 0 {
+                    e.mem.set_u32(list + 4, previous);
+                } else {
+                    e.mem.set_u32(next + 4, previous);
+                }
+            }
+            Ret::default()
+        });
+    }
+
+    /// An open menu, real lists and the tile model. Rendered tiles are 5
+    /// high under a parent whose `_top_bound` is 10. Returns a list whose
+    /// template tile has the number `number`.
+    fn list_world(number: f32) -> (Engine, Ptr<RaceSexMenu>, Ptr<MenuOptionList>) {
+        let mut e = engine();
+        let menu = menu(&mut e);
+        model_traits(&mut e);
+        real_lists(&mut e);
+        e.set_global(HIGHLIGHT_VALUE, 2.0f32);
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        let parent = model_tile(&mut e, 0);
+        e.mem.set_f32(trait_at(parent, 0x7c0), 10.0);
+        e.register_double(RENDER_TEMPLATE, move |e, _| {
+            let tile = model_tile(e, parent);
+            e.mem.set_f32(trait_at(tile, 0xfb0), 5.0);
+            word(tile)
+        });
+        let list = e.new_object::<MenuOptionList>();
+        let template = model_tile(&mut e, 0);
+        e.mem.set_f32(trait_at(template, 0x1004), number);
+        e.set(list, MenuOptionList::pTemplateTile, template);
+        e.call_log = Some(vec![]);
+        (e, menu, list)
+    }
+
+    /// Three options with the ids 1, 2 and 3 (tiles at y 10, 15 and 20).
+    fn three_options(e: &mut Engine, list: Ptr<MenuOptionList>) -> [u32; 3] {
+        [1, 2, 3].map(|id| fn_007b3b80(e, list, 0x111, id).addr())
+    }
+
+    fn tile_y(e: &Engine, option: u32) -> f32 {
+        e.mem.f32(trait_at(e.mem.u32(option), 0xfa2))
+    }
+
     #[test]
-    fn registry_has_all_sixty_functions() {
+    fn add_menu_option_places_and_highlights_the_options() {
+        let (mut e, menu, list) = list_world(2.0);
+        let first = fn_007b3b80(&mut e, list, 0x111, 3).addr();
+        let tile = e.mem.u32(first);
+        assert_eq!(e.mem.u32(first + 4), 3);
+        assert_eq!(e.mem.u32(first + 8), 0);
+        assert_eq!(tile_y(&e, first), 10.0);
+        assert_eq!(e.mem.f32(trait_at(tile, 0x1004)), 2.0);
+        assert_eq!(e.mem.f32(trait_at(tile, 0xfaf)), 1.0);
+        assert_eq!(e.mem.f32(trait_at(tile, 0xfd6)), 2.0);
+        assert_eq!(e.get(list, MenuOptionList::pHighlighted), first);
+        assert_eq!(e.get(list, MenuOptionList::fScrollDelta), 5.0);
+        let first_tile = e.mem.u32(menu.addr() + 0x78);
+        assert_eq!(
+            calls(&e, RENDER_TEMPLATE),
+            vec![vec![menu.addr(), first_tile, LIST_ITEM_TEMPLATE, 0]]
+        );
+        // The first lists' first options get the Pip-Boy sound.
+        assert_eq!(
+            calls(&e, SET_STRING_TRAIT),
+            vec![
+                vec![tile, TRAIT_STRING, 0x111, 1],
+                vec![tile, 0xfcb, SOUND_PIPBOY_MODE, 1]
+            ]
+        );
+        // The second goes below the first; no sound for id 7, and the
+        // highlight stays.
+        e.call_log = Some(vec![]);
+        let second =
+            menu_option_list_add_menu_option(&mut e, list, 0x222, SLIDER_TEMPLATE, 7, 0).addr();
+        assert_eq!(tile_y(&e, second), 15.0);
+        assert_eq!(calls(&e, SET_STRING_TRAIT).len(), 1);
+        assert_eq!(calls(&e, RENDER_TEMPLATE)[0][2], SLIDER_TEMPLATE);
+        assert_eq!(e.get(list, MenuOptionList::pHighlighted), first);
+        // InsertMenuOption puts a third one before the second node.
+        let second_node = e.mem.u32(list.addr() + 4);
+        e.call_log = Some(vec![]);
+        let third =
+            menu_option_list_insert_menu_option(&mut e, list, 1, 0x333, LIST_ITEM_TEMPLATE, 9)
+                .addr();
+        assert_eq!(
+            calls(&e, LIST_INSERT_BEFORE)[0][..2],
+            [list.addr(), second_node]
+        );
+        assert_eq!(items_of(&e, list.addr()), vec![first, third, second]);
+        assert_eq!(tile_y(&e, third), 15.0);
+        assert_eq!(tile_y(&e, second), 20.0);
+        // No caption, or no open menu: nothing is added.
+        assert!(
+            menu_option_list_add_menu_option(&mut e, list, 0, LIST_ITEM_TEMPLATE, 1, 0).is_null()
+        );
+        e.set_global(RACE_SEX_MENU_ME, 0u32);
+        assert!(
+            menu_option_list_insert_menu_option(&mut e, list, 0, 0x1, LIST_ITEM_TEMPLATE, 1)
+                .is_null()
+        );
+        assert_eq!(items_of(&e, list.addr()).len(), 3);
+    }
+
+    #[test]
+    fn add_menu_option_keeps_a_larger_scroll_step_and_list_four_is_silent() {
+        let (mut e, _menu, list) = list_world(4.0);
+        e.set(list, MenuOptionList::fScrollDelta, 8.0);
+        e.set(list, MenuOptionList::pHighlighted, 0x1234);
+        let option = fn_007b3b80(&mut e, list, 0x111, 0).addr();
+        assert_eq!(e.get(list, MenuOptionList::fScrollDelta), 8.0);
+        assert_eq!(calls(&e, SET_STRING_TRAIT).len(), 1);
+        assert_eq!(e.get(list, MenuOptionList::pHighlighted), 0x1234);
+        let tile = e.mem.u32(option);
+        assert_eq!(e.mem.f32(trait_at(tile, 0xfd6)), 0.0);
+        assert_eq!(fn_007b4900(&mut e, option), option);
+        assert_eq!(e.mem.u32(option), 0);
+        assert_eq!(e.mem.u32(option + 4), 0);
+    }
+
+    #[test]
+    fn sub_list_option_links_back_and_takes_the_sub_list_number() {
+        let (mut e, _menu, list) = list_world(3.0);
+        let sub = e.new_object::<MenuOptionList>();
+        let template = model_tile(&mut e, 0);
+        e.mem.set_f32(trait_at(template, 0x1004), 7.0);
+        e.set(sub, MenuOptionList::pTemplateTile, template);
+        e.register(STRING_FORMAT, |e, a| {
+            e.mem.set_u32(a[0], 0x5150);
+            Ret::default()
+        });
+        let option = fn_007b3bb0(&mut e, list, 0x4400, sub).addr();
+        assert_eq!(e.get(sub, MenuOptionList::iBackTarget), 3);
+        assert_eq!(e.mem.u32(option + 4), 7);
+        let text = calls(&e, STRING_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls(&e, STRING_FORMAT),
+            vec![vec![text, CAPTION_FORMAT, 0x4400, 0x3e]]
+        );
+        let tile = e.mem.u32(option);
+        assert_eq!(
+            calls(&e, SET_STRING_TRAIT)[0],
+            vec![tile, TRAIT_STRING, 0x5150, 1]
+        );
+        assert_eq!(calls(&e, STRING_DESTROY), vec![vec![text]]);
+    }
+
+    #[test]
+    fn slider_option_sets_range_value_and_fraction() {
+        let (mut e, _menu, list) = list_world(5.0);
+        e.register(ROUND_TO_STEP, |_, a| float(f32::from_bits(a[0]) as f64));
+        let option =
+            menu_option_list_add_slider_option(&mut e, list, 0x111, 0x18, 1, 20, 5, 0.5).addr();
+        let tile = e.mem.u32(option);
+        assert_eq!(calls(&e, RENDER_TEMPLATE)[0][2], SLIDER_TEMPLATE);
+        assert_eq!(e.mem.f32(trait_at(tile, 0x1006)), 1.0);
+        assert_eq!(e.mem.f32(trait_at(tile, 0x1007)), 20.0);
+        assert_eq!(e.mem.f32(trait_at(tile, 0x1005)), 5.0);
+        assert_eq!(e.mem.f32(trait_at(tile, 0x1008)), 10.0);
+        assert_eq!(
+            calls(&e, ROUND_TO_STEP),
+            vec![vec![10.0f32.to_bits(), 1.0f32.to_bits()]]
+        );
+        // The fraction is limited to 0..1; NaN stays.
+        for (fraction, expected) in [(-3.0f32, 0.0f32), (7.0, 20.0)] {
+            let option =
+                menu_option_list_add_slider_option(&mut e, list, 0x1, 0x18, 1, 20, 5, fraction)
+                    .addr();
+            let tile = e.mem.u32(option);
+            assert_eq!(e.mem.f32(trait_at(tile, 0x1008)), expected);
+        }
+        let option =
+            menu_option_list_add_slider_option(&mut e, list, 0x1, 0x18, 1, 20, 5, f32::NAN).addr();
+        let tile = e.mem.u32(option);
+        assert!(e.mem.f32(trait_at(tile, 0x1008)).is_nan());
+    }
+
+    #[test]
+    fn remove_menu_option_moves_the_highlight_and_the_rest_up() {
+        let (mut e, _menu, list) = list_world(5.0);
+        let [first, second, third] = three_options(&mut e, list);
+        let (second_tile, third_tile) = (e.mem.u32(second), e.mem.u32(third));
+        e.set(list, MenuOptionList::pHighlighted, second);
+        e.call_log = Some(vec![]);
+        menu_option_list_remove_menu_option(&mut e, list, 2);
+        assert_eq!(items_of(&e, list.addr()), vec![first, third]);
+        assert_eq!(e.get(list, MenuOptionList::pHighlighted), third);
+        assert_eq!(calls(&e, SET_FOCUS_TARGET_CDECL), vec![vec![third_tile]]);
+        assert_eq!(calls(&e, TILE_SLOTS), vec![vec![second_tile, 1]]);
+        assert_eq!(calls(&e, EMPTY_MEMBER), vec![vec![second]]);
+        assert_eq!(calls(&e, FREE), vec![vec![second]]);
+        assert_eq!(tile_y(&e, third), 15.0);
+        // The last option, highlighted: the highlight takes the tail's
+        // item, the removed option itself.
+        e.set(list, MenuOptionList::pHighlighted, third);
+        menu_option_list_remove_menu_option(&mut e, list, 3);
+        assert_eq!(items_of(&e, list.addr()), vec![first]);
+        assert_eq!(e.get(list, MenuOptionList::pHighlighted), third);
+        // An id nobody has: nothing happens.
+        e.call_log = Some(vec![]);
+        menu_option_list_remove_menu_option(&mut e, list, 9);
+        assert!(calls(&e, TILE_SLOTS).is_empty());
+        assert!(calls(&e, LIST_REMOVE_ITEM).is_empty());
+    }
+
+    #[test]
+    fn deleting_destructor_frees_with_bit_zero() {
+        let mut e = engine();
+        let object = e.mem.alloc(0xc);
+        assert_eq!(fn_007b3fa0(&mut e, object, 1), object);
+        assert_eq!(calls(&e, EMPTY_MEMBER), vec![vec![object]]);
+        assert_eq!(calls(&e, FREE), vec![vec![object]]);
+        let other = e.mem.alloc(0xc);
+        assert_eq!(fn_007b3fa0(&mut e, other, 2), other);
+        assert_eq!(calls(&e, FREE).len(), 1);
+    }
+
+    #[test]
+    fn focus_gives_and_takes_the_interface_focus() {
+        let mut e = engine();
+        e.register(INTERFACE_SINGLETON, |_, _| word(0x9000));
+        let list = e.new_object::<MenuOptionList>();
+        let option = make_option(&mut e, 0x55, 1, 0);
+        e.set(list, MenuOptionList::pHighlighted, option);
+        assert_eq!(menu_option_list_focus(&mut e, list, true), 1);
+        assert_eq!(
+            calls(&e, SET_CURRENT_FOCUS_TARGET),
+            vec![vec![0x9000, 0x55, 0xfc3, 1]]
+        );
+        // An option without a tile, or none: no focus, answer 0.
+        e.mem.set_u32(option, 0);
+        assert_eq!(menu_option_list_focus(&mut e, list, true), 0);
+        e.set(list, MenuOptionList::pHighlighted, 0);
+        assert_eq!(menu_option_list_focus(&mut e, list, true), 0);
+        assert_eq!(calls(&e, SET_CURRENT_FOCUS_TARGET).len(), 1);
+        // Unfocusing clears the highlight.
+        e.set(list, MenuOptionList::pHighlighted, option);
+        assert_eq!(menu_option_list_focus(&mut e, list, false), 1);
+        assert_eq!(
+            calls(&e, SET_CURRENT_FOCUS_TARGET)[1],
+            vec![0x9000, 0, 0xfc3, 1]
+        );
+        assert_eq!(e.get(list, MenuOptionList::pHighlighted), 0);
+    }
+
+    #[test]
+    fn linking_lists_sets_forward_and_back_targets() {
+        let (mut e, _menu, list) = list_world(3.0);
+        let next = e.new_object::<MenuOptionList>();
+        let template = model_tile(&mut e, 0);
+        e.mem.set_f32(trait_at(template, 0x1004), 8.9);
+        e.set(next, MenuOptionList::pTemplateTile, template);
+        fn_007b4050(&mut e, list, next);
+        assert_eq!(e.get(list, MenuOptionList::iParentTarget), 8);
+        assert_eq!(e.get(next, MenuOptionList::iBackTarget), 3);
+    }
+
+    #[test]
+    fn selection_update_marks_options_by_the_test() {
+        let (mut e, _menu, list) = list_world(5.0);
+        let [first, second, third] = three_options(&mut e, list);
+        e.register_double(0x0f56_0000, move |_, a| word((a[0] == second) as u32));
+        // Without a test nothing happens.
+        e.call_log = Some(vec![]);
+        menu_option_list_update_current_selection(&mut e, list);
+        assert!(calls(&e, ADD_USER_TRAIT).is_empty());
+        e.set(list, MenuOptionList::pCallback, 0x0f56_0000);
+        menu_option_list_update_current_selection(&mut e, list);
+        assert_eq!(
+            calls(&e, 0x0f56_0000),
+            vec![vec![first], vec![second], vec![third]]
+        );
+        let selected = |e: &Engine, option: u32| e.mem.f32(trait_at(e.mem.u32(option), 0x7c1));
+        assert_eq!(selected(&e, first), 1.0);
+        assert_eq!(selected(&e, second), 2.0);
+        assert_eq!(selected(&e, third), 1.0);
+        // Options without a tile are left alone.
+        let bare = make_option(&mut e, 0, 1, 0);
+        e.call_log = Some(vec![]);
+        fn_007b4140(&mut e, Ptr::new(bare));
+        fn_007b4180(&mut e, Ptr::new(bare));
+        assert!(calls(&e, ADD_USER_TRAIT).is_empty());
+    }
+
+    #[test]
+    fn options_are_found_by_tile_and_by_id() {
+        let (mut e, _menu, list) = list_world(5.0);
+        let [_, second, third] = three_options(&mut e, list);
+        let tile = e.mem.u32(second);
+        assert_eq!(fn_007b41c0(&mut e, list, tile), second);
+        assert_eq!(fn_007b41c0(&mut e, list, 0x9999), 0);
+        assert_eq!(fn_007b4210(&mut e, list, 3), third);
+        assert_eq!(fn_007b4210(&mut e, list, 4), 0);
+    }
+
+    #[test]
+    fn gamepad_moves_the_highlight_through_the_list() {
+        let (mut e, menu, list) = list_world(5.0);
+        let [first, second, third] = three_options(&mut e, list);
+        e.register(TILE_IS_VISIBLE, |_, _| word(1));
+        let highlight = |e: &Engine| e.get(list, MenuOptionList::pHighlighted);
+        e.set(list, MenuOptionList::pHighlighted, second);
+        assert!(menu_option_list_do_gamepad(&mut e, list, 1));
+        assert_eq!(highlight(&e), first);
+        // At the top: nothing above, answer false; the highlight stays.
+        assert!(!menu_option_list_do_gamepad(&mut e, list, 1));
+        assert_eq!(highlight(&e), first);
+        assert!(menu_option_list_do_gamepad(&mut e, list, 2));
+        assert_eq!(highlight(&e), second);
+        assert!(menu_option_list_do_gamepad(&mut e, list, 0x10));
+        assert_eq!(highlight(&e), third);
+        assert!(menu_option_list_do_gamepad(&mut e, list, 0xf));
+        assert_eq!(highlight(&e), first);
+        // No highlight: up takes the last, down the first.
+        e.set(list, MenuOptionList::pHighlighted, 0);
+        assert!(menu_option_list_do_gamepad(&mut e, list, 1));
+        assert_eq!(highlight(&e), third);
+        e.set(list, MenuOptionList::pHighlighted, 0);
+        assert!(menu_option_list_do_gamepad(&mut e, list, 2));
+        assert_eq!(highlight(&e), first);
+        // Other buttons are not handled.
+        e.call_log = Some(vec![]);
+        assert!(!menu_option_list_do_gamepad(&mut e, list, 3));
+        assert!(calls(&e, SET_FOCUS_TARGET_CDECL).is_empty());
+        // A hidden tile makes the menu scroll, at most 100 times.
+        e.register(TILE_IS_VISIBLE, |_, _| word(0));
+        assert!(menu_option_list_do_gamepad(&mut e, list, 2));
+        let scrolls = calls(&e, MENU_SLOTS + 0xc);
+        assert_eq!(scrolls.len(), 100);
+        assert_eq!(scrolls[0], vec![menu.addr(), 3, 0]);
+        let tile = e.mem.u32(second);
+        assert_eq!(calls(&e, SET_FOCUS_TARGET_CDECL), vec![vec![tile]]);
+        e.call_log = Some(vec![]);
+        assert!(menu_option_list_do_gamepad(&mut e, list, 0xf));
+        assert_eq!(calls(&e, MENU_SLOTS + 0xc)[0], vec![menu.addr(), 2, 0]);
+    }
+
+    #[test]
+    fn gamepad_refresh_highlights_the_first_and_scrolls_it_home() {
+        let (mut e, _menu, list) = list_world(5.0);
+        let [first, second, _] = three_options(&mut e, list);
+        let tile = e.mem.u32(first);
+        // Without a gamepad nothing happens.
+        e.set(list, MenuOptionList::pHighlighted, 0);
+        e.call_log = Some(vec![]);
+        fn_007b4410(&mut e, list);
+        assert!(calls(&e, SIMPLE_ARRAY_IS_EMPTY).is_empty());
+        e.register(GAMEPAD_IN_USE, |_, _| word(1));
+        e.register(TILE_GET_STRING, |_, _| word(0x4444));
+        e.register(STRING_FROM_TEXT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        // `_position` answers 2 once, then 0.
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let counter = asked.clone();
+        e.register_double(GET_FLOAT_TRAIT, move |e, a| {
+            if a[1] == 0x7c2 {
+                counter.set(counter.get() + 1);
+                return float(if counter.get() == 1 { 2.0 } else { 0.0 });
+            }
+            float(e.mem.f32(trait_at(a[0], a[1])) as f64)
+        });
+        fn_007b4410(&mut e, list);
+        assert_eq!(e.get(list, MenuOptionList::pHighlighted), first);
+        assert_eq!(calls(&e, TILE_GET_STRING), vec![vec![tile, 0xfe8]]);
+        assert_eq!(
+            calls(&e, SET_TRAIT_FROM_INT),
+            vec![vec![tile, 0xfe8, u32::MAX]]
+        );
+        assert_eq!(calls(&e, SET_FOCUS_TARGET_CDECL), vec![vec![tile]]);
+        assert_eq!(
+            calls(&e, SET_STRING_TRAIT),
+            vec![vec![tile, 0xfe8, 0x4444, 1]]
+        );
+        assert_eq!(asked.get(), 2);
+        // Scrolled by -2 steps of 5.
+        assert_eq!(tile_y(&e, first), 0.0);
+        assert_eq!(tile_y(&e, second), 5.0);
+        assert_eq!(calls(&e, STRING_DESTROY).len(), 1);
+        // An empty list without a highlight: nothing more.
+        e.set(list, MenuOptionList::pHighlighted, 0);
+        e.register(SIMPLE_ARRAY_IS_EMPTY, |_, _| word(1));
+        e.call_log = Some(vec![]);
+        fn_007b4410(&mut e, list);
+        assert!(calls(&e, TILE_GET_STRING).is_empty());
+    }
+
+    #[test]
+    fn scroll_by_moves_every_option_only_for_a_positive_step() {
+        let (mut e, _menu, list) = list_world(5.0);
+        let [first, _, third] = three_options(&mut e, list);
+        menu_option_list_scroll_by(&mut e, list, -1);
+        assert_eq!(tile_y(&e, first), 5.0);
+        assert_eq!(tile_y(&e, third), 15.0);
+        for step in [0.0f32, -0.0, -1.0] {
+            e.set(list, MenuOptionList::fScrollDelta, step);
+            e.call_log = Some(vec![]);
+            menu_option_list_scroll_by(&mut e, list, 3);
+            assert!(calls(&e, SET_FLOAT_TRAIT).is_empty());
+        }
+        e.set(list, MenuOptionList::fScrollDelta, f32::NAN);
+        menu_option_list_scroll_by(&mut e, list, 3);
+        assert!(tile_y(&e, first).is_nan());
+    }
+
+    #[test]
+    fn clearing_deletes_tiles_and_options() {
+        let (mut e, _menu, list) = list_world(5.0);
+        let [first, second, third] = three_options(&mut e, list);
+        let tiles = [first, second, third].map(|option| e.mem.u32(option));
+        e.call_log = Some(vec![]);
+        fn_007b45b0(&mut e, list);
+        assert_eq!(
+            calls(&e, TILE_SLOTS),
+            tiles.iter().map(|tile| vec![*tile, 1]).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            calls(&e, FREE),
+            vec![vec![first], vec![second], vec![third]]
+        );
+        assert_eq!(calls(&e, LIST_REMOVE_ALL), vec![vec![list.addr()]]);
+        assert_eq!(e.get(list, MenuOptionList::pHighlighted), 0);
+    }
+
+    /// A menu whose pressed tile (`+0xC0`, button `button`, parent with
+    /// trait `0x1008` = 3) and option (`+0xC4`, id `id`, range 0 to 10,
+    /// value 5) use the tile model.
+    fn pressed_world(button: f32, id: u32) -> (Engine, Ptr<RaceSexMenu>, u32) {
+        let mut e = engine();
+        let menu = menu(&mut e);
+        model_traits(&mut e);
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        let parent = model_tile(&mut e, 0);
+        e.mem.set_f32(trait_at(parent, 0x1008), 3.0);
+        let pressed = model_tile(&mut e, parent);
+        e.mem.set_f32(trait_at(pressed, 0xfaa), button);
+        let tile = model_tile(&mut e, 0);
+        e.mem.set_f32(trait_at(tile, 0x1007), 10.0);
+        e.mem.set_f32(trait_at(tile, 0x1005), 5.0);
+        let option = make_option(&mut e, tile, id, 0);
+        e.mem.set_u32(menu.addr() + 0xc0, pressed);
+        e.mem.set_u32(menu.addr() + 0xc4, option);
+        e.call_log = Some(vec![]);
+        (e, menu, option)
+    }
+
+    fn option_value(e: &Engine, option: u32) -> f32 {
+        e.mem.f32(trait_at(e.mem.u32(option), 0x1005))
+    }
+
+    #[test]
+    fn pressed_arrows_step_the_option_and_play_the_sound() {
+        for (button, expected) in [(100.0, 4.0), (104.0, 6.0), (102.0, 2.0), (103.0, 8.0)] {
+            let (mut e, menu, option) = pressed_world(button, 0x55);
+            let pressed = e.mem.u32(menu.addr() + 0xc0);
+            e.call(0x007a_dc60, &args![menu, 2u32, true]);
+            fn_007b4930(&mut e, menu);
+            assert_eq!(option_value(&e, option), expected);
+            assert_eq!(calls(&e, PLAY_TILE_SOUND), vec![vec![pressed, 0xfcb]]);
+            assert!(!race_sex_menu_get_flag(&mut e, menu, 2));
+            assert_eq!(e.mem.u32(menu.addr() + 0xc0), 0);
+            assert_eq!(e.mem.u32(menu.addr() + 0xc4), 0);
+        }
+        // At the top of the range nothing changes: no sound.
+        let (mut e, menu, option) = pressed_world(104.0, 0x55);
+        e.mem.set_f32(trait_at(e.mem.u32(option), 0x1005), 10.0);
+        fn_007b4930(&mut e, menu);
+        assert!(calls(&e, PLAY_TILE_SOUND).is_empty());
+        // 0x69 counts as a change with flag 2.
+        let (mut e, menu, _) = pressed_world(105.0, 0x55);
+        fn_007b4930(&mut e, menu);
+        assert!(calls(&e, PLAY_TILE_SOUND).is_empty());
+        let (mut e, menu, _) = pressed_world(105.0, 0x55);
+        race_sex_menu_set_flag(&mut e, menu, 2, true);
+        fn_007b4930(&mut e, menu);
+        assert_eq!(calls(&e, PLAY_TILE_SOUND).len(), 1);
+        // Nothing pressed: nothing at all.
+        let (mut e, menu, _) = pressed_world(100.0, 0x55);
+        e.mem.set_u32(menu.addr() + 0xc4, 0);
+        e.call_log = Some(vec![]);
+        fn_007b4930(&mut e, menu);
+        assert!(calls(&e, GET_FLOAT_TRAIT).is_empty());
+    }
+
+    #[test]
+    fn pressed_colour_arrows_compare_the_parent_caption() {
+        // The caption equals the setting's text: a change without a step.
+        let (mut e, menu, option) = pressed_world(100.0, 0x1d);
+        fn_007b4930(&mut e, menu);
+        assert_eq!(calls(&e, STRING_COMPARE), vec![vec![0, SETTING_3528]]);
+        assert_eq!(option_value(&e, option), 5.0);
+        assert_eq!(calls(&e, PLAY_TILE_SOUND).len(), 1);
+        // Otherwise the arrow steps the value.
+        let (mut e, menu, option) = pressed_world(100.0, 0x1d);
+        e.register(STRING_COMPARE, |_, _| word(1));
+        fn_007b4930(&mut e, menu);
+        assert_eq!(option_value(&e, option), 4.0);
+    }
+
+    #[test]
+    fn slider_release_in_the_colour_list_changes_the_hair_colour() {
+        let (mut e, menu) = world();
+        e.register(CURRENT_LIST_INDEX, |_, _| word(6));
+        let other = make_option(&mut e, 0x55, 0x1f, 0);
+        let colour_option = make_option(&mut e, 0x66, 0x1d, 0);
+        e.register_double(OPTION_LIST_FIND, move |_, _| word(colour_option));
+        e.mem.set_u32(menu.addr() + 0xc4, other);
+        race_sex_menu_set_flag(&mut e, menu, 7, true);
+        race_sex_menu_slider_release(&mut e, menu);
+        assert_eq!(
+            calls(&e, SET_STRING_TRAIT)[0],
+            vec![0x66, 0x1009, SETTING_3528, 1]
+        );
+        assert!(!race_sex_menu_get_flag(&mut e, menu, 7));
+    }
+
+    #[test]
+    fn slider_release_of_a_face_slider_updates_the_head() {
+        for (id, regenerated) in [(0x22u32, 1usize), (0x23, 0)] {
+            let (mut e, menu) = world();
+            let root = e.mem.alloc(0x100);
+            player_roots(&mut e, root, root);
+            let option = make_option(&mut e, 0x55, id, 0);
+            e.mem.set_u32(menu.addr() + 0xc4, option);
+            race_sex_menu_set_flag(&mut e, menu, 7, true);
+            race_sex_menu_slider_release(&mut e, menu);
+            // `007b1e70(0, 1, 0)` regenerates into LastFaceCoord;
+            // `(0, 0, 1)` does not.
+            let into_last = calls(&e, REGENERATE_FACE)
+                .iter()
+                .filter(|words| words[0] == menu.addr() + 0x124)
+                .count();
+            assert_eq!(into_last, regenerated);
+            assert!(!race_sex_menu_get_flag(&mut e, menu, 8));
+            assert!(!race_sex_menu_get_flag(&mut e, menu, 7));
+            assert_eq!(race_sex_menu_get_flag(&mut e, menu, 9), id == 0x23);
+        }
+    }
+
+    #[test]
+    fn slider_release_of_the_preset_applies_the_preset_head() {
+        let (mut e, menu) = world();
+        walk_chains(&mut e);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0x7777);
+        e.register_double(ARRAY_ENTRY, move |_, _| word(slot));
+        e.register(GET_FLOAT_TRAIT, |_, a| {
+            float(if a[1] == 0x1005 { 3.0 } else { 0.0 })
+        });
+        let colour = make_option(&mut e, 0x66, 0x1d, 0);
+        let head = chain(&mut e, &[colour]);
+        let colour_list = list_of(&e, menu, 6);
+        e.mem.set_u32(colour_list, head);
+        let option = make_option(&mut e, 0x55, 0x18, 0);
+        e.mem.set_u32(menu.addr() + 0xc4, option);
+        race_sex_menu_set_flag(&mut e, menu, 8, true);
+        race_sex_menu_set_flag(&mut e, menu, 9, true);
+        race_sex_menu_slider_release(&mut e, menu);
+        let base = e.mem.u32(menu.addr() + 0xd8);
+        assert_eq!(calls(&e, ARRAY_ENTRY), vec![vec![menu.addr() + 0xdc, 2]]);
+        assert_eq!(calls(&e, NPC_METHOD_603790), vec![vec![base, 0x7777]]);
+        assert!(calls(&e, SET_STRING_TRAIT).contains(&vec![0x66, 0x1009, SETTING_3528, 1]));
+        assert!(race_sex_menu_get_flag(&mut e, menu, 0));
+        for bit in [7, 8, 9] {
+            assert!(!race_sex_menu_get_flag(&mut e, menu, bit));
+        }
+    }
+
+    /// The face value case: the option's value is `value`; the face
+    /// coordinates `[0][0]` and `[0][1]` read 30 and 40.
+    fn face_value_world(value: f32) -> (Engine, Ptr<RaceSexMenu>) {
+        let (mut e, menu) = world();
+        e.set_global(SHAPE_SCALE_DOUBLE, 5.55f64);
+        e.set_global(SHAPE_OFFSET_DOUBLE, 5.6f64);
+        e.set_global(LOWER_BOUND_DOUBLE, 15.0f64);
+        e.set_global(UPPER_BOUND_DOUBLE, 65.0f64);
+        e.set_global(LOWER_BOUND, 15.0f32);
+        e.set_global(UPPER_BOUND, 65.0f32);
+        e.register_double(GET_FLOAT_TRAIT, move |_, a| {
+            float(if a[1] == 0x1005 { value as f64 } else { 0.0 })
+        });
+        e.register(FACE_COORD_GET, |_, a| {
+            float(if a[2] == 0 { 30.0 } else { 40.0 })
+        });
+        let option = make_option(&mut e, 0x55, 0x1a, 0);
+        e.mem.set_u32(menu.addr() + 0xc4, option);
+        e.call_log = Some(vec![]);
+        (e, menu)
+    }
+
+    #[test]
+    fn slider_release_of_the_face_value_keeps_the_difference_in_bounds() {
+        let (mut e, menu) = face_value_world(2.0);
+        let base = e.mem.u32(menu.addr() + 0xd8);
+        race_sex_menu_slider_release(&mut e, menu);
+        let built = calls(&e, EH_VECTOR_CONSTRUCTOR_ITERATOR);
+        let (current, initial) = (built[0][0], built[1][0]);
+        assert_eq!(initial, current + 0x80);
+        assert_eq!(calls(&e, INIT_FACE_GEN_COORD), vec![vec![initial]]);
+        assert_eq!(
+            calls(&e, GET_FACE_COORD),
+            vec![vec![base, current], vec![base, menu.addr() + 0x124]]
+        );
+        // 2 * 5.55 + 5.6 = 16.7 -> 16; 40 - (30 - 16) = 26.
+        assert_eq!(
+            calls(&e, FACE_COORD_SET),
+            vec![
+                vec![current, 0, 0, 16.0f32.to_bits()],
+                vec![current, 0, 1, 26.0f32.to_bits()]
+            ]
+        );
+        assert_eq!(calls(&e, REGENERATE_FACE)[0], vec![0, current, initial, 0]);
+        assert!(calls(&e, COPY_FACE_GEN_COORD).is_empty());
+        assert_eq!(
+            calls(&e, EH_VECTOR_DESTRUCTOR_ITERATOR),
+            vec![
+                vec![initial, 0x20, 4, FACE_COORD_DESTRUCT],
+                vec![current, 0x20, 4, FACE_COORD_DESTRUCT]
+            ]
+        );
+        assert!(race_sex_menu_get_flag(&mut e, menu, 9));
+        assert!(!race_sex_menu_get_flag(&mut e, menu, 7));
+        // Out of the bounds both are limited to 65 and to 15; the check of
+        // `00652900` copies the coordinates.
+        for (value, bound) in [(20.0f32, 65.0f32), (-10.0, 15.0)] {
+            let (mut e, menu) = face_value_world(value);
+            e.register(FACE_COORD_CHECK_652900, |_, _| word(1));
+            race_sex_menu_slider_release(&mut e, menu);
+            let set = calls(&e, FACE_COORD_SET);
+            assert_eq!(set[0][3], bound.to_bits());
+            assert_eq!(set[1][3], bound.to_bits());
+            let initial = calls(&e, INIT_FACE_GEN_COORD)[0][0];
+            assert_eq!(calls(&e, COPY_FACE_GEN_COORD), vec![vec![initial, 0, 0, 0]]);
+        }
+    }
+
+    #[test]
+    fn slider_release_of_another_option_does_nothing() {
+        let (mut e, menu) = world();
+        let option = make_option(&mut e, 0x55, 0x30, 0);
+        e.mem.set_u32(menu.addr() + 0xc4, option);
+        race_sex_menu_set_flag(&mut e, menu, 7, true);
+        race_sex_menu_slider_release(&mut e, menu);
+        assert!(race_sex_menu_get_flag(&mut e, menu, 7));
+    }
+
+    #[test]
+    fn default_preset_is_the_minimum_of_the_preset_option() {
+        let (mut e, menu) = world();
+        walk_chains(&mut e);
+        let slot = e.mem.alloc(4);
+        e.register_double(ARRAY_ENTRY, move |_, _| word(slot));
+        let option = make_option(&mut e, 0x55, 0x18, 0);
+        e.register_double(OPTION_LIST_FIND, move |_, _| word(option));
+        let head = chain(&mut e, &[option]);
+        let preset_list = list_of(&e, menu, 2);
+        e.mem.set_u32(preset_list, head);
+        race_sex_menu_choose_default_preset(&mut e, menu);
+        assert_eq!(calls(&e, SIMPLE_ARRAY_CLEAR).len(), 1);
+        assert_eq!(calls(&e, NPC_METHOD_603790).len(), 1);
+        assert!(race_sex_menu_get_flag(&mut e, menu, 0));
+        assert_eq!(e.mem.u32(menu.addr() + 0xc4), 0);
+    }
+
+    #[test]
+    fn randomize_needs_the_answer_or_flag_seven() {
+        let (mut e, menu) = world();
+        let base = e.mem.u32(menu.addr() + 0xd8);
+        race_sex_menu_randomize(&mut e);
+        assert!(calls(&e, NPC_METHOD_601830).is_empty());
+        e.register(GET_MESSAGE_MENU_RESULT, |_, _| word(1));
+        race_sex_menu_set_flag(&mut e, menu, 8, true);
+        race_sex_menu_randomize(&mut e);
+        assert_eq!(calls(&e, NPC_METHOD_601830), vec![vec![base, 1, 0, 1]]);
+        assert!(race_sex_menu_get_flag(&mut e, menu, 7));
+        assert!(!race_sex_menu_get_flag(&mut e, menu, 8));
+        // Flag 7 alone is enough.
+        e.register(GET_MESSAGE_MENU_RESULT, |_, _| word(0));
+        race_sex_menu_randomize(&mut e);
+        assert_eq!(calls(&e, NPC_METHOD_601830).len(), 2);
+        // No open menu: nothing.
+        e.set_global(RACE_SEX_MENU_ME, 0u32);
+        e.call_log = Some(vec![]);
+        race_sex_menu_randomize(&mut e);
+        assert!(calls(&e, GET_MESSAGE_MENU_RESULT).is_empty());
+    }
+
+    #[test]
+    fn registry_has_all_eighty_three_functions() {
         let funcs = funcs();
-        assert_eq!(funcs.len(), 60);
+        assert_eq!(funcs.len(), 83);
         let mut addresses: Vec<u32> = funcs.iter().map(|(address, _)| *address).collect();
         addresses.sort_unstable();
         addresses.dedup();
-        assert_eq!(addresses.len(), 60);
+        assert_eq!(addresses.len(), 83);
         assert_eq!(addresses[0], 0x007a_c1f0);
-        assert_eq!(addresses[59], 0x007b_3af0);
+        assert_eq!(addresses[82], 0x007b_51f0);
+        // The entries call the translations: 007b4210 by address.
+        let (mut e, _menu, list) = list_world(5.0);
+        let [_, second, _] = three_options(&mut e, list);
+        let (_, find) = funcs
+            .iter()
+            .find(|(address, _)| *address == 0x007b_4210)
+            .unwrap();
+        assert_eq!(find(&mut e, &[list.addr(), 2]).u32(), second);
     }
 }

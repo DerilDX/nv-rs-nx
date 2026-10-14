@@ -106,7 +106,7 @@ const COLLECTION_REMOVE_SLOT: u32 = 8;
 /// A float the exe copies through `FLD` and `FSTP`: a signaling NaN comes
 /// out quiet.
 fn quiet(value: f32) -> f32 {
-    (value as f64) as f32
+    x87_quiet(value)
 }
 
 // Translated from 0045cb90 (decompiled, FalloutNV.exe 1.4.0.525)

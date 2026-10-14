@@ -175,6 +175,501 @@ fn query_performance_counter(e: &mut Engine, out: Ptr) -> i32 {
     1
 }
 
+// Kernel objects and virtual memory. Handles are small integers (4, 8, ...,
+// never reused) into the table `Engine::kernel`; events and semaphores keep
+// their state as Windows does. One thread runs the game, so a wait that
+// would block forever (nothing else can signal the object) and a thread
+// that would start running stop the engine with a message naming the
+// import and handle, as a call to an untranslated function does: how game
+// threads run is the lead's decision (docs/ENGINE_PORT_PLAN.md).
+
+/// `WaitForSingleObject` timeout and results.
+const INFINITE: u32 = 0xffff_ffff;
+const WAIT_OBJECT_0: u32 = 0;
+const WAIT_TIMEOUT: u32 = 0x102;
+const WAIT_FAILED: u32 = 0xffff_ffff;
+/// `GetCurrentThread`'s pseudo handle.
+pub const CURRENT_THREAD: u32 = 0xffff_fffe;
+/// `CreateThread` flag.
+const CREATE_SUSPENDED: u32 = 4;
+/// `VirtualAlloc`/`VirtualFree` types and the one protection the game
+/// passes.
+const MEM_COMMIT: u32 = 0x1000;
+const MEM_RESERVE: u32 = 0x2000;
+const MEM_DECOMMIT: u32 = 0x4000;
+const MEM_RELEASE: u32 = 0x8000;
+const PAGE_READWRITE: u32 = 4;
+const PAGE_BYTES: u32 = 0x1000;
+/// Reservations start on 64 KiB boundaries, as on Windows.
+const ALLOCATION_GRANULARITY: u32 = 0x1_0000;
+/// End of FalloutNV.exe's image (`.reloc` ends at `014089ff`): a reserve
+/// at a fixed address inside the image fails, as on Windows.
+const IMAGE_END: u32 = 0x0140_9000;
+
+/// A kernel object behind a handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KernelObject {
+    Event {
+        manual_reset: bool,
+        signalled: bool,
+    },
+    Semaphore {
+        count: i32,
+        maximum: i32,
+    },
+    /// A thread made by `CreateThread`. It never runs (see above); it
+    /// exists so its handle can be resumed, prioritized and closed.
+    Thread {
+        start: u32,
+        parameter: u32,
+        id: u32,
+        suspend_count: u32,
+    },
+}
+
+/// A `VirtualAlloc` reservation: its size and which pages are committed.
+/// `block` is the [`crate::Mem`] heap block behind a reservation the
+/// system placed (address 0), 0 for one at an address the caller chose.
+#[derive(Debug, Clone)]
+struct Region {
+    size: u32,
+    block: u32,
+    committed: Vec<bool>,
+}
+
+/// The handle table and the `VirtualAlloc` reservations (`Engine::kernel`).
+#[derive(Debug, Default)]
+pub struct Kernel {
+    objects: std::collections::BTreeMap<u32, KernelObject>,
+    last_handle: u32,
+    threads_created: u32,
+    regions: std::collections::BTreeMap<u32, Region>,
+}
+
+impl Kernel {
+    /// The object behind `handle`, if it is open.
+    pub fn object(&self, handle: u32) -> Option<&KernelObject> {
+        self.objects.get(&handle)
+    }
+
+    fn insert(&mut self, object: KernelObject) -> u32 {
+        self.last_handle += 4;
+        self.objects.insert(self.last_handle, object);
+        self.last_handle
+    }
+
+    /// Base of the reservation holding all of `[start, end)`.
+    fn region_containing(&self, start: u64, end: u64) -> Option<u32> {
+        let (&base, region) = self.regions.range(..=start as u32).next_back()?;
+        (end <= base as u64 + region.size as u64).then_some(base)
+    }
+
+    /// Whether `[start, end)` overlaps a reservation.
+    fn overlaps_region(&self, start: u64, end: u64) -> bool {
+        self.regions
+            .iter()
+            .any(|(&b, r)| start < b as u64 + r.size as u64 && (b as u64) < end)
+    }
+}
+
+fn page_up(v: u64) -> u64 {
+    v.div_ceil(PAGE_BYTES as u64) * PAGE_BYTES as u64
+}
+
+/// Reserves `size` bytes at `address` (0: anywhere). Returns the base.
+fn reserve(e: &mut Engine, address: u32, size: u32) -> Option<u32> {
+    let (base, len, block) = if address == 0 {
+        // From the Mem heap, aligned within an oversized block.
+        let len = page_up(size as u64);
+        if len > (crate::mem::HEAP_END - crate::mem::HEAP_BASE) as u64 {
+            return None;
+        }
+        let len = len as u32;
+        let block = e.mem.alloc(len + ALLOCATION_GRANULARITY);
+        let base = block.next_multiple_of(ALLOCATION_GRANULARITY);
+        (base, len, block)
+    } else {
+        let base = address & !(ALLOCATION_GRANULARITY - 1);
+        let end = page_up(address as u64 + size as u64);
+        let overlaps = |lo: u32, hi: u32| (base as u64) < hi as u64 && end > lo as u64;
+        if base < ALLOCATION_GRANULARITY
+            || end > 1 << 32
+            || overlaps(crate::exe::IMAGE_BASE, IMAGE_END)
+            || overlaps(crate::mem::HEAP_BASE, crate::mem::HEAP_END)
+            || e.kernel.overlaps_region(base as u64, end)
+            || (base as u64..end)
+                .step_by(PAGE_BYTES as usize)
+                .any(|p| e.mem.is_mapped(p as u32))
+        {
+            return None;
+        }
+        (base, (end - base as u64) as u32, 0)
+    };
+    // Reserved pages are not addressable until committed.
+    e.mem.unmap(base, len);
+    e.kernel.regions.insert(
+        base,
+        Region {
+            size: len,
+            block,
+            committed: vec![false; (len / PAGE_BYTES) as usize],
+        },
+    );
+    Some(base)
+}
+
+/// Commits the pages of `[start, start + len)` in the reservation at
+/// `base`; newly committed pages read as zero.
+fn commit(e: &mut Engine, base: u32, start: u32, len: u32) {
+    for page in (start..start.wrapping_add(len)).step_by(PAGE_BYTES as usize) {
+        let i = ((page - base) / PAGE_BYTES) as usize;
+        let region = e.kernel.regions.get_mut(&base).expect("reservation");
+        if !region.committed[i] {
+            region.committed[i] = true;
+            e.mem.map(page, PAGE_BYTES);
+            e.mem.write(page, &[0; PAGE_BYTES as usize]);
+        }
+    }
+}
+
+/// Decommits the pages of `[start, start + len)` in the reservation at
+/// `base`: they are no longer addressable.
+fn decommit(e: &mut Engine, base: u32, start: u32, len: u32) {
+    for page in (start..start.wrapping_add(len)).step_by(PAGE_BYTES as usize) {
+        let i = ((page - base) / PAGE_BYTES) as usize;
+        let region = e.kernel.regions.get_mut(&base).expect("reservation");
+        if region.committed[i] {
+            region.committed[i] = false;
+            e.mem.unmap(page, PAGE_BYTES);
+        }
+    }
+}
+
+// Platform: replaces KERNEL32.DLL VirtualAlloc (import)
+/// `VirtualAlloc(address, size, type, protect)` with the types the game
+/// passes (`ScrapHeapManager`, `MemoryPool`, the CRT small-block heap):
+/// `MEM_RESERVE` at address 0 takes a 64 KiB-aligned range from the
+/// [`crate::Mem`] heap (as [`memory_manager_allocate`] does); at a chosen
+/// address it succeeds only where nothing is (not the image, the heap
+/// region, another reservation or mapped memory) and otherwise returns 0,
+/// which the memory pools' address search relies on. `MEM_COMMIT` commits
+/// whole pages inside a reservation (0 if the range is not inside one), or
+/// reserves and commits at address 0. Reserved pages that are not
+/// committed are unmapped, so touching them faults as on Windows.
+/// Returns the (rounded) start, 0 on failure.
+fn virtual_alloc(e: &mut Engine, address: u32, size: u32, kind: u32, protect: u32) -> u32 {
+    if kind == 0 || kind & !(MEM_COMMIT | MEM_RESERVE) != 0 || protect != PAGE_READWRITE {
+        panic!(
+            "VirtualAlloc({address:08x}, {size:#x}, {kind:#x}, {protect:#x}): only \
+             MEM_RESERVE and MEM_COMMIT with PAGE_READWRITE are provided (platform, units/platform.rs)"
+        );
+    }
+    if size == 0 {
+        return 0;
+    }
+    if kind & MEM_RESERVE != 0 || address == 0 {
+        let Some(base) = reserve(e, address, size) else {
+            return 0;
+        };
+        if kind & MEM_COMMIT != 0 {
+            let len = e.kernel.regions[&base].size;
+            commit(e, base, base, len);
+        }
+        return base;
+    }
+    let start = address & !(PAGE_BYTES - 1);
+    let end = page_up(address as u64 + size as u64);
+    match e.kernel.region_containing(start as u64, end) {
+        Some(base) => {
+            commit(e, base, start, (end - start as u64) as u32);
+            start
+        }
+        None => 0,
+    }
+}
+
+// Platform: replaces KERNEL32.DLL VirtualFree (import)
+/// `VirtualFree(address, size, type)`: `MEM_DECOMMIT` decommits the whole
+/// pages of the range (size 0 at a reservation's start: all of it), which
+/// must lie in one reservation; `MEM_RELEASE` (size 0, the reservation's
+/// start) frees the reservation and its heap block. Returns 1, or 0 for a
+/// range Windows would reject.
+fn virtual_free(e: &mut Engine, address: u32, size: u32, kind: u32) -> i32 {
+    match kind {
+        MEM_RELEASE => {
+            if size != 0 || !e.kernel.regions.contains_key(&address) {
+                return 0;
+            }
+            let len = e.kernel.regions[&address].size;
+            decommit(e, address, address, len);
+            let region = e.kernel.regions.remove(&address).expect("reservation");
+            e.mem.free(region.block);
+            1
+        }
+        MEM_DECOMMIT => {
+            let (start, end) = if size == 0 {
+                match e.kernel.regions.get(&address) {
+                    Some(r) => (address, address as u64 + r.size as u64),
+                    None => return 0,
+                }
+            } else {
+                (
+                    address & !(PAGE_BYTES - 1),
+                    page_up(address as u64 + size as u64),
+                )
+            };
+            match e.kernel.region_containing(start as u64, end) {
+                Some(base) => {
+                    decommit(e, base, start, (end - start as u64) as u32);
+                    1
+                }
+                None => 0,
+            }
+        }
+        _ => panic!(
+            "VirtualFree({address:08x}, {size:#x}, {kind:#x}): only MEM_DECOMMIT and \
+             MEM_RELEASE are provided (platform, units/platform.rs)"
+        ),
+    }
+}
+
+/// Named kernel objects (shared between processes) are not provided.
+fn unnamed(call: &str, name: Ptr) {
+    if !name.is_null() {
+        panic!(
+            "{call}: named object at {:08x}; named kernel objects are not provided \
+             (platform, units/platform.rs)",
+            name.addr()
+        );
+    }
+}
+
+/// Stops the engine: a wait or a thread start the single game thread
+/// cannot carry out.
+fn stop_one_thread(what: String) -> ! {
+    panic!(
+        "{what}: one thread runs the game, nothing else can run or signal it \
+         (KERNEL32.DLL import, platform; docs/ENGINE_PORT_PLAN.md)"
+    )
+}
+
+// Platform: replaces KERNEL32.DLL CreateEventA (import)
+/// `CreateEventA(security, manual reset, initial state, name)`: a new
+/// event's handle. Named events stop the engine.
+fn create_event_a(
+    e: &mut Engine,
+    _security: u32,
+    manual_reset: i32,
+    initial: i32,
+    name: Ptr,
+) -> u32 {
+    unnamed("CreateEventA", name);
+    e.kernel.insert(KernelObject::Event {
+        manual_reset: manual_reset != 0,
+        signalled: initial != 0,
+    })
+}
+
+/// Sets an event's state; 0 if `handle` is not an open event.
+fn set_event_state(e: &mut Engine, handle: u32, state: bool) -> i32 {
+    match e.kernel.objects.get_mut(&handle) {
+        Some(KernelObject::Event { signalled, .. }) => {
+            *signalled = state;
+            1
+        }
+        _ => 0,
+    }
+}
+
+// Platform: replaces KERNEL32.DLL SetEvent (import)
+fn set_event(e: &mut Engine, handle: u32) -> i32 {
+    set_event_state(e, handle, true)
+}
+
+// Platform: replaces KERNEL32.DLL ResetEvent (import)
+fn reset_event(e: &mut Engine, handle: u32) -> i32 {
+    set_event_state(e, handle, false)
+}
+
+// Platform: replaces KERNEL32.DLL CreateSemaphoreA (import)
+/// `CreateSemaphoreA(security, initial count, maximum count, name)`: a new
+/// semaphore's handle, or 0 for counts Windows rejects (maximum not
+/// positive, initial outside 0..=maximum). Named semaphores stop the
+/// engine.
+fn create_semaphore_a(
+    e: &mut Engine,
+    _security: u32,
+    initial: i32,
+    maximum: i32,
+    name: Ptr,
+) -> u32 {
+    unnamed("CreateSemaphoreA", name);
+    if maximum <= 0 || initial < 0 || initial > maximum {
+        return 0;
+    }
+    e.kernel.insert(KernelObject::Semaphore {
+        count: initial,
+        maximum,
+    })
+}
+
+// Platform: replaces KERNEL32.DLL ReleaseSemaphore (import)
+/// `ReleaseSemaphore(handle, release count, previous count out)`: adds to
+/// the count and stores the previous one (if the pointer is not null).
+/// Returns 0 without a change if `handle` is not a semaphore, the release
+/// count is not positive or the count would pass the maximum.
+fn release_semaphore(e: &mut Engine, handle: u32, release: i32, previous: Ptr) -> i32 {
+    let old = match e.kernel.objects.get_mut(&handle) {
+        Some(KernelObject::Semaphore { count, maximum })
+            if release > 0 && release <= *maximum - *count =>
+        {
+            let old = *count;
+            *count += release;
+            old
+        }
+        _ => return 0,
+    };
+    if !previous.is_null() {
+        e.mem.set_i32(previous.addr(), old);
+    }
+    1
+}
+
+// Platform: replaces KERNEL32.DLL WaitForSingleObject (import)
+/// `WaitForSingleObject(handle, timeout)`: a signalled object is taken at
+/// once (`WAIT_OBJECT_0`), resetting an auto-reset event or counting a
+/// semaphore down. An object that is not signalled stays so (no other
+/// thread runs): with a finite timeout the wait times out at once
+/// (`WAIT_TIMEOUT`; the clock is not advanced), with `INFINITE` it would
+/// block forever and stops the engine. Threads never run, so a thread
+/// handle is never signalled. An unknown handle gives `WAIT_FAILED`.
+fn wait_for_single_object(e: &mut Engine, handle: u32, timeout: u32) -> u32 {
+    let blocked = match e.kernel.objects.get_mut(&handle) {
+        Some(KernelObject::Event {
+            manual_reset,
+            signalled,
+        }) => {
+            if *signalled {
+                if !*manual_reset {
+                    *signalled = false;
+                }
+                return WAIT_OBJECT_0;
+            }
+            format!(
+                "{} event not signalled",
+                if *manual_reset {
+                    "manual-reset"
+                } else {
+                    "auto-reset"
+                }
+            )
+        }
+        Some(KernelObject::Semaphore { count, maximum }) => {
+            if *count > 0 {
+                *count -= 1;
+                return WAIT_OBJECT_0;
+            }
+            format!("semaphore count 0 (maximum {maximum})")
+        }
+        Some(KernelObject::Thread { start, .. }) => {
+            format!("thread (start {start:08x}) that never runs")
+        }
+        None if handle == CURRENT_THREAD => "the current thread".to_string(),
+        None => return WAIT_FAILED,
+    };
+    if timeout != INFINITE {
+        return WAIT_TIMEOUT;
+    }
+    stop_one_thread(format!(
+        "WaitForSingleObject(handle {handle:#x}, INFINITE) would block forever on a {blocked}"
+    ))
+}
+
+// Platform: replaces KERNEL32.DLL CloseHandle (import)
+/// Closes a handle from this table; 0 for one that is not open.
+fn close_handle(e: &mut Engine, handle: u32) -> i32 {
+    e.kernel.objects.remove(&handle).is_some() as i32
+}
+
+// Platform: replaces KERNEL32.DLL GetCurrentThread (import)
+fn get_current_thread(_e: &mut Engine) -> u32 {
+    CURRENT_THREAD
+}
+
+// Platform: replaces KERNEL32.DLL CreateThread (import)
+/// `CreateThread(security, stack size, start, parameter, flags, id out)`:
+/// a suspended thread is recorded (handle returned, a new thread id stored
+/// through the last argument if not null). A thread that would start
+/// running at once (no `CREATE_SUSPENDED`) stops the engine.
+fn create_thread(
+    e: &mut Engine,
+    _security: u32,
+    _stack_size: u32,
+    start: u32,
+    parameter: u32,
+    flags: u32,
+    id_out: Ptr,
+) -> u32 {
+    if flags & CREATE_SUSPENDED == 0 {
+        stop_one_thread(format!(
+            "CreateThread(start {start:08x}, parameter {parameter:08x}, flags {flags:#x}) \
+             would start the thread running"
+        ));
+    }
+    e.kernel.threads_created += 1;
+    let id = MAIN_THREAD_ID + e.kernel.threads_created;
+    let handle = e.kernel.insert(KernelObject::Thread {
+        start,
+        parameter,
+        id,
+        suspend_count: 1,
+    });
+    if !id_out.is_null() {
+        e.mem.set_u32(id_out.addr(), id);
+    }
+    handle
+}
+
+// Platform: replaces KERNEL32.DLL ResumeThread (import)
+/// Lowers a thread's suspend count and returns the previous one. Bringing
+/// it to 0 would start the thread running, which stops the engine. The
+/// current thread runs (previous count 0); an unknown handle gives -1.
+fn resume_thread(e: &mut Engine, handle: u32) -> u32 {
+    if handle == CURRENT_THREAD {
+        return 0;
+    }
+    match e.kernel.objects.get_mut(&handle) {
+        Some(KernelObject::Thread {
+            start,
+            parameter,
+            suspend_count,
+            ..
+        }) => {
+            let previous = *suspend_count;
+            if previous == 1 {
+                stop_one_thread(format!(
+                    "ResumeThread(handle {handle:#x}) would start the thread running \
+                     (start {start:08x}, parameter {parameter:08x})"
+                ));
+            }
+            *suspend_count = previous.saturating_sub(1);
+            previous
+        }
+        _ => 0xffff_ffff,
+    }
+}
+
+// Platform: replaces KERNEL32.DLL SetThreadPriority (import)
+/// Accepts any priority for a thread handle or the current thread (the
+/// threads do not run, so it has no effect); 0 for another handle.
+fn set_thread_priority(e: &mut Engine, handle: u32, _priority: i32) -> i32 {
+    (handle == CURRENT_THREAD
+        || matches!(
+            e.kernel.objects.get(&handle),
+            Some(KernelObject::Thread { .. })
+        )) as i32
+}
+
 /// (DLL, name, platform version) of the imports with a Rust stand-in.
 pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
     let k = "KERNEL32.dll";
@@ -247,6 +742,55 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "QueryPerformanceCounter",
             entry!(0, query_performance_counter(Ptr) -> i32).1,
         ),
+        (
+            k,
+            "VirtualAlloc",
+            entry!(0, virtual_alloc(u32, u32, u32, u32) -> u32).1,
+        ),
+        (
+            k,
+            "VirtualFree",
+            entry!(0, virtual_free(u32, u32, u32) -> i32).1,
+        ),
+        (
+            k,
+            "CreateEventA",
+            entry!(0, create_event_a(u32, i32, i32, Ptr) -> u32).1,
+        ),
+        (k, "SetEvent", entry!(0, set_event(u32) -> i32).1),
+        (k, "ResetEvent", entry!(0, reset_event(u32) -> i32).1),
+        (
+            k,
+            "CreateSemaphoreA",
+            entry!(0, create_semaphore_a(u32, i32, i32, Ptr) -> u32).1,
+        ),
+        (
+            k,
+            "ReleaseSemaphore",
+            entry!(0, release_semaphore(u32, i32, Ptr) -> i32).1,
+        ),
+        (
+            k,
+            "WaitForSingleObject",
+            entry!(0, wait_for_single_object(u32, u32) -> u32).1,
+        ),
+        (k, "CloseHandle", entry!(0, close_handle(u32) -> i32).1),
+        (
+            k,
+            "GetCurrentThread",
+            entry!(0, get_current_thread() -> u32).1,
+        ),
+        (
+            k,
+            "CreateThread",
+            entry!(0, create_thread(u32, u32, u32, u32, u32, Ptr) -> u32).1,
+        ),
+        (k, "ResumeThread", entry!(0, resume_thread(u32) -> u32).1),
+        (
+            k,
+            "SetThreadPriority",
+            entry!(0, set_thread_priority(u32, i32) -> i32).1,
+        ),
     ]
 }
 
@@ -292,5 +836,363 @@ mod tests {
         assert_eq!(q.addr(), SYSTEM_UTILITY);
         assert_eq!(e.mem.u32(SYSTEM_UTILITY + 0x84), 5);
         assert!(e.call_log.unwrap().iter().all(|c| c.0 != ATEXIT));
+    }
+
+    // Import slots of FalloutNV.exe 1.4.0.525 (Ghidra `PTR_<name>_<slot>`).
+    const CLOSE_HANDLE: u32 = 0x00fd_f07c;
+    const CREATE_SEMAPHORE_A: u32 = 0x00fd_f0b4;
+    const CREATE_EVENT_A: u32 = 0x00fd_f0cc;
+    const SET_EVENT: u32 = 0x00fd_f0d0;
+    const VIRTUAL_FREE: u32 = 0x00fd_f10c;
+    const VIRTUAL_ALLOC: u32 = 0x00fd_f114;
+    const SET_THREAD_PRIORITY: u32 = 0x00fd_f11c;
+    const GET_CURRENT_THREAD: u32 = 0x00fd_f120;
+    const CREATE_THREAD: u32 = 0x00fd_f124;
+    const RESUME_THREAD: u32 = 0x00fd_f158;
+    const RELEASE_SEMAPHORE: u32 = 0x00fd_f1b4;
+    const WAIT_FOR_SINGLE_OBJECT: u32 = 0x00fd_f1c8;
+    const RESET_EVENT: u32 = 0x00fd_f1cc;
+
+    /// An engine with the kernel-object and virtual-memory stand-ins
+    /// registered at their import slots, as `Engine::with_exe` does.
+    fn kernel_engine() -> Engine {
+        let mut e = Engine::new();
+        let slots = [
+            (CLOSE_HANDLE, "CloseHandle"),
+            (CREATE_SEMAPHORE_A, "CreateSemaphoreA"),
+            (CREATE_EVENT_A, "CreateEventA"),
+            (SET_EVENT, "SetEvent"),
+            (VIRTUAL_FREE, "VirtualFree"),
+            (VIRTUAL_ALLOC, "VirtualAlloc"),
+            (SET_THREAD_PRIORITY, "SetThreadPriority"),
+            (GET_CURRENT_THREAD, "GetCurrentThread"),
+            (CREATE_THREAD, "CreateThread"),
+            (RESUME_THREAD, "ResumeThread"),
+            (RELEASE_SEMAPHORE, "ReleaseSemaphore"),
+            (WAIT_FOR_SINGLE_OBJECT, "WaitForSingleObject"),
+            (RESET_EVENT, "ResetEvent"),
+        ];
+        let imports: Vec<crate::exe::Import> = slots
+            .iter()
+            .map(|&(slot, name)| crate::exe::Import {
+                slot,
+                dll: "KERNEL32.dll".into(),
+                name: name.into(),
+            })
+            .collect();
+        assert_eq!(e.register_imports(&imports), slots.len());
+        e
+    }
+
+    fn call(e: &mut Engine, slot: u32, a: &[u32]) -> u32 {
+        e.call(slot, a).u32()
+    }
+
+    #[test]
+    fn handles_are_small_distinct_and_closed_once() {
+        let mut e = kernel_engine();
+        let a = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
+        let b = call(&mut e, CREATE_SEMAPHORE_A, &[0, 0, 1, 0]);
+        assert_eq!((a, b), (4, 8));
+        assert_eq!(
+            e.kernel.object(b),
+            Some(&KernelObject::Semaphore {
+                count: 0,
+                maximum: 1
+            })
+        );
+        assert_eq!(call(&mut e, CLOSE_HANDLE, &[a]), 1);
+        assert_eq!(e.kernel.object(a), None);
+        assert_eq!(call(&mut e, CLOSE_HANDLE, &[a]), 0, "already closed");
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[a, 0]), WAIT_FAILED);
+        assert_eq!(call(&mut e, SET_EVENT, &[a]), 0);
+        // Handles are not reused.
+        assert_eq!(call(&mut e, CREATE_EVENT_A, &[0, 0, 0, 0]), 12);
+    }
+
+    #[test]
+    fn auto_reset_event_is_consumed_by_a_wait_manual_reset_is_not() {
+        let mut e = kernel_engine();
+        let auto = call(&mut e, CREATE_EVENT_A, &[0, 0, 1, 0]);
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[auto, INFINITE]), 0);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[auto, 100]),
+            WAIT_TIMEOUT
+        );
+        assert_eq!(call(&mut e, SET_EVENT, &[auto]), 1);
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[auto, 0]), 0);
+
+        let manual = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[manual, 0]),
+            WAIT_TIMEOUT
+        );
+        assert_eq!(call(&mut e, SET_EVENT, &[manual]), 1);
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[manual, INFINITE]), 0);
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[manual, INFINITE]), 0);
+        assert_eq!(call(&mut e, RESET_EVENT, &[manual]), 1);
+        assert_eq!(
+            call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[manual, 0]),
+            WAIT_TIMEOUT
+        );
+        // Not an event.
+        let s = call(&mut e, CREATE_SEMAPHORE_A, &[0, 1, 1, 0]);
+        assert_eq!(call(&mut e, RESET_EVENT, &[s]), 0);
+    }
+
+    #[test]
+    fn semaphore_counts_waits_and_releases() {
+        let mut e = kernel_engine();
+        e.mem.map(0x1000, 0x1000);
+        let s = call(&mut e, CREATE_SEMAPHORE_A, &[0, 1, 2, 0]);
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[s, INFINITE]), 0);
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[s, 0]), WAIT_TIMEOUT);
+        e.mem.set_i32(0x1000, -5);
+        assert_eq!(call(&mut e, RELEASE_SEMAPHORE, &[s, 2, 0x1000]), 1);
+        assert_eq!(e.mem.i32(0x1000), 0, "previous count");
+        // Past the maximum, or a count that is not positive: no change.
+        assert_eq!(call(&mut e, RELEASE_SEMAPHORE, &[s, 1, 0]), 0);
+        assert_eq!(call(&mut e, RELEASE_SEMAPHORE, &[s, 0, 0]), 0);
+        assert_eq!(
+            e.kernel.object(s),
+            Some(&KernelObject::Semaphore {
+                count: 2,
+                maximum: 2
+            })
+        );
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[s, 0]), 0);
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[s, 0]), 0);
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[s, 0]), WAIT_TIMEOUT);
+        // Counts Windows rejects.
+        assert_eq!(call(&mut e, CREATE_SEMAPHORE_A, &[0, 3, 2, 0]), 0);
+        assert_eq!(call(&mut e, CREATE_SEMAPHORE_A, &[0, 0, 0, 0]), 0);
+        // Not a semaphore.
+        let ev = call(&mut e, CREATE_EVENT_A, &[0, 0, 0, 0]);
+        assert_eq!(call(&mut e, RELEASE_SEMAPHORE, &[ev, 1, 0]), 0);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "WaitForSingleObject(handle 0x4, INFINITE) would block forever on a semaphore count 0 (maximum 1)"
+    )]
+    fn infinite_wait_on_an_empty_semaphore_stops() {
+        let mut e = kernel_engine();
+        let s = call(&mut e, CREATE_SEMAPHORE_A, &[0, 0, 1, 0]);
+        call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[s, INFINITE]);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "WaitForSingleObject(handle 0x4, INFINITE) would block forever on a manual-reset event not signalled"
+    )]
+    fn infinite_wait_on_an_unsignalled_event_stops() {
+        let mut e = kernel_engine();
+        let ev = call(&mut e, CREATE_EVENT_A, &[0, 1, 0, 0]);
+        call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[ev, INFINITE]);
+    }
+
+    #[test]
+    #[should_panic(expected = "named kernel objects are not provided")]
+    fn named_events_stop() {
+        let mut e = kernel_engine();
+        call(&mut e, CREATE_EVENT_A, &[0, 0, 0, 0x0100_0000]);
+    }
+
+    #[test]
+    fn suspended_thread_is_recorded_prioritized_and_closed() {
+        let mut e = kernel_engine();
+        e.mem.map(0x1000, 0x1000);
+        assert_eq!(call(&mut e, GET_CURRENT_THREAD, &[]), CURRENT_THREAD);
+        let t = call(
+            &mut e,
+            CREATE_THREAD,
+            &[0, 0x1_0000, 0x00aa_64d0, 0x4444, CREATE_SUSPENDED, 0x1000],
+        );
+        assert_eq!(t, 4);
+        assert_eq!(e.mem.u32(0x1000), MAIN_THREAD_ID + 1);
+        assert_eq!(
+            e.kernel.object(t),
+            Some(&KernelObject::Thread {
+                start: 0x00aa_64d0,
+                parameter: 0x4444,
+                id: MAIN_THREAD_ID + 1,
+                suspend_count: 1
+            })
+        );
+        assert_eq!(call(&mut e, SET_THREAD_PRIORITY, &[t, -1i32 as u32]), 1);
+        assert_eq!(call(&mut e, SET_THREAD_PRIORITY, &[CURRENT_THREAD, 2]), 1);
+        assert_eq!(call(&mut e, SET_THREAD_PRIORITY, &[0x99, 0]), 0);
+        assert_eq!(call(&mut e, RESUME_THREAD, &[CURRENT_THREAD]), 0);
+        assert_eq!(call(&mut e, RESUME_THREAD, &[0x99]), 0xffff_ffff);
+        // A thread never runs, so it is never signalled.
+        assert_eq!(call(&mut e, WAIT_FOR_SINGLE_OBJECT, &[t, 10]), WAIT_TIMEOUT);
+        assert_eq!(call(&mut e, CLOSE_HANDLE, &[t]), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "ResumeThread(handle 0x4) would start the thread running \
+                               (start 00aa64d0, parameter 00004444)")]
+    fn resuming_a_thread_to_run_stops() {
+        let mut e = kernel_engine();
+        let t = call(
+            &mut e,
+            CREATE_THREAD,
+            &[0, 0, 0x00aa_64d0, 0x4444, CREATE_SUSPENDED, 0],
+        );
+        call(&mut e, RESUME_THREAD, &[t]);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "CreateThread(start 00aa64d0, parameter 00004444, flags 0x0) \
+                               would start the thread running"
+    )]
+    fn creating_a_running_thread_stops() {
+        let mut e = kernel_engine();
+        call(&mut e, CREATE_THREAD, &[0, 0, 0x00aa_64d0, 0x4444, 0, 0]);
+    }
+
+    #[test]
+    fn reserve_commit_decommit_release_on_the_heap() {
+        let mut e = kernel_engine();
+        let base = call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[0, 0x80_0000, MEM_RESERVE, PAGE_READWRITE],
+        );
+        assert_ne!(base, 0);
+        assert_eq!(base % ALLOCATION_GRANULARITY, 0);
+        assert!(!e.mem.is_mapped(base), "reserved, not committed");
+        // Commit rounds out to whole pages and returns the page start.
+        let p = call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[base + 0x10, 0x1ff0, MEM_COMMIT, PAGE_READWRITE],
+        );
+        assert_eq!(p, base);
+        assert_eq!(e.mem.bytes(base, 0x2000), vec![0; 0x2000]);
+        assert!(!e.mem.is_mapped(base + 0x2000));
+        e.mem.set_u32(base + 0x1000, 7);
+        // Committing again keeps the contents.
+        call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[base, 0x2000, MEM_COMMIT, PAGE_READWRITE],
+        );
+        assert_eq!(e.mem.u32(base + 0x1000), 7);
+        // Outside the reservation: fails.
+        let end = base + 0x80_0000;
+        assert_eq!(
+            call(
+                &mut e,
+                VIRTUAL_ALLOC,
+                &[end - 0x1000, 0x2000, MEM_COMMIT, PAGE_READWRITE]
+            ),
+            0
+        );
+        // Decommit the tail page; recommitting gives zeros again.
+        assert_eq!(
+            call(&mut e, VIRTUAL_FREE, &[base + 0x1000, 0x1000, MEM_DECOMMIT]),
+            1
+        );
+        assert!(!e.mem.is_mapped(base + 0x1000));
+        assert!(e.mem.is_mapped(base));
+        call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[base + 0x1000, 0x1000, MEM_COMMIT, PAGE_READWRITE],
+        );
+        assert_eq!(e.mem.u32(base + 0x1000), 0);
+        // Release needs size 0 and the reservation's start.
+        assert_eq!(call(&mut e, VIRTUAL_FREE, &[base, 0x1000, MEM_RELEASE]), 0);
+        assert_eq!(
+            call(&mut e, VIRTUAL_FREE, &[base + 0x1000, 0, MEM_RELEASE]),
+            0
+        );
+        let block = e.kernel.regions[&base].block;
+        assert_eq!(call(&mut e, VIRTUAL_FREE, &[base, 0, MEM_RELEASE]), 1);
+        assert!(!e.mem.is_mapped(base));
+        assert_eq!(e.mem.block_size(block), None, "heap block freed");
+        assert_eq!(call(&mut e, VIRTUAL_FREE, &[base, 0, MEM_RELEASE]), 0);
+    }
+
+    #[test]
+    fn commit_at_address_zero_reserves_and_commits() {
+        let mut e = kernel_engine();
+        let base = call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[0, 0x1800, MEM_COMMIT, PAGE_READWRITE],
+        );
+        assert_eq!(base % ALLOCATION_GRANULARITY, 0);
+        assert_eq!(e.mem.bytes(base, 0x2000), vec![0; 0x2000]);
+        assert_eq!(call(&mut e, VIRTUAL_FREE, &[base, 0, MEM_DECOMMIT]), 1);
+        assert!(!e.mem.is_mapped(base));
+        assert_eq!(call(&mut e, VIRTUAL_FREE, &[base, 0, MEM_RELEASE]), 1);
+    }
+
+    #[test]
+    fn reserve_at_a_fixed_address_only_where_nothing_is() {
+        let mut e = kernel_engine();
+        let reserve = |e: &mut Engine, at: u32| {
+            call(
+                e,
+                VIRTUAL_ALLOC,
+                &[at, 0x2_0000, MEM_RESERVE, PAGE_READWRITE],
+            )
+        };
+        // The image, the heap region: fail (the memory pools then try the
+        // next 16 MiB step).
+        assert_eq!(reserve(&mut e, 0x0100_0000), 0);
+        assert_eq!(reserve(&mut e, 0x2000_0000), 0);
+        assert_eq!(reserve(&mut e, 0x0200_0000), 0x0200_0000);
+        assert_eq!(reserve(&mut e, 0x0201_0000), 0, "overlaps a reservation");
+        e.mem.map(0x0300_0000, 4);
+        assert_eq!(reserve(&mut e, 0x0300_0000), 0, "mapped memory");
+        let page = call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[0x0201_0000, 0x1000, MEM_COMMIT, PAGE_READWRITE],
+        );
+        assert_eq!(page, 0x0201_0000);
+        assert!(e.mem.is_mapped(0x0201_0000));
+        assert_eq!(
+            call(&mut e, VIRTUAL_FREE, &[0x0200_0000, 0, MEM_RELEASE]),
+            1
+        );
+        assert!(!e.mem.is_mapped(0x0201_0000));
+        assert_eq!(reserve(&mut e, 0x0200_0000), 0x0200_0000, "free again");
+    }
+
+    #[test]
+    #[should_panic(expected = "only MEM_RESERVE and MEM_COMMIT with PAGE_READWRITE")]
+    fn other_allocation_types_stop() {
+        let mut e = kernel_engine();
+        call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[0, 0x1000, MEM_COMMIT | 0x10_0000, PAGE_READWRITE],
+        );
+    }
+
+    #[test]
+    fn scrap_heap_buffers_reserve_commit_and_release_through_the_stand_ins() {
+        let mut e = kernel_engine();
+        // `00aa5ec0`: reserve 0x800000, commit the first 0x10000.
+        let base = e.call(0x00aa_5ec0, &args![0u32, 0x1_0000u32]).u32();
+        assert_eq!(base % ALLOCATION_GRANULARITY, 0);
+        e.mem.set_u32(base + 0xfffc, 1);
+        assert!(!e.mem.is_mapped(base + 0x1_0000));
+        // `ExpandBuffer` (`00aa5e30`): commit 0x10000 more after them.
+        e.call(0x00aa_5e30, &args![0u32, base, 0x1_0000u32, 0x1_0000u32]);
+        assert_eq!(e.mem.u32(base + 0x1_fffc), 0);
+        // `00aa5e90`: decommit the last 0x10000 again.
+        e.call(0x00aa_5e90, &args![0u32, base, 0x2_0000u32, 0x1_0000u32]);
+        assert!(!e.mem.is_mapped(base + 0x1_0000));
+        assert_eq!(e.mem.u32(base + 0xfffc), 1);
+        // `FreeBuffer` (`00aa5f30`): release.
+        e.call(0x00aa_5f30, &args![0u32, base, 0x1_0000u32]);
+        assert!(!e.mem.is_mapped(base));
+        assert!(e.kernel.regions.is_empty());
     }
 }

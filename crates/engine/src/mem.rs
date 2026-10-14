@@ -71,6 +71,20 @@ impl Mem {
         }
     }
 
+    /// Makes the pages of `[addr, addr + len)` unaddressable again; their
+    /// contents are dropped. `addr` and `len` must be page multiples (the
+    /// `VirtualFree` stand-in in `units/platform.rs` decommits this way).
+    pub fn unmap(&mut self, addr: u32, len: u32) {
+        assert!(
+            addr % PAGE as u32 == 0 && len % PAGE as u32 == 0,
+            "unmap of {addr:08x}+{len:x}: not whole pages"
+        );
+        let first = (addr >> PAGE_BITS) as u64;
+        for p in first..first + (len >> PAGE_BITS) as u64 {
+            self.pages[p as usize] = None;
+        }
+    }
+
     pub fn is_mapped(&self, addr: u32) -> bool {
         self.pages[(addr >> PAGE_BITS) as usize].is_some()
     }

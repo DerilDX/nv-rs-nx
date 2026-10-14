@@ -32,6 +32,7 @@ pub mod reference;
 pub mod static_init;
 pub mod types;
 pub mod units;
+pub mod x87;
 
 pub use abi::{AbiFn, Ret};
 pub use engine::Engine;
@@ -42,6 +43,7 @@ pub use ptr::{Field, Inline, Layout, Ptr, Scalar};
 pub mod prelude {
     pub use crate::abi::{AbiFn, Arg, Ret, RetVal};
     pub use crate::ptr::{Field, Inline, Layout, Ptr, Scalar};
+    pub use crate::x87::{x87_quiet, x87_quiet_bits};
     pub use crate::Engine;
     pub use crate::{args, entry, layout};
 }

@@ -27,6 +27,9 @@ pub struct Engine {
     /// Milliseconds since start, as `GetTickCount`/`timeGetTime` report
     /// them. The frame driver advances it; nothing else does.
     pub clock_ms: u32,
+    /// The Windows kernel objects the platform imports hand out (events,
+    /// semaphores, threads, `VirtualAlloc` regions; `units/platform.rs`).
+    pub kernel: crate::units::platform::Kernel,
 }
 
 impl Default for Engine {
@@ -52,6 +55,7 @@ impl Engine {
             call_log: None,
             tls: 0,
             clock_ms: 0,
+            kernel: Default::default(),
         }
     }
 
