@@ -1,4 +1,8 @@
-# nv-rs
+<p align="center">
+  <img src="docs/media/logo.png" alt="nv-rs logo: an NCR Ranger in front of a Mojave sunset, inside a gear" width="260">
+</p>
+
+<h1 align="center">nv-rs</h1>
 
 [![Rust](https://img.shields.io/badge/Rust-2021_edition-orange.svg)](https://www.rust-lang.org/)
 [![Engine](https://img.shields.io/badge/Engine-Bevy_0.16-blue.svg)](https://bevyengine.org/)
