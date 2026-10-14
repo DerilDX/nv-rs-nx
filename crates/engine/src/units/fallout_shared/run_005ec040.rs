@@ -13,6 +13,14 @@ const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
 /// The objective's field reset (`005ec1b0`, `ECX` = objective).
 const OBJECTIVE_RESET: u32 = 0x005e_c1b0;
 
+// Translated from 005ec040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit 0 of the byte at `+0` (unnamed in the map; `ECX`, no stack words).
+/// `TESCondition` calls it on a condition item, whose first byte holds the
+/// comparison flags; there bit 0 joins the item to the next by OR.
+pub fn fn_005ec040(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr()) & 1 != 0
+}
+
 // Translated from 005ec090 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 005ec090 - the exception-unwinding frame (FS:[0]) around the member constructors and the security-cookie bookkeeping are not translated.
 /// The `BGSQuestObjective` constructor (unnamed in the map; `ECX`, no stack
@@ -30,7 +38,10 @@ pub fn fn_005ec090(e: &mut Engine, this: Ptr) -> Ptr {
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005ec090, fn_005ec090(Ptr) -> Ptr)]
+    vec![
+        entry!(0x005ec040, fn_005ec040(Ptr) -> bool),
+        entry!(0x005ec090, fn_005ec090(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -65,5 +76,16 @@ mod tests {
                 (OBJECTIVE_RESET, vec![this]),
             ]
         );
+    }
+
+    #[test]
+    fn answers_bit_0_of_the_first_byte() {
+        let mut e = Engine::new();
+        let item = e.mem.alloc(4);
+        for (byte, expected) in [(0u8, false), (1, true), (0xfe, false), (0x81, true)] {
+            e.mem.set_u8(item, byte);
+            let back = e.call(0x005e_c040, &args![Ptr::<()>::new(item)]).bool();
+            assert_eq!(back, expected, "byte {byte:#x}");
+        }
     }
 }

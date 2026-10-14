@@ -25,9 +25,28 @@ pub fn tesloadscreen_tesloadscreen(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// Byte-swaps the `u32` at the address in place (`00401080`, `cdecl`: the
+/// address and a byte the callers push as 0).
+const SWAP_WORD_IN_PLACE: u32 = 0x0040_1080;
+
+// Translated from 005a6b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps the three words at `+0`, `+4` and `+8` in place, each through
+/// `00401080` with 0 as its second word (unnamed in the map; `ECX`, no
+/// stack words). The file header reader (`00471400`) calls it on the
+/// 12-byte `HEDR` data it read into its `TESFile` (`+0x3dc`) when the file
+/// needs its byte order converted.
+pub fn fn_005a6b10(e: &mut Engine, this: Ptr) {
+    for offset in [0u32, 4, 8] {
+        e.call(SWAP_WORD_IN_PLACE, &args![this.byte_add(offset), 0u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005a_66e0, tesloadscreen_tesloadscreen(Ptr) -> Ptr)]
+    vec![
+        entry!(0x005a_66e0, tesloadscreen_tesloadscreen(Ptr) -> Ptr),
+        entry!(0x005a6b10, fn_005a6b10(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -57,5 +76,29 @@ mod tests {
                 (0x34, 4, 0x0),
             ],
         });
+    }
+
+    #[test]
+    fn swaps_the_three_words_in_order() {
+        use super::*;
+        let mut e = Engine::new();
+        e.register(SWAP_WORD_IN_PLACE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005a_6b10, &args![Ptr::<()>::new(0x0a00_0000)]);
+        let swaps: Vec<Vec<u32>> = e
+            .call_log
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 == SWAP_WORD_IN_PLACE)
+            .map(|c| c.1)
+            .collect();
+        assert_eq!(
+            swaps,
+            vec![
+                vec![0x0a00_0000, 0],
+                vec![0x0a00_0004, 0],
+                vec![0x0a00_0008, 0],
+            ]
+        );
     }
 }

@@ -45,6 +45,16 @@ pub fn fn_00406d30(e: &mut Engine, destination: Ptr, size: u32, source: Ptr) -> 
     e.call(STRCPY_S, &args![destination, size, source]).i32()
 }
 
+/// `strcat_s(destination, size, source)` (LIBCMT, `cdecl`).
+const STRCAT_S: u32 = 0x00ec_6bd2;
+
+// Translated from 00406d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `strcat_s(destination, size, source)` (`cdecl`): a thin wrapper, its
+/// result (left in `EAX`) is `strcat_s`'s (`00ec6bd2`).
+pub fn fn_00406d50(e: &mut Engine, destination: Ptr, size: u32, source: Ptr) -> i32 {
+    e.call(STRCAT_S, &args![destination, size, source]).i32()
+}
+
 // Translated from 00406d90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Rounds a `float` to the nearest integer (`fld` / `fistp`), ties to even
 /// as the x87 does with its default rounding mode. A value that does not fit
@@ -72,6 +82,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         (0x00406d00, fn_00406d00_uniform as AbiFn),
         entry!(0x00406d30, fn_00406d30(Ptr, u32, Ptr) -> i32),
+        entry!(0x00406d50, fn_00406d50(Ptr, u32, Ptr) -> i32),
         entry!(0x00406d90, fn_00406d90(f32) -> i32),
     ]
 }
@@ -122,6 +133,20 @@ mod tests {
             ..Ret::default()
         });
         assert_eq!(e.call(0x0040_6d30, &args![100u32, 20u32, 3u32]).i32(), 123);
+    }
+
+    #[test]
+    fn strcat_s_forwards_its_three_words_and_result() {
+        let mut e = Engine::new();
+        e.register(STRCAT_S, |_, a| Ret {
+            eax: a[0] * 100 + a[1] * 10 + a[2],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0040_6d50, &args![4u32, 5u32, 6u32]).i32(), 456);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|c| c.0 == STRCAT_S).collect();
+        assert_eq!(calls[0].1, vec![4, 5, 6]);
     }
 
     #[test]

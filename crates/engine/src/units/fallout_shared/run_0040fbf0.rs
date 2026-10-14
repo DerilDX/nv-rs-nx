@@ -50,9 +50,22 @@ pub fn fn_0040fbf0(e: &mut Engine, this: Ptr, _unused_1: u32) {
     }
 }
 
+/// The import slot of `KERNEL32!Sleep` (`00fdf104`).
+const SLEEP_IMPORT: u32 = 0x00fd_f104;
+
+// Translated from 0040fca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sleep` wrapper (unnamed in the map; `cdecl`, one word): calls the
+/// imported `Sleep` with the milliseconds.
+pub fn fn_0040fca0(e: &mut Engine, milliseconds: u32) {
+    e.call(SLEEP_IMPORT, &args![milliseconds]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0040fbf0, fn_0040fbf0(Ptr, u32))]
+    vec![
+        entry!(0x0040fbf0, fn_0040fbf0(Ptr, u32)),
+        entry!(0x0040fca0, fn_0040fca0(u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -162,5 +175,17 @@ mod tests {
         assert_eq!(*sleeps.last().unwrap(), 1);
         assert_eq!(e.mem.u32(lock.addr()), THREAD);
         assert_eq!(e.mem.u32(lock.addr() + 4), 1);
+    }
+
+    #[test]
+    fn sleep_wrapper_passes_the_milliseconds_to_the_import() {
+        let mut e = Engine::new();
+        e.register(SLEEP_IMPORT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(SLEEP, &args![25u32]);
+        let log = e.call_log.unwrap();
+        let sleeps: Vec<_> = log.iter().filter(|c| c.0 == SLEEP_IMPORT).collect();
+        assert_eq!(sleeps.len(), 1);
+        assert_eq!(sleeps[0].1, vec![25]);
     }
 }

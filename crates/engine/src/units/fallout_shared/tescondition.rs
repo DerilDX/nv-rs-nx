@@ -43,8 +43,9 @@ const CONDITION_ITEM_SIZE: u32 = 0x1c;
 /// The game's `memset` wrapper (`00403d30`, cdecl: destination, value,
 /// count).
 const MEMSET: u32 = 0x0040_3d30;
-/// `00681220` (`ECX` = item, one stack word; `RET 4`): called by the item
-/// constructor with 0x1048 (unnamed in the map, not translated here).
+/// `00681220` (`ECX` = item, one stack word; `RET 4`): sets the item up for a
+/// function number (unnamed in the map; translated in `run_00681220.rs`);
+/// called by the item constructor with 0x1048.
 const ITEM_SETUP: u32 = 0x0068_1220;
 /// The word the item constructor hands to `00681220`.
 const ITEM_SETUP_VALUE: u32 = 0x1048;

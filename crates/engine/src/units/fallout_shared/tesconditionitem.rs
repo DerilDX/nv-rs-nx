@@ -60,7 +60,7 @@ const SET_OBJECT: u32 = 0x0060_0ab0;
 /// the word at the address.
 const SWAP_WORD: u32 = 0x0040_1080;
 /// `00681110` (`ECX` = the item's function data at +8): swaps the function
-/// data (not translated here).
+/// data (translated in `run_00680fe0.rs`).
 const SWAP_FUNCTION_DATA: u32 = 0x0068_1110;
 /// `00401460` (cdecl: destination, source, size): a copy.
 const COPY: u32 = 0x0040_1460;

@@ -838,6 +838,97 @@ pub fn vsprintf(e: &mut Engine, dest: Ptr, format: Ptr, va_list: u32) -> i32 {
     out.len() as i32
 }
 
+/// Copies variable-argument words to game memory and formats them there as
+/// the `va_list` ([`format_va`]).
+fn format_words(e: &mut Engine, format: &[u8], args: &[u32]) -> Vec<u8> {
+    let size = 4 * (args.len() as u32).max(1);
+    e.with_stack(size, |e, list| {
+        for (i, word) in args.iter().enumerate() {
+            e.mem.set_u32(list.addr() + 4 * i as u32, *word);
+        }
+        format_va(e, format, list.addr())
+    })
+}
+
+// Platform: replaces 00ec623a (sprintf, LIBCMT)
+/// `sprintf(buffer, format, ...)` (cdecl, variable arguments): the 2008
+/// runtime's string stream with room `0x7fffffff`, so the formatted text is
+/// written with its terminating zero and its length returned. A null
+/// `buffer` or `format` is an invalid parameter (MSVC sets `errno` to
+/// `EINVAL` and calls the handler, which in a release build ends the
+/// program). The formatting is [`format_va`]'s.
+pub fn sprintf(e: &mut Engine, buffer: Ptr, format: Ptr, args: &[u32]) -> i32 {
+    if format.is_null() || buffer.is_null() {
+        invalid_parameter("sprintf");
+    }
+    let text = e.mem.cstr(format.addr());
+    let out = format_words(e, &text, args);
+    e.mem.set_cstr(buffer.addr(), &out);
+    out.len() as i32
+}
+
+/// The registry entry of [`sprintf`]: buffer, format, then the variable
+/// arguments.
+fn sprintf_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    sprintf(e, Ptr::new(words[0]), Ptr::new(words[1]), &words[2..]).into_ret()
+}
+
+/// `_snprintf`'s room: `count`, at most `INT_MAX` (`0x7fffffff`).
+const SNPRINTF_MAX_COUNT: u32 = 0x7fff_ffff;
+
+// Platform: replaces 00eca38d (_snprintf, LIBCMT)
+/// `_snprintf(buffer, count, format, ...)` (cdecl, variable arguments) as
+/// the 2008 runtime's string stream (`_IOWRT | _IOSTRG`, room `count` capped
+/// at `0x7fffffff`) does it:
+/// - the formatted text fits with room to spare: written with its
+///   terminating zero, returns its length;
+/// - it fills the room exactly: written without a terminating zero,
+///   returns its length;
+/// - it is longer: the first `count` characters are written, no
+///   terminating zero, returns -1;
+/// - a null `buffer` with `count` 0 only counts (`write_char` and
+///   `write_string`, `00ed2ec8`/`00ed4638`, skip the store for a string
+///   stream without a base): returns the length.
+///
+/// A null `format`, or a null `buffer` with a nonzero `count`, is an invalid
+/// parameter (MSVC sets `errno` to `EINVAL` and calls the handler, which in a
+/// release build ends the program). `errno` (`ERANGE` from `_flsbuf` on
+/// overflow) is not modeled. The formatting is [`format_va`]'s, on the
+/// argument words copied to game memory as the `va_list`.
+pub fn snprintf(e: &mut Engine, buffer: Ptr, count: u32, format: Ptr, args: &[u32]) -> i32 {
+    if format.is_null() || (count != 0 && buffer.is_null()) {
+        invalid_parameter("_snprintf");
+    }
+    let text = e.mem.cstr(format.addr());
+    let out = format_words(e, &text, args);
+    if buffer.is_null() {
+        return out.len() as i32;
+    }
+    let room = count.min(SNPRINTF_MAX_COUNT) as usize;
+    if out.len() > room {
+        e.mem.write(buffer.addr(), &out[..room]);
+        return -1;
+    }
+    e.mem.write(buffer.addr(), &out);
+    if out.len() < room {
+        e.mem.set_u8(buffer.addr() + out.len() as u32, 0);
+    }
+    out.len() as i32
+}
+
+/// The registry entry of [`snprintf`]: buffer, count, format, then the
+/// variable arguments.
+fn snprintf_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    snprintf(
+        e,
+        Ptr::new(words[0]),
+        words[1],
+        Ptr::new(words[2]),
+        &words[3..],
+    )
+    .into_ret()
+}
+
 // ---- Program ---------------------------------------------------------------
 
 // Platform: replaces 00ec658f (_atexit, LIBCMT)
@@ -958,6 +1049,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ecadb8, rand() -> i32),
         entry!(0x00ec658f, atexit(Ptr) -> i32),
         entry!(0x00ec6cc4, vsprintf(Ptr, Ptr, u32) -> i32),
+        (0x00ec623a, sprintf_entry as AbiFn),
+        (0x00eca38d, snprintf_entry as AbiFn),
         entry!(0x00ec7c56, invalid_parameter_noinfo()),
         entry!(0x00ec43fb, rt_dynamic_cast(Ptr, i32, Ptr, Ptr, i32) -> Ptr),
     ]
@@ -1356,5 +1449,71 @@ mod tests {
             ),
             "Script 'MQ101Script' line 12: form 0001F2C0, 2.00"
         );
+    }
+
+    #[test]
+    fn snprintf_fits_fills_overflows_and_counts() {
+        let mut e = Engine::new();
+        let f = cstr(&mut e, b"Topic %s (%08x)");
+        let s = cstr(&mut e, b"GREETING");
+        let buffer = e.mem.alloc(32);
+        let fill = |e: &mut Engine| e.mem.write(buffer, &[0xaa; 32]);
+        // Room to spare: written with its zero.
+        fill(&mut e);
+        let n = e.call(0x00eca38d, &args![buffer, 32u32, f, s, 0x0001_2345u32]);
+        assert_eq!(n.i32(), 25);
+        assert_eq!(e.mem.cstr(buffer), b"Topic GREETING (00012345)".to_vec());
+        assert_eq!(e.mem.u8(buffer + 25), 0);
+        // Exactly full: no zero, the length.
+        let short = cstr(&mut e, b"abc%d");
+        fill(&mut e);
+        let n = e.call(0x00eca38d, &args![buffer, 4u32, short, 7u32]);
+        assert_eq!(n.i32(), 4);
+        assert_eq!(e.mem.bytes(buffer, 5), b"abc7\xaa".to_vec());
+        // Too long: the first `count` characters, no zero, -1.
+        fill(&mut e);
+        let n = e.call(0x00eca38d, &args![buffer, 3u32, short, 7u32]);
+        assert_eq!(n.i32(), -1);
+        assert_eq!(e.mem.bytes(buffer, 4), b"abc\xaa".to_vec());
+        // A count of 0 writes nothing.
+        fill(&mut e);
+        let n = e.call(0x00eca38d, &args![buffer, 0u32, short, 7u32]);
+        assert_eq!(n.i32(), -1);
+        assert_eq!(e.mem.u8(buffer), 0xaa);
+        // A null buffer with a zero count only counts.
+        let n = e.call(0x00eca38d, &args![0u32, 0u32, short, 12u32]);
+        assert_eq!(n.i32(), 5);
+    }
+
+    #[test]
+    fn sprintf_writes_the_text_and_its_zero() {
+        let mut e = Engine::new();
+        let f = cstr(&mut e, b"Form %s %s (%08X)");
+        let a = cstr(&mut e, b"QUST");
+        let b = cstr(&mut e, b"VMS49");
+        let buffer = e.mem.alloc(32);
+        e.mem.write(buffer, &[0xaa; 32]);
+        let n = e.call(0x00ec623a, &args![buffer, f, a, b, 0x0010_abcdu32]);
+        assert_eq!(n.i32(), 26);
+        assert_eq!(
+            e.mem.bytes(buffer, 28),
+            b"Form QUST VMS49 (0010ABCD)\0\xaa".to_vec()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "CRT invalid parameter: sprintf")]
+    fn sprintf_null_buffer_is_invalid() {
+        let mut e = Engine::new();
+        let f = cstr(&mut e, b"x");
+        e.call(0x00ec623a, &args![0u32, f]);
+    }
+
+    #[test]
+    #[should_panic(expected = "CRT invalid parameter: _snprintf")]
+    fn snprintf_null_buffer_with_room_is_invalid() {
+        let mut e = Engine::new();
+        let f = cstr(&mut e, b"x");
+        e.call(0x00eca38d, &args![0u32, 4u32, f]);
     }
 }

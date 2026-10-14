@@ -28,9 +28,31 @@ pub fn fn_004612b0(e: &mut Engine, form_type: u8) -> u32 {
     }
 }
 
+// Translated from 004612e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `this + 0x108` (unnamed in the map; `ECX`, no stack words). The topic
+/// code calls it on the object at `011c3f2c` for the first node of its
+/// topic list.
+pub fn fn_004612e0(_e: &mut Engine, this: Ptr) -> Ptr {
+    this.byte_add(0x108)
+}
+
+/// The byte `fn_00461300` sets (`01202d63`).
+const FLAG_01202D63: u32 = 0x0120_2d63;
+
+// Translated from 00461300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `01202d63` to 1 (unnamed in the map; no arguments).
+/// `TESDataHandler::CleanUpBadForms` and the form code call it.
+pub fn fn_00461300(e: &mut Engine) {
+    e.mem.set_u8(FLAG_01202D63, 1);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x004612b0, fn_004612b0(u8) -> u32)]
+    vec![
+        entry!(0x004612b0, fn_004612b0(u8) -> u32),
+        entry!(0x004612e0, fn_004612e0(Ptr) -> Ptr),
+        entry!(0x00461300, fn_00461300()),
+    ]
 }
 
 #[cfg(test)]
@@ -49,5 +71,24 @@ mod tests {
         assert_eq!(e.call(0x0046_12b0, &args![0x78u8]).u32(), 0x0102_8000);
         assert_eq!(e.call(0x0046_12b0, &args![0x79u8]).u32(), EMPTY_STRING);
         assert_eq!(e.call(0x0046_12b0, &args![0xffu8]).u32(), EMPTY_STRING);
+    }
+
+    #[test]
+    fn the_list_is_0x108_bytes_into_the_object() {
+        let mut e = Engine::new();
+        let back = e.call(0x0046_12e0, &args![Ptr::<()>::new(0x0200_0000)]);
+        assert_eq!(back.u32(), 0x0200_0108);
+    }
+
+    #[test]
+    fn sets_the_byte_to_one_and_leaves_its_neighbours() {
+        let mut e = Engine::new();
+        e.map(FLAG_01202D63 & !0xfff, 0x1000);
+        e.mem.set_u32(FLAG_01202D63 - 3, 0);
+        e.mem.set_u8(FLAG_01202D63 + 1, 0x77);
+        e.call(0x0046_1300, &args![]);
+        assert_eq!(e.mem.u8(FLAG_01202D63), 1);
+        assert_eq!(e.mem.u32(FLAG_01202D63 - 3), 0x0100_0000);
+        assert_eq!(e.mem.u8(FLAG_01202D63 + 1), 0x77);
     }
 }
