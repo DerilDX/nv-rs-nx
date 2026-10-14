@@ -17,6 +17,10 @@ const HASH_MAP_VTABLE: u32 = 0x0101_2278;
 const ALLOCATE: u32 = 0x00aa_1070;
 /// `memset` wrapper (`00403d30`, `cdecl` (dest, value, count)).
 const FILL: u32 = 0x0040_3d30;
+/// The map's destructor body (`00405230`, `thiscall`, no stack words).
+const DESTROY: u32 = 0x0040_5230;
+/// The deallocator (`00401030`, `cdecl` (block)).
+const FREE: u32 = 0x0040_1030;
 
 // Translated from 00405570 (PC disassembly, FalloutNV.exe 1.4.0.525)
 /// The outermost constructor (`thiscall`, `RET 8`): [`fn_004055d0`] with the
@@ -25,6 +29,18 @@ const FILL: u32 = 0x0040_3d30;
 pub fn fn_00405570(e: &mut Engine, this: Ptr, buckets: u32, copy: u8) -> Ptr {
     fn_004055d0(e, this, buckets, copy);
     e.mem.set_u32(this.addr(), MAP_VTABLE);
+    this
+}
+
+// Translated from 004055a0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor in the vtable `01012298` (`thiscall`,
+/// `RET 4`): the destructor body `00405230`, then, when bit 0 of `flags` is
+/// set, frees `this` (`00401030`). Returns `this`.
+pub fn fn_004055a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(DESTROY, &args![this]);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
     this
 }
 
@@ -71,6 +87,7 @@ pub fn fn_00405630(e: &mut Engine, this: Ptr, buckets: u32) -> Ptr {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00405570, fn_00405570(Ptr, u32, u8) -> Ptr),
+        entry!(0x004055a0, fn_004055a0(Ptr, u32) -> Ptr),
         entry!(0x004055d0, fn_004055d0(Ptr, u32, u8) -> Ptr),
         entry!(0x00405600, fn_00405600(Ptr, u32) -> Ptr),
         entry!(0x00405630, fn_00405630(Ptr, u32) -> Ptr),
@@ -103,5 +120,23 @@ mod tests {
         assert_eq!(e.mem.u8(m + 0x10), 1);
         let array = e.mem.u32(m + 8);
         assert_eq!(log[2].1, vec![array, 0, 37 * 4]);
+    }
+
+    #[test]
+    fn the_deleting_destructor_frees_only_with_bit_zero() {
+        let mut e = Engine::new();
+        e.register(DESTROY, |_, _| Ret::default());
+        e.register(FREE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0040_55a0, &[0x5000, 1]).u32(), 0x5000);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(DESTROY, vec![0x5000])));
+        assert!(log.contains(&(FREE, vec![0x5000])));
+
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0040_55a0, &[0x5000, 2]).u32(), 0x5000);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(DESTROY, vec![0x5000])));
+        assert!(!log.iter().any(|c| c.0 == FREE));
     }
 }

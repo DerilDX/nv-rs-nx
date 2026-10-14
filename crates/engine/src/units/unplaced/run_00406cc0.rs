@@ -4,6 +4,36 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `floor(value)` (LIBCMT, `cdecl`, a `double` argument and result; unnamed
+/// in the engine map, the body rounds down).
+const FLOOR: u32 = 0x00ec_6940;
+/// The actor value table: a pointer per actor value index (its entries'
+/// word at +0x44 is the flag word [`fn_00406d70`] tests).
+const ACTOR_VALUE_TABLE: u32 = 0x011d_61c8;
+/// The list constructor run on `StatsMenu::StatusDataList`'s
+/// `BSSimpleList<EffectItemData *>` base (`thiscall`, no arguments).
+const STATUS_LIST_BASE_CONSTRUCT: u32 = 0x0096_a2d0;
+/// The `StatsMenu::StatusDataList` vtable (its RTTI complete object locator,
+/// at `0x01102268`, names `.?AVStatusDataList@StatsMenu@@`).
+const STATUS_DATA_LIST_VTABLE: u32 = 0x0101_2650;
+
+// Translated from 00406cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl(value)`: copies the `float` argument through the x87 stack
+/// (`FLD`/`FSTP`, which quiets a signalling NaN) and returns
+/// [`fn_00406ce0`]'s result, left in `ST0`.
+pub fn fn_00406cc0(e: &mut Engine, value: f32) -> f32 {
+    fn_00406ce0(e, x87_quiet(value))
+}
+
+// Translated from 00406ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl(value)`: the `float` rounded down, through the CRT's `double`
+/// `floor` (`00ec6940`); the result is stored as a `float` and loaded back
+/// into `ST0`.
+pub fn fn_00406ce0(e: &mut Engine, value: f32) -> f32 {
+    let argument = f64::from(x87_quiet(value));
+    e.call(FLOOR, &args![argument]).f64() as f32
+}
+
 /// `vsprintf_s(buffer, size, format, va_list)` (LIBCMT, `cdecl`).
 const VSPRINTF_S: u32 = 0x00ec_6bb5;
 /// `strcpy_s(destination, size, source)` (LIBCMT, `cdecl`).
@@ -55,6 +85,17 @@ pub fn fn_00406d50(e: &mut Engine, destination: Ptr, size: u32, source: Ptr) -> 
     e.call(STRCAT_S, &args![destination, size, source]).i32()
 }
 
+// Translated from 00406d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl(index, mask)`: whether the flag word at +0x44 of the actor value
+/// table's entry `index` (`[0x011d61c8 + 4 * index]`) has a bit of `mask`,
+/// as 1 or 0.
+pub fn fn_00406d70(e: &mut Engine, index: i32, mask: u32) -> bool {
+    let entry = e
+        .mem
+        .u32(ACTOR_VALUE_TABLE.wrapping_add((index as u32).wrapping_mul(4)));
+    e.mem.u32(entry.wrapping_add(0x44)) & mask != 0
+}
+
 // Translated from 00406d90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Rounds a `float` to the nearest integer (`fld` / `fistp`), ties to even
 /// as the x87 does with its default rounding mode. A value that does not fit
@@ -77,19 +118,98 @@ pub fn fn_00406d90(_e: &mut Engine, value: f32) -> i32 {
     }
 }
 
+// Translated from 00406db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `StatsMenu::StatusDataList` constructor (`thiscall`; the vtable it
+/// stores names the class): constructs the `BSSimpleList<EffectItemData *>`
+/// base at +4 (Xbox PDB layout) with `0096a2d0`, then stores the vtable.
+/// Returns `this`.
+pub fn fn_00406db0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(STATUS_LIST_BASE_CONSTRUCT, &args![this.byte_add(4)]);
+    e.mem.set_u32(this.addr(), STATUS_DATA_LIST_VTABLE);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00406cc0, fn_00406cc0(f32) -> f32),
+        entry!(0x00406ce0, fn_00406ce0(f32) -> f32),
         (0x00406d00, fn_00406d00_uniform as AbiFn),
         entry!(0x00406d30, fn_00406d30(Ptr, u32, Ptr) -> i32),
         entry!(0x00406d50, fn_00406d50(Ptr, u32, Ptr) -> i32),
+        entry!(0x00406d70, fn_00406d70(i32, u32) -> bool),
         entry!(0x00406d90, fn_00406d90(f32) -> i32),
+        entry!(0x00406db0, fn_00406db0(Ptr) -> Ptr),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn double_argument(a: &[u32]) -> f64 {
+        f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32)
+    }
+
+    #[test]
+    fn floor_wrapper_rounds_down_and_stores_a_float() {
+        let mut e = Engine::new();
+        e.register(FLOOR, |_, a| double_argument(a).floor().into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0040_6ce0, &args![2.75f32]).f64(), 2.0);
+        assert_eq!(e.call(0x0040_6ce0, &args![-2.25f32]).f64(), -3.0);
+        let log = e.call_log.take().unwrap();
+        let floors: Vec<_> = log.iter().filter(|c| c.0 == FLOOR).collect();
+        assert_eq!(floors[0].1, args![2.75f64]);
+        // The `double` result is stored as a `float`.
+        e.register(FLOOR, |_, a| (double_argument(a) + 1.0e-10).into_ret());
+        assert_eq!(e.call(0x0040_6ce0, &args![0.5f32]).f64(), 0.5);
+    }
+
+    #[test]
+    fn float_copy_hands_the_quieted_value_to_the_floor_wrapper() {
+        let mut e = Engine::new();
+        e.register(FLOOR, |_, a| (double_argument(a) * 2.0).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0040_6cc0, &args![1.5f32]).f64(), 3.0);
+        e.call(0x0040_6cc0, &args![f32::from_bits(0x7f80_0001)]);
+        let log = e.call_log.take().unwrap();
+        let floors: Vec<_> = log.iter().filter(|c| c.0 == FLOOR).collect();
+        assert!(double_argument(&floors[1].1).is_nan());
+        let high = floors[1].1[1];
+        assert_eq!(high >> 19 & 1, 1, "the quiet bit is set");
+    }
+
+    #[test]
+    fn actor_value_flag_test_reads_the_table_entry() {
+        let mut e = Engine::new();
+        e.map(ACTOR_VALUE_TABLE, 0x100);
+        let entry = e.mem.alloc(0x48);
+        e.mem.set_u32(entry + 0x44, 0b1010);
+        e.mem.set_u32(ACTOR_VALUE_TABLE + 4 * 5, entry);
+        assert!(e.call(0x0040_6d70, &args![5i32, 0b0010u32]).bool());
+        assert_eq!(e.call(0x0040_6d70, &args![5i32, 0b1000u32]).u32(), 1);
+        assert_eq!(e.call(0x0040_6d70, &args![5i32, 0b0101u32]).u32(), 0);
+    }
+
+    #[test]
+    fn status_data_list_constructor_builds_the_list_then_the_vtable() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc);
+        e.register(STATUS_LIST_BASE_CONSTRUCT, |e, a| {
+            assert_eq!(e.mem.u32(a[0] - 4), 0, "the vtable is stored afterwards");
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0040_6db0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), STATUS_DATA_LIST_VTABLE);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == STATUS_LIST_BASE_CONSTRUCT)
+            .collect();
+        assert_eq!(calls[0].1, vec![this + 4]);
+    }
 
     #[test]
     fn sprintf_passes_a_va_list_over_the_extra_words() {

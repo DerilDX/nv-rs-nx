@@ -506,12 +506,12 @@ pub fn fn_005289b0(e: &mut Engine, _manager: Ptr, task: Ptr) {
 }
 
 // Translated from 00528b60 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Locks the object, obtains a value through its callback path, then releases
-/// the lock and returns the callback's byte result.
+/// Locks the object, gets its map (00449f80), looks the key up in it with
+/// 0044c000, then releases the lock and returns the lookup's byte result.
 pub fn fn_00528b60(e: &mut Engine, this: Ptr, first: u32, second: u32, mode: u8) -> bool {
     e.call(0x0040_fbf0, &args![this.addr() + 0x20, 0u32]);
-    let value = e.call(0x0044_9f80, &args![this, first, second, mode]);
-    let result = e.call(0x0044_c000, &args![value.eax]).bool();
+    let map = e.call(0x0044_9f80, &args![this]).u32();
+    let result = e.call(0x0044_c000, &args![map, first, second, mode]).bool();
     e.call(0x0040_fba0, &args![this.addr() + 0x20]);
     result
 }
@@ -1130,7 +1130,15 @@ mod tests {
         returning(&mut e, 0x0044_c000, 1);
         stub(&mut e, 0x0040_fba0);
         let map = Ptr::new(e.mem.alloc(0x30));
+        e.call_log = Some(vec![]);
         assert!(fn_00528b60(&mut e, map, 1, 2, 3));
+        let log = e.call_log.take().unwrap();
+        // 00449f80 takes only `this` (plain RET); the three pushed words are
+        // 0044c000's (RET 0xc), called on 00449f80's result.
+        let get = log.iter().find(|(a, _)| *a == 0x0044_9f80).unwrap();
+        assert_eq!(get.1, vec![map.addr()]);
+        let find = log.iter().find(|(a, _)| *a == 0x0044_c000).unwrap();
+        assert_eq!(find.1, vec![0x0600_0100, 1, 2, 3]);
     }
 
     #[test]
