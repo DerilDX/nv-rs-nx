@@ -16,6 +16,10 @@ jobs:
       fail-fast: false
       matrix:
         workspace: [core, viewer]
+    env:
+      # CI builds once from a cache; incremental state and debug info only cost time.
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
     defaults:
       run:
         shell: pwsh
@@ -27,6 +31,13 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           rustup default stable
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      # Reuse compiled dependencies between runs. Only pushes to main save the
+      # cache, so pull requests restore main's build without filling the store.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ${{ matrix.workspace == 'viewer' && 'viewer -> target' || '. -> target' }}
+          shared-key: ${{ matrix.workspace }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check formatting, tests and lints
         env:
           WORKSPACE: ${{ matrix.workspace }}
