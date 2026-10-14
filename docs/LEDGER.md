@@ -21,6 +21,7 @@ Map provenance:
 | Status | Meaning |
 | --- | --- |
 | translated | cited on a translation marker (ADR-0003) in Rust |
+| static init (table) | a static initializer run from the generated table `crates/engine/data/static_initializers.tsv` (research/initgen), not a hand translation |
 | traced | cited elsewhere in Rust |
 | platform | its subsystem is replaced by Rust/Bevy |
 | library | compiler-generated code, C/C++ runtime, zlib |
@@ -30,11 +31,12 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 14155 | 21.4% |
-| traced | 4095 | 6.2% |
+| translated | 14211 | 21.4% |
+| static init (table) | 15762 | 23.8% |
+| traced | 4043 | 6.1% |
 | platform | 3383 | 5.1% |
-| library | 21900 | 33.1% |
-| open | 22726 | 34.3% |
+| library | 6187 | 9.3% |
+| open | 22673 | 34.2% |
 | **all** | **66259** | |
 
 Translation totals count markers, not complete behavior. **796** engine functions
@@ -469,7 +471,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `0082f830` | `crates/engine/src/units/fallout_audio/falloutaudiomedia.rs:360` |
 | `008300c0` | `crates/engine/src/units/fallout_audio/falloutaudiomedia.rs:691` |
 | `00830b30` | `crates/engine/src/units/fallout_audio/falloutaudiomedia.rs:1104` |
-| `00831e20` | `crates/engine/src/units/fallout_audio/falloutaudiomedia.rs:1489` |
+| `00831e20` | `crates/engine/src/units/fallout_audio/falloutaudiomedia.rs:1485` |
 | `008433d0` | `crates/engine/src/units/fallout_misc/bgsreconstructformsinallfilesmap.rs:71` |
 | `00843470` | `crates/engine/src/units/fallout_misc/bgsreconstructformsinallfilesmap.rs:60` |
 | `00845300` | `crates/engine/src/units/fallout_misc/run_00845230.rs:23` |
@@ -839,9 +841,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00ec5ec0` | `crates/engine/src/units/fallout_shared_magic/effectsetting.rs:348` |
 | `00ec8660` | `crates/engine/src/units/fallout_misc/bgssaveloadstructs.rs:412` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 17794 (43.9%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 17847 (44.0%) are translated, run from the static-initializer table, or traced.
 
-Rust cites 19000 distinct `.text` addresses; 83 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 35941 distinct `.text` addresses; 1257 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -869,57 +871,57 @@ How the subsystem was found:
 
 Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime libraries, Function ID) name. KB is the size of the PC code.
 
-| Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| compiler: static init/exit | 21335 | 529 | 102 | 1 | 72 | 0 | 21262 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 7139 | 790 | 0 | 0 | 2541 | 75.7% |
-| Havok SDK | 6591 | 1555 | 3499 | 53 | 126 | 0 | 0 | 6412 | 2.7% |
-| fallout/ai | 4849 | 1475 | 1888 | 2707 | 508 | 0 | 0 | 1634 | 66.3% |
-| fallout/interface | 2645 | 991 | 1247 | 1054 | 626 | 0 | 0 | 965 | 63.5% |
-| (unplaced) | 2353 | 470 | 0 | 188 | 432 | 1 | 0 | 1732 | 26.3% |
-| fallout shared/pathfinding | 1788 | 365 | 452 | 826 | 201 | 0 | 0 | 761 | 57.4% |
-| NiMain | 1619 | 261 | 1134 | 96 | 110 | 0 | 0 | 1413 | 12.7% |
-| BSHavok | 1615 | 316 | 1134 | 162 | 127 | 0 | 0 | 1326 | 17.9% |
-| BSShader | 1549 | 608 | 350 | 0 | 148 | 1401 | 0 | 0 | - |
-| NiAnimation | 1279 | 171 | 903 | 0 | 37 | 0 | 0 | 1242 | 2.9% |
-| fallout/misc | 1045 | 171 | 353 | 702 | 67 | 0 | 0 | 276 | 73.6% |
-| BSMain | 991 | 192 | 478 | 245 | 74 | 0 | 0 | 672 | 32.2% |
-| NiXenonRenderer | 965 | 172 | 298 | 1 | 16 | 948 | 0 | 0 | - |
-| SpeedTree | 732 | 234 | 151 | 0 | 115 | 617 | 0 | 0 | - |
-| fallout/magic | 705 | 162 | 378 | 8 | 86 | 0 | 0 | 611 | 13.3% |
-| LIBCMT | 682 | 124 | 503 | 0 | 27 | 33 | 622 | 0 | - |
-| NiParticle | 649 | 89 | 540 | 0 | 68 | 0 | 0 | 581 | 10.5% |
-| fallout shared/havok | 478 | 60 | 110 | 107 | 58 | 0 | 0 | 313 | 34.5% |
-| FaceGen | 474 | 164 | 51 | 0 | 10 | 0 | 0 | 464 | 2.1% |
-| fallout shared/facegen | 433 | 63 | 91 | 0 | 60 | 0 | 0 | 373 | 13.9% |
-| BSMenu | 361 | 136 | 221 | 208 | 43 | 0 | 0 | 110 | 69.5% |
-| BSAudio | 304 | 75 | 141 | 243 | 8 | 0 | 0 | 53 | 82.6% |
-| fallout shared/magic | 296 | 43 | 83 | 146 | 37 | 0 | 0 | 113 | 61.8% |
-| BSSystem | 275 | 54 | 36 | 1 | 41 | 233 | 0 | 0 | - |
-| NiCollision | 215 | 104 | 115 | 0 | 5 | 0 | 0 | 210 | 2.3% |
-| fallout shared/distant terrain system | 204 | 37 | 62 | 30 | 30 | 0 | 0 | 144 | 29.4% |
-| BSCore | 197 | 22 | 45 | 26 | 18 | 2 | 0 | 151 | 22.3% |
-| fallout/audio | 190 | 55 | 49 | 75 | 23 | 0 | 0 | 92 | 51.6% |
-| fallout shared/sky | 164 | 59 | 51 | 66 | 25 | 0 | 0 | 73 | 55.5% |
-| fallout shared/region system | 159 | 26 | 74 | 2 | 22 | 0 | 0 | 135 | 15.1% |
-| fallout shared/tempeffects | 149 | 48 | 58 | 31 | 13 | 0 | 0 | 105 | 29.5% |
-| fallout shared/speedtree | 115 | 33 | 57 | 29 | 13 | 0 | 0 | 73 | 36.5% |
-| NiSystem | 92 | 7 | 39 | 5 | 6 | 0 | 0 | 81 | 12.0% |
-| BSSystemUtilities | 86 | 5 | 25 | 2 | 8 | 76 | 0 | 0 | - |
-| fallout/dialogue | 74 | 14 | 46 | 0 | 19 | 0 | 0 | 55 | 25.7% |
-| BSMovie | 62 | 9 | 21 | 0 | 9 | 53 | 0 | 0 | - |
-| libcpmt | 12 | 0 | 8 | 0 | 0 | 0 | 12 | 0 | - |
-| d3dx9 | 11 | 0 | 8 | 0 | 0 | 11 | 0 | 0 | - |
-| fallout/debug | 10 | 0 | 7 | 0 | 2 | 0 | 0 | 8 | 20.0% |
-| fallout shared/settings | 9 | 0 | 5 | 0 | 2 | 0 | 0 | 7 | 22.2% |
-| BSDevices | 8 | 1 | 5 | 0 | 6 | 2 | 0 | 0 | - |
-| XAPILIB | 8 | 0 | 6 | 1 | 5 | 2 | 0 | 0 | - |
-| zLib | 4 | 10 | 1 | 0 | 0 | 0 | 4 | 0 | - |
-| BSDiag | 3 | 0 | 3 | 0 | 1 | 2 | 0 | 0 | - |
-| RemoteLog | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 | - |
-| XBOXKRNL | 1 | 0 | 1 | 1 | 0 | 0 | 0 | 0 | - |
-| d3d9 | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | - |
-| xaudio2 | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 | - |
+| Subsystem | Functions | KB | Named | translated | static init (table) | traced | platform | library | open | done |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| compiler: static init/exit | 21335 | 529 | 102 | 1 | 15762 | 21 | 0 | 5551 | 0 | - |
+| fallout shared | 10470 | 2065 | 3149 | 7143 | 0 | 789 | 0 | 0 | 2538 | 75.8% |
+| Havok SDK | 6591 | 1555 | 3499 | 54 | 0 | 127 | 0 | 0 | 6410 | 2.7% |
+| fallout/ai | 4849 | 1475 | 1888 | 2707 | 0 | 508 | 0 | 0 | 1634 | 66.3% |
+| fallout/interface | 2645 | 991 | 1247 | 1057 | 0 | 626 | 0 | 0 | 962 | 63.6% |
+| (unplaced) | 2353 | 470 | 0 | 199 | 0 | 430 | 1 | 0 | 1723 | 26.7% |
+| fallout shared/pathfinding | 1788 | 365 | 452 | 826 | 0 | 201 | 0 | 0 | 761 | 57.4% |
+| NiMain | 1619 | 261 | 1134 | 97 | 0 | 110 | 0 | 0 | 1412 | 12.8% |
+| BSHavok | 1615 | 316 | 1134 | 162 | 0 | 127 | 0 | 0 | 1326 | 17.9% |
+| BSShader | 1549 | 608 | 350 | 0 | 0 | 148 | 1401 | 0 | 0 | - |
+| NiAnimation | 1279 | 171 | 903 | 26 | 0 | 37 | 0 | 0 | 1216 | 4.9% |
+| fallout/misc | 1045 | 171 | 353 | 702 | 0 | 68 | 0 | 0 | 275 | 73.7% |
+| BSMain | 991 | 192 | 478 | 245 | 0 | 74 | 0 | 0 | 672 | 32.2% |
+| NiXenonRenderer | 965 | 172 | 298 | 1 | 0 | 16 | 948 | 0 | 0 | - |
+| SpeedTree | 732 | 234 | 151 | 0 | 0 | 115 | 617 | 0 | 0 | - |
+| fallout/magic | 705 | 162 | 378 | 8 | 0 | 86 | 0 | 0 | 611 | 13.3% |
+| LIBCMT | 682 | 124 | 503 | 0 | 0 | 28 | 34 | 620 | 0 | - |
+| NiParticle | 649 | 89 | 540 | 0 | 0 | 68 | 0 | 0 | 581 | 10.5% |
+| fallout shared/havok | 478 | 60 | 110 | 107 | 0 | 58 | 0 | 0 | 313 | 34.5% |
+| FaceGen | 474 | 164 | 51 | 0 | 0 | 10 | 0 | 0 | 464 | 2.1% |
+| fallout shared/facegen | 433 | 63 | 91 | 4 | 0 | 60 | 0 | 0 | 369 | 14.8% |
+| BSMenu | 361 | 136 | 221 | 208 | 0 | 43 | 0 | 0 | 110 | 69.5% |
+| BSAudio | 304 | 75 | 141 | 243 | 0 | 8 | 0 | 0 | 53 | 82.6% |
+| fallout shared/magic | 296 | 43 | 83 | 149 | 0 | 36 | 0 | 0 | 111 | 62.5% |
+| BSSystem | 275 | 54 | 36 | 1 | 0 | 41 | 233 | 0 | 0 | - |
+| NiCollision | 215 | 104 | 115 | 0 | 0 | 5 | 0 | 0 | 210 | 2.3% |
+| fallout shared/distant terrain system | 204 | 37 | 62 | 30 | 0 | 30 | 0 | 0 | 144 | 29.4% |
+| BSCore | 197 | 22 | 45 | 27 | 0 | 18 | 2 | 0 | 150 | 22.8% |
+| fallout/audio | 190 | 55 | 49 | 75 | 0 | 23 | 0 | 0 | 92 | 51.6% |
+| fallout shared/sky | 164 | 59 | 51 | 66 | 0 | 25 | 0 | 0 | 73 | 55.5% |
+| fallout shared/region system | 159 | 26 | 74 | 2 | 0 | 22 | 0 | 0 | 135 | 15.1% |
+| fallout shared/tempeffects | 149 | 48 | 58 | 31 | 0 | 13 | 0 | 0 | 105 | 29.5% |
+| fallout shared/speedtree | 115 | 33 | 57 | 29 | 0 | 13 | 0 | 0 | 73 | 36.5% |
+| NiSystem | 92 | 7 | 39 | 6 | 0 | 6 | 0 | 0 | 80 | 13.0% |
+| BSSystemUtilities | 86 | 5 | 25 | 2 | 0 | 8 | 76 | 0 | 0 | - |
+| fallout/dialogue | 74 | 14 | 46 | 0 | 0 | 19 | 0 | 0 | 55 | 25.7% |
+| BSMovie | 62 | 9 | 21 | 1 | 0 | 9 | 52 | 0 | 0 | - |
+| libcpmt | 12 | 0 | 8 | 0 | 0 | 0 | 0 | 12 | 0 | - |
+| d3dx9 | 11 | 0 | 8 | 0 | 0 | 0 | 11 | 0 | 0 | - |
+| fallout/debug | 10 | 0 | 7 | 0 | 0 | 2 | 0 | 0 | 8 | 20.0% |
+| fallout shared/settings | 9 | 0 | 5 | 0 | 0 | 2 | 0 | 0 | 7 | 22.2% |
+| BSDevices | 8 | 1 | 5 | 0 | 0 | 6 | 2 | 0 | 0 | - |
+| XAPILIB | 8 | 0 | 6 | 1 | 0 | 5 | 2 | 0 | 0 | - |
+| zLib | 4 | 10 | 1 | 0 | 0 | 0 | 0 | 4 | 0 | - |
+| BSDiag | 3 | 0 | 3 | 0 | 0 | 1 | 2 | 0 | 0 | - |
+| RemoteLog | 1 | 0 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | - |
+| XBOXKRNL | 1 | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | - |
+| d3d9 | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 | 0 | - |
+| xaudio2 | 1 | 0 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | - |
 
 `done` is translated plus traced as a share of the subsystem; it is left out (`-`) for platform and library subsystems.
 
@@ -927,12 +929,12 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 
 The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame function, from `research/engine-map/frame.tsv` (docs/FRAME_SKELETON.md): direct calls in call order to depth 3, one row per call site, so a function called twice counts twice. Statuses as above.
 
-| Depth | Call sites | Functions | translated | traced | platform | library | open |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
-| 1 | 143 | 117 | 124 | 12 | 3 | 0 | 4 |
-| 2 | 1575 | 583 | 1309 | 208 | 22 | 4 | 32 |
-| 3 | 4973 | 1303 | 4064 | 650 | 140 | 26 | 93 |
+| Depth | Call sites | Functions | translated | static init (table) | traced | platform | library | open |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| 1 | 143 | 117 | 124 | 0 | 12 | 3 | 0 | 4 |
+| 2 | 1575 | 583 | 1309 | 0 | 208 | 22 | 4 | 32 |
+| 3 | 4973 | 1303 | 4069 | 0 | 648 | 140 | 26 | 90 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 

@@ -6,8 +6,10 @@
 //! FalloutNV.exe in the installation that holds `Data`, refuses any build
 //! but 1.4.0.525 (the one every translated address belongs to), maps the
 //! executable's data sections (read-only use of the file: nothing is
-//! written to the installation, nothing from it is stored) and runs the
-//! allocator start-up the game runs before any form exists.
+//! written to the installation, nothing from it is stored), runs the
+//! executable's static initializers as `__cinit` does before `WinMain`
+//! ([`engine::static_init`]) and the allocator start-up the game runs before
+//! any form exists.
 //!
 //! The engine is not `Send`, `Sync` or `Clone` (its memory and test doubles
 //! are `Rc<RefCell<..>>`); a [`Host`] is owned by one thread and handed to
@@ -25,14 +27,18 @@ pub struct Host {
     pub engine: Engine,
     /// The executable whose data sections are mapped.
     pub exe: PathBuf,
+    /// What the static initializers' run did (entries run, skipped).
+    pub static_init: engine::static_init::Report,
 }
 
 impl Host {
     /// Starts the game's code for the installation whose `Data` folder is
     /// `data`: its `FalloutNV.exe` ([`engine::exe::installed_exe`]),
     /// checked to be 1.4.0.525 ([`engine::exe::checked_sections`], the check
-    /// `engine::exe::verify` makes) and mapped, then the allocator started
-    /// ([`start_allocator`]). The error says which file and why (missing,
+    /// `engine::exe::verify` makes) and mapped; then the static initializers
+    /// ([`engine::static_init::run`], in `__cinit`'s order, the untranslated
+    /// ones skipped and counted), the memory manager's among them replaced by
+    /// [`start_allocator`] ([`STAND_INS`]). The error says which file and why (missing,
     /// not a PE file, another build).
     pub fn start(data: &Path) -> Result<Host, String> {
         let exe = engine::exe::installed_exe(data);
@@ -44,28 +50,47 @@ impl Host {
             ));
         }
         let mut engine = Engine::with_exe(&exe)?;
-        start_allocator(&mut engine);
-        Ok(Host { engine, exe })
+        let static_init = engine::static_init::run(&mut engine, &STAND_INS);
+        Ok(Host {
+            engine,
+            exe,
+            static_init,
+        })
     }
 
     /// The start-up diagnostic line.
     pub fn describe(&self) -> String {
         format!(
-            "Game code: {} (1.4.0.525), {} translated functions, allocator started.",
+            "Game code: {} (1.4.0.525), {} translated functions; static initializers: \
+             {} run from the table, {} by address, {} by platform code, {} skipped \
+             (not translated yet).",
             self.exe.display(),
-            self.engine.translated_count()
+            self.engine.translated_count(),
+            self.static_init.rows,
+            self.static_init.translated,
+            self.static_init.platform,
+            self.static_init.skipped()
         )
     }
 }
 
-/// The allocator start-up that runs before any form exists, as the engine's
-/// probes and the opt-in interpreter run (`crates/engine/tests/real_scda.rs`)
-/// run it: `operator new` (`00401000`) of the holder (8 bytes) and of a
+/// The static initializers nv-rs runs its own code for. Entry `00fb66a0`
+/// constructs the `MemoryManager` (Xbox PDB) singleton at `011f6238`
+/// (`00aa3880`): its fields, a memory check, `MemoryManager::Initialize`,
+/// the Ni allocator set-up `00866690` and `00aa58d0`. The memory manager is
+/// platform (the engine's heap, `Mem`), so in its place, at the same point of
+/// the table, runs the allocator set-up of `00866690` ([`start_allocator`]),
+/// which the settings' maps need (`00aa1070` allocates through `011f6080`).
+pub const STAND_INS: [engine::static_init::StandIn; 1] = [(0x00fb_66a0, start_allocator)];
+
+/// The Ni allocator set-up of `00866690` (called by the memory manager's
+/// constructor, `00aa3880`), as the engine's probes and the opt-in
+/// interpreter (`crates/engine/tests/real_scda.rs`) run it: `operator new` (`00401000`) of the holder (8 bytes) and of a
 /// `BSNiAllocator` (Xbox PDB, 4 bytes) that `00aa2230` gives its vtable,
 /// the holder made by `00aa21d0` (allocator stored, byte +4 cleared) and
 /// stored at `011f6118`, then `00aa2020`, which resolves that allocator and
-/// calls its `Initialize` (slot +0x1c). The rest of the game's system
-/// start-up (`WinMain`'s) is not reproduced.
+/// calls its `Initialize` (slot +0x1c). (`00866690` ends with a call to a
+/// library singleton's slot +4 that is not reproduced.)
 pub fn start_allocator(e: &mut Engine) {
     let holder = e.call(0x0040_1000, &[8]).u32();
     let allocator = e.call(0x0040_1000, &[4]).u32();

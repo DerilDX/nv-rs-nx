@@ -228,43 +228,54 @@ translated in `fallout_misc/bgschangeflags.rs`.) S6 (quest scripts
 through the game's interpreter in the live game) needs the quest forms
 and the other referenced forms (see the script track plan).
 
-### Static initializers (not run yet)
+### Static initializers
 
 The game constructs many globals before `WinMain`: `__cinit` (`00eccd14`)
 runs `_initterm_e(010113c4, 010113e8)` (8 C initializers) and
-`_initterm(00fdf4a4, 010113c0)` (17,728 non-null C++ dynamic initializers,
-each usually followed by its `atexit` destructor; the engine map counts
-16,315 `init` and 5,020 `atexit` functions as "compiler: static
-init/exit"). `host::Host::start` does not run them, so those globals read
-as zero in the game's memory: a `Setting` such as `fGunShellLifetime`
-(`011ce7c0`) has neither its name nor its default. Measured on 2026-10-13
-(callees of every entry, Ghidra):
+`_initterm(00fdf4a4, 010113c0)` (17,728 non-null C++ dynamic initializers:
+`Setting`s with their names and defaults, the NiAnimation dispatch tables,
+computed float constants, `NiRTTI` records, Havok class records, ...).
+`host::Host::start` runs both tables in `__cinit`'s order
+(`engine::static_init::run`) right after mapping the executable.
 
-| Entries | Shape | Data |
-| ---: | --- | --- |
-| 7,254 | `CALL <one-shot registration>; MOV [global], EAX`: 25 NiAnimation functions (`00a26e20`, `00a299f0`, ...) included by about 329 units each; the first call fills function-pointer tables, later calls return 0 | game (Gamebryo dispatch tables) |
-| 4,409 | no calls: constants computed with x87 (`FLD`/`FMUL`/`FSTP`) into globals | game |
-| 4,386 | a `Setting` constructor (`0040e0b0`, `0040c150`, `0044f440`, `0045cf30`, `0045cfe0`, `004a4a40`, `0045d060`, `0044fae0`) with the global, its name and default, which also adds it to its collection (`00404a70` and others), then `atexit` | game (settings) |
-| 1,066 | a math helper (`004019b0`) into a global constant | game |
-| 67 | `NiRTTI` constructors (`00a7b610`) | game (RTTI chain) |
-| 554 | 140 other shapes (`0044f570` model loader, sky `00633c90`/`00633000`, lists `0096a2d0`, strings, CRT `00ec6054`, ...) | mostly game |
-| 8 | the C initializers | CRT |
+Most entries are a few instructions of one of three shapes. They are not
+one Rust function each: `research/initgen` reads every entry's code
+(Ghidra's disassembly, or its bytes for the ~1,400 entries Ghidra made no
+function of), checks it instruction by instruction against a shape, and
+writes one row per matching entry to `crates/engine/data/static_initializers.tsv`
+(16,937 rows; 799 entries refused, left for hand translation). The engine
+has one translation per shape (`crates/engine/src/static_init.rs`):
 
-One initializer is translated. Nearly all of them build game data, so they
-can't stay "library". Proposal: `Host::start` runs both tables in `__cinit`'s
-order by address (`_atexit` `00ec658f` is already `platform`). The four
-regular shapes (about 17,100 entries) are best translated by a generator
-that checks each body against its shape and refuses anything else; the
-callees (the Setting constructors and their bases `0040e130`/`00404920`/
-`0045cfb0`, the collections' `Add`, the 25 registration functions,
-`004019d0`) and the 554 others are translated by hand. Until every entry is
-translated, the run would skip the untranslated ones and print how many
-were skipped. Entries can depend on earlier ones (collections before
-settings), so the order is kept. `crates/host/tests/static_initializers.rs`
-measures the tables and holds the acceptance test: three sample settings
-(`fGunShellLifetime`, `fPlayerMaxResistance`, `fMaxArmorRating`) must have
-the name and default their initializers pass. It is ignored and fails
-today.
+- `reg f g`: `CALL f; MOV [g],EAX` (the 25 one-shot NiAnimation
+  registrations, translated by initgen's `--rust` and checked by hand).
+- `object ctor g dtor args`: a constructor run on a global with pushed
+  words, floats or doubles (x87), then its destructor given to `_atexit`.
+- `const ops`: x87 loads, arithmetic and stores (double precision, x87 NaN
+  rules), the float square-root helper `004019b0`, calls without
+  arguments, plain moves.
+
+The ledger (`scripts/ledger`) counts each row as the translation of its
+entry. The values come from the executable at run time (rows hold
+addresses, never the executable's bytes).
+
+Entry `00fb66a0` builds the `MemoryManager` singleton (`00aa3880`); the
+memory manager is platform, so in its place, at the same point of the
+table, runs the Ni allocator set-up `host::start_allocator` (the settings'
+maps allocate through it): `host::STAND_INS`.
+
+An entry without a row runs by address when translated. An entry whose
+row needs an untranslated callee is skipped, and an entry that reaches an
+untranslated function part-way is recorded with the stop; all are
+counted (`Report`, and the start-up line). Measured 2026-10-13: 16,688
+entries run from the table, 799 without a row, 243 with an untranslated
+callee, 5 stopped part-way.
+
+`crates/host/tests/static_initializers.rs` (opt-in, `NV_EXE`) runs it on the
+real executable: three sample settings (`fGunShellLifetime`,
+`fPlayerMaxResistance`, `fMaxArmorRating`) hold the name and default their
+initializers pass, and 55 settings across all seven `Setting` constructors
+and their three collections hold their names, values and vtables.
+
 
 ## Lessons from the first sessions (2026-10-09)
 

@@ -287,6 +287,11 @@ pub fn ci_sqrt(_e: &mut Engine, v: f64) -> f64 {
     v.sqrt()
 }
 
+// Platform: replaces 00ec6054 (sqrt, LIBCMT): argument on the stack.
+pub fn sqrt(_e: &mut Engine, v: f64) -> f64 {
+    v.sqrt()
+}
+
 // Platform: replaces 00ec9f70 (_CIcos, LIBCMT): argument in ST0.
 pub fn ci_cos(_e: &mut Engine, v: f64) -> f64 {
     v.cos()
@@ -905,6 +910,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00eca573, atof(Ptr) -> f64),
         entry!(0x00ec62c0, ftol2(f64) -> u64),
         entry!(0x00ec6040, ci_sqrt(f64) -> f64),
+        entry!(0x00ec6054, sqrt(f64) -> f64),
         entry!(0x00ec9f70, ci_cos(f64) -> f64),
         entry!(0x00eca0a0, ci_sin(f64) -> f64),
         entry!(0x00ec9f30, cos(f64) -> f64),

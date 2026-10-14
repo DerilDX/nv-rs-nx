@@ -60,9 +60,54 @@ pub fn construct_node(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
     this
 }
 
+/// A hash map's vtable slots: the bucket of a key (+4), whether two keys are
+/// equal (+8), filling a new node (+0xC); and the node allocator
+/// (`00844a70`, `thiscall` on the map).
+const MAP_HASH_SLOT: u32 = 0x4;
+const MAP_EQUAL_SLOT: u32 = 0x8;
+const MAP_SET_NODE_SLOT: u32 = 0xc;
+const MAP_NEW_NODE: u32 = 0x0084_4a70;
+
+// Translated from 00470200 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// A hash map's `SetAt` (`thiscall`, `RET 8`: key, value). The map: vtable,
+/// bucket count (+4), bucket array (+8), entry count (+0xC), copies-keys flag
+/// (byte +0x10); a node: next (+0), key (+4), value (+8). When a node of the
+/// key's bucket has an equal key, its value is replaced (and its key too
+/// when the map doesn't copy keys); otherwise a new node (`00844a70`, filled
+/// through slot +0xC) goes at the head of the bucket and the count grows.
+pub fn fn_00470200(e: &mut Engine, this: Ptr, key: u32, value: u32) {
+    let map = this.addr();
+    let bucket = e.vcall(map, MAP_HASH_SLOT, &args![key]).u32();
+    let mut node = e
+        .mem
+        .u32(e.mem.u32(map + 8).wrapping_add(bucket.wrapping_mul(4)));
+    while node != 0 {
+        let stored = e.mem.u32(node + 4);
+        let equal = e.vcall(map, MAP_EQUAL_SLOT, &args![key, stored]).u32() as u8;
+        if equal != 0 {
+            if e.mem.u8(map + 0x10) == 0 {
+                e.mem.set_u32(node + 4, key);
+            }
+            e.mem.set_u32(node + 8, value);
+            return;
+        }
+        node = e.mem.u32(node);
+    }
+    let node = e.call(MAP_NEW_NODE, &args![this]).u32();
+    e.vcall(map, MAP_SET_NODE_SLOT, &args![node, key, value]);
+    let slot = e.mem.u32(map + 8).wrapping_add(bucket.wrapping_mul(4));
+    let head = e.mem.u32(slot);
+    e.mem.set_u32(node, head);
+    let slot = e.mem.u32(map + 8).wrapping_add(bucket.wrapping_mul(4));
+    e.mem.set_u32(slot, node);
+    let count = e.mem.u32(map + 0xc).wrapping_add(1);
+    e.mem.set_u32(map + 0xc, count);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00470200, fn_00470200(Ptr, u32, u32)),
         entry!(0x00470440, construct_node(Ptr, Ptr) -> Ptr),
         entry!(0x004702f0, fn_004702f0(Ptr, u32) -> Ptr),
         entry!(0x00470470, fn_00470470(Ptr)),
@@ -72,6 +117,37 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_at_adds_a_node_then_replaces_its_value() {
+        let mut e = Engine::new();
+        // Hash: the key itself; equal: same word; set node: key and value.
+        e.put_vtable(0x0090_0000, &[0, 0x0090_1000, 0x0090_2000, 0x0090_3000]);
+        e.register(0x0090_1000, |_, a| (a[1] % 4).into_ret());
+        e.register(0x0090_2000, |_, a| u32::from(a[1] == a[2]).into_ret());
+        e.register(0x0090_3000, |e, a| {
+            e.mem.set_u32(a[1] + 4, a[2]);
+            e.mem.set_u32(a[1] + 8, a[3]);
+            Ret::default()
+        });
+        e.register(MAP_NEW_NODE, |e, _| e.mem.alloc(0xc).into_ret());
+        let map = e.mem.alloc(0x14);
+        let buckets = e.mem.alloc(16);
+        e.mem.set_u32(map, 0x0090_0000);
+        e.mem.set_u32(map + 4, 4);
+        e.mem.set_u32(map + 8, buckets);
+        e.call(0x00470200, &[map, 6, 100]);
+        e.call(0x00470200, &[map, 10, 200]);
+        assert_eq!(e.mem.u32(map + 0xc), 2);
+        // Both in bucket 2, the newer at the head.
+        let head = e.mem.u32(buckets + 8);
+        assert_eq!(e.mem.u32(head + 4), 10);
+        let next = e.mem.u32(head);
+        assert_eq!(e.mem.u32(next + 4), 6);
+        e.call(0x00470200, &[map, 6, 300]);
+        assert_eq!(e.mem.u32(map + 0xc), 2);
+        assert_eq!(e.mem.u32(next + 8), 300);
+    }
 
     #[test]
     fn constructor_copies_before_clearing_an_aliased_source_and_keeps_guards() {

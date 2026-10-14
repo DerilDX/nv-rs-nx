@@ -70,17 +70,49 @@ pub fn fn_00402820(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The C runtime's `sqrt(double)` (`00ec6054`, `cdecl`, the result in
+/// `ST0`).
+const SQRT: u32 = 0x00ec_6054;
+
+/// A float loaded on the x87 stack (`FLD float`): the value, except that a
+/// signaling NaN comes out quiet.
+fn x87_load_float(bits: u32) -> f64 {
+    let nan = bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0;
+    let bits = if nan { bits | 0x0040_0000 } else { bits };
+    f64::from(f32::from_bits(bits))
+}
+
+// Translated from 004019b0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// `cdecl` (one float): passes the float through the x87 stack to
+/// [`fn_004019d0`] and returns its result in `ST0`.
+pub fn fn_004019b0(e: &mut Engine, value: u32) -> f64 {
+    let passed = (x87_load_float(value) as f32).to_bits();
+    fn_004019d0(e, passed)
+}
+
+// Translated from 004019d0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// `cdecl` (one float): the square root of the float as a double
+/// (`sqrt`, `00ec6054`), rounded to a float (`FSTP float` then `FLD float`)
+/// and returned in `ST0`. (Ghidra shows a `this`; `ECX` is never read.)
+pub fn fn_004019d0(e: &mut Engine, value: u32) -> f64 {
+    let root = e.call(SQRT, &args![x87_load_float(value)]).f64();
+    f64::from(root as f32)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0040_1a10, fn_00401a10(Ptr) -> Ptr),
         entry!(0x0040_20f0, fn_004020f0(Ptr) -> Ptr),
         entry!(0x0040_2820, fn_00402820(Ptr) -> Ptr),
+        entry!(0x004019b0, fn_004019b0(u32) -> f64),
+        entry!(0x004019d0, fn_004019d0(u32) -> f64),
     ]
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::units::crt::ctor_test::{self, A};
 
     #[test]
@@ -152,5 +184,20 @@ mod tests {
                 (0xac, 4, 0x0101_1844),
             ],
         });
+    }
+
+    #[test]
+    fn the_square_root_of_a_float_rounded_to_a_float() {
+        let mut e = Engine::new();
+        e.register(SQRT, |_, a| {
+            let v = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            v.sqrt().into_ret()
+        });
+        e.call_log = Some(vec![]);
+        let r = e.call(0x004019b0, &[2.0f32.to_bits()]).f64();
+        assert_eq!(r, f64::from(2.0f64.sqrt() as f32));
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1].0, SQRT);
+        assert_eq!(log[1].1, args![2.0f64]);
     }
 }
