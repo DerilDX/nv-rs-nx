@@ -66,6 +66,7 @@ of that name runs that file, or fails if the folder is not a script path.
 | `NvFunctionCard.java` | Writes a Markdown and JSON card per function: constants decoded by machine, instruction classes, CPU-fidelity tier. | 3 |
 | `NvEngineMap.java` | Writes every function's size, name, ordered calls, imports, strings and reference counts, and every MSVC RTTI vtable, as TSV for the engine map ([research/engine-map](../engine-map/README.md)). | 3 |
 | `NvCreateFunctions.java` | Creates functions at listed addresses (vtable slot targets) and at their callees' targets. Changes the project. | 2 |
+| `NvPurity.java` | Writes, per function, what it touches besides its own stack (stores to globals, through pointers or implicit; indirect and imported calls; FS use), its direct calls, stack cleanup (`RET n`), ECX/EDX use on entry and stack-argument bytes, as TSV for the automatic oracle check ([research/nv-oracle/nv-pure](../nv-oracle/nv-pure/README.md)). Read-only. | 6 |
 
 ### `NvEngineMap.java` `out=<dir>`
 

@@ -1,0 +1,15 @@
+[package]
+name = "nv-pure"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Automatic oracle check: pure translations against the real CPU through nv-call (#182)"
+license = "MIT OR Apache-2.0"
+
+# Standalone: it links the engine crate (the translations under test), which
+# the 32-bit nv-oracle workspace should not have to build. No crates.io
+# dependencies.
+[workspace]
+
+[dependencies]
+engine = { path = "../../../crates/engine" }
