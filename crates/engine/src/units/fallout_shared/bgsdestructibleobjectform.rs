@@ -555,7 +555,11 @@ pub fn fn_00476b00(e: &mut Engine, this: Ptr, flag: u8) {
 pub fn fn_00476b20(e: &mut Engine, value: f32) -> f32 {
     let truncated = e.call(TRUNCATE_FLOAT, &args![value]).f32();
     let zero: f64 = e.global(ZERO);
-    let result = if (truncated as f64 - value as f64) < zero {
+    // `FCOMP` then `TEST AH,1` (C0): taken for below and for unordered, so a
+    // NaN difference also adds 1.0 (found by the oracle check, #189).
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    let below_or_unordered = !(truncated as f64 - value as f64 >= zero);
+    let result = if below_or_unordered {
         let one: f64 = e.global(ONE);
         truncated as f64 + one
     } else {
@@ -3393,6 +3397,21 @@ mod tests {
         ] {
             let got = e.call(0x0047_6b20, &args![value]).f32();
             assert_eq!(got, expected, "ceil of {value}");
+        }
+    }
+
+    #[test]
+    fn round_up_of_nan_adds_one_like_the_exe() {
+        // The exe's `00404090` gives 0.0 for NaN; the compare is then
+        // unordered, which C0 counts as "below" (oracle check, #189).
+        let mut e = engine();
+        e.register(TRUNCATE_FLOAT, |_, a| {
+            let v = f32::from_bits(a[0]);
+            (if v.is_nan() { 0.0f32 } else { v.trunc() }).into_ret()
+        });
+        for bits in [0x7fc0_0000u32, 0xffc0_0000, 0x7fc1_2345, 0x7f80_0001] {
+            let got = e.call(0x0047_6b20, &args![f32::from_bits(bits)]).f32();
+            assert_eq!(got, 1.0, "round up of NaN {bits:#010x}");
         }
     }
 
