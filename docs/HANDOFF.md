@@ -113,7 +113,13 @@ animation, faces, audio) is about 8,000-9,000 functions of new translation.
     collection so new pure translations are checked, and file any mismatch as
     an issue. Their follow-ups in #190 (pointer arguments, runtime-state
     snapshots, presetting ST0, a ledger "oracle-checked" column) are good next
-    steps for them or us. The original task text follows.
+    steps for them or us. **Pointer arguments are in progress by
+    MeatisOmalley (#193, branch `oracle/pointer-args`, approved
+    2026-10-15):** about 2,000 read-only pointer functions in phase 1 and
+    about 1,000 out-parameter functions in phase 2, with buffers at
+    0x30000000 guarded against the engine heap top. Review their PR when it
+    lands, the same way as #190 (Ghidra script read-only, no exe bytes
+    committed, mutation-tested). The original task text follows.
     **Automatic oracle check for every pure translation.** `nv-call`
     (`research/nv-oracle`) runs a function on the real CPU. Classify
     translated functions that are pure (no globals written, no calls out, or
