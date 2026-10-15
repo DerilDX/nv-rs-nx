@@ -105,9 +105,15 @@ animation, faces, audio) is about 8,000-9,000 functions of new translation.
    and an already-translated sibling as the template in their task, and
    assign whole families at once. Measure functions per batch before and
    after.
-10. **Taken by contributor MeatisOmalley (issue #182, branch
-    `oracle/pure-diff`, approved 2026-10-14). Don't duplicate it. Review their
-    PR and wire the local check into `check-lead.sh` when it lands.**
+10. **Done by contributor MeatisOmalley (#182, #190, merged 2026-10-14):**
+    `research/ghidra/NvPurity.java` and `research/nv-oracle/nv-pure`. Its first
+    run: 324 functions, 10,326 vectors, one real bug (#189, fixed in #191).
+    **Next:** add `nv-pure check` to `phase0/bin/check-lead.sh` (set
+    `NV_ORACLE_EXE` and `NV_CALL` locally), regenerate `pure.tsv` after each
+    collection so new pure translations are checked, and file any mismatch as
+    an issue. Their follow-ups in #190 (pointer arguments, runtime-state
+    snapshots, presetting ST0, a ledger "oracle-checked" column) are good next
+    steps for them or us. The original task text follows.
     **Automatic oracle check for every pure translation.** `nv-call`
     (`research/nv-oracle`) runs a function on the real CPU. Classify
     translated functions that are pure (no globals written, no calls out, or
