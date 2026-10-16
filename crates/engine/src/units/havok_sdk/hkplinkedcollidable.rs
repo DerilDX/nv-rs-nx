@@ -39,6 +39,13 @@ layout! {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(
+            0x00d081d0,
+            hkp_linked_collidable_get_collision_entries_deterministic_unchecked(
+                Ptr<HkpLinkedCollidable>,
+            )
+                -> Ptr<HkArrayBase>
+        ),
+        entry!(
             0x00d081e0,
             hkp_linked_collidable_get_collision_entries_deterministic_unchecked_ov2(
                 Ptr<HkpLinkedCollidable>,
@@ -59,6 +66,16 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             )
         ),
     ]
+}
+
+// Translated from 00d081d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpLinkedCollidable::getCollisionEntriesDeterministicUnchecked` (Xbox PDB, the first
+/// overload; `LEA EAX,[ECX+0x50]`): the address of the collision entry array.
+pub fn hkp_linked_collidable_get_collision_entries_deterministic_unchecked(
+    _e: &mut Engine,
+    this: Ptr<HkpLinkedCollidable>,
+) -> Ptr<HkArrayBase> {
+    this.at(HkpLinkedCollidable::m_collisionEntries)
 }
 
 // Translated from 00d081e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -268,5 +285,18 @@ mod tests {
             calls(&e, QUICK_SORT),
             vec![vec![data, 0, 2, ENTRY_COMPARISON]]
         );
+    }
+}
+
+#[cfg(test)]
+mod a06_tests {
+    use super::*;
+
+    #[test]
+    fn the_first_overload_returns_the_entry_array_address() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x60);
+        let got = e.call(0x00d081d0, &args![this]).u32();
+        assert_eq!(got, this + 0x50);
     }
 }

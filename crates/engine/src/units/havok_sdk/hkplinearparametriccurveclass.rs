@@ -201,9 +201,36 @@ pub fn fn_00e01040(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// Translated from 00e00000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body that `deleting_destructor_00e00070` runs (`__fastcall`; no name in the
+/// engine map): empties the two arrays of a `hkpLinearParametricCurve`-shaped object, the
+/// `hkArray<float>` at +0x2C and then the `hkArray<hkVector4>` at +0x20, and puts the base
+/// vtable `0102e388` back. For each array the size is cleared, the storage freed through
+/// allocator slot `0x10` (data, bytes) when the capacity word's top bit is clear (bytes =
+/// capacity bits times the element size, 4 or 16), and the pointer and capacity reset to
+/// null and `0x80000000`. The class is unconfirmed.
+pub fn fn_00e00000(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    for (data_at, element_shift) in [(0x2cu32, 2u32), (0x20, 4)] {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x10);
+        let flags = e.mem.u32(me + data_at + 8);
+        e.mem.set_u32(me + data_at + 4, 0);
+        if (flags as i32) >= 0 {
+            let data = e.mem.u32(me + data_at);
+            let bytes = (flags & 0x3fff_ffff) << element_shift;
+            e.vcall(allocator, 0x10, &args![data, bytes]);
+        }
+        e.mem.set_u32(me + data_at, 0);
+        e.mem.set_u32(me + data_at + 8, 0x8000_0000);
+    }
+    e.mem.set_u32(me, 0x0102_e388);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e0_0000, fn_00e00000(Ptr)),
         entry!(0x00e0_0070, deleting_destructor_00e00070(Ptr, u8) -> Ptr),
         entry!(0x00e0_0990, deleting_destructor_00e00990(Ptr, u8) -> Ptr),
         entry!(0x00e0_1010, deleting_destructor_00e01010(Ptr, u8) -> Ptr),
@@ -417,4 +444,56 @@ mod a07_first_word_tests {
         0x00e0_2730,
         0x00e4_af80
     );
+}
+
+#[cfg(test)]
+mod a06_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const FREE_DOUBLE: u32 = 0x0900_0011;
+
+    #[test]
+    fn fn_00e00000_frees_owned_arrays_and_resets_both() {
+        let mut e = Engine::new();
+        let frees = Rc::new(RefCell::new(Vec::new()));
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x10, FREE_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let sink = Rc::clone(&frees);
+        e.register_double(FREE_DOUBLE, move |_, a| {
+            sink.borrow_mut().push(vec![a[1], a[2]]);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x40);
+        // Points: owned, capacity 5; distances: capacity 7 but not owned (top bit set).
+        e.mem.set_u32(this + 0x20, 0x1111);
+        e.mem.set_u32(this + 0x24, 3);
+        e.mem.set_u32(this + 0x28, 5);
+        e.mem.set_u32(this + 0x2c, 0x2222);
+        e.mem.set_u32(this + 0x30, 2);
+        e.mem.set_u32(this + 0x34, 0x8000_0007);
+        e.call(0x00e00000, &args![this]);
+        assert_eq!(*frees.borrow(), vec![vec![0x1111, 5 * 16]]);
+        for offset in [0x20, 0x24, 0x2c, 0x30] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        assert_eq!(e.mem.u32(this + 0x28), 0x8000_0000);
+        assert_eq!(e.mem.u32(this + 0x34), 0x8000_0000);
+        assert_eq!(e.mem.u32(this), 0x0102_e388);
+        // Owned distances: freed with four bytes per element, before the points.
+        frees.borrow_mut().clear();
+        e.mem.set_u32(this + 0x2c, 0x3333);
+        e.mem.set_u32(this + 0x34, 6);
+        e.call(0x00e00000, &args![this]);
+        assert_eq!(*frees.borrow(), vec![vec![0x3333, 24]]);
+    }
 }

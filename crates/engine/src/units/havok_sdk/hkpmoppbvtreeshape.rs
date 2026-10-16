@@ -345,6 +345,145 @@ pub fn deleting_destructor_00d54930(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+/// The strings `"Mesh"` (`010d0d64`) and `"Mopp"` (`010d0d5c`) of the content statistics, and
+/// the constant `01269c8c` handed on to the base.
+const STATISTICS_MESH: u32 = 0x010d_0d64;
+const STATISTICS_MOPP: u32 = 0x010d_0d5c;
+const STATISTICS_BASE_ARGUMENT: u32 = 0x0126_9c8c;
+/// `hkReferencedObject::calcContentStatistics` (`00c90360`, thiscall, `RET 8`).
+const REFERENCED_CALC_STATISTICS: u32 = 0x00c9_0360;
+/// `hkReferencedObject::addReference` (`00c90510`) and `removeReference` (`00c905b0`), both
+/// thiscall without stack arguments.
+const ADD_REFERENCE: u32 = 0x00c9_0510;
+const REMOVE_REFERENCE: u32 = 0x00c9_05b0;
+/// Vtables the constructors and destructors write.
+const VTABLE_MOPP_SHAPE: u32 = 0x010d_0dac;
+const VTABLE_CONTAINER: u32 = 0x010c_6fd0;
+const VTABLE_CONTAINER_BASE: u32 = 0x010c_6fb0;
+const VTABLE_BV_TREE_BASE: u32 = 0x010d_0d70;
+const VTABLE_REFERENCED: u32 = 0x0102_e388;
+
+// Translated from 00d54300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMoppBvTreeShape::calcContentStatistics` (Xbox PDB), `RET 8`: reports the child shape
+/// (`+0x34`) as `"Mesh"` and the code (`+0x14`) as `"Mopp"` through slot `0xC` of the
+/// collector, each with a 0, then runs `hkReferencedObject::calcContentStatistics(collector,
+/// 01269c8c)`.
+pub fn hkp_mopp_bv_tree_shape_calc_content_statistics(e: &mut Engine, this: Ptr, collector: Ptr) {
+    let me = this.addr();
+    let child = e.mem.u32(me + 0x34);
+    e.vcall(collector.addr(), 0xc, &args![STATISTICS_MESH, child, 0u32]);
+    let code = e.mem.u32(me + 0x14);
+    e.vcall(collector.addr(), 0xc, &args![STATISTICS_MOPP, code, 0u32]);
+    e.call(
+        REFERENCED_CALC_STATISTICS,
+        &args![this, collector, STATISTICS_BASE_ARGUMENT],
+    );
+}
+
+// Translated from 00d543e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `hkpMoppBvTreeShape` (the engine map has no name), `__fastcall`: walks the
+/// vtables down, releases the child shape at `+0x34` when there is one and the code at
+/// `+0x14`, and ends with the base vtable.
+pub fn fn_00d543e0(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    e.mem.set_u32(me, VTABLE_MOPP_SHAPE);
+    e.mem.set_u32(me + 0x30, VTABLE_CONTAINER);
+    let child = e.mem.u32(me + 0x34);
+    if child != 0 {
+        e.call(REMOVE_REFERENCE, &args![child]);
+    }
+    e.mem.set_u32(me + 0x30, VTABLE_CONTAINER_BASE);
+    let code = e.mem.u32(me + 0x14);
+    e.mem.set_u32(me, VTABLE_BV_TREE_BASE);
+    e.call(REMOVE_REFERENCE, &args![code]);
+    e.mem.set_u32(me, VTABLE_REFERENCED);
+}
+
+// Translated from 00d54440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMoppBvTreeShape::calcSizeForSpu` (Xbox PDB), `RET 8` with one word: when the byte at
+/// `code + 0x2c` is 0, asks the child shape's slot `0x18` for `(word, 0x100)`; a result from 0
+/// to 0x100 is stored at `+0x38` and 0x40 is returned. Every other case returns -1.
+pub fn hkp_mopp_bv_tree_shape_calc_size_for_spu(e: &mut Engine, this: Ptr, word: u32) -> u32 {
+    let me = this.addr();
+    let code = e.mem.u32(me + 0x14);
+    if e.mem.u8(code + 0x2c) != 0 {
+        return 0xffff_ffff;
+    }
+    let child = e.mem.u32(me + 0x34);
+    let size = e.vcall(child, 0x18, &args![word, 0x100u32]).u32() as i32;
+    if !(0..=0x100).contains(&size) {
+        return 0xffff_ffff;
+    }
+    e.mem.set_u32(me + 0x38, size as u32);
+    0x40
+}
+
+// Translated from 00d54490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the shape base (the engine map has no name), `RET 8` `(shape_type, code)`:
+/// sets the 16-bit word at `+6` to 1, the type word at `+0xC`, 0 at `+8` and in the byte at
+/// `+0x10`, the vtable `010d0d70` and the code at `+0x14`, adds a reference to the code and
+/// copies its vector at `+0x10` to `+0x20` and its words at `+0x20` and `+0x24` to `+0x18`
+/// and `+0x1C`. Returns `this`.
+pub fn fn_00d54490(e: &mut Engine, this: Ptr, shape_type: u32, code: Ptr) -> Ptr {
+    let me = this.addr();
+    let c = code.addr();
+    e.mem.set_u16(me + 6, 1);
+    e.mem.set_u32(me + 0xc, shape_type);
+    e.mem.set_u32(me + 8, 0);
+    e.mem.set_u8(me + 0x10, 0);
+    e.mem.set_u32(me, VTABLE_BV_TREE_BASE);
+    e.mem.set_u32(me + 0x14, c);
+    e.call(ADD_REFERENCE, &args![code]);
+    for word in 0..4 {
+        let value = e.mem.u32(c + 0x10 + 4 * word);
+        e.mem.set_u32(me + 0x20 + 4 * word, value);
+    }
+    let first = e.mem.u32(c + 0x20);
+    e.mem.set_u32(me + 0x18, first);
+    let second = e.mem.u32(c + 0x24);
+    e.mem.set_u32(me + 0x1c, second);
+    this
+}
+
+// Translated from 00d544f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `hkpMoppBvTreeShape` (the engine map has no name), `RET 8` `(child, code)`:
+/// runs `00d54490(10, code)`, then sets the vtable `010d0dac`, the container vtable
+/// `010c6fd0` at `+0x30`, the child at `+0x34` and adds a reference to the child. Returns
+/// `this`.
+pub fn fn_00d544f0(e: &mut Engine, this: Ptr, child: Ptr, code: Ptr) -> Ptr {
+    let me = this.addr();
+    e.call(0x00d5_4490, &args![this, 10u32, code]);
+    e.mem.set_u32(me, VTABLE_MOPP_SHAPE);
+    e.mem.set_u32(me + 0x30, VTABLE_CONTAINER);
+    e.mem.set_u32(me + 0x34, child.addr());
+    e.call(ADD_REFERENCE, &args![child]);
+    this
+}
+
+// Translated from 00d548f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkMoppBvTreeShapeBase::_scalar_deleting_destructor_` (Xbox PDB), `RET 4`: sets the vtable
+/// `010d0d70`, releases the code at `+0x14`, sets the base vtable and, when bit 0 of `flags`
+/// is set, returns the block to the memory router's allocator (slot `8`) with the 16-bit size
+/// at `+4`. Returns `this`.
+pub fn hk_mopp_bv_tree_shape_base_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u8,
+) -> Ptr {
+    let me = this.addr();
+    let code = e.mem.u32(me + 0x14);
+    e.mem.set_u32(me, VTABLE_BV_TREE_BASE);
+    e.call(REMOVE_REFERENCE, &args![code]);
+    e.mem.set_u32(me, VTABLE_REFERENCED);
+    if flags & 1 != 0 {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let size = u32::from(e.mem.u16(me + 4));
+        let allocator = e.mem.u32(router + 0x10);
+        e.vcall(allocator, 8, &args![this, size]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -374,6 +513,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             query_aabb_impl(Ptr<HkpMoppBvTreeShape>, Ptr, u32, u32) -> u32
         ),
         entry!(0x00d5_4930, deleting_destructor_00d54930(Ptr, u8) -> Ptr),
+        entry!(
+            0x00d5_4300,
+            hkp_mopp_bv_tree_shape_calc_content_statistics(Ptr, Ptr)
+        ),
+        entry!(0x00d5_43e0, fn_00d543e0(Ptr)),
+        entry!(
+            0x00d5_4440,
+            hkp_mopp_bv_tree_shape_calc_size_for_spu(Ptr, u32) -> u32
+        ),
+        entry!(0x00d5_4490, fn_00d54490(Ptr, u32, Ptr) -> Ptr),
+        entry!(0x00d5_44f0, fn_00d544f0(Ptr, Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00d5_48f0,
+            hk_mopp_bv_tree_shape_base_scalar_deleting_destructor(Ptr, u8) -> Ptr
+        ),
     ]
 }
 
@@ -715,5 +869,203 @@ mod tests {
             .u32();
         assert_eq!(count, 5);
         assert_eq!(*freed.borrow(), vec![vec![allocator, 0x7777, 24]]);
+    }
+}
+
+#[cfg(test)]
+mod a06_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    const COLLECTOR_SLOT: u32 = 0x0900_0301;
+    const CHILD_SLOT: u32 = 0x0900_0302;
+    const FREE_SLOT: u32 = 0x0900_0303;
+
+    fn log_double(e: &mut Engine, addr: u32, log: &Log, tag: u32) {
+        let sink = Rc::clone(log);
+        e.register_double(addr, move |_, a| {
+            let mut row = vec![tag];
+            row.extend_from_slice(a);
+            sink.borrow_mut().push(row);
+            Ret::default()
+        });
+    }
+
+    /// An object whose vtable has `slot` set to `target`.
+    fn object_with_slot(e: &mut Engine, slot: u32, target: u32) -> u32 {
+        let vtable = e.mem.alloc(0x80);
+        e.mem.set_u32(vtable + slot, target);
+        let object = e.mem.alloc(0x80);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn install_router(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 8, FREE_SLOT);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        allocator
+    }
+
+    #[test]
+    fn content_statistics_report_the_child_and_the_code() {
+        let mut e = Engine::new();
+        let log: Log = Rc::default();
+        log_double(&mut e, COLLECTOR_SLOT, &log, 1);
+        log_double(&mut e, REFERENCED_CALC_STATISTICS, &log, 2);
+        let collector = object_with_slot(&mut e, 0xc, COLLECTOR_SLOT);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x14, 0xc0de);
+        e.mem.set_u32(this + 0x34, 0xc41d);
+        e.call(0x00d54300, &args![this, collector]);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                vec![1, collector, STATISTICS_MESH, 0xc41d, 0],
+                vec![1, collector, STATISTICS_MOPP, 0xc0de, 0],
+                vec![2, this, collector, STATISTICS_BASE_ARGUMENT],
+            ]
+        );
+    }
+
+    #[test]
+    fn the_destructor_releases_the_child_only_when_there_is_one() {
+        let mut e = Engine::new();
+        let log: Log = Rc::default();
+        log_double(&mut e, REMOVE_REFERENCE, &log, 1);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x14, 0xc0de);
+        e.mem.set_u32(this + 0x34, 0xc41d);
+        e.call(0x00d543e0, &args![this]);
+        assert_eq!(*log.borrow(), vec![vec![1, 0xc41d], vec![1, 0xc0de]]);
+        assert_eq!(e.mem.u32(this), VTABLE_REFERENCED);
+        assert_eq!(e.mem.u32(this + 0x30), VTABLE_CONTAINER_BASE);
+        log.borrow_mut().clear();
+        e.mem.set_u32(this + 0x34, 0);
+        e.call(0x00d543e0, &args![this]);
+        assert_eq!(*log.borrow(), vec![vec![1, 0xc0de]]);
+    }
+
+    #[test]
+    fn the_spu_size_needs_a_code_type_of_zero_and_a_small_child_size() {
+        let mut e = Engine::new();
+        let log: Log = Rc::default();
+        let size = Rc::new(RefCell::new(0x80i32));
+        let answer = Rc::clone(&size);
+        let sink = Rc::clone(&log);
+        e.register_double(CHILD_SLOT, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret {
+                eax: *answer.borrow() as u32,
+                ..Ret::default()
+            }
+        });
+        let child = object_with_slot(&mut e, 0x18, CHILD_SLOT);
+        let code = e.mem.alloc(0x40);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x14, code);
+        e.mem.set_u32(this + 0x34, child);
+        assert_eq!(e.call(0x00d54440, &args![this, 0x77u32]).u32(), 0x40);
+        assert_eq!(e.mem.u32(this + 0x38), 0x80);
+        assert_eq!(*log.borrow(), vec![vec![child, 0x77, 0x100]]);
+        for (value, stored) in [(0, true), (0x100, true), (0x101, false), (-1, false)] {
+            e.mem.set_u32(this + 0x38, 0x1234);
+            *size.borrow_mut() = value;
+            let got = e.call(0x00d54440, &args![this, 0u32]).u32();
+            if stored {
+                assert_eq!((got, e.mem.u32(this + 0x38)), (0x40, value as u32));
+            } else {
+                assert_eq!((got, e.mem.u32(this + 0x38)), (0xffff_ffff, 0x1234));
+            }
+        }
+        // Other code types answer -1 without asking the child.
+        for kind in [1u8, 2] {
+            e.mem.set_u8(code + 0x2c, kind);
+            log.borrow_mut().clear();
+            assert_eq!(e.call(0x00d54440, &args![this, 0u32]).u32(), 0xffff_ffff);
+            assert!(log.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn the_base_constructor_copies_the_code_header() {
+        let mut e = Engine::new();
+        let log: Log = Rc::default();
+        log_double(&mut e, ADD_REFERENCE, &log, 1);
+        let code = e.mem.alloc(0x40);
+        for word in 0..16u32 {
+            e.mem.set_u32(code + 4 * word, 0x100 + word);
+        }
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u8(this + 0x10, 9);
+        let got = e.call(0x00d54490, &args![this, 7u32, code]).u32();
+        assert_eq!(got, this);
+        assert_eq!(*log.borrow(), vec![vec![1, code]]);
+        assert_eq!(e.mem.u16(this + 6), 1);
+        assert_eq!(e.mem.u32(this + 0xc), 7);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u8(this + 0x10), 0);
+        assert_eq!(e.mem.u32(this), VTABLE_BV_TREE_BASE);
+        assert_eq!(e.mem.u32(this + 0x14), code);
+        let copied: Vec<u32> = (0..4).map(|i| e.mem.u32(this + 0x20 + 4 * i)).collect();
+        assert_eq!(copied, vec![0x104, 0x105, 0x106, 0x107]);
+        assert_eq!(e.mem.u32(this + 0x18), 0x108);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x109);
+    }
+
+    #[test]
+    fn the_shape_constructor_wraps_the_base_and_references_the_child() {
+        let mut e = Engine::new();
+        let log: Log = Rc::default();
+        let sink = Rc::clone(&log);
+        e.register_double(0x00d5_4490, move |e, a| {
+            sink.borrow_mut().push(vec![1, a[0], a[1], a[2]]);
+            // The base writes its vtable, which the derived constructor replaces.
+            e.mem.set_u32(a[0], VTABLE_BV_TREE_BASE);
+            Ret::default()
+        });
+        log_double(&mut e, ADD_REFERENCE, &log, 2);
+        let this = e.mem.alloc(0x40);
+        let got = e.call(0x00d544f0, &args![this, 0xc41du32, 0xc0deu32]).u32();
+        assert_eq!(got, this);
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![1, this, 10, 0xc0de], vec![2, 0xc41d]]
+        );
+        assert_eq!(e.mem.u32(this), VTABLE_MOPP_SHAPE);
+        assert_eq!(e.mem.u32(this + 0x30), VTABLE_CONTAINER);
+        assert_eq!(e.mem.u32(this + 0x34), 0xc41d);
+    }
+
+    #[test]
+    fn the_base_deleting_destructor_frees_when_bit_zero_is_set() {
+        let mut e = Engine::new();
+        let log: Log = Rc::default();
+        let allocator = install_router(&mut e);
+        log_double(&mut e, REMOVE_REFERENCE, &log, 1);
+        log_double(&mut e, FREE_SLOT, &log, 2);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x14, 0xc0de);
+        e.mem.set_u16(this + 4, 0x40);
+        let got = e.call(0x00d548f0, &args![this, 0xfeu32]).u32();
+        assert_eq!(got, this);
+        assert_eq!(*log.borrow(), vec![vec![1, 0xc0de]]);
+        assert_eq!(e.mem.u32(this), VTABLE_REFERENCED);
+        log.borrow_mut().clear();
+        e.call(0x00d548f0, &args![this, 1u32]);
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![1, 0xc0de], vec![2, allocator, this, 0x40]]
+        );
     }
 }

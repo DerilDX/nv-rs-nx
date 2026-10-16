@@ -43,6 +43,8 @@
 #![allow(clippy::eq_op)]
 // Results assigned in each branch keep the exe's branch layout.
 #![allow(clippy::needless_late_init)]
+// `a = b op a` keeps the exe's operand order (it decides which NaN comes out).
+#![allow(clippy::assign_op_pattern)]
 // Test doubles record calls in shared logs.
 #![cfg_attr(test, allow(clippy::type_complexity))]
 // Tests build their expected call lists and buffers with `vec!`.
