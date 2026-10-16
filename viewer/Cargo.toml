@@ -3,7 +3,7 @@ name = "nv-viewer"
 version = "0.1.0"
 description = "Walk around a Fallout: New Vegas cell in real time (Bevy)"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-or-later"
 publish = false
 
 # Its own workspace, so the rest of the project still builds without

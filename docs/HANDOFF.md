@@ -54,8 +54,7 @@ next account continues from here. Talk to the maintainer in plain language.
   xNVSE / JIP LN compatibility (check licenses first). GOG/Epic exe support
   later. Optional real-time shadows off by default. Bevy upgrade one version
   per PR before the renderer phase.
-- **Never copy code from other New Vegas reimplementations** (NVForever is
-  GPL-3.0; nv-rs is MIT/Apache).
+- **Never copy code from other New Vegas reimplementations.**
 
 **Correction:** the Havok SDK (5,081 functions) is NOT ported; only the B1
 solver work (79 functions in `crates/physics`). Phase A (movement, physics,

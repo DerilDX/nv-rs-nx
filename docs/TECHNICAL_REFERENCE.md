@@ -1379,4 +1379,4 @@ Bethesda Softworks, ZeniMax Media or Obsidian Entertainment. Fallout and
 Fallout: New Vegas are their trademarks. The tools read files from an
 installation you own and never modify them.
 
-Licensed under MIT or Apache-2.0, at your option.
+Licensed under the GNU GPL v3 or later (see LEGAL.md).

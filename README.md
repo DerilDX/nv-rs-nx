@@ -6,8 +6,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-2021_edition-orange.svg)](https://www.rust-lang.org/)
 [![Engine](https://img.shields.io/badge/Engine-Bevy_0.16-blue.svg)](https://bevyengine.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE-MIT)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE-APACHE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows-purple.svg)](docs/PLAYTESTING.md)
 [![Status](https://img.shields.io/badge/Status-experimental-lightgrey.svg)](docs/MILESTONES.md)
 
@@ -165,7 +164,6 @@ Final decisions rest with the maintainer, **slaterain**
 
 ## Legal and license
 
-Original code is dual-licensed under [MIT](LICENSE-MIT) or
-[Apache-2.0](LICENSE-APACHE), at your option. The licence covers only original
-work. Fallout and Fallout: New Vegas are trademarks of their respective owners.
+Original code is licensed under the [GNU GPL v3 or later](LICENSE). The
+licence covers only original work. Fallout and Fallout: New Vegas are trademarks of their respective owners.
 Read [LEGAL.md](LEGAL.md) for the full notice.

@@ -83,7 +83,7 @@ exists.
 ## Technology
 
 - OpenXR through [bevy_oxr](https://github.com/awtterpip/bevy_oxr) (the
-  `bevy_mod_openxr` crate), licensed MIT or Apache-2.0 like this project.
+  `bevy_mod_openxr` crate), licensed MIT or Apache-2.0, both compatible with this project's GPL.
   When Bevy is added, pin its version to one that bevy_oxr supports.
 - Runtimes: SteamVR on Windows, Monado on Linux.
 - **Developing without a headset:** a debug mode renders both eye views side
