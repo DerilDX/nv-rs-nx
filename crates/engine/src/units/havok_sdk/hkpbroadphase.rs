@@ -41,9 +41,63 @@ pub fn deleting_destructor_00d97100(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+/// `hkCriticalSection::hkCriticalSection` (`00cf6da0`, `this` = the block, `(argument)`) and the
+/// call `00cf6d30` made on the broad phase's `+8` sub-object once the section is in place.
+const CRITICAL_SECTION_CONSTRUCT: u32 = 0x00cf_6da0;
+const AFTER_SECTION_CALL: u32 = 0x00cf_6d30;
+/// `DeleteCriticalSection` import slot.
+const DELETE_CRITICAL_SECTION: u32 = 0x00fd_f058;
+
+// Translated from 00d97070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpBroadPhase::enableMultiThreading` (named in the engine map): when the broad phase has
+/// no critical section yet (`+0x10`), takes `0x18` bytes from the memory router's allocator
+/// (slot 4), constructs the section in them with `argument` (`00cf6da0`; 0 when the
+/// allocation failed) and stores it, then calls `00cf6d30` on the sub-object at `this + 8`.
+pub fn hkp_broad_phase_enable_multi_threading(e: &mut Engine, this: Ptr, argument: u32) {
+    let base = this.addr();
+    if e.mem.u32(base + 0x10) != 0 {
+        return;
+    }
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let block = e.vcall(allocator, 4, &args![0x18u32]).u32();
+    let section = if block != 0 {
+        e.call(CRITICAL_SECTION_CONSTRUCT, &args![block, argument])
+            .u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(base + 0x10, section);
+    e.call(AFTER_SECTION_CALL, &args![base + 8]);
+}
+
+// Translated from 00d970c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpBroadPhase::~hkpBroadPhase` (named in the engine map): writes the vtable `010d3f7c`; a
+/// critical section at `+0x10` is deleted (`DeleteCriticalSection`, import slot `00fdf058`),
+/// its `0x18` bytes are returned to the memory router's allocator (slot 8) and the pointer
+/// cleared; finally the base vtable `0102e388` is written.
+pub fn hkp_broad_phase_destruct(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let section = e.mem.u32(base + 0x10);
+    e.mem.set_u32(base, 0x010d_3f7c);
+    if section != 0 {
+        e.call(DELETE_CRITICAL_SECTION, &args![section]);
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x10);
+        e.vcall(allocator, 8, &args![section, 0x18u32]);
+        e.mem.set_u32(base + 0x10, 0);
+    }
+    e.mem.set_u32(base, 0x0102_e388);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00d9_7070,
+            hkp_broad_phase_enable_multi_threading(Ptr, u32)
+        ),
+        entry!(0x00d9_70c0, hkp_broad_phase_destruct(Ptr)),
         entry!(0x00d9_7050, hkp_broad_phase_lock_implementation(Ptr)),
         entry!(0x00d9_7060, hkp_broad_phase_unlock_implementation(Ptr)),
         entry!(0x00d9_7100, deleting_destructor_00d97100(Ptr, u8) -> Ptr),
@@ -134,5 +188,99 @@ mod tests {
                 (LEAVE_CRITICAL_SECTION, vec![0x1234_0000]),
             ]
         );
+    }
+
+    const TAKE_SLOT_DOUBLE: u32 = 0x0900_0012;
+
+    /// The argument lists of every logged call to `addr`.
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// A memory router whose allocator takes through a double answering `take_result` (slot
+    /// 4) and frees through another (slot 8); returns the allocator.
+    fn install_allocator(e: &mut Engine, take_result: u32) -> u32 {
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, TAKE_SLOT_DOUBLE);
+        e.mem.set_u32(vtable + 8, FREE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register_double(TAKE_SLOT_DOUBLE, move |_, _| Ret {
+            eax: take_result,
+            ..Ret::default()
+        });
+        e.register_double(FREE_SLOT_DOUBLE, |_, _| Ret::default());
+        allocator
+    }
+
+    #[test]
+    fn enable_multi_threading_builds_the_critical_section_once() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        let allocator = install_allocator(&mut e, 0x4444_0000);
+        e.register_double(CRITICAL_SECTION_CONSTRUCT, |_, a| Ret {
+            eax: a[0] + 1,
+            ..Ret::default()
+        });
+        e.register_double(AFTER_SECTION_CALL, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        e.call(0x00d9_7070, &args![this, 77u32]);
+        assert_eq!(e.mem.u32(this + 0x10), 0x4444_0001);
+        assert_eq!(calls(&e, TAKE_SLOT_DOUBLE), vec![vec![allocator, 0x18]]);
+        assert_eq!(
+            calls(&e, CRITICAL_SECTION_CONSTRUCT),
+            vec![vec![0x4444_0000, 77]]
+        );
+        assert_eq!(calls(&e, AFTER_SECTION_CALL), vec![vec![this + 8]]);
+        // With a section in place nothing more happens.
+        e.call(0x00d9_7070, &args![this, 77u32]);
+        assert_eq!(calls(&e, AFTER_SECTION_CALL).len(), 1);
+        assert_eq!(calls(&e, TAKE_SLOT_DOUBLE).len(), 1);
+    }
+
+    #[test]
+    fn enable_multi_threading_stores_null_when_the_allocation_fails() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        install_allocator(&mut e, 0);
+        e.register_double(AFTER_SECTION_CALL, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        e.call(0x00d9_7070, &args![this, 77u32]);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        assert!(calls(&e, CRITICAL_SECTION_CONSTRUCT).is_empty());
+        assert_eq!(calls(&e, AFTER_SECTION_CALL), vec![vec![this + 8]]);
+    }
+
+    #[test]
+    fn destruct_deletes_and_returns_the_critical_section() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        let allocator = install_allocator(&mut e, 0);
+        e.register_double(DELETE_CRITICAL_SECTION, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x10, 0x5555_0000);
+        e.call(0x00d9_70c0, &args![this]);
+        assert_eq!(e.mem.u32(this), 0x0102_e388);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        assert_eq!(calls(&e, DELETE_CRITICAL_SECTION), vec![vec![0x5555_0000]]);
+        assert_eq!(
+            calls(&e, FREE_SLOT_DOUBLE),
+            vec![vec![allocator, 0x5555_0000, 0x18]]
+        );
+        // Without a section only the vtables are written.
+        e.call(0x00d9_70c0, &args![this]);
+        assert_eq!(calls(&e, DELETE_CRITICAL_SECTION).len(), 1);
     }
 }

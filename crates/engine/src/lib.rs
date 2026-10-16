@@ -38,6 +38,11 @@
 // Allocation sizes spell out the exe's "all ones on carry" (`SETO`/`NEG`/`OR`)
 // as `checked_mul(..).unwrap_or(u32::MAX)`, next to the instructions it mirrors.
 #![allow(clippy::manual_saturating_arithmetic)]
+// SSE lanes the exe computes as `a*b - a*b` stay: they give NaN, not 0, for
+// infinite or NaN inputs.
+#![allow(clippy::eq_op)]
+// Results assigned in each branch keep the exe's branch layout.
+#![allow(clippy::needless_late_init)]
 // Test doubles record calls in shared logs.
 #![cfg_attr(test, allow(clippy::type_complexity))]
 // Tests build their expected call lists and buffers with `vec!`.

@@ -1319,10 +1319,17 @@ mod tests {
         assert_eq!(w.returned, 1);
         let half_root = 0.5f32.sqrt();
         assert_near(w.separating, [0.0, -half_root, half_root, -2.0], 1e-4);
-        assert_eq!(
-            calls_to(&e, FLOAT_MINIMUM),
-            vec![vec![(-2.0f32).to_bits(), 0.5f32.to_bits()]]
-        );
+        // The arguments come through the host's RCPPS/RSQRTSS estimate, which
+        // differs by CPU vendor: one ULP either way is the same answer (#207).
+        let minimum_calls = calls_to(&e, FLOAT_MINIMUM);
+        assert_eq!(minimum_calls.len(), 1);
+        for (got, want) in minimum_calls[0].iter().zip([-2.0f32, 0.5]) {
+            assert!(
+                got.abs_diff(want.to_bits()) <= 1,
+                "{:#x} is not within one ULP of {want}",
+                got
+            );
+        }
         assert_eq!(calls_to(&e, SET_TRANSFORMED_INVERSE_POS).len(), 1);
     }
 

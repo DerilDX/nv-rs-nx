@@ -5,8 +5,42 @@
 use crate::prelude::*;
 use crate::units::havok_sdk::hkpsphereshape::{load_vec, maxps, minps, store_vec, zip_with, Vec4};
 
+use super::bhkentity::{
+    release_ni_object, stream_transfer, HEAP_ALLOCATE, INTERLOCKED_INCREMENT, MEMORY_MANAGER,
+    MEMORY_MANAGER_ALLOCATE,
+};
+
 /// The memory router (`0x00c8_5750`): its field `+0x10` is the allocator the block is freed through.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;
+/// The base constructor (`00a5d3a0`) and base destructor (`00a5d3d0`) of the data object
+/// (`this` only; called `NI_OBJECT_CONSTRUCT`/`NI_OBJECT_DESTRUCT` in other units).
+const DATA_BASE_CONSTRUCT: u32 = 0x00a5_d3a0;
+const DATA_BASE_DESTRUCT: u32 = 0x00a5_d3d0;
+/// The memory manager's `Deallocate` (`00aa4060`, `this` = the manager, a pointer).
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+/// The vtable of the data object (`010c740c`).
+const DATA_VTABLE: u32 = 0x010c_740c;
+/// The shape base constructor (`hkpShapeCollection`, `00d21410`: `this`, the shape type and the
+/// collection type), and the vtables the shape stores: the shape's (`010c755c`), its container
+/// sub-object's (`010c753c`) and the two the destructor ends with.
+const SHAPE_COLLECTION_CONSTRUCT: u32 = 0x00d2_1410;
+const SHAPE_VTABLE: u32 = 0x010c_755c;
+const CONTAINER_VTABLE: u32 = 0x010c_753c;
+const BASE_ENDED_VTABLE: u32 = 0x010c_6fb0;
+const SHAPE_ENDED_VTABLE: u32 = 0x0102_e388;
+/// The stream's reader and writer objects (`stream + 0x24c` and `+ 0x250`) keep their transfer
+/// functions at `+8` and `+0xC`; the stream's version number is at `+4`.
+const READER_FUNCTION: u32 = 8;
+const WRITER_FUNCTION: u32 = 0xc;
+const READER_OBJECT: u32 = 0x24c;
+const WRITER_OBJECT: u32 = 0x250;
+/// The format words handed to the transfer functions as their fourth argument: the triangle data
+/// (`011b1734` when writing, `011b1754` when reading) and the vertex data (`011b1730` when
+/// writing, `011b1750` when reading).
+const WRITE_TRIANGLE_FORMAT: u32 = 0x011b_1734;
+const WRITE_VERTEX_FORMAT: u32 = 0x011b_1730;
+const READ_TRIANGLE_FORMAT: u32 = 0x011b_1754;
+const READ_VERTEX_FORMAT: u32 = 0x011b_1750;
 
 // Translated from 00ca40f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Deleting destructor: runs the base destructor (`0x00ca_3b90`) on `this` and, when bit 0 of
@@ -355,9 +389,439 @@ pub fn hk_packed_ni_tri_strips_data_get_r_t_t_i(_e: &mut Engine) -> u32 {
     0x0126_82bc
 }
 
+/// The product of two words, or `0xffffffff` when it does not fit in 32 bits (`MUL`, `SETO`,
+/// `NEG`, `OR`: the size a failed multiplication hands to the allocator).
+fn product_or_max(a: u32, b: u32) -> u32 {
+    let wide = u64::from(a) * u64::from(b);
+    if wide >> 32 != 0 {
+        u32::MAX
+    } else {
+        wide as u32
+    }
+}
+
+/// Calls the transfer function the stream's reader or writer object `object` keeps at
+/// `object + function_offset` with `(object, buffer, size, format, flag)`, `format` being the
+/// address of a format word, and adds the answer to the object's position (`+4`).
+fn transfer_with_format(
+    e: &mut Engine,
+    object: u32,
+    function_offset: u32,
+    buffer: u32,
+    size: u32,
+    format: u32,
+    flag: u32,
+) {
+    let function = e.mem.u32(object + function_offset);
+    let moved = e
+        .call(function, &args![object, buffer, size, format, flag])
+        .u32();
+    let position = e.mem.u32(object + 4);
+    e.mem.set_u32(object + 4, position.wrapping_add(moved));
+}
+
+/// Resets the cached box of the shape (`+0x60` minimum, `+0x70` maximum) to the empty box: the
+/// first three lanes of the minimum are the float at 0x0104da48, those of the maximum the float
+/// at 0x0104e148, and the last lane of both the float at 0x01011d78.
+fn reset_world_box(e: &mut Engine, shape: u32) {
+    let min_fill = e.mem.f32(EMPTY_MIN_FILL);
+    let max_fill = e.mem.f32(EMPTY_MAX_FILL);
+    let w_fill = e.mem.f32(EMPTY_W_FILL);
+    store_vec(
+        e,
+        shape + WORLD_AABB,
+        [min_fill, min_fill, min_fill, w_fill],
+    );
+    store_vec(
+        e,
+        shape + WORLD_AABB + 0x10,
+        [max_fill, max_fill, max_fill, w_fill],
+    );
+}
+
+// Translated from 00ca34c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ca34c0 - the FS:[0] exception frame is not modeled.
+/// `fn_00ca34c0` (unnamed in the Xbox PDB): takes no arguments. Allocates 0x30 bytes from the
+/// game heap (`00aa13e0`); when that gave a block, runs the data object's base constructor
+/// (`00a5d3a0`) on it, clears the 16-bit word at `+0x10`, stores the data vtable 0x010c740c
+/// and clears the words at `+8`, `+0xC`, `+0x14`, `+0x18`, `+0x20` and `+0x24`. Answers the
+/// block, or 0. It is the factory of a `hkPackedNiTriStripsData` (unconfirmed).
+pub fn fn_00ca34c0(e: &mut Engine) -> u32 {
+    let block = e.call(HEAP_ALLOCATE, &args![0x30u32]).u32();
+    if block == 0 {
+        return 0;
+    }
+    e.call(DATA_BASE_CONSTRUCT, &args![block]);
+    e.mem.set_u16(block + 0x10, 0);
+    e.mem.set_u32(block, DATA_VTABLE);
+    for offset in [0x8, 0xc, 0x14, 0x18, 0x20, 0x24] {
+        e.mem.set_u32(block + offset, 0);
+    }
+    block
+}
+
+// Translated from 00ca3570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fn_00ca3570` (unnamed in the Xbox PDB): the destructor body of `hkPackedNiTriStripsData`
+/// (the deleting destructor `00ca3980` calls it). Stores the data vtable, gives the blocks at
+/// `+0x14`, `+0x18`, `+0x24` and `+0x20` back to the memory manager (`Deallocate`, `00aa4060`)
+/// when they are set, and ends with the base destructor (`00a5d3d0`).
+pub fn fn_00ca3570(e: &mut Engine, this: u32) {
+    e.mem.set_u32(this, DATA_VTABLE);
+    for offset in [0x14, 0x18, 0x24, 0x20] {
+        let block = e.mem.u32(this + offset);
+        if block != 0 {
+            e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, block]);
+        }
+    }
+    e.call(DATA_BASE_DESTRUCT, &args![this]);
+}
+
+// Translated from 00ca36a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ca36a0 - the /GS cookie check (00ec408c) is not modeled.
+/// `fn_00ca36a0` (unnamed in the Xbox PDB): takes the address of a 64-byte transform. Copies
+/// it to `AabbTransform` (`+0x20`), stores the first lane of `vScale` (`+0x90`, through the x87
+/// stack) as `fAabbScale` (`+0x80`), resets the cached box (`+0x60`, `+0x70`) to the empty box
+/// and grows it over every vertex of the data (the count at `+0xC`, 12-byte vertices at
+/// `+0x18`): the vertex (floats loaded through the x87, last lane 0) is multiplied lane-wise
+/// by `vScale`, moved by the transform through `hkVector4::setTransformedPos` (`00c7f640`) and
+/// folded in with `MINPS`/`MAXPS`.
+pub fn fn_00ca36a0(e: &mut Engine, this: u32, transform: u32) {
+    for block in 0..4 {
+        let lanes = load_vec(e, transform + 0x10 * block);
+        store_vec(e, this + AABB_TRANSFORM + 0x10 * block, lanes);
+    }
+    let first_scale = x87_quiet_bits(e.mem.u32(this + SCALE));
+    e.mem.set_u32(this + 0x80, first_scale);
+    reset_world_box(e, this);
+    let data = e.mem.u32(this + 0x84);
+    if e.mem.u32(data + 0xc) == 0 {
+        return;
+    }
+    e.with_stack(0x20, |e, scratch| {
+        let vertex = scratch.addr();
+        let moved = vertex + 0x10;
+        let mut offset = 0u32;
+        let mut done = 0u32;
+        loop {
+            let data = e.mem.u32(this + 0x84);
+            let source = e.mem.u32(data + 0x18).wrapping_add(offset);
+            let scale = load_vec(e, this + SCALE);
+            let raw: Vec4 = [
+                x87_quiet(e.mem.f32(source)),
+                x87_quiet(e.mem.f32(source + 4)),
+                x87_quiet(e.mem.f32(source + 8)),
+                0.0,
+            ];
+            store_vec(e, vertex, zip_with(scale, raw, |s, v| s * v));
+            e.call(SET_TRANSFORMED_POS, &args![moved, transform, vertex]);
+            let corner = load_vec(e, moved);
+            offset = offset.wrapping_add(0xc);
+            let low = zip_with(load_vec(e, this + WORLD_AABB), corner, minps);
+            store_vec(e, this + WORLD_AABB, low);
+            let high = zip_with(load_vec(e, this + WORLD_AABB + 0x10), corner, maxps);
+            store_vec(e, this + WORLD_AABB + 0x10, high);
+            done += 1;
+            let data = e.mem.u32(this + 0x84);
+            if done >= e.mem.u32(data + 0xc) {
+                break;
+            }
+        }
+    });
+}
+
+// Translated from 00ca39f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ca39f0 - the FS:[0] exception frame is not modeled.
+/// `hkPackedNiTriStripsShape::hkPackedNiTriStripsShape` (Xbox PDB): takes the construction
+/// info. Runs the shape base constructor (`00d21410`) on `(this, 0x1f, 3)`, stores the shape
+/// and container vtables, takes a counted reference to the strips data the info holds at `+4`
+/// (stored at `+0x84`, count raised through `InterlockedIncrement`), copies the float at info
+/// `+8` (through the x87 stack) to `fRadius` (`+0xA0`) and the vector at info `+0x10` to
+/// `vScale` (`+0x90`), resets the cached box and sets `m_disableWelding` (`+0x14`) to 1.
+/// Answers `this`.
+pub fn hk_packed_ni_tri_strips_shape_hk_packed_ni_tri_strips_shape(
+    e: &mut Engine,
+    this: u32,
+    info: u32,
+) -> u32 {
+    e.call(SHAPE_COLLECTION_CONSTRUCT, &args![this, 0x1fu32, 3u32]);
+    e.mem.set_u32(this, SHAPE_VTABLE);
+    e.mem.set_u32(this + 0x10, CONTAINER_VTABLE);
+    e.mem.set_u32(this + 0x84, 0);
+    let data = e.mem.u32(info + 4);
+    if data != 0 {
+        e.mem.set_u32(this + 0x84, data);
+        e.call(INTERLOCKED_INCREMENT, &args![data + 4]);
+    }
+    let radius = x87_quiet_bits(e.mem.u32(info + 8));
+    e.mem.set_u32(this + 0xa0, radius);
+    let scale = load_vec(e, info + 0x10);
+    store_vec(e, this + SCALE, scale);
+    reset_world_box(e, this);
+    e.mem.set_u8(this + 0x14, 1);
+    this
+}
+
+// Translated from 00ca3b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fn_00ca3b00` (unnamed in the Xbox PDB): a thunk that moves `this` back by 0x10 (from the
+/// container sub-object to the shape) and jumps to the deleting destructor `00ca40f0` with the
+/// same stack word. Answers what that answers.
+pub fn fn_00ca3b00(e: &mut Engine, this: u32, flags: u32) -> u32 {
+    e.call(0x00ca_40f0, &args![this.wrapping_sub(0x10), flags])
+        .u32()
+}
+
+// Translated from 00ca3b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkPackedNiTriStripsShape::CopyCinfo` (Xbox PDB): takes the construction info. Copies the
+/// radius (`+0xA0`, through the x87 stack) to info `+8` and `vScale` (`+0x90`) to info `+0x10`;
+/// when the info's strips data (`+4`) is not the shape's (`+0x84`), releases the info's
+/// (decrement of its count at `+4`, virtual slot 4 when it reaches 0) and takes a counted
+/// reference to the shape's.
+pub fn hk_packed_ni_tri_strips_shape_copy_cinfo(e: &mut Engine, this: u32, info: u32) {
+    let radius = x87_quiet_bits(e.mem.u32(this + 0xa0));
+    e.mem.set_u32(info + 8, radius);
+    let scale = load_vec(e, this + SCALE);
+    store_vec(e, info + 0x10, scale);
+    let old = e.mem.u32(info + 4);
+    if old != e.mem.u32(this + 0x84) {
+        if old != 0 {
+            release_ni_object(e, old);
+        }
+        let data = e.mem.u32(this + 0x84);
+        e.mem.set_u32(info + 4, data);
+        if data != 0 {
+            e.call(INTERLOCKED_INCREMENT, &args![data + 4]);
+        }
+    }
+}
+
+// Translated from 00ca3b90 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ca3b90 - the FS:[0] exception frame is not modeled.
+/// `fn_00ca3b90` (unnamed in the Xbox PDB): the destructor body of `hkPackedNiTriStripsShape`
+/// (the deleting destructor `00ca40f0` calls it). Stores the shape and container vtables,
+/// releases the strips data (`+0x84`: decrement of its count at `+4`, virtual slot 4 when it
+/// reaches 0) and clears the pointer, releases whatever the pointer then holds (nothing, as
+/// the code is written), and ends with the vtables 0x010c6fb0 at `+0x10` and 0x0102e388 at `+0`.
+pub fn fn_00ca3b90(e: &mut Engine, this: u32) {
+    e.mem.set_u32(this, SHAPE_VTABLE);
+    e.mem.set_u32(this + 0x10, CONTAINER_VTABLE);
+    let data = e.mem.u32(this + 0x84);
+    if data != 0 {
+        release_ni_object(e, data);
+        e.mem.set_u32(this + 0x84, 0);
+    }
+    let data = e.mem.u32(this + 0x84);
+    if data != 0 {
+        release_ni_object(e, data);
+    }
+    e.mem.set_u32(this + 0x10, BASE_ENDED_VTABLE);
+    e.mem.set_u32(this, SHAPE_ENDED_VTABLE);
+}
+
+// Translated from 00ca3dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkPackedNiTriStripsData::SaveBinary` (Xbox PDB): takes the stream. Every piece goes
+/// through the transfer function of the writer object (`stream + 0x250`, function at `+0xC`),
+/// reloaded each time: the triangle count (`+8`), the triangle data (`+0x14`, 8 bytes each),
+/// the vertex count (`+0xC`), a byte telling whether the compressed vertices (`+0x20`) are
+/// set, the vertices (6 bytes each from `+0x20` when set, else 12 bytes each from `+0x18`), the
+/// part count (16 bits at `+0x10`) and the parts (`+0x24`, 12 bytes each).
+pub fn hk_packed_ni_tri_strips_data_save_binary(e: &mut Engine, this: u32, stream: u32) {
+    let writer = e.mem.u32(stream + WRITER_OBJECT);
+    stream_transfer(e, writer, WRITER_FUNCTION, this + 8, 4, Some(4), 1);
+    let triangle_count = e.mem.u32(this + 8);
+    let triangles = e.mem.u32(this + 0x14);
+    let writer = e.mem.u32(stream + WRITER_OBJECT);
+    transfer_with_format(
+        e,
+        writer,
+        WRITER_FUNCTION,
+        triangles,
+        triangle_count.wrapping_mul(8),
+        WRITE_TRIANGLE_FORMAT,
+        4,
+    );
+    let writer = e.mem.u32(stream + WRITER_OBJECT);
+    stream_transfer(e, writer, WRITER_FUNCTION, this + 0xc, 4, Some(4), 1);
+    let compressed = e.mem.u32(this + 0x20) != 0;
+    let writer = e.mem.u32(stream + WRITER_OBJECT);
+    e.with_stack(4, |e, flag| {
+        e.mem.set_u8(flag.addr(), u8::from(compressed));
+        stream_transfer(e, writer, WRITER_FUNCTION, flag.addr(), 1, Some(1), 1);
+    });
+    let vertex_count = e.mem.u32(this + 0xc);
+    let writer = e.mem.u32(stream + WRITER_OBJECT);
+    if compressed {
+        let vertices = e.mem.u32(this + 0x20);
+        stream_transfer(
+            e,
+            writer,
+            WRITER_FUNCTION,
+            vertices,
+            vertex_count.wrapping_mul(6),
+            Some(2),
+            1,
+        );
+    } else {
+        let vertices = e.mem.u32(this + 0x18);
+        transfer_with_format(
+            e,
+            writer,
+            WRITER_FUNCTION,
+            vertices,
+            vertex_count.wrapping_mul(12),
+            WRITE_VERTEX_FORMAT,
+            1,
+        );
+    }
+    let writer = e.mem.u32(stream + WRITER_OBJECT);
+    stream_transfer(e, writer, WRITER_FUNCTION, this + 0x10, 2, Some(2), 1);
+    let part_count = u32::from(e.mem.u16(this + 0x10));
+    let parts = e.mem.u32(this + 0x24);
+    let writer = e.mem.u32(stream + WRITER_OBJECT);
+    transfer_with_format(
+        e,
+        writer,
+        WRITER_FUNCTION,
+        parts,
+        part_count.wrapping_mul(12),
+        WRITE_VERTEX_FORMAT,
+        1,
+    );
+}
+
+// Translated from 00ca3f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkPackedNiTriStripsData::LoadBinary` (Xbox PDB): takes the stream. The mirror of
+/// `SaveBinary`, through the transfer function of the reader object (`stream + 0x24c`,
+/// function at `+8`), reloaded each time. Reads the triangle count (`+8`) and allocates the
+/// triangle data (`+0x14`) from the memory manager (`00aa3e40`, `count * 8` bytes, all ones
+/// when that overflows). A stream version (`stream + 4`) below 0x21 holds 20-byte records of
+/// which the first two words are kept as the 8-byte entries; a later one holds the entries.
+/// Then the vertex count (`+0xC`), a byte that is read and dropped for versions from 0x22, the
+/// vertex data (`+0x18`, 12 bytes each, allocated like the triangles), the part count (16 bits
+/// at `+0x10`) and the parts (`+0x24`, 12 bytes each). The compressed vertices (`+0x20`) are
+/// not read.
+pub fn hk_packed_ni_tri_strips_data_load_binary(e: &mut Engine, this: u32, stream: u32) {
+    let reader = e.mem.u32(stream + READER_OBJECT);
+    stream_transfer(e, reader, READER_FUNCTION, this + 8, 4, Some(4), 1);
+    let triangle_count = e.mem.u32(this + 8);
+    let triangles = e
+        .call(
+            MEMORY_MANAGER_ALLOCATE,
+            &args![MEMORY_MANAGER, product_or_max(triangle_count, 8)],
+        )
+        .u32();
+    e.mem.set_u32(this + 0x14, triangles);
+    if e.mem.u32(stream + 4) < 0x21 {
+        if e.mem.u32(this + 8) != 0 {
+            let mut index = 0u32;
+            loop {
+                let reader = e.mem.u32(stream + READER_OBJECT);
+                let (first, second) = e.with_stack(0x14, |e, record| {
+                    transfer_with_format(
+                        e,
+                        reader,
+                        READER_FUNCTION,
+                        record.addr(),
+                        0x14,
+                        READ_TRIANGLE_FORMAT,
+                        7,
+                    );
+                    (e.mem.u32(record.addr()), e.mem.u32(record.addr() + 4))
+                });
+                let entry = e.mem.u32(this + 0x14).wrapping_add(index.wrapping_mul(8));
+                e.mem.set_u32(entry, first);
+                index = index.wrapping_add(1);
+                e.mem.set_u32(entry + 4, second);
+                if index >= e.mem.u32(this + 8) {
+                    break;
+                }
+            }
+        }
+    } else {
+        let triangle_bytes = e.mem.u32(this + 8).wrapping_mul(8);
+        let reader = e.mem.u32(stream + READER_OBJECT);
+        transfer_with_format(
+            e,
+            reader,
+            READER_FUNCTION,
+            triangles,
+            triangle_bytes,
+            READ_TRIANGLE_FORMAT,
+            4,
+        );
+    }
+    let reader = e.mem.u32(stream + READER_OBJECT);
+    stream_transfer(e, reader, READER_FUNCTION, this + 0xc, 4, Some(4), 1);
+    if e.mem.u32(stream + 4) >= 0x22 {
+        let reader = e.mem.u32(stream + READER_OBJECT);
+        e.with_stack(4, |e, dropped| {
+            stream_transfer(e, reader, READER_FUNCTION, dropped.addr(), 1, Some(1), 1);
+        });
+    }
+    let vertex_count = e.mem.u32(this + 0xc);
+    let vertices = e
+        .call(
+            MEMORY_MANAGER_ALLOCATE,
+            &args![MEMORY_MANAGER, product_or_max(vertex_count, 12)],
+        )
+        .u32();
+    e.mem.set_u32(this + 0x18, vertices);
+    let vertex_bytes = e.mem.u32(this + 0xc).wrapping_mul(12);
+    let reader = e.mem.u32(stream + READER_OBJECT);
+    transfer_with_format(
+        e,
+        reader,
+        READER_FUNCTION,
+        vertices,
+        vertex_bytes,
+        READ_VERTEX_FORMAT,
+        1,
+    );
+    let reader = e.mem.u32(stream + READER_OBJECT);
+    stream_transfer(e, reader, READER_FUNCTION, this + 0x10, 2, Some(2), 1);
+    let part_count = u32::from(e.mem.u16(this + 0x10));
+    let parts = e
+        .call(
+            MEMORY_MANAGER_ALLOCATE,
+            &args![MEMORY_MANAGER, product_or_max(part_count, 12)],
+        )
+        .u32();
+    e.mem.set_u32(this + 0x24, parts);
+    let reader = e.mem.u32(stream + READER_OBJECT);
+    transfer_with_format(
+        e,
+        reader,
+        READER_FUNCTION,
+        parts,
+        part_count.wrapping_mul(12),
+        READ_VERTEX_FORMAT,
+        1,
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ca34c0, fn_00ca34c0() -> u32),
+        entry!(0x00ca3570, fn_00ca3570(u32)),
+        entry!(0x00ca36a0, fn_00ca36a0(u32, u32)),
+        entry!(
+            0x00ca39f0,
+            hk_packed_ni_tri_strips_shape_hk_packed_ni_tri_strips_shape(u32, u32) -> u32
+        ),
+        entry!(0x00ca3b00, fn_00ca3b00(u32, u32) -> u32),
+        entry!(
+            0x00ca3b20,
+            hk_packed_ni_tri_strips_shape_copy_cinfo(u32, u32)
+        ),
+        entry!(0x00ca3b90, fn_00ca3b90(u32)),
+        entry!(
+            0x00ca3dc0,
+            hk_packed_ni_tri_strips_data_save_binary(u32, u32)
+        ),
+        entry!(
+            0x00ca3f10,
+            hk_packed_ni_tri_strips_data_load_binary(u32, u32)
+        ),
         entry!(0x00ca34b0, hk_packed_ni_tri_strips_data_get_r_t_t_i() -> u32),
         entry!(0x00ca_40f0, deleting_destructor_00ca40f0(Ptr, u8) -> Ptr),
         entry!(0x00ca3980, hk_packed_ni_tri_strips_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
@@ -794,5 +1258,491 @@ mod tests {
     fn hk_packed_ni_tri_strips_data_get_r_t_t_i_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00ca_34b0, &args![]).u32(), 0x0126_82bc);
+    }
+}
+
+#[cfg(test)]
+mod data_tests {
+    use super::*;
+    use crate::units::bshavok::bhkentity::testing::{
+        calls_to, interlocked_doubles, logging_engine, ni_object,
+    };
+    use crate::units::bshavok::bhkentity::INTERLOCKED_DECREMENT;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    /// The double that stands for the transfer function of the stream objects.
+    const TRANSFER_DOUBLE: u32 = 0x0900_0c00;
+    /// The double that stands for virtual slot 4 (the delete) of the data objects.
+    const DELETE_SLOT: u32 = 0x0900_0004;
+
+    fn nothing(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    /// An engine with the interlocked imports, the delete slot and the manager doubled (the
+    /// allocator answers zeroed blocks).
+    fn engine() -> Engine {
+        let mut e = logging_engine();
+        interlocked_doubles(&mut e);
+        e.register(DELETE_SLOT, nothing);
+        e.register(MEMORY_DEALLOCATE, nothing);
+        e.register(DATA_BASE_CONSTRUCT, nothing);
+        e.register(DATA_BASE_DESTRUCT, nothing);
+        e.register(HEAP_ALLOCATE, |e, a| Ret {
+            eax: e.mem.alloc(a[0]),
+            ..Ret::default()
+        });
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| Ret {
+            eax: e.mem.alloc(a[1].max(1)),
+            ..Ret::default()
+        });
+        e
+    }
+
+    /// A stream whose reader and writer are the same object, with its transfer function
+    /// at the double; answers `(stream, object)`.
+    fn stream(e: &mut Engine, version: u32) -> (u32, u32) {
+        let stream = e.mem.alloc(0x300);
+        let object = e.mem.alloc(0x20);
+        e.mem.set_u32(object + READER_FUNCTION, TRANSFER_DOUBLE);
+        e.mem.set_u32(object + WRITER_FUNCTION, TRANSFER_DOUBLE);
+        e.mem.set_u32(stream + 4, version);
+        e.mem.set_u32(stream + READER_OBJECT, object);
+        e.mem.set_u32(stream + WRITER_OBJECT, object);
+        (stream, object)
+    }
+
+    /// Installs the reader double: every transfer fills the buffer with the next chunk.
+    fn feed(e: &mut Engine, chunks: Vec<Vec<u8>>) {
+        let queue = Rc::new(RefCell::new(VecDeque::from(chunks)));
+        e.register_double(TRANSFER_DOUBLE, move |e, a| {
+            let chunk = queue.borrow_mut().pop_front().unwrap_or_default();
+            for (i, byte) in chunk.iter().enumerate().take(a[2] as usize) {
+                e.mem.set_u8(a[1] + i as u32, *byte);
+            }
+            Ret {
+                eax: a[2],
+                ..Ret::default()
+            }
+        });
+    }
+
+    /// Installs the writer double: every transfer records the bytes of its buffer.
+    fn capture(e: &mut Engine) -> Rc<RefCell<Vec<Vec<u8>>>> {
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&written);
+        e.register_double(TRANSFER_DOUBLE, move |e, a| {
+            let bytes = (0..a[2]).map(|i| e.mem.u8(a[1] + i)).collect();
+            sink.borrow_mut().push(bytes);
+            Ret {
+                eax: a[2],
+                ..Ret::default()
+            }
+        });
+        written
+    }
+
+    fn word(value: u32) -> Vec<u8> {
+        value.to_le_bytes().to_vec()
+    }
+
+    fn sizes(e: &Engine) -> Vec<u32> {
+        calls_to(e, TRANSFER_DOUBLE).iter().map(|c| c[2]).collect()
+    }
+
+    #[test]
+    fn the_factory_builds_a_cleared_data_object() {
+        let mut e = engine();
+        let block = e.call(0x00ca_34c0, &args![]).u32();
+        assert_ne!(block, 0);
+        assert_eq!(calls_to(&e, HEAP_ALLOCATE), [[0x30]]);
+        assert_eq!(calls_to(&e, DATA_BASE_CONSTRUCT), [[block]]);
+        assert_eq!(e.mem.u32(block), DATA_VTABLE);
+        for offset in [0x8, 0xc, 0x14, 0x18, 0x20, 0x24] {
+            assert_eq!(e.mem.u32(block + offset), 0);
+        }
+    }
+
+    #[test]
+    fn the_factory_answers_zero_when_the_heap_does() {
+        let mut e = engine();
+        e.register(HEAP_ALLOCATE, |_, _| Ret::default());
+        assert_eq!(e.call(0x00ca_34c0, &args![]).u32(), 0);
+        assert!(calls_to(&e, DATA_BASE_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn the_data_destructor_frees_the_set_blocks_in_order() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0x14, 0x100);
+        e.mem.set_u32(this + 0x24, 0x300);
+        e.mem.set_u32(this + 0x20, 0x400);
+        e.call(0x00ca_3570, &args![this]);
+        assert_eq!(e.mem.u32(this), DATA_VTABLE);
+        assert_eq!(
+            calls_to(&e, MEMORY_DEALLOCATE),
+            [
+                [MEMORY_MANAGER, 0x100],
+                [MEMORY_MANAGER, 0x300],
+                [MEMORY_MANAGER, 0x400]
+            ]
+        );
+        assert_eq!(calls_to(&e, DATA_BASE_DESTRUCT), [[this]]);
+    }
+
+    #[test]
+    fn the_thunk_moves_this_back_to_the_shape() {
+        let mut e = engine();
+        e.register(0x00ca_40f0, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x00ca_3b00, &args![0x5010u32, 1u32]).u32(), 0x5000);
+        assert_eq!(calls_to(&e, 0x00ca_40f0), [[0x5000, 1]]);
+    }
+
+    /// The constants the box reset reads.
+    fn box_constants(e: &mut Engine) {
+        for (address, value) in [
+            (EMPTY_MIN_FILL, 100.0f32),
+            (EMPTY_MAX_FILL, -100.0),
+            (EMPTY_W_FILL, 0.0),
+        ] {
+            e.map(address, 4);
+            e.mem.set_f32(address, value);
+        }
+    }
+
+    #[test]
+    fn the_shape_constructor_takes_the_data_and_resets_the_box() {
+        let mut e = engine();
+        box_constants(&mut e);
+        e.register(SHAPE_COLLECTION_CONSTRUCT, nothing);
+        let data = ni_object(&mut e, 1, DELETE_SLOT);
+        let info = e.mem.alloc(0x30);
+        e.mem.set_u32(info + 4, data);
+        e.mem.set_u32(info + 8, 0x7f80_0001);
+        for lane in 0..4 {
+            e.mem.set_f32(info + 0x10 + 4 * lane, 1.0 + lane as f32);
+        }
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0x84, 0x1234);
+        assert_eq!(e.call(0x00ca_39f0, &args![this, info]).u32(), this);
+        assert_eq!(calls_to(&e, SHAPE_COLLECTION_CONSTRUCT), [[this, 0x1f, 3]]);
+        assert_eq!(e.mem.u32(this), SHAPE_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x10), CONTAINER_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x84), data);
+        assert_eq!(e.mem.u32(data + 4), 2);
+        assert_eq!(e.mem.u32(this + 0xa0), 0x7fc0_0001);
+        assert_eq!(load_vec(&e, this + 0x90), [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(load_vec(&e, this + 0x60), [100.0, 100.0, 100.0, 0.0]);
+        assert_eq!(load_vec(&e, this + 0x70), [-100.0, -100.0, -100.0, 0.0]);
+        assert_eq!(e.mem.u8(this + 0x14), 1);
+    }
+
+    #[test]
+    fn the_shape_constructor_without_data_keeps_the_pointer_empty() {
+        let mut e = engine();
+        box_constants(&mut e);
+        e.register(SHAPE_COLLECTION_CONSTRUCT, nothing);
+        let info = e.mem.alloc(0x30);
+        let this = e.mem.alloc(0xb0);
+        e.call(0x00ca_39f0, &args![this, info]);
+        assert_eq!(e.mem.u32(this + 0x84), 0);
+        assert!(calls_to(&e, INTERLOCKED_INCREMENT).is_empty());
+    }
+
+    #[test]
+    fn copy_cinfo_swaps_the_data_and_copies_the_values() {
+        let mut e = engine();
+        let shape_data = ni_object(&mut e, 3, DELETE_SLOT);
+        let info_data = ni_object(&mut e, 1, DELETE_SLOT);
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0x84, shape_data);
+        e.mem.set_f32(this + 0xa0, 0.25);
+        for lane in 0..4 {
+            e.mem.set_f32(this + 0x90 + 4 * lane, 5.0 + lane as f32);
+        }
+        let info = e.mem.alloc(0x30);
+        e.mem.set_u32(info + 4, info_data);
+        e.call(0x00ca_3b20, &args![this, info]);
+        assert_eq!(e.mem.f32(info + 8), 0.25);
+        assert_eq!(load_vec(&e, info + 0x10), [5.0, 6.0, 7.0, 8.0]);
+        assert_eq!(e.mem.u32(info + 4), shape_data);
+        assert_eq!(e.mem.u32(shape_data + 4), 4);
+        // The info's old data lost its only reference and was deleted.
+        assert_eq!(calls_to(&e, DELETE_SLOT), [[info_data]]);
+        // The same data again changes nothing.
+        e.call(0x00ca_3b20, &args![this, info]);
+        assert_eq!(e.mem.u32(shape_data + 4), 4);
+        assert_eq!(calls_to(&e, INTERLOCKED_INCREMENT).len(), 1);
+        assert_eq!(calls_to(&e, INTERLOCKED_DECREMENT).len(), 1);
+    }
+
+    #[test]
+    fn the_shape_destructor_releases_the_data_and_ends_with_its_vtables() {
+        let mut e = engine();
+        let data = ni_object(&mut e, 2, DELETE_SLOT);
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0x84, data);
+        e.call(0x00ca_3b90, &args![this]);
+        assert_eq!(e.mem.u32(data + 4), 1);
+        assert_eq!(e.mem.u32(this + 0x84), 0);
+        assert!(calls_to(&e, DELETE_SLOT).is_empty());
+        assert_eq!(e.mem.u32(this + 0x10), BASE_ENDED_VTABLE);
+        assert_eq!(e.mem.u32(this), SHAPE_ENDED_VTABLE);
+        // Without data nothing is released.
+        let bare = e.mem.alloc(0xb0);
+        e.call(0x00ca_3b90, &args![bare]);
+        assert_eq!(calls_to(&e, INTERLOCKED_DECREMENT).len(), 1);
+    }
+
+    #[test]
+    fn the_shape_destructor_deletes_data_with_the_last_reference() {
+        let mut e = engine();
+        let data = ni_object(&mut e, 1, DELETE_SLOT);
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0x84, data);
+        e.call(0x00ca_3b90, &args![this]);
+        assert_eq!(calls_to(&e, DELETE_SLOT), [[data]]);
+    }
+
+    #[test]
+    fn product_or_max_saturates_on_overflow() {
+        assert_eq!(product_or_max(3, 8), 24);
+        assert_eq!(product_or_max(0x2000_0000, 8), u32::MAX);
+        assert_eq!(product_or_max(0x1fff_ffff, 8), 0xffff_fff8);
+    }
+
+    /// A data object with 2 triangles, 3 vertices and 2 parts; the compressed vertices are
+    /// set when `compressed`.
+    fn data_object(e: &mut Engine, compressed: bool) -> u32 {
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 8, 2);
+        e.mem.set_u32(this + 0xc, 3);
+        e.mem.set_u16(this + 0x10, 2);
+        let triangles = e.mem.alloc(16);
+        let vertices = e.mem.alloc(36);
+        let parts = e.mem.alloc(24);
+        e.mem.set_u32(this + 0x14, triangles);
+        e.mem.set_u32(this + 0x18, vertices);
+        e.mem.set_u32(this + 0x24, parts);
+        e.mem.set_u8(triangles, 0x11);
+        e.mem.set_u8(vertices, 0x22);
+        e.mem.set_u8(parts, 0x33);
+        if compressed {
+            let packed = e.mem.alloc(18);
+            e.mem.set_u8(packed, 0x44);
+            e.mem.set_u32(this + 0x20, packed);
+        }
+        this
+    }
+
+    #[test]
+    fn saving_writes_the_pieces_in_order_with_full_vertices() {
+        let mut e = engine();
+        let written = capture(&mut e);
+        let (stream, object) = stream(&mut e, 0x22);
+        let this = data_object(&mut e, false);
+        e.call(0x00ca_3dc0, &args![this, stream]);
+        let pieces = written.borrow();
+        assert_eq!(pieces.len(), 7);
+        assert_eq!(pieces[0], word(2));
+        assert_eq!((pieces[1].len(), pieces[1][0]), (16, 0x11));
+        assert_eq!(pieces[2], word(3));
+        assert_eq!(pieces[3], vec![0]);
+        assert_eq!((pieces[4].len(), pieces[4][0]), (36, 0x22));
+        assert_eq!(pieces[5], vec![2, 0]);
+        assert_eq!((pieces[6].len(), pieces[6][0]), (24, 0x33));
+        let calls = calls_to(&e, TRANSFER_DOUBLE);
+        assert_eq!(calls[1][3], WRITE_TRIANGLE_FORMAT);
+        assert_eq!(calls[1][4], 4);
+        assert_eq!(calls[4][3], WRITE_VERTEX_FORMAT);
+        assert_eq!(calls[6][3], WRITE_VERTEX_FORMAT);
+        assert!(calls.iter().all(|c| c[0] == object));
+        assert_eq!(e.mem.u32(object + 4), 4 + 16 + 4 + 1 + 36 + 2 + 24);
+    }
+
+    #[test]
+    fn saving_writes_the_compressed_vertices_when_set() {
+        let mut e = engine();
+        let written = capture(&mut e);
+        let (stream, _) = stream(&mut e, 0x22);
+        let this = data_object(&mut e, true);
+        e.call(0x00ca_3dc0, &args![this, stream]);
+        let pieces = written.borrow();
+        assert_eq!(pieces[3], vec![1]);
+        assert_eq!((pieces[4].len(), pieces[4][0]), (18, 0x44));
+    }
+
+    /// The records of the old format: 20 bytes, the first two words are kept.
+    fn old_record(first: u32, second: u32) -> Vec<u8> {
+        let mut bytes = word(first);
+        bytes.extend(word(second));
+        bytes.extend([0xee; 12]);
+        bytes
+    }
+
+    #[test]
+    fn loading_an_old_stream_keeps_the_first_words_of_each_record() {
+        let mut e = engine();
+        feed(
+            &mut e,
+            vec![
+                word(2),
+                old_record(0xa1, 0xa2),
+                old_record(0xb1, 0xb2),
+                word(3),
+                vec![0x55; 36],
+                vec![2, 0],
+                vec![0x66; 24],
+            ],
+        );
+        let (stream, object) = stream(&mut e, 0x20);
+        let this = e.mem.alloc(0x30);
+        e.call(0x00ca_3f10, &args![this, stream]);
+        assert_eq!(sizes(&e), [4, 0x14, 0x14, 4, 36, 2, 24]);
+        let triangles = e.mem.u32(this + 0x14);
+        assert_eq!(e.mem.u32(triangles), 0xa1);
+        assert_eq!(e.mem.u32(triangles + 4), 0xa2);
+        assert_eq!(e.mem.u32(triangles + 8), 0xb1);
+        assert_eq!(e.mem.u32(triangles + 12), 0xb2);
+        assert_eq!(e.mem.u32(this + 0xc), 3);
+        assert_eq!(e.mem.u8(e.mem.u32(this + 0x18)), 0x55);
+        assert_eq!(e.mem.u16(this + 0x10), 2);
+        assert_eq!(e.mem.u8(e.mem.u32(this + 0x24)), 0x66);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_ALLOCATE),
+            [
+                [MEMORY_MANAGER, 16],
+                [MEMORY_MANAGER, 36],
+                [MEMORY_MANAGER, 24]
+            ]
+        );
+        let calls = calls_to(&e, TRANSFER_DOUBLE);
+        assert_eq!(calls[1][3], READ_TRIANGLE_FORMAT);
+        assert_eq!(calls[1][4], 7);
+        assert_eq!(calls[4][3], READ_VERTEX_FORMAT);
+        assert_eq!(e.mem.u32(object + 4), 4 + 40 + 4 + 36 + 2 + 24);
+    }
+
+    #[test]
+    fn loading_a_new_stream_reads_the_triangles_in_one_piece_and_drops_a_byte() {
+        let mut e = engine();
+        feed(
+            &mut e,
+            vec![
+                word(2),
+                vec![0x77; 16],
+                word(3),
+                vec![1],
+                vec![0x55; 36],
+                vec![2, 0],
+                vec![0x66; 24],
+            ],
+        );
+        let (stream, _) = stream(&mut e, 0x22);
+        let this = e.mem.alloc(0x30);
+        e.call(0x00ca_3f10, &args![this, stream]);
+        assert_eq!(sizes(&e), [4, 16, 4, 1, 36, 2, 24]);
+        let calls = calls_to(&e, TRANSFER_DOUBLE);
+        assert_eq!(calls[1][1], e.mem.u32(this + 0x14));
+        assert_eq!(calls[1][3], READ_TRIANGLE_FORMAT);
+        assert_eq!(calls[1][4], 4);
+        assert_eq!(e.mem.u8(e.mem.u32(this + 0x14)), 0x77);
+    }
+
+    #[test]
+    fn loading_an_empty_old_stream_reads_no_records() {
+        let mut e = engine();
+        feed(&mut e, vec![word(0), word(0), vec![0, 0]]);
+        let (stream, _) = stream(&mut e, 0x10);
+        let this = e.mem.alloc(0x30);
+        e.call(0x00ca_3f10, &args![this, stream]);
+        assert_eq!(sizes(&e), [4, 4, 0, 2, 0]);
+    }
+
+    #[test]
+    fn an_overflowing_count_asks_the_manager_for_all_ones() {
+        let mut e = engine();
+        e.register(MEMORY_MANAGER_ALLOCATE, |_, _| Ret::default());
+        feed(&mut e, vec![word(0x2000_0000)]);
+        let (stream, _) = stream(&mut e, 0x22);
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0x18, 0);
+        // The failed allocations leave null blocks; only the first request is looked at.
+        e.call(0x00ca_3f10, &args![this, stream]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_ALLOCATE)[0],
+            [MEMORY_MANAGER, u32::MAX]
+        );
+    }
+
+    /// A shape over a unit scale and the identity-like transform double: the double moves
+    /// every vertex by +1 on x.
+    #[test]
+    fn the_transform_setter_copies_the_transform_and_grows_the_box_over_the_vertices() {
+        let mut e = engine();
+        box_constants(&mut e);
+        e.register(SET_TRANSFORMED_POS, |e, a| {
+            // Out = vertex + (1, 0, 0, 0).
+            let x = e.mem.f32(a[2]) + 1.0;
+            e.mem.set_f32(a[0], x);
+            for lane in 1..4 {
+                let value = e.mem.f32(a[2] + 4 * lane);
+                e.mem.set_f32(a[0] + 4 * lane, value);
+            }
+            Ret::default()
+        });
+        let this = e.mem.alloc(0xb0);
+        let data = e.mem.alloc(0x30);
+        let vertices = e.mem.alloc(36);
+        e.mem.set_u32(this + 0x84, data);
+        e.mem.set_u32(data + 0xc, 3);
+        e.mem.set_u32(data + 0x18, vertices);
+        let points = [[0.0f32, 1.0, 2.0], [-3.0, 4.0, 0.5], [2.0, -1.0, 8.0]];
+        for (i, point) in points.iter().enumerate() {
+            for (lane, value) in point.iter().enumerate() {
+                e.mem
+                    .set_f32(vertices + 12 * i as u32 + 4 * lane as u32, *value);
+            }
+        }
+        store_vec(&mut e, this + SCALE, [2.0, 1.0, 1.0, 5.0]);
+        let transform = e.mem.alloc(0x40);
+        for word in 0..16 {
+            e.mem.set_f32(transform + 4 * word, word as f32);
+        }
+        e.call(0x00ca_36a0, &args![this, transform]);
+        for word in 0..16 {
+            assert_eq!(e.mem.f32(this + AABB_TRANSFORM + 4 * word), word as f32);
+        }
+        assert_eq!(e.mem.f32(this + 0x80), 2.0);
+        // Scaled x: 0, -6, 4; moved by 1: 1, -5, 5.
+        assert_eq!(load_vec(&e, this + WORLD_AABB), [-5.0, -1.0, 0.5, 0.0]);
+        assert_eq!(load_vec(&e, this + WORLD_AABB + 0x10), [5.0, 4.0, 8.0, 0.0]);
+        let calls = calls_to(&e, SET_TRANSFORMED_POS);
+        assert_eq!(calls.len(), 3);
+        assert!(calls.iter().all(|c| c[1] == transform));
+    }
+
+    #[test]
+    fn the_transform_setter_with_no_vertices_leaves_the_empty_box() {
+        let mut e = engine();
+        box_constants(&mut e);
+        e.register(SET_TRANSFORMED_POS, nothing);
+        let this = e.mem.alloc(0xb0);
+        let data = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0x84, data);
+        let transform = e.mem.alloc(0x40);
+        e.call(0x00ca_36a0, &args![this, transform]);
+        assert!(calls_to(&e, SET_TRANSFORMED_POS).is_empty());
+        assert_eq!(load_vec(&e, this + WORLD_AABB), [100.0, 100.0, 100.0, 0.0]);
+        assert_eq!(
+            load_vec(&e, this + WORLD_AABB + 0x10),
+            [-100.0, -100.0, -100.0, 0.0]
+        );
     }
 }
