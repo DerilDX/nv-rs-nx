@@ -35,13 +35,44 @@ pub fn fn_0059ae60(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `00484d60` (unnamed in the engine map): the base body the wrapper forwards to;
+/// `thiscall`, `this` plus one stack word (`RET 4`).
+const FORWARD_TARGET_00484D60: u32 = 0x0048_4d60;
+
+// Translated from 0059add0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable words 010347e0 and 010368a8): forwards `this` and one
+/// pointer word to `00484d60`, which, after a check on the word through `00428110` and
+/// `004280f0`, calls `00865e50` on the word with `this+8` and 4. Returns nothing: no path of
+/// `00484d60` produces a value (it ends after that call).
+pub fn fn_0059add0(e: &mut Engine, this: Ptr, argument: Ptr) {
+    e.call(FORWARD_TARGET_00484D60, &args![this, argument]);
+}
+
+/// `00484da0` (unnamed in the engine map): the base body the wrapper forwards to;
+/// `thiscall`, `this` plus one stack word (`RET 4`).
+const FORWARD_TARGET_00484DA0: u32 = 0x0048_4da0;
+
+// Translated from 0059adf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable words 010347e8 and 010368b0): forwards `this` and one
+/// pointer word to `00484da0`, which reads a word through `00864980` and merges it into the
+/// flags word at `this+8`. Returns nothing: every path of `00484da0` ends after that store
+/// with no value.
+pub fn fn_0059adf0(e: &mut Engine, this: Ptr, argument: Ptr) {
+    e.call(FORWARD_TARGET_00484DA0, &args![this, argument]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0059_ae60, fn_0059ae60(Ptr) -> Ptr)]
+    vec![
+        entry!(0x0059_ae60, fn_0059ae60(Ptr) -> Ptr),
+        entry!(0x0059_add0, fn_0059add0(Ptr, Ptr)),
+        entry!(0x0059_adf0, fn_0059adf0(Ptr, Ptr)),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::units::crt::ctor_test::{self, A};
 
     #[test]
@@ -82,5 +113,35 @@ mod tests {
                 (0x80, 4, 0x0103_4910),
             ],
         });
+    }
+
+    #[test]
+    fn forwarder_fn_0059add0_forwards_this_and_the_argument() {
+        let mut e = Engine::new();
+        e.register(FORWARD_TARGET_00484D60, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0059_add0, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == FORWARD_TARGET_00484D60)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
+    }
+
+    #[test]
+    fn forwarder_fn_0059adf0_forwards_this_and_the_argument() {
+        let mut e = Engine::new();
+        e.register(FORWARD_TARGET_00484DA0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0059_adf0, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == FORWARD_TARGET_00484DA0)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
     }
 }

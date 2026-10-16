@@ -30,9 +30,26 @@ pub fn fn_008225d0(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
     e.call(OPERATOR_NEW, &args![count << 2]).u32()
 }
 
+/// `0081bf20` (named `MagicHitEffect::InitLoadGame_ov2` in the engine map): the base body
+/// the wrapper forwards to; `thiscall`, `this` plus one stack word (`RET 4`).
+const INIT_LOAD_GAME_TARGET_0081BF20: u32 = 0x0081_bf20;
+
+// Translated from 0081d9d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicShaderHitEffect::InitLoadGame` overload 2 (engine map vtable name; vtable words
+/// 0107b304 and 0107b7c4): forwards `this` and one pointer to the base body `0081bf20`
+/// (`MagicHitEffect::InitLoadGame_ov2`, Xbox PDB
+/// `?InitLoadGame@MagicHitEffect@@UAAXPAVBGSLoadGameBuffer@@@Z`, void). Returns nothing.
+pub fn magic_shader_hit_effect_init_load_game_ov2(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    e.call(INIT_LOAD_GAME_TARGET_0081BF20, &args![this, buffer]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0081_d9d0,
+            magic_shader_hit_effect_init_load_game_ov2(Ptr, Ptr)
+        ),
         entry!(0x00822600, fn_00822600(Ptr) -> Ptr),
         entry!(0x008225d0, fn_008225d0(Ptr, u32) -> u32),
     ]
@@ -63,5 +80,20 @@ mod tests {
         assert_eq!(r.u32(), this);
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1], (ARRAY_CONSTRUCTOR, vec![this, 0, 0]));
+    }
+
+    #[test]
+    fn forwarder_magic_shader_hit_effect_init_load_game_ov2_forwards_this_and_the_argument() {
+        let mut e = Engine::new();
+        e.register(INIT_LOAD_GAME_TARGET_0081BF20, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0081_d9d0, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == INIT_LOAD_GAME_TARGET_0081BF20)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
     }
 }

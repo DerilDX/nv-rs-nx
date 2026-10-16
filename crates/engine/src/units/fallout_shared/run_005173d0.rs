@@ -30,9 +30,34 @@ pub fn fn_005173e0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00517610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A forwarder: it hands `this` (`ECX`) to `00519550`, which calls `00470470` on the member
+/// at `this + 0x88`, and returns nothing. Parameters: one word, `this`; the disassembly of
+/// the function ends in a plain `RET` and passes only `ECX` on. `00519550` ends right after
+/// that call with no result of its own; `00470470` ends on a store (`MOV [EDX],0`), and
+/// Ghidra types both void.
+pub fn fn_00517610(e: &mut Engine, this: Ptr) {
+    e.call(0x0051_9550, &args![this]);
+}
+
+// Translated from 005175d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Start values of the form `005173e0` builds (form type 0x1c; class unconfirmed): zeroes the
+/// words at `+0x78`, `+0x7c` and `+0x80` and the byte at `+0x84`.
+pub fn fn_005175d0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base + 0x78, 0);
+    e.mem.set_u32(base + 0x7c, 0);
+    e.mem.set_u32(base + 0x80, 0);
+    e.mem.set_u8(base + 0x84, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0051_73e0, fn_005173e0(Ptr) -> Ptr)]
+    vec![
+        entry!(0x0051_7610, fn_00517610(Ptr)),
+        entry!(0x0051_73e0, fn_005173e0(Ptr) -> Ptr),
+        entry!(0x0051_75d0, fn_005175d0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -66,5 +91,46 @@ mod tests {
                 (0x70, 4, 0x0102_b188),
             ],
         });
+    }
+}
+
+#[cfg(test)]
+mod thunk_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fwd_a03_00517610_passes_this_to_the_callee() {
+        let mut e = Engine::new();
+        e.register(0x0051_9550, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0051_7610, &args![0x0000_5000u32]);
+        assert_eq!(calls_to(&e, 0x0051_9550), vec![vec![0x5000]]);
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_005175d0_zeroes_the_start_values() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x90);
+        e.mem.write(this, &[0xcd; 0x90]);
+        e.call(0x0051_75d0, &args![Ptr::<()>::new(this)]);
+        let mut expected = vec![0xcd_u8; 0x90];
+        expected[0x78..0x84].fill(0);
+        expected[0x84] = 0;
+        assert_eq!(e.mem.bytes(this, 0x90), expected);
     }
 }

@@ -26,13 +26,26 @@ pub fn fn_005ed680(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The function `fn_005edaf0` calls on the member (`005eee60`).
+const CALLEE_005EEE60: u32 = 0x005e_ee60;
+
+// Translated from 005edaf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thin wrapper: calls `005eee60` with `ECX` = `this + 0x40` and passes on nothing (the callee returns no value).
+pub fn fn_005edaf0(e: &mut Engine, this: Ptr) {
+    e.call(CALLEE_005EEE60, &args![this.byte_add(0x40)]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005e_d680, fn_005ed680(Ptr) -> Ptr)]
+    vec![
+        entry!(0x005e_d680, fn_005ed680(Ptr) -> Ptr),
+        entry!(0x005e_daf0, fn_005edaf0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::units::crt::ctor_test::{self, A};
 
     #[test]
@@ -55,5 +68,17 @@ mod tests {
             ],
             stores: &[(0x0, 4, 0x0104_70ec), (0x18, 4, 0x0104_70c4)],
         });
+    }
+
+    #[test]
+    fn l68d_005edaf0_passes_this_plus_40_to_the_callee() {
+        let mut e = Engine::new();
+        e.register(CALLEE_005EEE60, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005e_daf0, &args![0x4100u32]);
+        let log = e.call_log.take().unwrap();
+        let inner: Vec<_> = log.iter().filter(|c| c.0 == CALLEE_005EEE60).collect();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].1, vec![0x4100 + 0x40]);
     }
 }

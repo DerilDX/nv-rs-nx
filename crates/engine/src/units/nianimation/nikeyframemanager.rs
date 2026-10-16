@@ -4,7 +4,27 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `NiKeyframeManager::ms_RTTI` (the class's `NiRTTI` record).
+const NI_KEYFRAME_MANAGER_RTTI: u32 = 0x011f_3fb4;
+
+// Translated from 00a4da80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiKeyframeManager::GetRTTI` (Xbox PDB): the address of the class's `NiRTTI` record.
+pub fn ni_keyframe_manager_get_rtti(_e: &mut Engine) -> Ptr {
+    Ptr::new(NI_KEYFRAME_MANAGER_RTTI)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x00a4da80, ni_keyframe_manager_get_rtti() -> Ptr)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ni_keyframe_manager_get_rtti_returns_the_class_rtti() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00a4da80, &args![]).u32(), NI_KEYFRAME_MANAGER_RTTI);
+    }
 }

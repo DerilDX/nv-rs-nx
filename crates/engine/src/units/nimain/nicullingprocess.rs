@@ -4,7 +4,27 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `NiCullingProcess::ms_RTTI` (the class's `NiRTTI` record).
+const NI_CULLING_PROCESS_RTTI: u32 = 0x011f_4990;
+
+// Translated from 00a693f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiCullingProcess::GetRTTI` (Xbox PDB): the address of the class's `NiRTTI` record.
+pub fn ni_culling_process_get_rtti(_e: &mut Engine) -> Ptr {
+    Ptr::new(NI_CULLING_PROCESS_RTTI)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x00a693f0, ni_culling_process_get_rtti() -> Ptr)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ni_culling_process_get_rtti_returns_the_class_rtti() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00a693f0, &args![]).u32(), NI_CULLING_PROCESS_RTTI);
+    }
 }

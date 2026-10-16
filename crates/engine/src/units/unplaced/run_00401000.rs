@@ -66,9 +66,20 @@ pub fn fn_004010b0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00401150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A forwarder: it hands `this` (`ECX`) to the byte-getter `00401170` of this unit (reads
+/// the byte at `+4`), and returns its result (a `u8`). Parameters: one word, `this`; the
+/// disassembly of the function ends in a plain `RET` and passes only `ECX` on. The return
+/// type (`u8`, AL) is that of `00401170`'s translated signature `fn_00401170(Ptr) -> u8`;
+/// the wrapper's disassembly (`CALL 00401170` then straight to `RET`) leaves EAX untouched.
+pub fn fn_00401150(e: &mut Engine, this: Ptr) -> u8 {
+    fn_00401170(e, this)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0040_1150, fn_00401150(Ptr) -> u8),
         entry!(0x00401050, fn_00401050(u32, u32, i32, u32)),
         entry!(0x00401080, fn_00401080(Ptr, u32)),
         entry!(0x00401170, fn_00401170(Ptr) -> u8),
@@ -173,5 +184,31 @@ mod ctor_tests {
             ],
             stores: &[(0x0, 4, 0x0101_144c)],
         });
+    }
+}
+
+#[cfg(test)]
+mod thunk_tests {
+    use super::*;
+
+    #[allow(dead_code)]
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fwd_a03_00401150_returns_the_byte_at_4_through_the_unit_getter() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u8(object + 4, 0x5a);
+        // Neighbouring bytes are not part of the result.
+        e.mem.set_u8(object + 5, 0xff);
+        assert_eq!(e.call(0x0040_1150, &[object]).u32() & 0xff, 0x5a);
     }
 }

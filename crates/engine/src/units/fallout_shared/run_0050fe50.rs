@@ -31,9 +31,36 @@ pub fn fn_005104f0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00510620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the component at `+0x70` of the form `005104f0` builds: it stores
+/// the component's base vtable (`0x0102_9ee0`) and returns the object. The engine map
+/// gives it no name, so the class is unconfirmed.
+pub fn fn_00510620(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0x0102_9ee0);
+    this
+}
+
+// Translated from 00510710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Start values of the form `005104f0` builds (form type 0x15; class unconfirmed):
+/// zeroes the words at `+0x74`, `+0x78`, `+0x80`, `+0x84` and `+0x7c`, then runs
+/// `00438390` on the string at `+0x88` with the text at `0x0101_1584`.
+pub fn fn_00510710(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base + 0x74, 0);
+    e.mem.set_u32(base + 0x78, 0);
+    e.mem.set_u32(base + 0x80, 0);
+    e.mem.set_u32(base + 0x84, 0);
+    e.mem.set_u32(base + 0x7c, 0);
+    e.call(0x0043_8390, &args![base + 0x88, 0x0101_1584u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0051_04f0, fn_005104f0(Ptr) -> Ptr)]
+    vec![
+        entry!(0x0051_04f0, fn_005104f0(Ptr) -> Ptr),
+        entry!(0x0051_0620, fn_00510620(Ptr) -> Ptr),
+        entry!(0x0051_0710, fn_00510710(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -68,5 +95,40 @@ mod tests {
                 (0x70, 4, 0x0102_9ce8),
             ],
         });
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::prelude::*;
+    use crate::units::crt::ctor_test;
+
+    #[test]
+    fn fn_00510620_stores_the_vtable() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0051_0620,
+            size: 0x10,
+            globals: &[],
+            returns: &[],
+            calls: &[],
+            stores: &[(0x0, 4, 0x0102_9ee0)],
+        });
+    }
+
+    #[test]
+    fn fn_00510710_zeroes_the_fields_and_sets_the_string() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x90);
+        e.mem.write(this, &[0xcd; 0x90]);
+        e.register(0x0043_8390, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0051_0710, &args![Ptr::<()>::new(this)]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1..], [(0x0043_8390, vec![this + 0x88, 0x0101_1584])]);
+        for offset in [0x74, 0x78, 0x7c, 0x80, 0x84] {
+            assert_eq!(e.mem.u32(this + offset), 0, "+{offset:#x}");
+        }
+        assert_eq!(e.mem.u32(this + 0x70), 0xcdcd_cdcd);
+        assert_eq!(e.mem.u32(this + 0x88), 0xcdcd_cdcd);
     }
 }

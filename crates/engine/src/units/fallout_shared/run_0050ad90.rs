@@ -58,12 +58,28 @@ pub fn fn_0050b8f0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 0050ade0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x4c (`SUB ECX,0x4c`) and jumps to `0050a820`. `0050a820` (`RET 4`) has the shape of a deleting destructor: it tests bit 0 of the flags word and returns the object pointer in `EAX`. The return type is `u32` from that `EAX`; the parameter count is from the `RET 4`. The stack word is passed on unchanged.
+pub fn fn_0050ade0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x0050_a820, &args![this.addr().wrapping_sub(0x4c), flags])
+        .u32()
+}
+
+// Translated from 0050b3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x4c (`SUB ECX,0x4c`) and jumps to `0050aea0`. `0050aea0` (`RET 4`) has the shape of a deleting destructor: it tests bit 0 of the flags word and returns the object pointer in `EAX`. The return type is `u32` from that `EAX`; the parameter count is from the `RET 4`. The stack word is passed on unchanged.
+pub fn fn_0050b3f0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x0050_aea0, &args![this.addr().wrapping_sub(0x4c), flags])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0050_adf0, fn_0050adf0(Ptr) -> Ptr),
         entry!(0x0050_b400, fn_0050b400(Ptr) -> Ptr),
         entry!(0x0050_b8f0, fn_0050b8f0(Ptr) -> Ptr),
+        entry!(0x0050_ade0, fn_0050ade0(Ptr, u32) -> u32),
+        entry!(0x0050_b3f0, fn_0050b3f0(Ptr, u32) -> u32),
     ]
 }
 
@@ -126,5 +142,48 @@ mod tests {
             ],
             stores: &[(0x0, 4, 0x0102_8c5c), (0x30, 4, 0x0102_8c38)],
         });
+    }
+}
+
+#[cfg(test)]
+mod le81_thunk_tests {
+    use crate::prelude::*;
+
+    /// Calls `thunk` with `this = 0x2000` and `extra` stack words, with a
+    /// double over `target` that returns `0xdeadbeef`; checks that the
+    /// double ran once, with `this` moved back by `back` and `extra` passed on.
+    fn check(thunk: u32, target: u32, back: u32, extra: &[u32]) -> Ret {
+        let mut e = Engine::new();
+        e.register(target, |_, _| Ret {
+            eax: 0xdead_beef,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let mut words = vec![0x2000u32];
+        words.extend_from_slice(extra);
+        let result = e.call(thunk, &words);
+        let log = e.call_log.take().unwrap();
+        let mut expected = vec![0x2000 - back];
+        expected.extend_from_slice(extra);
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == target).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, expected);
+        result
+    }
+
+    #[test]
+    fn le81_thunk_0050ade0() {
+        assert_eq!(
+            check(0x0050_ade0, 0x0050_a820, 0x4c, &[0x1]).u32(),
+            0xdead_beef
+        );
+    }
+
+    #[test]
+    fn le81_thunk_0050b3f0() {
+        assert_eq!(
+            check(0x0050_b3f0, 0x0050_aea0, 0x4c, &[0x1]).u32(),
+            0xdead_beef
+        );
     }
 }

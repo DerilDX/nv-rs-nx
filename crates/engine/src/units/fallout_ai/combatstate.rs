@@ -3709,9 +3709,23 @@ fn fn_0099c230_entry(e: &mut Engine, words: &[u32]) -> Ret {
     RetVal::into_ret(fn_0099c230(e, Ptr::new(words[0]), check))
 }
 
+/// `009052c0` (unnamed in the engine map): the base body the wrapper forwards to;
+/// `thiscall`, `this` plus one stack word (`RET 4`).
+const ELEMENT_TARGET_009052C0: u32 = 0x0090_52c0;
+
+// Translated from 009a3280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (callers `SaveGame`, `LoadGame` of the combat state and
+/// `CalculateLocationToExamine`): forwards `this` and an index to `009052c0` (in
+/// `highprocess.cpp` per the engine map), which returns the word at `this+4` plus `index`
+/// times 0x54: the address of a 0x54-byte element. The wrapper returns that address.
+pub fn fn_009a3280(e: &mut Engine, this: Ptr, index: u32) -> Ptr {
+    e.call(ELEMENT_TARGET_009052C0, &args![this, index]).ptr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x009a_3280, fn_009a3280(Ptr, u32) -> Ptr),
         entry!(
             0x006f2290,
             bs_simple_array_tes_object_weap_set_size(Ptr<BSSimpleArray>, u32, u8)
@@ -5191,5 +5205,23 @@ mod tests {
         assert_eq!(calls(&log, 0x0099_cc60).len(), 2);
         stub(&mut e, 0x0099_cc60, 0);
         assert!(!fn_0099cb00(&mut e, 0x700, 0x800));
+    }
+
+    #[test]
+    fn forwarder_fn_009a3280_forwards_this_and_the_argument() {
+        let mut e = Engine::new();
+        e.register(ELEMENT_TARGET_009052C0, |_, a| {
+            (0x4000_0000 | a[1]).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        let result = e.call(0x009a_3280, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == ELEMENT_TARGET_009052C0)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
+        assert_eq!(result.u32(), 0x4000_2000);
     }
 }

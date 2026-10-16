@@ -128,6 +128,69 @@ pub fn fn_0060c9c0(e: &mut Engine, this: Ptr<TESQuest>, enable: u8) {
     e.vcall(this.addr(), ADD_CHANGE_SLOT, &args![CHANGE_QUEST_FLAGS]);
 }
 
+// Translated from 0060c440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0xdc (`SUB ECX,0xdc`) and jumps to `00601370`. `00601370` (`RET 4`) has the shape of a deleting destructor: it tests bit 0 of the flags word and returns the object pointer in `EAX`. The return type is `u32` from that `EAX`; the parameter count is from the `RET 4`. The stack word is passed on unchanged.
+pub fn fn_0060c440(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x0060_1370, &args![this.addr().wrapping_sub(0xdc), flags])
+        .u32()
+}
+
+// Translated from 0060c450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x7c (`SUB ECX,0x7c`) and jumps to `00608da0`. `00608da0` (`RET 0x4`) returns a 16-bit value in `AX` (it ends `MOV AX,word ptr [...]`), so the thunk returns `u16`; the parameter count is from the `RET`. The stack word is passed on unchanged.
+pub fn fn_0060c450(e: &mut Engine, this: Ptr, argument: u32) -> u16 {
+    e.call(
+        0x0060_8da0,
+        &args![this.addr().wrapping_sub(0x7c), argument],
+    )
+    .u16()
+}
+
+// Translated from 0060c460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x90 (`SUB ECX,0x90`) and jumps to `00608e80`. `00608e80` (`RET 0x8`) takes two stack words and leaves no deliberate value in `EAX` (its decompiled form is `void`), so the thunk returns nothing; the parameter count is from the `RET`. The stack words are passed on unchanged.
+pub fn fn_0060c460(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+    e.call(
+        0x0060_8e80,
+        &args![this.addr().wrapping_sub(0x90), first, second],
+    );
+}
+
+// Translated from 0060c470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x90 (`SUB ECX,0x90`) and jumps to `00608e00`. `00608e00` (`RET 0x4`) takes one stack word and leaves no deliberate value in `EAX` (its decompiled form is `void`), so the thunk returns nothing; the parameter count is from the `RET`. The stack word is passed on unchanged.
+pub fn fn_0060c470(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(
+        0x0060_8e00,
+        &args![this.addr().wrapping_sub(0x90), argument],
+    );
+}
+
+// Translated from 0060c480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x7c (`SUB ECX,0x7c`) and jumps to `00608e80`. `00608e80` (`RET 0x8`) takes two stack words and leaves no deliberate value in `EAX` (its decompiled form is `void`), so the thunk returns nothing; the parameter count is from the `RET`. The stack words are passed on unchanged.
+pub fn fn_0060c480(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+    e.call(
+        0x0060_8e80,
+        &args![this.addr().wrapping_sub(0x7c), first, second],
+    );
+}
+
+// Translated from 0060c490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x90 (`SUB ECX,0x90`) and jumps to `00608da0`. `00608da0` (`RET 0x4`) returns a 16-bit value in `AX` (it ends `MOV AX,word ptr [...]`), so the thunk returns `u16`; the parameter count is from the `RET`. The stack word is passed on unchanged.
+pub fn fn_0060c490(e: &mut Engine, this: Ptr, argument: u32) -> u16 {
+    e.call(
+        0x0060_8da0,
+        &args![this.addr().wrapping_sub(0x90), argument],
+    )
+    .u16()
+}
+
+// Translated from 0060c4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x7c (`SUB ECX,0x7c`) and jumps to `00608e00`. `00608e00` (`RET 0x4`) takes one stack word and leaves no deliberate value in `EAX` (its decompiled form is `void`), so the thunk returns nothing; the parameter count is from the `RET`. The stack word is passed on unchanged.
+pub fn fn_0060c4a0(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(
+        0x0060_8e00,
+        &args![this.addr().wrapping_sub(0x7c), argument],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -135,6 +198,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0060c5c0, fn_0060c5c0(Ptr<QuestData>) -> Ptr<QuestData>),
         entry!(0x0060c740, fn_0060c740(Ptr<TESQuest>)),
         entry!(0x0060c9c0, fn_0060c9c0(Ptr<TESQuest>, u8)),
+        entry!(0x0060_c440, fn_0060c440(Ptr, u32) -> u32),
+        entry!(0x0060_c450, fn_0060c450(Ptr, u32) -> u16),
+        entry!(0x0060_c460, fn_0060c460(Ptr, u32, u32)),
+        entry!(0x0060_c470, fn_0060c470(Ptr, u32)),
+        entry!(0x0060_c480, fn_0060c480(Ptr, u32, u32)),
+        entry!(0x0060_c490, fn_0060c490(Ptr, u32) -> u16),
+        entry!(0x0060_c4a0, fn_0060c4a0(Ptr, u32)),
     ]
 }
 
@@ -278,5 +348,70 @@ mod tests {
         assert_eq!(e.get(quest, TESQuest::cCurrentStage), 0);
         assert_eq!(e.mem.u8(base + DATA) & 1, 1);
         assert_eq!(e.mem.u32(base + CALLS), 1);
+    }
+}
+
+#[cfg(test)]
+mod le81_thunk_tests {
+    use crate::prelude::*;
+
+    /// Calls `thunk` with `this = 0x2000` and `extra` stack words, with a
+    /// double over `target` that returns `0xdeadbeef`; checks that the
+    /// double ran once, with `this` moved back by `back` and `extra` passed on.
+    fn check(thunk: u32, target: u32, back: u32, extra: &[u32]) -> Ret {
+        let mut e = Engine::new();
+        e.register(target, |_, _| Ret {
+            eax: 0xdead_beef,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let mut words = vec![0x2000u32];
+        words.extend_from_slice(extra);
+        let result = e.call(thunk, &words);
+        let log = e.call_log.take().unwrap();
+        let mut expected = vec![0x2000 - back];
+        expected.extend_from_slice(extra);
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == target).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, expected);
+        result
+    }
+
+    #[test]
+    fn le81_thunk_0060c440() {
+        assert_eq!(
+            check(0x0060_c440, 0x0060_1370, 0xdc, &[0x1]).u32(),
+            0xdead_beef
+        );
+    }
+
+    #[test]
+    fn le81_thunk_0060c450() {
+        assert_eq!(check(0x0060_c450, 0x0060_8da0, 0x7c, &[0x77]).u16(), 0xbeef);
+    }
+
+    #[test]
+    fn le81_thunk_0060c460() {
+        check(0x0060_c460, 0x0060_8e80, 0x90, &[0x77, 0x88]);
+    }
+
+    #[test]
+    fn le81_thunk_0060c470() {
+        check(0x0060_c470, 0x0060_8e00, 0x90, &[0x77]);
+    }
+
+    #[test]
+    fn le81_thunk_0060c480() {
+        check(0x0060_c480, 0x0060_8e80, 0x7c, &[0x77, 0x88]);
+    }
+
+    #[test]
+    fn le81_thunk_0060c490() {
+        assert_eq!(check(0x0060_c490, 0x0060_8da0, 0x90, &[0x77]).u16(), 0xbeef);
+    }
+
+    #[test]
+    fn le81_thunk_0060c4a0() {
+        check(0x0060_c4a0, 0x0060_8e00, 0x7c, &[0x77]);
     }
 }

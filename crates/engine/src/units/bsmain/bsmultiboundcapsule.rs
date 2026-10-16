@@ -13,9 +13,26 @@ pub fn fn_00526ac0(e: &mut Engine, this: Ptr) -> f64 {
     e.mem.f32(this.addr() + 0x24) as f64
 }
 
+/// `00c4fa10` (unnamed in the engine map): the base body the wrapper forwards to;
+/// `thiscall`, `this` plus one stack word (`RET 4`).
+const LINK_OBJECT_TARGET_00C4FA10: u32 = 0x00c4_fa10;
+
+// Translated from 00c60ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `BSMultiBoundCapsule` vtable word 010c34fc, right after
+/// `BSMultiBoundCapsule::LoadBinary` (010c34f8). Forwards `this` and the stream to `00c4fa10`
+/// (`bsmultiboundshape.obj`, unnamed in the engine map). Returns nothing: Xbox PDB
+/// `?LinkObject@NiObject@@UAAXAAVNiStream@@@Z` is void; `stream` is the `NiStream` reference
+/// as an address. Parameter count from the `RET 4` of both bodies.
+pub fn fn_00c60ec0(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(LINK_OBJECT_TARGET_00C4FA10, &args![this, stream]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00526ac0, fn_00526ac0(Ptr) -> f64)]
+    vec![
+        entry!(0x00526ac0, fn_00526ac0(Ptr) -> f64),
+        entry!(0x00c6_0ec0, fn_00c60ec0(Ptr, Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -37,5 +54,20 @@ mod tests {
             e.call(0x00526ac0, &[object]).f64().to_bits(),
             0x7ff8_0000_2000_0000
         );
+    }
+
+    #[test]
+    fn forwarder_fn_00c60ec0_forwards_this_and_the_argument() {
+        let mut e = Engine::new();
+        e.register(LINK_OBJECT_TARGET_00C4FA10, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00c6_0ec0, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == LINK_OBJECT_TARGET_00C4FA10)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
     }
 }

@@ -55,13 +55,98 @@ pub fn tescreature_tescreature(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `009dace0` (named `CombatProcedureUseCombatItem::InitLoadGame` in the engine map): the
+/// base body the wrapper forwards to; `thiscall`, `this` plus one stack word (`RET 4`).
+const INIT_LOAD_GAME_TARGET_009DACE0: u32 = 0x009d_ace0;
+
+// Translated from 005fb430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (vtable word 01048fcc): forwards `this` and one pointer to
+/// `009dace0` (named `CombatProcedureUseCombatItem::InitLoadGame`; Xbox PDB
+/// `?InitLoadGame@CombatProcedureUseCombatItem@@UAAXPAVBGSLoadFormBuffer@@@Z`, void), whose
+/// body only calls the empty stub `004534f0` on the same two words. Returns nothing.
+pub fn fn_005fb430(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    e.call(INIT_LOAD_GAME_TARGET_009DACE0, &args![this, buffer]);
+}
+
+// Translated from 005f75e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005f75e0 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
+/// `TESActorBase::TESActorBase` (Xbox PDB): the constructor `TESCreature`'s (`005f7230`) and
+/// `TESNPC`'s constructors run first; `ECX` is the object. It constructs the base
+/// (`0050f6f0`) and the components at `+0x30`, `+0x64`, `+0x70`, `+0x7c`, `+0x90`, `+0xb0`,
+/// `+0xb8`, `+0xc4`, `+0xd0`, `+0xdc`, `+0xf4`, `+0x100` (`005f78e0`) and `+0x104`, then
+/// stores the vtable pointers. The exception-unwinding frame is not translated.
+pub fn tesactorbase_tesactorbase(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0050_f6f0, &args![this]);
+    e.call(0x0047_c700, &args![base + 0x30]);
+    e.call(0x0048_1610, &args![base + 0x64]);
+    e.call(0x0047_bd10, &args![base + 0x70]);
+    e.call(0x0048_cfe0, &args![base + 0x7c]);
+    e.call(0x0047_ec40, &args![base + 0x90]);
+    e.call(0x0048_71d0, &args![base + 0xb0]);
+    e.call(0x0047_ff70, &args![base + 0xb8]);
+    e.call(0x0047_f9c0, &args![base + 0xc4]);
+    e.call(0x0040_2d00, &args![base + 0xd0]);
+    e.call(0x0048_8f50, &args![base + 0xdc]);
+    e.call(0x0048_cc50, &args![base + 0xf4]);
+    fn_005f78e0(e, Ptr::new(base + 0x100));
+    e.call(0x0047_5350, &args![base + 0x104]);
+    for (offset, vtable) in [
+        (0x00, 0x0104_92ac),
+        (0x30, 0x0104_923c),
+        (0x64, 0x0104_9224),
+        (0x70, 0x0104_9210),
+        (0x7c, 0x0104_91f0),
+        (0x90, 0x0104_91d0),
+        (0xb0, 0x0104_91b8),
+        (0xb8, 0x0104_91a4),
+        (0xc4, 0x0104_9190),
+        (0xd0, 0x0104_917c),
+        (0xdc, 0x0104_9158),
+        (0xf4, 0x0104_9144),
+        (0x100, 0x0104_9114),
+        (0x104, 0x0104_9100),
+    ] {
+        e.mem.set_u32(base + offset, vtable);
+    }
+    this
+}
+
+// Translated from 005f78e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the component at `+0x100` of `TESActorBase`: stores its base vtable
+/// (`0x0104_9450`) and returns the object. The engine map gives it no name, so the class is
+/// unconfirmed.
+pub fn fn_005f78e0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0x0104_9450);
+    this
+}
+
+// Translated from 005f7b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets or clears bit `0x200` of the actor base data's flags: calls
+/// `TESActorBaseData::SetFlagBit` (`0047dd50`, `ECX` = `this`) with the bit `0x200`, the value
+/// `clear == 0` and the second flag byte passed through. `ECX` is the actor base data
+/// subobject. The engine map gives the function no name.
+pub fn fn_005f7b50(e: &mut Engine, this: Ptr, clear: u8, notify: u8) {
+    e.call(
+        0x0047_dd50,
+        &args![this, 0x200u32, u32::from(clear == 0), u32::from(notify)],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005f_7230, tescreature_tescreature(Ptr) -> Ptr)]
+    vec![
+        entry!(0x005f_7230, tescreature_tescreature(Ptr) -> Ptr),
+        entry!(0x005f_b430, fn_005fb430(Ptr, Ptr)),
+        entry!(0x005f_75e0, tesactorbase_tesactorbase(Ptr) -> Ptr),
+        entry!(0x005f_78e0, fn_005f78e0(Ptr) -> Ptr),
+        entry!(0x005f_7b50, fn_005f7b50(Ptr, u8, u8)),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::units::crt::ctor_test::{self, A};
 
     #[test]
@@ -143,5 +228,101 @@ mod tests {
                 (0x114, 4, 0x0104_8d88),
             ],
         });
+    }
+
+    #[test]
+    fn forwarder_fn_005fb430_forwards_this_and_the_argument() {
+        let mut e = Engine::new();
+        e.register(INIT_LOAD_GAME_TARGET_009DACE0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005f_b430, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == INIT_LOAD_GAME_TARGET_009DACE0)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::prelude::*;
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn tesactorbase_tesactorbase_builds_the_object() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x005f_75e0,
+            size: 0x110,
+            globals: &[],
+            returns: &[],
+            calls: &[
+                (0x0050_f6f0, &[A::T(0x0)]),
+                (0x0047_c700, &[A::T(0x30)]),
+                (0x0048_1610, &[A::T(0x64)]),
+                (0x0047_bd10, &[A::T(0x70)]),
+                (0x0048_cfe0, &[A::T(0x7c)]),
+                (0x0047_ec40, &[A::T(0x90)]),
+                (0x0048_71d0, &[A::T(0xb0)]),
+                (0x0047_ff70, &[A::T(0xb8)]),
+                (0x0047_f9c0, &[A::T(0xc4)]),
+                (0x0040_2d00, &[A::T(0xd0)]),
+                (0x0048_8f50, &[A::T(0xdc)]),
+                (0x0048_cc50, &[A::T(0xf4)]),
+                (0x0047_5350, &[A::T(0x104)]),
+            ],
+            stores: &[
+                (0x00, 4, 0x0104_92ac),
+                (0x30, 4, 0x0104_923c),
+                (0x64, 4, 0x0104_9224),
+                (0x70, 4, 0x0104_9210),
+                (0x7c, 4, 0x0104_91f0),
+                (0x90, 4, 0x0104_91d0),
+                (0xb0, 4, 0x0104_91b8),
+                (0xb8, 4, 0x0104_91a4),
+                (0xc4, 4, 0x0104_9190),
+                (0xd0, 4, 0x0104_917c),
+                (0xdc, 4, 0x0104_9158),
+                (0xf4, 4, 0x0104_9144),
+                // `005f78e0` stores 0x0104_9450 first; the constructor overwrites it.
+                (0x100, 4, 0x0104_9114),
+                (0x104, 4, 0x0104_9100),
+            ],
+        });
+    }
+
+    #[test]
+    fn fn_005f78e0_stores_the_vtable() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x005f_78e0,
+            size: 0x10,
+            globals: &[],
+            returns: &[],
+            calls: &[],
+            stores: &[(0x0, 4, 0x0104_9450)],
+        });
+    }
+
+    #[test]
+    fn fn_005f7b50_sets_the_flag_bit_from_the_negated_argument() {
+        for (clear, notify, want) in [
+            (0u32, 1u32, 1u32),
+            (1, 0, 0),
+            (0x100, 1, 1),
+            (0x1_0001, 0, 0),
+        ] {
+            let mut e = Engine::new();
+            e.register(0x0047_dd50, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            e.call(0x005f_7b50, &[0x5000, clear, notify]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(
+                log[1..],
+                [(0x0047_dd50, vec![0x5000, 0x200, want, notify & 0xff])],
+                "clear {clear:#x}"
+            );
+        }
     }
 }

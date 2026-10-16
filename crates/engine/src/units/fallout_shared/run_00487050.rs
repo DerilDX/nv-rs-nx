@@ -47,9 +47,25 @@ pub fn fn_00487050(e: &mut Engine, component: Ptr, file: Ptr<TESFile>) {
     });
 }
 
+// Translated from 004871d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the form component `TESHealthForm` (the engine map
+/// gives it no name; the RTTI name of the vtable it stores, `0101cb94`, is
+/// `.?AVTESHealthForm@@`): runs the base constructor (`00402d30`), stores the
+/// vtable at `+0`, then calls `TESHealthForm::InitializeDataComponent`
+/// (Xbox PDB name of `00487220`) directly. Returns `this`.
+pub fn fn_004871d0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0040_2d30, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0101_cb94);
+    e.call(0x0048_7220, &args![this]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00487050, fn_00487050(Ptr, Ptr<TESFile>))]
+    vec![
+        entry!(0x00487050, fn_00487050(Ptr, Ptr<TESFile>)),
+        entry!(0x004871d0, fn_004871d0(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -121,5 +137,22 @@ mod tests {
         assert!(calls_to(&log, GET_TES_CHUNK).is_empty());
         let (log, _) = run(0x5000, 0, FULL_CHUNK, 5);
         assert!(calls_to(&log, GET_TES_CHUNK).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod component_tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_004871d0_builds_the_component() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0048_71d0,
+            size: 0x10,
+            globals: &[],
+            returns: &[],
+            calls: &[(0x0040_2d30, &[A::T(0x0)]), (0x0048_7220, &[A::T(0x0)])],
+            stores: &[(0x0, 4, 0x0101_cb94)],
+        });
     }
 }

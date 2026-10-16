@@ -3,8 +3,115 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::platform::MEMORY_MANAGER;
+
+/// Import slot of `InterlockedDecrement`.
+const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+/// The handle of the empty `NiFixedString`, which is never counted.
+const EMPTY_FIXED_STRING: u32 = 0x0109_b220;
+/// `MemoryManager::Deallocate` (`00aa4060`, `thiscall` on the singleton, one
+/// stack word: the block).
+const MEMORY_MANAGER_DEALLOCATE: u32 = 0x00aa_4060;
+
+// Translated from 00a644a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: frees the storage of an array of `NiFixedString`
+/// handles (`cdecl`, one stack word: the first element, with the element count in
+/// the word in front of it; nothing for null). Walks the elements from the last
+/// to the first and, for each handle that is not the empty string handle
+/// (`0109b220`), drops one reference of the pooled string (`InterlockedDecrement`
+/// of the count 8 bytes before the handle; the string is not freed here). Then
+/// the block, count word included, is given back to the memory manager
+/// (`00aa4060`). The decompiler shows the comparison with the empty string
+/// handle as a comparison with 0; the disassembly compares with the global.
+pub fn fn_00a644a0(e: &mut Engine, elements: Ptr) {
+    if elements.is_null() {
+        return;
+    }
+    let count = e.mem.u32(elements.addr().wrapping_sub(4));
+    let mut cursor = elements.addr().wrapping_add(count.wrapping_mul(4));
+    let mut remaining = count.wrapping_sub(1) as i32;
+    while remaining >= 0 {
+        let handle = e.mem.u32(cursor.wrapping_sub(4));
+        cursor = cursor.wrapping_sub(4);
+        if handle != e.global::<u32>(EMPTY_FIXED_STRING) {
+            e.call(INTERLOCKED_DECREMENT, &args![handle.wrapping_sub(8)]);
+        }
+        remaining = remaining.wrapping_sub(1);
+    }
+    e.call(
+        MEMORY_MANAGER_DEALLOCATE,
+        &args![MEMORY_MANAGER, elements.addr().wrapping_sub(4)],
+    );
+}
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x00a6_44a0, fn_00a644a0(Ptr))]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EMPTY: u32 = 0x0109_b220;
+
+    fn fixture() -> Engine {
+        let mut e = Engine::new();
+        e.map(EMPTY & !0xfff, 0x1000);
+        e.register(INTERLOCKED_DECREMENT, |_, _| Ret::default());
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn null_does_nothing() {
+        let mut e = fixture();
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_44a0, &args![0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn every_counted_handle_loses_a_reference_from_the_last_to_the_first() {
+        let mut e = fixture();
+        e.set_global(EMPTY, 0x5008u32);
+        let block = e.mem.alloc(16);
+        e.mem.set_u32(block, 3);
+        // handles: a string, the empty string, a string
+        for (i, handle) in [0x9008u32, 0x5008, 0xa008].iter().enumerate() {
+            e.mem.set_u32(block + 4 + i as u32 * 4, *handle);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_44a0, &args![block + 4]);
+        let log = e.call_log.take().unwrap();
+        let decrements: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == INTERLOCKED_DECREMENT)
+            .map(|call| call.1.clone())
+            .collect();
+        assert_eq!(decrements, vec![args![0xa000u32], args![0x9000u32]]);
+        let frees: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == MEMORY_MANAGER_DEALLOCATE)
+            .collect();
+        assert_eq!(frees.len(), 1);
+        assert_eq!(frees[0].1, args![MEMORY_MANAGER, block]);
+    }
+
+    #[test]
+    fn an_empty_array_only_frees_the_block() {
+        let mut e = fixture();
+        let block = e.mem.alloc(8);
+        e.mem.set_u32(block, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_44a0, &args![block + 4]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|call| call.0 != INTERLOCKED_DECREMENT));
+        assert_eq!(
+            log.iter()
+                .filter(|call| call.0 == MEMORY_MANAGER_DEALLOCATE)
+                .count(),
+            1
+        );
+    }
 }

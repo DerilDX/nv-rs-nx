@@ -4,7 +4,96 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `00c318b0`: the jump target of `00c28b50`.
+const JUMP_TARGET_00C28B50: u32 = 0x00c3_18b0;
+
+/// `00c31950`: the jump target of `00c28b70`.
+const JUMP_TARGET_00C28B70: u32 = 0x00c3_1950;
+
+/// `00c31830`: the jump target of `00c28b80`.
+const JUMP_TARGET_00C28B80: u32 = 0x00c3_1830;
+
+// Translated from 00c28b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysPositionModifier::LoadBinary` (Xbox PDB): a 5-byte jump to `00c318b0` (engine map: `NiPSysModifier::LoadBinary`), passing on `this` and its one argument. Return type (void): Xbox PDB public name `?LoadBinary@NiPSysPositionModifier@@UAAXAAVNiStream@@@Z`.
+pub fn ni_p_sys_position_modifier_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(JUMP_TARGET_00C28B50, &args![this, stream]);
+}
+
+// Translated from 00c28b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysPositionModifier::SaveBinary` (Xbox PDB): a 5-byte jump to `00c31950` (engine map: `NiPSysModifier::SaveBinary`), passing on `this` and its one argument. Return type (void): Xbox PDB public name `?SaveBinary@NiPSysPositionModifier@@UAAXAAVNiStream@@@Z`.
+pub fn ni_p_sys_position_modifier_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(JUMP_TARGET_00C28B70, &args![this, stream]);
+}
+
+// Translated from 00c28b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysPositionModifier::IsEqual` (Xbox PDB): a 5-byte jump to `00c31830` (engine map: `NiPSysModifier::IsEqual`), passing on `this` and its one argument; returns the target result. Return type (bool): Xbox PDB public name `?IsEqual@NiPSysPositionModifier@@UAA_NPAVNiObject@@@Z`.
+pub fn ni_p_sys_position_modifier_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    e.call(JUMP_TARGET_00C28B80, &args![this, other]).bool()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![
+        entry!(
+            0x00c2_8b50,
+            ni_p_sys_position_modifier_load_binary(Ptr, Ptr)
+        ),
+        entry!(
+            0x00c2_8b70,
+            ni_p_sys_position_modifier_save_binary(Ptr, Ptr)
+        ),
+        entry!(0x00c2_8b80, ni_p_sys_position_modifier_is_equal(Ptr, Ptr) -> bool),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thunk_00c28b50_forwards_its_words_to_the_jump_target() {
+        const THUNK: u32 = 0x00c2_8b50;
+        const TARGET: u32 = 0x00c3_18b0;
+        let mut e = Engine::new();
+        e.register(TARGET, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(THUNK, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+    }
+
+    #[test]
+    fn thunk_00c28b70_forwards_its_words_to_the_jump_target() {
+        const THUNK: u32 = 0x00c2_8b70;
+        const TARGET: u32 = 0x00c3_1950;
+        let mut e = Engine::new();
+        e.register(TARGET, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(THUNK, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+    }
+
+    #[test]
+    fn thunk_00c28b80_forwards_its_words_and_returns_the_target_result() {
+        const THUNK: u32 = 0x00c2_8b80;
+        const TARGET: u32 = 0x00c3_1830;
+        let mut e = Engine::new();
+        e.register(TARGET, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 1);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+        e.register(TARGET, |_, _| Ret::default());
+        assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
 }

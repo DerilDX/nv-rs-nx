@@ -46,9 +46,22 @@ pub fn fn_0052b8f0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 0052d220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A forwarder: it hands `this` (`ECX`) to `0052d240`, which only forwards `this` to
+/// `00483710`, an empty function, and returns nothing. Parameters: one word, `this`; the
+/// disassembly of the function ends in a plain `RET` and passes only `ECX` on. `00483710`'s
+/// disassembly is `PUSH EBP; MOV EBP,ESP; PUSH ECX; MOV [EBP-4],ECX; MOV ESP,EBP; POP EBP;
+/// RET`, so nothing is returned.
+pub fn fn_0052d220(e: &mut Engine, this: Ptr) {
+    e.call(0x0052_d240, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0052_b8f0, fn_0052b8f0(Ptr) -> Ptr)]
+    vec![
+        entry!(0x0052_d220, fn_0052d220(Ptr)),
+        entry!(0x0052_b8f0, fn_0052b8f0(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -117,5 +130,29 @@ mod tests {
         e.call(0x0052_b8f0, &args![0x011c_9750u32]);
         let log = e.call_log.take().unwrap();
         assert_eq!(log.last().unwrap(), &(0x0048_4490, vec![0x011c_9750]));
+    }
+}
+
+#[cfg(test)]
+mod thunk_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fwd_a03_0052d220_passes_this_to_the_callee() {
+        let mut e = Engine::new();
+        e.register(0x0052_d240, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0052_d220, &args![0x0000_5000u32]);
+        assert_eq!(calls_to(&e, 0x0052_d240), vec![vec![0x5000]]);
     }
 }

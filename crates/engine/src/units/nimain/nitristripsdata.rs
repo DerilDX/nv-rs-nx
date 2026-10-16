@@ -4,7 +4,44 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+layout! {
+    /// `NiTriStripsData` (Xbox PDB), 0x50 bytes: only the fields used so far.
+    pub struct NiTriStripsData: 0x50 {
+        /// `m_pusStripLists` (Xbox PDB): `u16*`, the strips' vertex indices.
+        0x4c m_pusStripLists: Ptr,
+    }
+}
+
+// Translated from 00a75f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriStripsData::GetStripLists` (map name): the strip index array.
+pub fn ni_tri_strips_data_get_strip_lists(e: &mut Engine, this: Ptr<NiTriStripsData>) -> Ptr {
+    e.get(this, NiTriStripsData::m_pusStripLists)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(
+        0x00a75f10,
+        ni_tri_strips_data_get_strip_lists(Ptr<NiTriStripsData>) -> Ptr
+    )]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn returns_the_strip_lists_pointer() {
+        let mut e = Engine::new();
+        let data: Ptr<NiTriStripsData> = e.new_object();
+        e.set(
+            data,
+            NiTriStripsData::m_pusStripLists,
+            Ptr::<()>::new(0x7000),
+        );
+        assert_eq!(
+            e.call(0x00a7_5f10, &args![data]).ptr::<()>(),
+            Ptr::<()>::new(0x7000)
+        );
+    }
 }

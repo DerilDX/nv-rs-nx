@@ -35,12 +35,27 @@ pub fn bs_simple_array_set_reserved_size(e: &mut Engine, this: Ptr<BSSimpleArray
     e.set(this, BSSimpleArray::iReservedSize, new_size);
 }
 
+/// `009f8ac0` (unnamed in the engine map): the base body the wrapper forwards to;
+/// `thiscall`, `this` plus one stack word (`RET 4`).
+const ELEMENT_TARGET_009F8AC0: u32 = 0x009f_8ac0;
+
+// Translated from 009f8a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (spectator package; callers `009f8420`, `009f8020`, `009f76e0`):
+/// forwards `this` and an index to `009f8ac0`, which returns the word at `this+4` plus `index`
+/// times 0x34: the address of a 0x34-byte element. The wrapper returns that address.
+pub fn fn_009f8a80(e: &mut Engine, this: Ptr, index: u32) -> Ptr {
+    e.call(ELEMENT_TARGET_009F8AC0, &args![this, index]).ptr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x0084b5c0,
-        bs_simple_array_set_reserved_size(Ptr<BSSimpleArray>, u32)
-    )]
+    vec![
+        entry!(0x009f_8a80, fn_009f8a80(Ptr, u32) -> Ptr),
+        entry!(
+            0x0084b5c0,
+            bs_simple_array_set_reserved_size(Ptr<BSSimpleArray>, u32)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -99,5 +114,23 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(log.len(), 2, "no destroy step when new size == iSize");
         assert_eq!(log[1], (RESIZE_BUFFER, vec![this.addr(), 6, 6]));
+    }
+
+    #[test]
+    fn forwarder_fn_009f8a80_forwards_this_and_the_argument() {
+        let mut e = Engine::new();
+        e.register(ELEMENT_TARGET_009F8AC0, |_, a| {
+            (0x4000_0000 | a[1]).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        let result = e.call(0x009f_8a80, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|call| call.0 == ELEMENT_TARGET_009F8AC0)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
+        assert_eq!(result.u32(), 0x4000_2000);
     }
 }

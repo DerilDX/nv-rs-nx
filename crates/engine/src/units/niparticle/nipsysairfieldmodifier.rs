@@ -4,7 +4,73 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `00c2e520`: the jump target of `00c2f4e0`.
+const JUMP_TARGET_00C2F4E0: u32 = 0x00c2_e520;
+
+/// `00c28b60`: the jump target of `00c2f4f0`.
+const JUMP_TARGET_00C2F4F0: u32 = 0x00c2_8b60;
+
+// Translated from 00c2f4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysAirFieldModifier::LinkObject` (Xbox PDB): a 5-byte jump to `00c2e520` (engine map: `NiPSysBombModifier::LinkObject`), passing on `this` and its one argument. Return type (void): Xbox PDB public name `?LinkObject@NiPSysAirFieldModifier@@UAAXAAVNiStream@@@Z`.
+pub fn ni_p_sys_air_field_modifier_link_object(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(JUMP_TARGET_00C2F4E0, &args![this, stream]);
+}
+
+// Translated from 00c2f4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysAirFieldModifier::RegisterStreamables` (Xbox PDB): a 5-byte jump to `00c28b60` (engine map: `NiPSysAgeDeathModifier::RegisterStreamables`), passing on `this` and its one argument; returns the target result. Return type (bool): Xbox PDB public name `?RegisterStreamables@NiPSysAirFieldModifier@@UAA_NAAVNiStream@@@Z`.
+pub fn ni_p_sys_air_field_modifier_register_streamables(
+    e: &mut Engine,
+    this: Ptr,
+    stream: Ptr,
+) -> bool {
+    e.call(JUMP_TARGET_00C2F4F0, &args![this, stream]).bool()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![
+        entry!(
+            0x00c2_f4e0,
+            ni_p_sys_air_field_modifier_link_object(Ptr, Ptr)
+        ),
+        entry!(0x00c2_f4f0, ni_p_sys_air_field_modifier_register_streamables(Ptr, Ptr) -> bool),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thunk_00c2f4e0_forwards_its_words_to_the_jump_target() {
+        const THUNK: u32 = 0x00c2_f4e0;
+        const TARGET: u32 = 0x00c2_e520;
+        let mut e = Engine::new();
+        e.register(TARGET, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(THUNK, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+    }
+
+    #[test]
+    fn thunk_00c2f4f0_forwards_its_words_and_returns_the_target_result() {
+        const THUNK: u32 = 0x00c2_f4f0;
+        const TARGET: u32 = 0x00c2_8b60;
+        let mut e = Engine::new();
+        e.register(TARGET, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 1);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+        e.register(TARGET, |_, _| Ret::default());
+        assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
 }

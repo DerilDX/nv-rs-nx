@@ -4,7 +4,30 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `NiFloatInterpolator::ms_RTTI` (the class's `NiRTTI` record).
+const NI_FLOAT_INTERPOLATOR_RTTI: u32 = 0x011f_3738;
+
+// Translated from 00a3c380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiFloatInterpolator::GetRTTI` (Xbox PDB): the address of the class's `NiRTTI` record.
+pub fn ni_float_interpolator_get_rtti(_e: &mut Engine) -> Ptr {
+    Ptr::new(NI_FLOAT_INTERPOLATOR_RTTI)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x00a3c380, ni_float_interpolator_get_rtti() -> Ptr)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ni_float_interpolator_get_rtti_returns_the_class_rtti() {
+        let mut e = Engine::new();
+        assert_eq!(
+            e.call(0x00a3c380, &args![]).u32(),
+            NI_FLOAT_INTERPOLATOR_RTTI
+        );
+    }
 }

@@ -24,9 +24,21 @@ pub fn fn_005fc680(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 005fc840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A forwarder: it hands `this` (`ECX`) to `005fc860`, which walks a list and deletes its
+/// items, and returns nothing. Parameters: one word, `this`; the disassembly of the function
+/// ends in a plain `RET` and passes only `ECX` on. `005fc860`'s disassembly is a loop that
+/// ends on its exit test without loading a result (Ghidra types it void).
+pub fn fn_005fc840(e: &mut Engine, this: Ptr) {
+    e.call(0x005f_c860, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005f_c680, fn_005fc680(Ptr) -> Ptr)]
+    vec![
+        entry!(0x005f_c840, fn_005fc840(Ptr)),
+        entry!(0x005f_c680, fn_005fc680(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -54,5 +66,29 @@ mod tests {
                 (0x24, 4, 0x0104_98b4),
             ],
         });
+    }
+}
+
+#[cfg(test)]
+mod thunk_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fwd_a03_005fc840_passes_this_to_the_callee() {
+        let mut e = Engine::new();
+        e.register(0x005f_c860, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005f_c840, &args![0x0000_5000u32]);
+        assert_eq!(calls_to(&e, 0x005f_c860), vec![vec![0x5000]]);
     }
 }

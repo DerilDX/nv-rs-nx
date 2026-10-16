@@ -67,9 +67,105 @@ pub fn fn_0051d770(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 0051d760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x30 (`SUB ECX,0x30`) and jumps to `0051b900`. `0051b900` (`RET 4`) has the shape of a deleting destructor: it tests bit 0 of the flags word and returns the object pointer in `EAX`. The return type is `u32` from that `EAX`; the parameter count is from the `RET 4`. The stack word is passed on unchanged.
+pub fn fn_0051d760(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x0051_b900, &args![this.addr().wrapping_sub(0x30), flags])
+        .u32()
+}
+
+// Translated from 0051ddf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Start values of `TESObjectWEAP` (the class `0051d770` constructs; the RTTI name of its
+/// vtable is `TESObjectWEAP`): clears the `0xcc` bytes at `+0xf4` (`memset`, `00403d30`), stores
+/// the default weapon fields (floats copied from the exe's constants at `0x0101712c`,
+/// `0x01017b78`, `0x01013d84`, `0x01013970`, `0x01016248`, `0x01026994`, `0x0101e2bc`), runs
+/// virtual slot 0 of the ten components at `+0x1d0`, `+0x1e8`, `+0x200`, `+0x270`, `+0x290`,
+/// `+0x2b0`, `+0x2d0`, `+0x2f0`, `+0x310` and `+0x330`, sets the current spell of the
+/// component at `+0x74` to 2 (`NonActorMagicCaster::SetCurrentSpell`, `0041fd00`) and sets the
+/// byte at `+0x384` when `0051e2a0` answers 0xc4 or more (signed).
+pub fn fn_0051ddf0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0040_3d30, &args![base + 0xf4, 0u32, 0xccu32]);
+    e.mem.set_u8(base + 0x102, 1);
+    copy_float(e, 0x0101_712c, base + 0x134);
+    e.mem.set_f32(base + 0x104, 0.0);
+    copy_float(e, 0x0101_7b78, base + 0x108);
+    e.mem.set_f32(base + 0x10c, 1.0);
+    e.mem.set_u8(base + 0x11c, 5);
+    e.mem.set_u8(base + 0x103, 0);
+    e.mem.set_u8(base + 0x11d, 0xff);
+    e.mem.set_u8(base + 0x101, 0xff);
+    e.mem.set_u32(base + 0x118, 0);
+    e.mem.set_u8(base + 0x11e, 1);
+    copy_float(e, 0x0101_3d84, base + 0x120);
+    copy_float(e, 0x0101_3970, base + 0x124);
+    e.mem.set_u32(base + 0x128, 0);
+    e.mem.set_f32(base + 0x138, 0.0);
+    copy_float(e, 0x0101_6248, base + 0x13c);
+    e.mem.set_f32(base + 0x140, 1.0);
+    copy_float(e, 0x0102_6994, base + 0x144);
+    e.mem.set_f32(base + 0x148, 1.0);
+    e.mem.set_u32(base + 0x15c, 0x2d);
+    e.mem.set_f32(base + 0x168, 1.0);
+    e.mem.set_f32(base + 0x170, 0.0);
+    e.mem.set_u32(base + 0x16c, 0xffff_ffff);
+    copy_float(e, 0x0101_e2bc, base + 0x174);
+    copy_float(e, 0x0101_6248, base + 0x178);
+    e.mem.set_u32(base + 0x19c, 0);
+    e.mem.set_u32(base + 0x1bc, 0);
+    e.mem.set_f32(base + 0x18c, 0.0);
+    e.mem.set_f32(base + 0x190, 0.0);
+    e.mem.set_f32(base + 0x194, 0.0);
+    e.mem.set_f32(base + 0x1ac, 0.0);
+    e.mem.set_f32(base + 0x1b0, 0.0);
+    e.mem.set_f32(base + 0x1b4, 0.0);
+    e.mem.set_f32(base + 0x1a8, 1.0);
+    e.mem.set_u8(base + 0x198, 0xff);
+    e.mem.set_u8(base + 0x1a1, 0xff);
+    e.mem.set_u8(base + 0x1a0, 0xff);
+    e.mem.set_u16(base + 0x1c0, 0);
+    e.mem.set_f32(base + 0x1c4, 1.0);
+    e.mem.set_u8(base + 0x1c8, 1);
+    e.mem.set_u32(base + 0x1cc, 0);
+    e.mem.set_f32(base + 0x374, 0.0);
+    e.mem.set_f32(base + 0x378, 0.0);
+    e.mem.set_u32(base + 0x370, 0);
+    e.mem.set_f32(base + 0x37c, 0.0);
+    e.mem.set_u8(base + 0x380, 1);
+    e.mem.set_u8(base + 0x381, 0);
+    for offset in (0x218..=0x26c).step_by(4) {
+        e.mem.set_u32(base + offset, 0);
+    }
+    for offset in [0x350, 0x354, 0x358] {
+        e.mem.set_u32(base + offset, 0);
+    }
+    for offset in [
+        0x1d0, 0x1e8, 0x200, 0x270, 0x290, 0x2b0, 0x2d0, 0x2f0, 0x310, 0x330,
+    ] {
+        e.vcall(base + offset, 0, &args![]);
+    }
+    e.call(0x0041_fd00, &args![base + 0x74, 2u32]);
+    e.mem.set_u32(base + 0x364, 1);
+    e.mem.set_u8(base + 0x384, 0);
+    let value = e.call(0x0051_e2a0, &args![this, 0u32]).i32();
+    if value >= 0xc4 {
+        e.mem.set_u8(base + 0x384, 1);
+    }
+}
+
+/// `FLD dword [source]` then `FSTP dword [destination]`.
+fn copy_float(e: &mut Engine, source: u32, destination: u32) {
+    let value = x87_quiet(e.global::<f32>(source));
+    e.mem.set_f32(destination, value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0051_d770, fn_0051d770(Ptr) -> Ptr)]
+    vec![
+        entry!(0x0051_d770, fn_0051d770(Ptr) -> Ptr),
+        entry!(0x0051_d760, fn_0051d760(Ptr, u32) -> u32),
+        entry!(0x0051_ddf0, fn_0051ddf0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -140,5 +236,175 @@ mod tests {
                 (0xe8, 4, 0x0102_c378),
             ],
         });
+    }
+}
+
+#[cfg(test)]
+mod le81_thunk_tests {
+    use crate::prelude::*;
+
+    /// Calls `thunk` with `this = 0x2000` and `extra` stack words, with a
+    /// double over `target` that returns `0xdeadbeef`; checks that the
+    /// double ran once, with `this` moved back by `back` and `extra` passed on.
+    fn check(thunk: u32, target: u32, back: u32, extra: &[u32]) -> Ret {
+        let mut e = Engine::new();
+        e.register(target, |_, _| Ret {
+            eax: 0xdead_beef,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let mut words = vec![0x2000u32];
+        words.extend_from_slice(extra);
+        let result = e.call(thunk, &words);
+        let log = e.call_log.take().unwrap();
+        let mut expected = vec![0x2000 - back];
+        expected.extend_from_slice(extra);
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == target).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, expected);
+        result
+    }
+
+    #[test]
+    fn le81_thunk_0051d760() {
+        assert_eq!(
+            check(0x0051_d760, 0x0051_b900, 0x30, &[0x1]).u32(),
+            0xdead_beef
+        );
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::prelude::*;
+
+    const SIZE: u32 = 0x388;
+    const COMPONENTS: [u32; 10] = [
+        0x1d0, 0x1e8, 0x200, 0x270, 0x290, 0x2b0, 0x2d0, 0x2f0, 0x310, 0x330,
+    ];
+    const FLOAT_GLOBALS: [(u32, u32); 7] = [
+        (0x0101_712c, 0x4020_0000),
+        (0x0101_7b78, 0x4100_0000),
+        (0x0101_3d84, 0x4380_0000),
+        (0x0101_3970, 0x4480_0000),
+        (0x0101_6248, 0x3f00_0000),
+        (0x0102_6994, 0x7f80_0001),
+        (0x0101_e2bc, 0x3dcc_cccd),
+    ];
+
+    type Calls = Vec<(u32, Vec<u32>)>;
+
+    /// The object after the call, the logged calls and the object's address.
+    fn run(spell_answer: u32) -> (Vec<u8>, Calls, u32) {
+        let mut e = Engine::new();
+        for (address, bits) in FLOAT_GLOBALS {
+            e.map(address, 4);
+            e.mem.set_u32(address, bits);
+        }
+        let this = e.mem.alloc(SIZE);
+        e.mem.write(this, &[0xcd; SIZE as usize]);
+        // Each component's vtable has the same slot 0.
+        e.put_vtable(0x0090_1000, &[0x0090_0100]);
+        for offset in COMPONENTS {
+            e.mem.set_u32(this + offset, 0x0090_1000);
+        }
+        for address in [0x0090_0100, 0x0040_3d30, 0x0041_fd00] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register_double(0x0051_e2a0, move |_, _| Ret {
+            eax: spell_answer,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0051_ddf0, &args![Ptr::<()>::new(this)]);
+        let log = e.call_log.take().unwrap();
+        (e.mem.bytes(this, SIZE), log, this)
+    }
+
+    fn expected_bytes() -> Vec<u8> {
+        let mut bytes = vec![0xcd_u8; SIZE as usize];
+        let mut put = |offset: usize, width: usize, value: u32| {
+            bytes[offset..offset + width].copy_from_slice(&value.to_le_bytes()[..width]);
+        };
+        let one = 0x3f80_0000;
+        for offset in COMPONENTS {
+            put(offset as usize, 4, 0x0090_1000);
+        }
+        put(0x102, 1, 1);
+        put(0x134, 4, 0x4020_0000);
+        put(0x104, 4, 0);
+        put(0x108, 4, 0x4100_0000);
+        put(0x10c, 4, one);
+        put(0x11c, 1, 5);
+        put(0x103, 1, 0);
+        put(0x11d, 1, 0xff);
+        put(0x101, 1, 0xff);
+        put(0x118, 4, 0);
+        put(0x11e, 1, 1);
+        put(0x120, 4, 0x4380_0000);
+        put(0x124, 4, 0x4480_0000);
+        put(0x128, 4, 0);
+        put(0x138, 4, 0);
+        put(0x13c, 4, 0x3f00_0000);
+        put(0x140, 4, one);
+        // A signalling NaN picks up the quiet bit through FLD/FSTP.
+        put(0x144, 4, 0x7fc0_0001);
+        put(0x148, 4, one);
+        put(0x15c, 4, 0x2d);
+        put(0x168, 4, one);
+        put(0x170, 4, 0);
+        put(0x16c, 4, 0xffff_ffff);
+        put(0x174, 4, 0x3dcc_cccd);
+        put(0x178, 4, 0x3f00_0000);
+        for offset in [0x19c, 0x1bc, 0x18c, 0x190, 0x194, 0x1ac, 0x1b0, 0x1b4] {
+            put(offset, 4, 0);
+        }
+        put(0x1a8, 4, one);
+        put(0x198, 1, 0xff);
+        put(0x1a1, 1, 0xff);
+        put(0x1a0, 1, 0xff);
+        put(0x1c0, 2, 0);
+        put(0x1c4, 4, one);
+        put(0x1c8, 1, 1);
+        put(0x1cc, 4, 0);
+        put(0x374, 4, 0);
+        put(0x378, 4, 0);
+        put(0x370, 4, 0);
+        put(0x37c, 4, 0);
+        put(0x380, 1, 1);
+        put(0x381, 1, 0);
+        for offset in (0x218..=0x26c).step_by(4) {
+            put(offset, 4, 0);
+        }
+        for offset in [0x350, 0x354, 0x358] {
+            put(offset, 4, 0);
+        }
+        put(0x364, 4, 1);
+        put(0x384, 1, 0);
+        bytes
+    }
+
+    #[test]
+    fn fn_0051ddf0_sets_the_start_values_and_runs_the_components() {
+        let (bytes, log, this) = run(0xc3);
+        assert_eq!(bytes, expected_bytes());
+        let calls: Calls = log[1..].to_vec();
+        let mut want: Calls = vec![(0x0040_3d30, vec![this + 0xf4, 0, 0xcc])];
+        for offset in COMPONENTS {
+            want.push((0x0090_0100, vec![this + offset]));
+        }
+        want.push((0x0041_fd00, vec![this + 0x74, 2]));
+        want.push((0x0051_e2a0, vec![this, 0]));
+        assert_eq!(calls, want);
+    }
+
+    #[test]
+    fn fn_0051ddf0_sets_the_flag_byte_from_0xc4_up_and_not_for_negatives() {
+        let mut want = expected_bytes();
+        want[0x384] = 1;
+        assert_eq!(run(0xc4).0, want);
+        assert_eq!(run(0x1000).0, want);
+        want[0x384] = 0;
+        assert_eq!(run(0xffff_ff00).0, want);
     }
 }

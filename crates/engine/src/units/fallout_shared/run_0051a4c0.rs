@@ -38,9 +38,57 @@ pub fn fn_0051a6a0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 0051a660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x7c (`SUB ECX,0x7c`) and jumps to `0051a550`. `0051a550` (`RET 0x4`) returns a 16-bit value in `AX` (it ends `MOV AX,word ptr [...]`), so the thunk returns `u16`; the parameter count is from the `RET`. The stack word is passed on unchanged.
+pub fn fn_0051a660(e: &mut Engine, this: Ptr, argument: u32) -> u16 {
+    e.call(
+        0x0051_a550,
+        &args![this.addr().wrapping_sub(0x7c), argument],
+    )
+    .u16()
+}
+
+// Translated from 0051a670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x7c (`SUB ECX,0x7c`) and jumps to `0051a5d0`. `0051a5d0` (`RET 0x8`) takes two stack words and leaves no deliberate value in `EAX` (its decompiled form is `void`), so the thunk returns nothing; the parameter count is from the `RET`. The stack words are passed on unchanged.
+pub fn fn_0051a670(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+    e.call(
+        0x0051_a5d0,
+        &args![this.addr().wrapping_sub(0x7c), first, second],
+    );
+}
+
+// Translated from 0051a680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x3c (`SUB ECX,0x3c`) and jumps to `00519e40`. `00519e40` (`RET 4`) has the shape of a deleting destructor: it tests bit 0 of the flags word and returns the object pointer in `EAX`. The return type is `u32` from that `EAX`; the parameter count is from the `RET 4`. The stack word is passed on unchanged.
+pub fn fn_0051a680(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x0051_9e40, &args![this.addr().wrapping_sub(0x3c), flags])
+        .u32()
+}
+
+// Translated from 0051a690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by 0x7c (`SUB ECX,0x7c`) and jumps to `0051a5a0`. `0051a5a0` (`RET 0x4`) takes one stack word and leaves no deliberate value in `EAX` (its decompiled form is `void`), so the thunk returns nothing; the parameter count is from the `RET`. The stack word is passed on unchanged.
+pub fn fn_0051a690(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(
+        0x0051_a5a0,
+        &args![this.addr().wrapping_sub(0x7c), argument],
+    );
+}
+
+// Translated from 0051a980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Start value of the form `0051a6a0` builds (form type 0x1f; class unconfirmed): clears the word at `+0xa8`.
+pub fn fn_0051a980(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr() + 0xa8, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0051_a6a0, fn_0051a6a0(Ptr) -> Ptr)]
+    vec![
+        entry!(0x0051_a6a0, fn_0051a6a0(Ptr) -> Ptr),
+        entry!(0x0051_a660, fn_0051a660(Ptr, u32) -> u16),
+        entry!(0x0051_a670, fn_0051a670(Ptr, u32, u32)),
+        entry!(0x0051_a680, fn_0051a680(Ptr, u32) -> u32),
+        entry!(0x0051_a690, fn_0051a690(Ptr, u32)),
+        entry!(0x0051_a980, fn_0051a980(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -82,5 +130,71 @@ mod tests {
                 (0x9c, 4, 0x0102_b764),
             ],
         });
+    }
+}
+
+#[cfg(test)]
+mod le81_thunk_tests {
+    use crate::prelude::*;
+
+    /// Calls `thunk` with `this = 0x2000` and `extra` stack words, with a
+    /// double over `target` that returns `0xdeadbeef`; checks that the
+    /// double ran once, with `this` moved back by `back` and `extra` passed on.
+    fn check(thunk: u32, target: u32, back: u32, extra: &[u32]) -> Ret {
+        let mut e = Engine::new();
+        e.register(target, |_, _| Ret {
+            eax: 0xdead_beef,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let mut words = vec![0x2000u32];
+        words.extend_from_slice(extra);
+        let result = e.call(thunk, &words);
+        let log = e.call_log.take().unwrap();
+        let mut expected = vec![0x2000 - back];
+        expected.extend_from_slice(extra);
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == target).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, expected);
+        result
+    }
+
+    #[test]
+    fn le81_thunk_0051a660() {
+        assert_eq!(check(0x0051_a660, 0x0051_a550, 0x7c, &[0x77]).u16(), 0xbeef);
+    }
+
+    #[test]
+    fn le81_thunk_0051a670() {
+        check(0x0051_a670, 0x0051_a5d0, 0x7c, &[0x77, 0x88]);
+    }
+
+    #[test]
+    fn le81_thunk_0051a680() {
+        assert_eq!(
+            check(0x0051_a680, 0x0051_9e40, 0x3c, &[0x1]).u32(),
+            0xdead_beef
+        );
+    }
+
+    #[test]
+    fn le81_thunk_0051a690() {
+        check(0x0051_a690, 0x0051_a5a0, 0x7c, &[0x77]);
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_0051a980_clears_the_word_at_0xa8() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xb0);
+        e.mem.write(this, &[0xcd; 0xb0]);
+        e.call(0x0051_a980, &args![Ptr::<()>::new(this)]);
+        let mut expected = vec![0xcd_u8; 0xb0];
+        expected[0xa8..0xac].fill(0);
+        assert_eq!(e.mem.bytes(this, 0xb0), expected);
     }
 }

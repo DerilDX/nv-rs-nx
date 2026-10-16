@@ -23,9 +23,27 @@ pub fn fn_00402d00(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00402ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The engine map gives it no name. `thiscall`, no stack arguments: sets the
+/// fields of an object at `+0xb8` to -1, `+0xbc` to the byte 0, `+0xc0` to 0,
+/// `+0xc4` to the `float` 0.0 and `+0xc8` to 0, then calls `00483710` on it.
+/// Returns nothing.
+pub fn fn_00402ea0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base + 0xb8, 0xffff_ffff);
+    e.mem.set_u8(base + 0xbc, 0);
+    e.mem.set_u32(base + 0xc0, 0);
+    e.mem.set_f32(base + 0xc4, 0.0);
+    e.mem.set_u32(base + 0xc8, 0);
+    e.call(0x0048_3710, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00402d00, fn_00402d00(Ptr) -> Ptr)]
+    vec![
+        entry!(0x00402d00, fn_00402d00(Ptr) -> Ptr),
+        entry!(0x00402ea0, fn_00402ea0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -50,5 +68,27 @@ mod tests {
                 (STRING_CONSTRUCT, vec![object + 4]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod start_value_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00402ea0_sets_the_start_values_and_calls_00483710() {
+        let mut e = Engine::new();
+        e.register(0x0048_3710, |_, _| Ret::default());
+        let this = e.mem.alloc(0xcc);
+        e.mem.write(this, &[0xcd; 0xcc]);
+        e.call_log = Some(vec![]);
+        e.call(0x0040_2ea0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1..], [(0x0048_3710, vec![this])]);
+        let mut expected = vec![0xcd_u8; 0xcc];
+        expected[0xb8..0xbc].copy_from_slice(&[0xff; 4]);
+        expected[0xbc] = 0;
+        expected[0xc0..0xcc].fill(0);
+        assert_eq!(e.mem.bytes(this, 0xcc), expected);
     }
 }

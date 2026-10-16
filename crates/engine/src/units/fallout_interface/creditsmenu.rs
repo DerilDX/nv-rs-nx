@@ -4,7 +4,39 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// The handle of the empty `NiFixedString`.
+const EMPTY_FIXED_STRING: u32 = 0x0109_b220;
+
+// Translated from 007613f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the map files it under `creditsmenu.cpp`, a
+/// range placement; the body is not menu code): stores the handle of the empty
+/// `NiFixedString` (the word at `0109b220`) in the word at `this` and returns
+/// `this`, the default constructor of an `NiFixedString`-sized object (the stream
+/// code uses it as the element constructor of its fixed string array). The
+/// decompiler shows the stored value as 0; the disassembly reads the global.
+pub fn fn_007613f0(e: &mut Engine, this: Ptr) -> Ptr {
+    let empty = e.global::<u32>(EMPTY_FIXED_STRING);
+    e.mem.set_u32(this.addr(), empty);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x0076_13f0, fn_007613f0(Ptr) -> Ptr)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_word_becomes_the_empty_string_handle() {
+        let mut e = Engine::new();
+        e.map(EMPTY_FIXED_STRING & !0xfff, 0x1000);
+        e.set_global(EMPTY_FIXED_STRING, 0x0123_4568u32);
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(object, 0xdead_beef);
+        assert_eq!(e.call(0x0076_13f0, &args![object]).u32(), object);
+        assert_eq!(e.mem.u32(object), 0x0123_4568);
+    }
 }

@@ -93,6 +93,15 @@ pub fn fn_008651d0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The function `fn_00865870` calls on the member (`00865900`).
+const CALLEE_00865900: u32 = 0x0086_5900;
+
+// Translated from 00865870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Named `NiTMap<TESForm*,BGSLoadGameSubBuffer>::NewItem` (Xbox PDB name in the engine map). Thin wrapper: calls `00865900` with `ECX` = `this + 0xc` and passes on its pointer result.
+pub fn fn_00865870(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(CALLEE_00865900, &args![this.byte_add(0xc)]).ptr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -103,6 +112,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00865840, fn_00865840(Ptr) -> u32),
         entry!(0x008657e0, fn_008657e0(Ptr) -> u32),
         entry!(0x008651d0, fn_008651d0(Ptr) -> Ptr),
+        entry!(0x0086_5870, fn_00865870(Ptr) -> Ptr),
     ]
 }
 
@@ -206,5 +216,23 @@ mod tests {
                 vec![0x6000, 0x10, 3, 0x0086_5200, 0x0086_57e0]
             )
         );
+    }
+
+    #[test]
+    fn l68d_00865870_passes_this_plus_c_to_the_callee() {
+        let mut e = Engine::new();
+        e.register(CALLEE_00865900, |_, a| Ret {
+            eax: a[0] ^ 0x5555,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0086_5870, &args![0x4100u32]).ptr::<()>().addr(),
+            0x1459
+        );
+        let log = e.call_log.take().unwrap();
+        let inner: Vec<_> = log.iter().filter(|c| c.0 == CALLEE_00865900).collect();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].1, vec![0x4100 + 0xc]);
     }
 }

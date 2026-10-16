@@ -31,9 +31,32 @@ pub fn fn_00618580(e: &mut Engine, this: Ptr, flag: u32) -> Ptr {
     this
 }
 
+// Translated from 00618920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A forwarder: it hands `this` (`ECX`) to `00618940` of this unit, and returns nothing.
+/// Parameters: one word, `this`; the disassembly of the function ends in a plain `RET` and
+/// passes only `ECX` on. `00618940` is a function of this unit and returns nothing (see its
+/// own doc).
+pub fn fn_00618920(e: &mut Engine, this: Ptr) {
+    fn_00618940(e, this);
+}
+
+// Translated from 00618940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A forwarder: it hands `this` (`ECX`) to `0061bcf0`, which stores the vtable `0104d448` at
+/// `+0` and frees the block held at `+4` through the cdecl `004ede70`, and returns nothing.
+/// Parameters: one word, `this`; the disassembly of the function ends in a plain `RET` and
+/// passes only `ECX` on. `0061bcf0`'s disassembly ends with the stack cleanup of that call
+/// (`ADD ESP,4`) and computes no result (Ghidra types it void).
+pub fn fn_00618940(e: &mut Engine, this: Ptr) {
+    e.call(0x0061_bcf0, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0061_8580, fn_00618580(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x0061_8920, fn_00618920(Ptr)),
+        entry!(0x0061_8940, fn_00618940(Ptr)),
+        entry!(0x0061_8580, fn_00618580(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -81,5 +104,40 @@ mod tests {
         put(0x28, 0x0100_0001);
         want[0x24] = 0x01;
         assert_eq!(e.mem.bytes(this, 0x48), want);
+    }
+}
+
+#[cfg(test)]
+mod thunk_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fwd_a03_00618920_runs_the_unit_function_and_through_it_the_destructor() {
+        let mut e = Engine::new();
+        e.register(0x0061_bcf0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0061_8920, &args![0x0000_5000u32]);
+        assert_eq!(calls_to(&e, 0x0061_bcf0), vec![vec![0x5000]]);
+        // The call to the unit's own function is direct, not through the table.
+        assert!(calls_to(&e, 0x0061_8940).is_empty());
+    }
+
+    #[test]
+    fn fwd_a03_00618940_passes_this_to_the_callee() {
+        let mut e = Engine::new();
+        e.register(0x0061_bcf0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0061_8940, &args![0x0000_5000u32]);
+        assert_eq!(calls_to(&e, 0x0061_bcf0), vec![vec![0x5000]]);
     }
 }

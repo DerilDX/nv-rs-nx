@@ -1678,6 +1678,27 @@ pub fn fn_004de370(e: &mut Engine, this: Ptr, name: u32, value: u32) -> Ptr {
     this
 }
 
+/// `004dd150` (Ghidra names it `powf`; no map name): cdecl (base, exponent), result in ST0.
+const POWF: u32 = 0x004d_d150;
+
+// Translated from 004dd130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: the wrapper that forwards its two `float` arguments to
+/// `powf` (`004dd150`) and leaves the result in ST0. Both go through an
+/// `FLD`/`FSTP` pair, which quiets a signalling NaN.
+pub fn fn_004dd130(e: &mut Engine, base: f32, exponent: f32) -> f32 {
+    e.call(POWF, &args![x87_quiet(base), x87_quiet(exponent)])
+        .f32()
+}
+
+/// The function `fn_004dcce0` calls on the member (`00658930`).
+const CALLEE_00658930: u32 = 0x0065_8930;
+
+// Translated from 004dcce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thin wrapper: calls `00658930` with `ECX` = `this + 0x450` and passes on its 16-bit result.
+pub fn fn_004dcce0(e: &mut Engine, this: Ptr) -> u16 {
+    e.call(CALLEE_00658930, &args![this.byte_add(0x450)]).u16()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1723,6 +1744,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004dc540, fn_004dc540(Ptr, Ptr)),
         entry!(0x004dc560, fn_004dc560()),
         entry!(0x004dc590, fn_004dc590()),
+        entry!(0x004dd130, fn_004dd130(f32, f32) -> f32),
+        entry!(0x004d_cce0, fn_004dcce0(Ptr) -> u16),
     ]
 }
 
@@ -3297,5 +3320,43 @@ mod tests {
         assert_eq!(calls_to(&e, NO_EFFECT), vec![vec![0xbbbb]]);
         assert_eq!(e.mem.u32(SMART_POINTER_B), 0);
         assert_eq!(e.mem.u32(SMART_POINTER_A), 0xaaaa);
+    }
+
+    #[test]
+    fn pow_wrapper_forwards_both_floats_and_returns_the_result() {
+        let mut e = Engine::new();
+        e.register(POWF, |_, a| {
+            f32::from_bits(a[0]).powf(f32::from_bits(a[1])).into_ret()
+        });
+        assert_eq!(e.call(0x004d_d130, &args![2.0f32, 10.0f32]).f32(), 1024.0);
+    }
+
+    #[test]
+    fn pow_wrapper_quiets_a_signalling_nan_argument() {
+        let mut e = Engine::new();
+        e.register(POWF, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x004d_d130, &args![f32::from_bits(0x7f80_0001), 1.0f32]);
+        let log = e.call_log.take().unwrap();
+        let forwarded = log.iter().find(|(addr, _)| *addr == POWF).unwrap();
+        assert_eq!(forwarded.1, vec![0x7fc0_0001, 1.0f32.to_bits()]);
+    }
+
+    #[test]
+    fn l68d_004dcce0_passes_this_plus_450_to_the_callee() {
+        let mut e = Engine::new();
+        e.register(CALLEE_00658930, |_, a| Ret {
+            eax: a[0] | 0x5_0000,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_cce0, &args![0x4100u32]).u16(), 0x4550);
+        let log = e.call_log.take().unwrap();
+        let inner: Vec<_> = log.iter().filter(|c| c.0 == CALLEE_00658930).collect();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].1, vec![0x4100 + 0x450]);
     }
 }

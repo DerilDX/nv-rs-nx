@@ -45,6 +45,7 @@ address	cc	params	ret	unit	callees	consts
 00471f70	cdecl		u32	crates/engine/src/units/fallout_shared/tesfile.rs		
 00476b20	cdecl	f32	f32	crates/engine/src/units/fallout_shared/bgsdestructibleobjectform.rs	00404090,00ec62c0	i1,d0000000000000000,d3ff0000000000000,i0
 004772e0	cdecl		u32	crates/engine/src/units/fallout_shared/bgsdestructibleobjectform.rs		
+0047f060	cdecl	i32	bool	crates/engine/src/units/fallout_shared/tesaiform.rs		i32,i46,i1,i0
 00481f30	cdecl	u8	bool	crates/engine/src/units/fallout_shared/tescontainer.rs		i24,i92,i1
 00484b40	cdecl	u32	bool	crates/engine/src/units/fallout_shared/tesform.rs		i0,i2047,i1
 004865f0	cdecl	u16,u16	u16	crates/engine/src/units/fallout_shared/tesform.rs		
@@ -189,6 +190,7 @@ address	cc	params	ret	unit	callees	consts
 006041c0	cdecl		u32	crates/engine/src/units/fallout_shared/tesnpc.rs		
 00605d40	cdecl	u32	u32	crates/engine/src/units/fallout_shared/tesnpc.rs		
 00607340	cdecl		u32	crates/engine/src/units/fallout_shared/tesnpc.rs		
+006259f0	cdecl		u32	crates/engine/src/units/fallout_shared_havok/havokstream.rs		
 00631070	cdecl	f32	f32	crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs		i65,i5,d0000000000000000,fbf800000
 006310c0	thiscall	u32	u32	crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs	006310e0,0087eaa0,009d9f40	i16,i64,i224
 006310e0	thiscall	u32	u32	crates/engine/src/units/fallout_shared_havok/teswaterlistener.rs	0087eaa0	i16,i64
@@ -204,6 +206,7 @@ address	cc	params	ret	unit	callees	consts
 0066dba0	cdecl	i32	i32	crates/engine/src/units/fallout_shared/actionpoints.rs		i22,i0,i14,i13,i1,i2,i3,i4,i5,i6,i7,i8,i19
 0066dde0	cdecl	u32	bool	crates/engine/src/units/fallout_shared/actionpoints.rs		i21,i1
 0066de30	cdecl	u32	bool	crates/engine/src/units/fallout_shared/actionpoints.rs		i21,i1
+0066eba0	cdecl	u32	bool	crates/engine/src/units/fallout_shared/actorvalue.rs		i0,i18,i43,i1
 0068b050	cdecl	f64,f32	f64	crates/engine/src/units/fallout_shared_tempeffects/bstempeffectsimpledecal.rs		i5
 0068c8d0	cdecl		u32	crates/engine/src/units/fallout_shared_tempeffects/bstempeffectsimpledecal.rs		
 00693db0	cdecl		u32	crates/engine/src/units/fallout_shared_pathfinding/navmesh_loadsave.rs		i46
@@ -303,6 +306,11 @@ address	cc	params	ret	unit	callees	consts
 008d5750	cdecl	u32	i32	crates/engine/src/units/fallout_ai/followerbarks.rs		i13,i100,i90,i80,i70,i60,i50,i40,i30,i20,i15,i10,i5
 008e3e90	cdecl		bool	crates/engine/src/units/fallout_ai/highprocess_p3.rs		i0
 008f21c0	cdecl		u8	crates/engine/src/units/fallout_ai/highprocess_p3.rs		
+00920b60	cdecl		u32	crates/engine/src/units/fallout_ai/middlehighprocess.rs		
+00920b70	cdecl		u32	crates/engine/src/units/fallout_ai/middlehighprocess.rs		
+00923000	thiscall	u32	u32	crates/engine/src/units/fallout_ai/middlehighprocess.rs		i212
+00929390	cdecl	u32,u32	bool	crates/engine/src/units/fallout_ai/middlehighprocess_p2.rs		
+0092a980	cdecl	u32	bool	crates/engine/src/units/fallout_ai/middlehighprocess_p2.rs		i2,i3,i1
 00935ef0	cdecl		u32	crates/engine/src/units/fallout_ai/mobileobject.rs		
 0093ccd0	cdecl		u32	crates/engine/src/units/fallout_ai/playercharacter.rs		
 009443f0	cdecl		f32	crates/engine/src/units/fallout_ai/playercharacter.rs		f3f800000
@@ -339,3 +347,7 @@ address	cc	params	ret	unit	callees	consts
 00c5d2b0	cdecl	f32	f32	crates/engine/src/units/bsmain/run_00c5d2b0.rs		d4018000000000000,d402e000000000000,d4024000000000000
 00c5d300	cdecl	f32,f32,f32	f32	crates/engine/src/units/bsmain/run_00c5d2b0.rs		
 00c661c0	stdcall	u32,u32	u32	crates/engine/src/units/bshavok/bhkworld.rs		
+00c98210	cdecl	f32,f32	f32	crates/engine/src/units/unplaced/run_00c98210.rs		i5
+00c9e0f0	cdecl	f32,f32	f32	crates/engine/src/units/havok_sdk/run_00c9e0f0.rs		i65
+00cb1810	cdecl	i32	u32	crates/engine/src/units/havok_sdk/hkmap.rs		i8,i4
+00d19d70	cdecl	u16,u16	u16	crates/engine/src/units/havok_sdk/hkp3axissweep.rs		

@@ -54,9 +54,21 @@ pub fn fn_0066fe40(e: &mut Engine, this: Ptr, id: u32, name: u32) -> Ptr {
     this
 }
 
+// Translated from 0066eba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The engine map gives it no name; `tesobjectweap.rs` calls it as a
+/// resistance validity check (unconfirmed here). `cdecl`, one `uint` (an
+/// actor value index): true for 0x12, 0x13, 0x14, 0x34 and 0x3a to 0x3d (a
+/// jump table over `index - 0x12`, 44 entries), false for every other value.
+pub fn fn_0066eba0(_e: &mut Engine, index: u32) -> bool {
+    matches!(index, 0x12..=0x14 | 0x34 | 0x3a..=0x3d)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0066_fe40, fn_0066fe40(Ptr, u32, u32) -> Ptr)]
+    vec![
+        entry!(0x0066_fe40, fn_0066fe40(Ptr, u32, u32) -> Ptr),
+        entry!(0x0066_eba0, fn_0066eba0(u32) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -173,5 +185,24 @@ mod tests {
         assert_eq!(calls[2].1, vec![this + 0x24]);
         assert_eq!(calls[3].1, vec![this + 0x2c]);
         assert_eq!(calls[4].1, vec![this + 0x3c]);
+    }
+}
+
+#[cfg(test)]
+mod table_tests {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_0066eba0_is_true_for_exactly_the_tabled_indices() {
+        let mut e = Engine::new();
+        let yes = [0x12, 0x13, 0x14, 0x34, 0x3a, 0x3b, 0x3c, 0x3d];
+        for index in 0..0x60u32 {
+            let got = e.call(0x0066_eba0, &args![index]).bool();
+            assert_eq!(got, yes.contains(&index), "index {index:#x}");
+        }
+        assert!(!e.call(0x0066_eba0, &args![0xffff_ffffu32]).bool());
+        assert!(!e
+            .call(0x0066_eba0, &args![0x12u32.wrapping_add(0x1_0000)])
+            .bool());
     }
 }

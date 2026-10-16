@@ -77,9 +77,20 @@ pub fn bgsreconstructformsinallfilesmap_constructor(e: &mut Engine, this: Ptr) -
     this
 }
 
+// Translated from 00843220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A forwarder: it hands `this` (`ECX`) to `00844ff0`, a destructor with an exception frame
+/// that stores the vtable `0107ed3c` and runs `008454f0` and `00844fa0`, and returns
+/// nothing. Parameters: one word, `this`; the disassembly of the function ends in a plain
+/// `RET` and passes only `ECX` on. `00844ff0`'s disassembly ends with its exception-frame
+/// unlink and returns no value (Ghidra types it void).
+pub fn fn_00843220(e: &mut Engine, this: Ptr) {
+    e.call(0x0084_4ff0, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0084_3220, fn_00843220(Ptr)),
         entry!(0x00844db0, fn_00844db0(Ptr, u32) -> Ptr),
         entry!(0x00844130, fn_00844130(Ptr, u32) -> Ptr),
         entry!(0x00844a90, fn_00844a90(Ptr) -> Ptr),
@@ -173,5 +184,29 @@ mod tests {
         assert_eq!(e.mem.u32(this + 4), 0x25, "base bucket count");
         assert_eq!(e.mem.u32(this + 0x10), 0x0107_ed08);
         assert_eq!(e.mem.u32(this + 0x30), 0);
+    }
+}
+
+#[cfg(test)]
+mod thunk_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fwd_a03_00843220_passes_this_to_the_callee() {
+        let mut e = Engine::new();
+        e.register(0x0084_4ff0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0084_3220, &args![0x0000_5000u32]);
+        assert_eq!(calls_to(&e, 0x0084_4ff0), vec![vec![0x5000]]);
     }
 }

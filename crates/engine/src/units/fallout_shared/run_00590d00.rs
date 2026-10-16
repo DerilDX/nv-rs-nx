@@ -47,10 +47,23 @@ pub fn fn_00591b70(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 005912d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the component at `+0x18` of `BGSMusicType` (`00591200` calls it): runs
+/// `00402d30` on the object, stores the vtable `0x0103_3ab8` and runs `004037b0` on the string
+/// at `+0x4`. Returns `this`. The engine map gives it no name.
+pub fn fn_005912d0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x0040_2d30, &args![this]);
+    e.mem.set_u32(base, 0x0103_3ab8);
+    e.call(0x0040_37b0, &args![base + 0x4]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00590d00, fn_00590d00(Ptr) -> bool),
+        entry!(0x0059_12d0, fn_005912d0(Ptr) -> Ptr),
         entry!(0x0059_1200, fn_00591200(Ptr) -> Ptr),
         entry!(0x0059_1b70, fn_00591b70(Ptr) -> Ptr),
     ]
@@ -111,6 +124,23 @@ mod ctor_tests {
                 (0x0040_1b20, &[A::T(0x0)]),
             ],
             stores: &[(0x0, 4, 0x0103_3b34)],
+        });
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_005912d0_builds_the_component() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0059_12d0,
+            size: 0x10,
+            globals: &[],
+            returns: &[],
+            calls: &[(0x0040_2d30, &[A::T(0x0)]), (0x0040_37b0, &[A::T(0x4)])],
+            stores: &[(0x0, 4, 0x0103_3ab8)],
         });
     }
 }

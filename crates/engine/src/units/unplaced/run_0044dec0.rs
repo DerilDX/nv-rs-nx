@@ -28,12 +28,24 @@ pub fn fn_0044e120(
     done
 }
 
+/// The function `fn_0044df20` calls on the member (`0044dff0`).
+const CALLEE_0044DFF0: u32 = 0x0044_dff0;
+
+// Translated from 0044df20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thin wrapper: calls `0044dff0` with `ECX` = `this + 0x8` and passes on its `bool` result (`AL`).
+pub fn fn_0044df20(e: &mut Engine, this: Ptr) -> bool {
+    e.call(CALLEE_0044DFF0, &args![this.byte_add(0x8)]).bool()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x0044e120,
-        fn_0044e120(Ptr, u32, u32, u32, u32) -> u32
-    )]
+    vec![
+        entry!(
+            0x0044e120,
+            fn_0044e120(Ptr, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x0044_df20, fn_0044df20(Ptr) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -64,5 +76,21 @@ mod tests {
         e.mem.set_u32(stream + 4, 0xffff_fff0);
         e.call(0x0044_e120, &args![this, 0u32, 0x20u32, 0u32, 0u32]);
         assert_eq!(e.mem.u32(stream + 4), 0x10);
+    }
+
+    #[test]
+    fn l68d_0044df20_passes_this_plus_8_to_the_callee() {
+        let mut e = Engine::new();
+        e.register(CALLEE_0044DFF0, |_, a| Ret {
+            eax: a[0] & 1,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0044_df20, &args![0x4100u32]).bool());
+        assert!(e.call(0x0044_df20, &args![0x4100u32 + 1]).bool());
+        let log = e.call_log.take().unwrap();
+        let inner: Vec<_> = log.iter().filter(|c| c.0 == CALLEE_0044DFF0).collect();
+        assert_eq!(inner.len(), 2);
+        assert_eq!(inner[0].1, vec![0x4100 + 0x8]);
     }
 }
