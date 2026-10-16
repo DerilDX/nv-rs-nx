@@ -54,6 +54,14 @@ const SLOT_FIRST_VERTEX: u32 = 0x34;
 const SLOT_SUPPORTING_VERTEX: u32 = 0x38;
 const SLOT_CONVERT_VERTEX_IDS: u32 = 0x3c;
 const SLOT_CENTRE: u32 = 0x44;
+const SLOT_CALC_SIZE_FOR_SPU: u32 = 0x18;
+
+/// `hkReferencedObject::calcContentStatistics` (`this` in `ECX`, collector, class), the
+/// `hkClass` `hkpConvexTransformShape::calcContentStatistics` passes to it, and the string
+/// the collector's slot `0xC` is given first.
+const REFERENCED_OBJECT_CALC_CONTENT_STATISTICS: u32 = 0x00c9_0360;
+const TRANSFORM_SHAPE_CLASS: u32 = 0x0126_8940;
+const CHILD_LABEL: u32 = 0x010c_6fec;
 
 /// `hkTransform::setMul` (Xbox PDB, `this` = out; `(a, b)`).
 const SET_MUL: u32 = 0x00cb_2240;
@@ -423,6 +431,69 @@ pub fn hkp_convex_transform_shape_cast_ray_with_collector_impl(
     profile_record(e, PROFILE_END);
 }
 
+// Translated from 00d5d730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConvexTransformShape::calcContentStatistics` (engine map): `ECX` = shape, the
+/// collector and one more word (never read) on the stack. Calls the collector's slot `0xC`
+/// with the label at `010c6fec`, the child shape and 0, then
+/// `hkReferencedObject::calcContentStatistics` with the class at `01268940`.
+pub fn hkp_convex_transform_shape_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr<HkpConvexTransformShape>,
+    collector: u32,
+    _unused_1: u32,
+) {
+    let child = e.get(this, HkpConvexTransformShape::m_childShape);
+    e.vcall(collector, 0xc, &args![CHILD_LABEL, child, 0u32]);
+    e.call(
+        REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
+        &args![this, collector, TRANSFORM_SHAPE_CLASS],
+    );
+}
+
+// Translated from 00d5d770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A function with no name in the engine map: `ECX` = shape, one stack word, the address of
+/// four 16-byte vectors. Copies them bit for bit over the stored transform (`+0x20` to
+/// `+0x5f`).
+pub fn fn_00d5d770(e: &mut Engine, this: Ptr<HkpConvexTransformShape>, transform: u32) {
+    for index in 0..4 {
+        copy_vec(
+            e,
+            transform + 0x10 * index,
+            this.addr() + TRANSFORM + 0x10 * index,
+        );
+    }
+}
+
+// Translated from 00d5e020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConvexTransformShape::calcSizeForSpu` (engine map): `ECX` = shape, two stack words.
+/// Asks the child's slot `0x18` for its size with `limit - 0x60` as the limit; a negative
+/// answer or one above that limit gives -1. When the child is stored right behind the
+/// shape (at `this + 0x60`) the word at `+0x1c` is cleared and the result is the child's
+/// size plus 0x60; otherwise the word at `+0x1c` receives the child's size and the result is
+/// 0x60.
+pub fn hkp_convex_transform_shape_calc_size_for_spu(
+    e: &mut Engine,
+    this: Ptr<HkpConvexTransformShape>,
+    first: u32,
+    limit: i32,
+) -> i32 {
+    let child = e.get(this, HkpConvexTransformShape::m_childShape);
+    let room = limit.wrapping_sub(0x60);
+    let size = e
+        .vcall(child, SLOT_CALC_SIZE_FOR_SPU, &args![first, room])
+        .i32();
+    if !(0..=room).contains(&size) {
+        return -1;
+    }
+    if child == this.addr() + 0x60 {
+        e.mem.set_u32(this.addr() + 0x1c, 0);
+        size.wrapping_add(0x60)
+    } else {
+        e.mem.set_u32(this.addr() + 0x1c, size as u32);
+        0x60
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -505,6 +576,23 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 Ptr,
                 Ptr,
             )
+        ),
+        entry!(
+            0x00d5d730,
+            hkp_convex_transform_shape_calc_content_statistics(
+                Ptr<HkpConvexTransformShape>,
+                u32,
+                u32,
+            )
+        ),
+        entry!(0x00d5d770, fn_00d5d770(Ptr<HkpConvexTransformShape>, u32)),
+        entry!(
+            0x00d5e020,
+            hkp_convex_transform_shape_calc_size_for_spu(
+                Ptr<HkpConvexTransformShape>,
+                u32,
+                i32,
+            ) -> i32
         ),
     ]
 }
@@ -845,5 +933,92 @@ mod tests {
             PROFILE_BEGIN_CAST_RAY_WITH_COLLECTOR
         );
         assert_eq!(e.mem.u32(stream + 0x2c), PROFILE_END);
+    }
+
+    #[test]
+    fn calc_content_statistics_reports_the_child_then_the_base() {
+        let mut e = Engine::new();
+        let (this, child) = shape(&mut e);
+        e.register_double(fake(0xc), |_, _| Ret::default());
+        e.register_double(REFERENCED_OBJECT_CALC_CONTENT_STATISTICS, |_, _| {
+            Ret::default()
+        });
+        let collector = e.mem.alloc(0x10);
+        e.mem.set_u32(collector, CHILD_VTABLE);
+        e.call(0x00d5d730, &args![this, collector, 0x9999u32]);
+        // The first entry is the call under test itself.
+        let log = e.call_log.clone().unwrap()[1..].to_vec();
+        assert_eq!(
+            log,
+            vec![
+                (fake(0xc), vec![collector, 0x010c_6fec, child, 0]),
+                (
+                    REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
+                    vec![this.addr(), collector, 0x0126_8940]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn transform_setter_copies_four_vectors_bit_for_bit() {
+        let mut e = Engine::new();
+        let (this, _) = shape(&mut e);
+        let source = e.mem.alloc(0x40);
+        for word in 0..16u32 {
+            e.mem.set_u32(source + 4 * word, 0x7fc0_0000 + word);
+        }
+        e.call(0x00d5d770, &args![this, source]);
+        for word in 0..16u32 {
+            assert_eq!(e.mem.u32(this.addr() + 0x20 + 4 * word), 0x7fc0_0000 + word);
+        }
+    }
+
+    /// A shape whose child is stored right behind it (at `this + 0x60`).
+    fn shape_with_inline_child(e: &mut Engine) -> u32 {
+        shape(e);
+        let block = e.mem.alloc(0x80);
+        e.mem.set_u32(block + 0x18, block + 0x60);
+        e.mem.set_u32(block + 0x1c, 0x1234);
+        e.mem.set_u32(block + 0x60, CHILD_VTABLE);
+        block
+    }
+
+    #[test]
+    fn calc_size_for_spu_keeps_a_separate_child_apart() {
+        let mut e = Engine::new();
+        let (this, child) = shape(&mut e);
+        e.register_double(fake(SLOT_CALC_SIZE_FOR_SPU), |_, _| ret(0x30));
+        let result = e.call(0x00d5e020, &args![this, 7u32, 0x200u32]).i32();
+        assert_eq!(result, 0x60);
+        assert_eq!(e.mem.u32(this.addr() + 0x1c), 0x30);
+        assert_eq!(
+            calls_to(&e, fake(SLOT_CALC_SIZE_FOR_SPU)),
+            vec![vec![child, 7, 0x1a0]]
+        );
+    }
+
+    #[test]
+    fn calc_size_for_spu_adds_an_inline_child() {
+        let mut e = Engine::new();
+        let block = shape_with_inline_child(&mut e);
+        e.register_double(fake(SLOT_CALC_SIZE_FOR_SPU), |_, _| ret(0x30));
+        let result = e.call(0x00d5e020, &args![block, 7u32, 0x200u32]).i32();
+        assert_eq!(result, 0x90);
+        assert_eq!(e.mem.u32(block + 0x1c), 0);
+    }
+
+    #[test]
+    fn calc_size_for_spu_rejects_negative_and_oversized_answers() {
+        let mut e = Engine::new();
+        let (this, _) = shape(&mut e);
+        e.mem.set_u32(this.addr() + 0x1c, 0x55);
+        e.register_double(fake(SLOT_CALC_SIZE_FOR_SPU), |_, _| ret(-1i32 as u32));
+        assert_eq!(e.call(0x00d5e020, &args![this, 7u32, 0x200u32]).i32(), -1);
+        e.register_double(fake(SLOT_CALC_SIZE_FOR_SPU), |_, _| ret(0x1a1));
+        assert_eq!(e.call(0x00d5e020, &args![this, 7u32, 0x200u32]).i32(), -1);
+        e.register_double(fake(SLOT_CALC_SIZE_FOR_SPU), |_, _| ret(0x1a0));
+        assert_eq!(e.call(0x00d5e020, &args![this, 7u32, 0x200u32]).i32(), 0x60);
+        assert_eq!(e.mem.u32(this.addr() + 0x1c), 0x1a0);
     }
 }

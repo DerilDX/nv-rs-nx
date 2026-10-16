@@ -370,6 +370,170 @@ pub fn hkp_phantom_update_broad_phase(e: &mut Engine, this: Ptr, aabb: Ptr) {
     e.mem.free(locals);
 }
 
+/// `hkpWorldObject::~hkpWorldObject` (`00c9d3b0`, `this`) and
+/// `hkpWorldObject::calcContentStatistics` (`00cd2b00`, `this`, collector, class record).
+const WORLD_OBJECT_DESTRUCT: u32 = 0x00c9_d3b0;
+const WORLD_OBJECT_CALC_CONTENT_STATISTICS: u32 = 0x00cd_2b00;
+/// `hkStatisticsCollector::getAllocatedSize` (`00d06f80`, cdecl `(pointer, bytes)`).
+const GET_ALLOCATED_SIZE: u32 = 0x00d0_6f80;
+/// The class record `calcContentStatistics` hands on (`01268808`) and the vtable
+/// `~hkpPhantom` leaves in the object (`010c7214`, the deleting destructor's table).
+const PHANTOM_CLASS_RECORD: u32 = 0x0126_8808;
+const PHANTOM_VTABLE: u32 = 0x010c_7214;
+/// The statistics names of the two listener arrays: `"OvrlapLisPtr"` and `"PhantmLisPtr"`.
+const NAME_OVERLAP_LISTENERS: u32 = 0x010c_cf68;
+const NAME_PHANTOM_LISTENERS: u32 = 0x010c_cf58;
+
+/// Calls virtual slot `slot` of every non-null phantom listener (last to first, the list
+/// re-read each time) with the phantom as the argument.
+fn call_phantom_listeners(e: &mut Engine, this: Ptr, slot: u32) {
+    let me = this.addr();
+    let mut index = e.mem.i32(me + 0x9c).wrapping_sub(1);
+    while index >= 0 {
+        let data = e.mem.u32(me + 0x98);
+        let listener = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
+        if listener != 0 {
+            e.vcall(listener, slot, &args![this]);
+        }
+        index -= 1;
+    }
+}
+
+/// Returns the storage of the pointer array at `array` to the memory router's allocator (slot
+/// `0x10`, `(data, capacity * 4)`) when its capacity word is not negative, after setting its
+/// size to 0, and leaves it empty with null data and the capacity word `0x80000000`.
+fn release_pointer_array(e: &mut Engine, array: u32) {
+    let allocator = router_allocator(e);
+    e.mem.set_u32(array + 4, 0);
+    let capacity = e.mem.u32(array + 8);
+    if (capacity as i32) >= 0 {
+        let data = e.mem.u32(array);
+        e.vcall(
+            allocator,
+            0x10,
+            &args![data, (capacity & 0x3fff_ffff).wrapping_mul(4)],
+        );
+    }
+    e.mem.set_u32(array, 0);
+    e.mem.set_u32(array + 8, 0x8000_0000);
+}
+
+/// The statistics record for one listener array: when the capacity word's top bit is clear or
+/// the collector's byte at `+0x10` is set, the collector (slot `0x14`) gets `(3, name, data,
+/// size * 4, allocated size)` where the allocated size is
+/// `getAllocatedSize(data, capacity * 4)`.
+fn report_pointer_array(e: &mut Engine, collector: u32, array: u32, name: u32) {
+    let capacity = e.mem.u32(array + 8);
+    if (capacity as i32) >= 0 || e.mem.u8(collector + 0x10) != 0 {
+        let data = e.mem.u32(array);
+        let bytes = (capacity & 0x3fff_ffff).wrapping_mul(4);
+        let allocated = e.call(GET_ALLOCATED_SIZE, &args![data, bytes]).u32();
+        let data = e.mem.u32(array);
+        let used = e.mem.u32(array + 4).wrapping_mul(4);
+        e.vcall(collector, 0x14, &args![3u32, name, data, used, allocated]);
+    }
+}
+
+// Translated from 00d07910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Xbox name unknown; the destructor runs it first): calls virtual slot `0x10` of
+/// every non-null phantom listener (`m_phantomListeners`, last to first) with the phantom,
+/// without sweeping the null entries afterwards.
+pub fn fn_00d07910(e: &mut Engine, this: Ptr) {
+    call_phantom_listeners(e, this, 0x10);
+}
+
+// Translated from 00d07bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpPhantom::firePhantomShapeSet` (engine map): calls slot `0xc` of each phantom listener
+/// with the phantom, then removes the null listeners (the exe jumps to `00d07af0` for that).
+pub fn hkp_phantom_fire_phantom_shape_set(e: &mut Engine, this: Ptr) {
+    call_phantom_listeners(e, this, 0xc);
+    fn_00d07af0(e, this);
+}
+
+// Translated from 00d07c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpPhantom::removePhantomOverlapListener` (engine map): removes `listener` from
+/// `m_overlapListeners` (data +0x8c, size +0x90), shifting the following entries down. A
+/// listener that is not in the list is treated as index -1, as `fn_00d07c10` does for the
+/// phantom listeners.
+pub fn hkp_phantom_remove_phantom_overlap_listener(e: &mut Engine, this: Ptr, listener: u32) {
+    let array = this.addr() + 0x8c;
+    let count = e.mem.i32(array + 4);
+    let data = e.mem.u32(array);
+    let mut index = -1;
+    for candidate in 0..count.max(0) {
+        if e.mem.u32(data + candidate as u32 * 4) == listener {
+            index = candidate;
+            break;
+        }
+    }
+    remove_word_at(e, array, index);
+}
+
+// Translated from 00d07cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpPhantom::calcContentStatistics` (engine map): `ECX` = phantom and two stack words, the
+/// collector and a word the function does not read. Runs
+/// `hkpWorldObject::calcContentStatistics` (`00cd2b00`) with `(this, collector, 01268808)`, then
+/// reports `m_overlapListeners` (name `"OvrlapLisPtr"`) and `m_phantomListeners` (name
+/// `"PhantmLisPtr"`) to the collector, each as `report_pointer_array` describes.
+pub fn hkp_phantom_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr,
+    collector: u32,
+    _unused: u32,
+) {
+    e.call(
+        WORLD_OBJECT_CALC_CONTENT_STATISTICS,
+        &args![this, collector, PHANTOM_CLASS_RECORD],
+    );
+    report_pointer_array(e, collector, this.addr() + 0x8c, NAME_OVERLAP_LISTENERS);
+    report_pointer_array(e, collector, this.addr() + 0x98, NAME_PHANTOM_LISTENERS);
+}
+
+// Translated from 00d07de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpPhantom::addPhantomOverlapListener` (engine map): appends `listener` to
+/// `m_overlapListeners`, first growing the array (`00c90940`) when its size equals its
+/// capacity.
+pub fn hkp_phantom_add_phantom_overlap_listener(e: &mut Engine, this: Ptr, listener: u32) {
+    let array = this.addr() + 0x8c;
+    let allocator = router_allocator(e);
+    if e.mem.u32(array + 4) == e.mem.u32(array + 8) & 0x3fff_ffff {
+        e.call(ARRAY_RESERVE_MORE, &args![allocator, array, 4u32]);
+    }
+    let size = e.mem.u32(array + 4);
+    let data = e.mem.u32(array);
+    e.mem
+        .set_u32(data.wrapping_add(size.wrapping_mul(4)), listener);
+    e.mem.set_u32(array + 4, size.wrapping_add(1));
+}
+
+// Translated from 00d07e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpPhantom::deallocateInternalArrays` (engine map, `__fastcall`): releases the storage of
+/// `m_overlapListeners` when it is empty and then that of `m_phantomListeners` when it is empty
+/// (see `release_pointer_array`); a list with entries is left alone.
+pub fn hkp_phantom_deallocate_internal_arrays(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    if e.mem.u32(me + 0x90) == 0 {
+        release_pointer_array(e, me + 0x8c);
+    }
+    if e.mem.u32(me + 0x9c) == 0 {
+        release_pointer_array(e, me + 0x98);
+    }
+}
+
+// Translated from 00d08130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpPhantom::~hkpPhantom` (engine map, `__fastcall`): sets the vtable `010c7214`, tells the
+/// phantom listeners (`fn_00d07910`), releases `m_phantomListeners` and then
+/// `m_overlapListeners` (see `release_pointer_array`) and ends in the base destructor
+/// (`hkpWorldObject::~hkpWorldObject`, `00c9d3b0`).
+pub fn hkp_phantom_destruct(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    e.mem.set_u32(me, PHANTOM_VTABLE);
+    fn_00d07910(e, this);
+    release_pointer_array(e, me + 0x98);
+    release_pointer_array(e, me + 0x8c);
+    e.call(WORLD_OBJECT_DESTRUCT, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -381,6 +545,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d0_7b90, hkp_phantom_fire_phantom_added(Ptr)),
         entry!(0x00d0_7da0, fn_00d07da0(Ptr, u32)),
         entry!(0x00d0_7ec0, hkp_phantom_update_broad_phase(Ptr, Ptr)),
+        entry!(0x00d0_7910, fn_00d07910(Ptr)),
+        entry!(0x00d0_7bd0, hkp_phantom_fire_phantom_shape_set(Ptr)),
+        entry!(
+            0x00d0_7c80,
+            hkp_phantom_remove_phantom_overlap_listener(Ptr, u32)
+        ),
+        entry!(
+            0x00d0_7cf0,
+            hkp_phantom_calc_content_statistics(Ptr, u32, u32)
+        ),
+        entry!(
+            0x00d0_7de0,
+            hkp_phantom_add_phantom_overlap_listener(Ptr, u32)
+        ),
+        entry!(0x00d0_7e20, hkp_phantom_deallocate_internal_arrays(Ptr)),
+        entry!(0x00d0_8130, hkp_phantom_destruct(Ptr)),
     ]
 }
 
@@ -814,5 +994,267 @@ mod tests {
             vec![vec![e.mem.u32(scene.router + 0x10), block, 64]]
         );
         assert_eq!(e.mem.u32(scene.router), scene.top);
+    }
+
+    /// A memory router whose allocator records its frees (slot `0x10`); returns the allocator.
+    fn heap_router(e: &mut Engine, log: &CallLog) -> u32 {
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x10, ALLOCATOR_FREE_SLOT);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        record(e, log, ALLOCATOR_FREE_SLOT, 0);
+        allocator
+    }
+
+    /// A listener whose virtual function at vtable offset `offset` is `handler`.
+    fn listener_with_slot(e: &mut Engine, offset: u32, handler: u32) -> u32 {
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + offset, handler);
+        let listener = e.mem.alloc(8);
+        e.mem.set_u32(listener, vtable);
+        listener
+    }
+
+    #[test]
+    fn the_unnamed_listener_call_does_not_sweep_nulls() {
+        let mut e = engine();
+        let log = new_log();
+        record(&mut e, &log, LISTENER_SLOT + 0x100, 0);
+        let first = listener_with_slot(&mut e, 0x10, LISTENER_SLOT + 0x100);
+        let phantom = e.mem.alloc(0xa4);
+        make_list(&mut e, phantom, 0x98, &[0, first]);
+        e.call(0x00d0_7910, &args![phantom]);
+        assert_eq!(
+            calls_to(&log, LISTENER_SLOT + 0x100),
+            vec![vec![first, phantom]]
+        );
+        assert_eq!(read_list(&e, phantom, 0x98), vec![0, first]);
+    }
+
+    #[test]
+    fn fire_phantom_shape_set_calls_slot_c_and_sweeps_nulls() {
+        let mut e = engine();
+        let log = new_log();
+        let listener = listener_with_slot(&mut e, 0xc, LISTENER_SLOT + 0x200);
+        record(&mut e, &log, LISTENER_SLOT + 0x200, 0);
+        let phantom = e.mem.alloc(0xa4);
+        make_list(&mut e, phantom, 0x98, &[0, listener, 0]);
+        e.call(0x00d0_7bd0, &args![phantom]);
+        assert_eq!(
+            calls_to(&log, LISTENER_SLOT + 0x200),
+            vec![vec![listener, phantom]]
+        );
+        assert_eq!(read_list(&e, phantom, 0x98), vec![listener]);
+    }
+
+    #[test]
+    fn remove_overlap_listener_shifts_the_rest_down() {
+        let mut e = engine();
+        let phantom = e.mem.alloc(0xa4);
+        make_list(&mut e, phantom, 0x8c, &[7, 8, 9]);
+        e.call(0x00d0_7c80, &args![phantom, 8u32]);
+        assert_eq!(read_list(&e, phantom, 0x8c), vec![7, 9]);
+        e.call(0x00d0_7c80, &args![phantom, 9u32]);
+        assert_eq!(read_list(&e, phantom, 0x8c), vec![7]);
+        // The phantom listeners are not touched.
+        assert_eq!(e.mem.u32(phantom + 0x9c), 0);
+    }
+
+    #[test]
+    fn remove_overlap_listener_that_is_absent_acts_as_index_minus_one() {
+        let mut e = engine();
+        let phantom = e.mem.alloc(0xa4);
+        let block = make_list(&mut e, phantom, 0x8c, &[7, 9]);
+        e.call(0x00d0_7c80, &args![phantom, 5u32]);
+        assert_eq!(e.mem.i32(phantom + 0x90), 1);
+        assert_eq!(e.mem.u32(block), 7);
+        assert_eq!(e.mem.u32(block + 4), 9);
+    }
+
+    #[test]
+    fn add_overlap_listener_grows_a_full_array_first() {
+        let mut e = engine();
+        let log = new_log();
+        let allocator = heap_router(&mut e, &log);
+        let phantom = e.mem.alloc(0xa4);
+        make_list(&mut e, phantom, 0x8c, &[4, 5]);
+        let grow_log = Rc::clone(&log);
+        e.register_double(ARRAY_RESERVE_MORE, move |e, a| {
+            grow_log.borrow_mut().push((ARRAY_RESERVE_MORE, a.to_vec()));
+            let room = e.mem.alloc(32);
+            for index in 0..2 {
+                let old = e.mem.u32(e.mem.u32(a[1]) + 4 * index);
+                e.mem.set_u32(room + 4 * index, old);
+            }
+            e.mem.set_u32(a[1], room);
+            e.mem.set_u32(a[1] + 8, 8);
+            Ret::default()
+        });
+        e.call(0x00d0_7de0, &args![phantom, 6u32]);
+        assert_eq!(
+            calls_to(&log, ARRAY_RESERVE_MORE),
+            vec![vec![allocator, phantom + 0x8c, 4]]
+        );
+        assert_eq!(read_list(&e, phantom, 0x8c), vec![4, 5, 6]);
+        e.call(0x00d0_7de0, &args![phantom, 7u32]);
+        assert_eq!(calls_to(&log, ARRAY_RESERVE_MORE).len(), 1);
+        assert_eq!(read_list(&e, phantom, 0x8c), vec![4, 5, 6, 7]);
+        assert_eq!(e.mem.u32(phantom + 0x9c), 0);
+    }
+
+    #[test]
+    fn deallocate_internal_arrays_releases_only_the_empty_lists() {
+        let mut e = engine();
+        let log = new_log();
+        let allocator = heap_router(&mut e, &log);
+        let phantom = e.mem.alloc(0xa4);
+        let overlap_block = make_list(&mut e, phantom, 0x8c, &[]);
+        e.mem.set_u32(phantom + 0x94, 4);
+        make_list(&mut e, phantom, 0x98, &[1, 2]);
+        e.call(0x00d0_7e20, &args![phantom]);
+        assert_eq!(
+            calls_to(&log, ALLOCATOR_FREE_SLOT),
+            vec![vec![allocator, overlap_block + 4, 16]]
+        );
+        assert_eq!(e.mem.u32(phantom + 0x8c), 0);
+        assert_eq!(e.mem.u32(phantom + 0x90), 0);
+        assert_eq!(e.mem.u32(phantom + 0x94), 0x8000_0000);
+        assert_eq!(read_list(&e, phantom, 0x98), vec![1, 2]);
+        // Now the other list is empty and its storage is not owned: nothing is freed, but the
+        // array is reset.
+        e.mem.set_u32(phantom + 0x9c, 0);
+        e.mem.set_u32(phantom + 0xa0, 0x8000_0002);
+        e.call(0x00d0_7e20, &args![phantom]);
+        assert_eq!(calls_to(&log, ALLOCATOR_FREE_SLOT).len(), 1);
+        assert_eq!(e.mem.u32(phantom + 0x98), 0);
+        assert_eq!(e.mem.u32(phantom + 0xa0), 0x8000_0000);
+    }
+
+    #[test]
+    fn destructor_tells_the_listeners_and_frees_both_lists() {
+        let mut e = engine();
+        let log = new_log();
+        let allocator = heap_router(&mut e, &log);
+        record(&mut e, &log, LISTENER_SLOT + 0x100, 0);
+        record(&mut e, &log, WORLD_OBJECT_DESTRUCT, 0);
+        let listener = listener_with_slot(&mut e, 0x10, LISTENER_SLOT + 0x100);
+        let phantom = e.mem.alloc(0xa4);
+        let overlap_block = make_list(&mut e, phantom, 0x8c, &[3]);
+        let phantom_block = make_list(&mut e, phantom, 0x98, &[listener, 0]);
+        e.call(0x00d0_8130, &args![phantom]);
+        let order: Vec<(u32, Vec<u32>)> = log.borrow().clone();
+        assert_eq!(
+            order,
+            vec![
+                (LISTENER_SLOT + 0x100, vec![listener, phantom]),
+                (ALLOCATOR_FREE_SLOT, vec![allocator, phantom_block + 4, 8]),
+                (ALLOCATOR_FREE_SLOT, vec![allocator, overlap_block + 4, 4]),
+                (WORLD_OBJECT_DESTRUCT, vec![phantom]),
+            ]
+        );
+        assert_eq!(e.mem.u32(phantom), PHANTOM_VTABLE);
+        for offset in [0x8c, 0x98] {
+            assert_eq!(e.mem.u32(phantom + offset), 0);
+            assert_eq!(e.mem.u32(phantom + offset + 4), 0);
+            assert_eq!(e.mem.u32(phantom + offset + 8), 0x8000_0000);
+        }
+    }
+
+    /// A collector whose slot `0x14` and byte `+0x10` are set up for the statistics tests.
+    fn statistics_collector(e: &mut Engine, log: &CallLog, borrowed_too: bool) -> u32 {
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0x14, LISTENER_SLOT + 0x300);
+        let collector = e.mem.alloc(0x20);
+        e.mem.set_u32(collector, vtable);
+        e.mem.set_u8(collector + 0x10, u8::from(borrowed_too));
+        record(e, log, LISTENER_SLOT + 0x300, 0);
+        record(e, log, WORLD_OBJECT_CALC_CONTENT_STATISTICS, 0);
+        record(e, log, GET_ALLOCATED_SIZE, 0x99);
+        collector
+    }
+
+    #[test]
+    fn calc_content_statistics_reports_both_listener_arrays() {
+        let mut e = engine();
+        let log = new_log();
+        let collector = statistics_collector(&mut e, &log, false);
+        let phantom = e.mem.alloc(0xa4);
+        let overlap_block = make_list(&mut e, phantom, 0x8c, &[3, 4]);
+        e.mem.set_u32(phantom + 0x94, 6);
+        let phantom_block = make_list(&mut e, phantom, 0x98, &[5]);
+        e.call(0x00d0_7cf0, &args![phantom, collector, 0u32]);
+        assert_eq!(
+            log.borrow().iter().map(|(at, _)| *at).collect::<Vec<_>>(),
+            vec![
+                WORLD_OBJECT_CALC_CONTENT_STATISTICS,
+                GET_ALLOCATED_SIZE,
+                LISTENER_SLOT + 0x300,
+                GET_ALLOCATED_SIZE,
+                LISTENER_SLOT + 0x300,
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, WORLD_OBJECT_CALC_CONTENT_STATISTICS),
+            vec![vec![phantom, collector, PHANTOM_CLASS_RECORD]]
+        );
+        assert_eq!(
+            calls_to(&log, GET_ALLOCATED_SIZE),
+            vec![vec![overlap_block + 4, 24], vec![phantom_block + 4, 4]]
+        );
+        assert_eq!(
+            calls_to(&log, LISTENER_SLOT + 0x300),
+            vec![
+                vec![
+                    collector,
+                    3,
+                    NAME_OVERLAP_LISTENERS,
+                    overlap_block + 4,
+                    8,
+                    0x99
+                ],
+                vec![
+                    collector,
+                    3,
+                    NAME_PHANTOM_LISTENERS,
+                    phantom_block + 4,
+                    4,
+                    0x99
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn calc_content_statistics_skips_borrowed_arrays_unless_asked() {
+        let mut e = engine();
+        let log = new_log();
+        let collector = statistics_collector(&mut e, &log, false);
+        let phantom = e.mem.alloc(0xa4);
+        e.mem.set_u32(phantom + 0x94, 0x8000_0000);
+        e.mem.set_u32(phantom + 0xa0, 0x8000_0003);
+        e.call(0x00d0_7cf0, &args![phantom, collector, 0u32]);
+        assert!(calls_to(&log, LISTENER_SLOT + 0x300).is_empty());
+        assert!(calls_to(&log, GET_ALLOCATED_SIZE).is_empty());
+        e.mem.set_u8(collector + 0x10, 1);
+        e.call(0x00d0_7cf0, &args![phantom, collector, 0u32]);
+        assert_eq!(
+            calls_to(&log, GET_ALLOCATED_SIZE),
+            vec![vec![0, 0], vec![0, 12]]
+        );
+        assert_eq!(calls_to(&log, LISTENER_SLOT + 0x300).len(), 2);
+        // Only the first array is borrowed: the second is reported without being asked.
+        e.mem.set_u8(collector + 0x10, 0);
+        e.mem.set_u32(phantom + 0xa0, 3);
+        log.borrow_mut().clear();
+        e.call(0x00d0_7cf0, &args![phantom, collector, 0u32]);
+        let reported = calls_to(&log, LISTENER_SLOT + 0x300);
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported[0][2], NAME_PHANTOM_LISTENERS);
     }
 }

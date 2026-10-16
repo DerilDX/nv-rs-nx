@@ -491,6 +491,7 @@ address	cc	params	ret	unit	callees	consts
 00d47f90	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d47f90.rs		
 00d48360	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d48360.rs		
 00d495f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d49530.rs		
+00d571d0	cdecl		f32	crates/engine/src/units/havok_sdk/hkpcylindershape.rs		i0,i65,d3f847ae140000000,f3f8ccccd
 00d69ab0	cdecl		u32	crates/engine/src/units/havok_sdk/hkpconstraintviewer.rs		
 00d6a870	cdecl		u32	crates/engine/src/units/havok_sdk/hkpmidphaseviewer.rs		
 00d6ad60	cdecl		u32	crates/engine/src/units/havok_sdk/hkpbroadphaseviewer.rs		

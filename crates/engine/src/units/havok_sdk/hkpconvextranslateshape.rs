@@ -41,6 +41,14 @@ const SLOT_FIRST_VERTEX: u32 = 0x34;
 const SLOT_SUPPORTING_VERTEX: u32 = 0x38;
 const SLOT_CONVERT_VERTEX_IDS: u32 = 0x3c;
 const SLOT_CENTRE: u32 = 0x44;
+const SLOT_CALC_SIZE_FOR_SPU: u32 = 0x18;
+
+/// `hkReferencedObject::calcContentStatistics` (`this` in `ECX`, collector, class), the
+/// class word `hkpConvexTranslateShape::calcContentStatistics` passes to it, and the string
+/// the collector's slot `0xC` is given first.
+const REFERENCED_OBJECT_CALC_CONTENT_STATISTICS: u32 = 0x00c9_0360;
+const TRANSLATE_SHAPE_CLASS: u32 = 0x0126_8940;
+const CHILD_LABEL: u32 = 0x010c_6fec;
 
 /// `hkTransform::setMul` (Xbox PDB, `this` = out; `(a, b)`).
 const SET_MUL: u32 = 0x00cb_2240;
@@ -316,6 +324,55 @@ pub fn hkp_convex_translate_shape_cast_ray_with_collector_impl(
     });
 }
 
+// Translated from 00dd5e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConvexTranslateShape::calcSizeForSpu` (engine map): `ECX` = shape, two stack words.
+/// Asks the child's slot `0x18` for its size with `limit - 0x30` as the limit; a negative
+/// answer or one above that limit gives -1. When the child is stored right behind the
+/// shape (at `this + 0x30`) the word at `+0x1c` is cleared and the result is the child's
+/// size plus 0x30; otherwise the word at `+0x1c` receives the child's size and the result is
+/// 0x30.
+pub fn hkp_convex_translate_shape_calc_size_for_spu(
+    e: &mut Engine,
+    this: Ptr<HkpConvexTranslateShape>,
+    first: u32,
+    limit: i32,
+) -> i32 {
+    let child = e.get(this, HkpConvexTranslateShape::m_childShape);
+    let room = limit.wrapping_sub(0x30);
+    let size = e
+        .vcall(child, SLOT_CALC_SIZE_FOR_SPU, &args![first, room])
+        .i32();
+    if !(0..=room).contains(&size) {
+        return -1;
+    }
+    if child == this.addr() + 0x30 {
+        e.mem.set_u32(this.addr() + 0x1c, 0);
+        size.wrapping_add(0x30)
+    } else {
+        e.mem.set_u32(this.addr() + 0x1c, size as u32);
+        0x30
+    }
+}
+
+// Translated from 00dd5e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConvexTranslateShape::calcContentStatistics` (engine map): `ECX` = shape, the
+/// collector and one more word (never read) on the stack. Calls the collector's slot `0xC`
+/// with the label at `010c6fec`, the child shape and 0, then
+/// `hkReferencedObject::calcContentStatistics` with the class at `01268940`.
+pub fn hkp_convex_translate_shape_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr<HkpConvexTranslateShape>,
+    collector: u32,
+    _unused_1: u32,
+) {
+    let child = e.get(this, HkpConvexTranslateShape::m_childShape);
+    e.vcall(collector, 0xc, &args![CHILD_LABEL, child, 0u32]);
+    e.call(
+        REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
+        &args![this, collector, TRANSLATE_SHAPE_CLASS],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -388,6 +445,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 Ptr,
                 Ptr,
                 Ptr,
+            )
+        ),
+        entry!(
+            0x00dd5e10,
+            hkp_convex_translate_shape_calc_size_for_spu(
+                Ptr<HkpConvexTranslateShape>,
+                u32,
+                i32,
+            ) -> i32
+        ),
+        entry!(
+            0x00dd5e70,
+            hkp_convex_translate_shape_calc_content_statistics(
+                Ptr<HkpConvexTranslateShape>,
+                u32,
+                u32,
             )
         ),
     ]
@@ -695,5 +768,72 @@ mod tests {
 
     fn load_bits_of(e: &Engine, address: u32) -> [u32; 4] {
         std::array::from_fn(|lane| e.mem.u32(address + 4 * lane as u32))
+    }
+
+    #[test]
+    fn calc_content_statistics_reports_the_child_then_the_base() {
+        let mut e = Engine::new();
+        let (this, child) = shape(&mut e);
+        e.register_double(fake(0xc), |_, _| Ret::default());
+        e.register_double(REFERENCED_OBJECT_CALC_CONTENT_STATISTICS, |_, _| {
+            Ret::default()
+        });
+        let collector = e.mem.alloc(0x10);
+        e.mem.set_u32(collector, CHILD_VTABLE);
+        e.call(0x00dd5e70, &args![this, collector, 0x9999u32]);
+        // The first entry is the call under test itself.
+        let log = e.call_log.clone().unwrap()[1..].to_vec();
+        assert_eq!(
+            log,
+            vec![
+                (fake(0xc), vec![collector, 0x010c_6fec, child, 0]),
+                (
+                    REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
+                    vec![this.addr(), collector, 0x0126_8940]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn calc_size_for_spu_keeps_a_separate_child_apart() {
+        let mut e = Engine::new();
+        let (this, child) = shape(&mut e);
+        e.register_double(fake(SLOT_CALC_SIZE_FOR_SPU), |_, _| ret(0x30));
+        let result = e.call(0x00dd5e10, &args![this, 7u32, 0x200u32]).i32();
+        assert_eq!(result, 0x30);
+        assert_eq!(e.mem.u32(this.addr() + 0x1c), 0x30);
+        assert_eq!(
+            calls_to(&e, fake(SLOT_CALC_SIZE_FOR_SPU)),
+            vec![vec![child, 7, 0x1d0]]
+        );
+    }
+
+    #[test]
+    fn calc_size_for_spu_adds_an_inline_child() {
+        let mut e = Engine::new();
+        shape(&mut e);
+        let block = e.mem.alloc(0x60);
+        e.mem.set_u32(block + 0x18, block + 0x30);
+        e.mem.set_u32(block + 0x1c, 0x1234);
+        e.mem.set_u32(block + 0x30, CHILD_VTABLE);
+        e.register_double(fake(SLOT_CALC_SIZE_FOR_SPU), |_, _| ret(0x20));
+        let result = e.call(0x00dd5e10, &args![block, 7u32, 0x200u32]).i32();
+        assert_eq!(result, 0x50);
+        assert_eq!(e.mem.u32(block + 0x1c), 0);
+    }
+
+    #[test]
+    fn calc_size_for_spu_rejects_negative_and_oversized_answers() {
+        let mut e = Engine::new();
+        let (this, _) = shape(&mut e);
+        e.mem.set_u32(this.addr() + 0x1c, 0x55);
+        e.register_double(fake(SLOT_CALC_SIZE_FOR_SPU), |_, _| ret(-1i32 as u32));
+        assert_eq!(e.call(0x00dd5e10, &args![this, 7u32, 0x200u32]).i32(), -1);
+        e.register_double(fake(SLOT_CALC_SIZE_FOR_SPU), |_, _| ret(0x1d1));
+        assert_eq!(e.call(0x00dd5e10, &args![this, 7u32, 0x200u32]).i32(), -1);
+        e.register_double(fake(SLOT_CALC_SIZE_FOR_SPU), |_, _| ret(0x1d0));
+        assert_eq!(e.call(0x00dd5e10, &args![this, 7u32, 0x200u32]).i32(), 0x30);
+        assert_eq!(e.mem.u32(this.addr() + 0x1c), 0x1d0);
     }
 }

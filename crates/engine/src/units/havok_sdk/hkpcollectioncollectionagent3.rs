@@ -13,8 +13,12 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::units::bsmenu::font::fistp;
+use crate::units::havok_sdk::hkpbvagent::{profile_start_record, LABEL_END};
 use crate::units::havok_sdk::hkpcapsulecapsuleagent::{load_matrix, transform_point};
-use crate::units::havok_sdk::hkpsphereshape::{load_vec, maxps, minps, store_vec, zip_with, Vec4};
+use crate::units::havok_sdk::hkpsphereshape::{
+    load_bits, load_vec, maxps, minps, profile_record, store_bits, store_vec, zip_with, Vec4,
+    PROFILE_SLOT, TLS_GET_VALUE,
+};
 
 /// `hkpCollisionDispatcher` agent3 registration (`00cfbd60`: `this` = the dispatcher, `RET 0xC`;
 /// the entry, type a, type b).
@@ -30,6 +34,43 @@ const LABEL_STATISTICS: u32 = 0x010c_eca8;
 const AGENT3_READY: u32 = 0x0126_8ad5;
 /// The dispatcher byte the registration sets (`+0x1E22`).
 const DISPATCHER_AGENT3: u32 = 0x1e22;
+
+/// The memory router (`00c85750`, no arguments): its object's word at `+0` is the top of the
+/// stack allocator.
+const MEMORY_ROUTER: u32 = 0x00c8_5750;
+/// `hkTransform::setInverse` (`00cb21e0`, `this` = result, one word).
+const TRANSFORM_SET_INVERSE: u32 = 0x00cb_21e0;
+/// The functions `process` (`00d35770`) calls: `00d2d4b0` (cdecl: the collidable and a scratch
+/// block; the object that lists the collidable's children), `00d2d4c0` (cdecl: the collidable;
+/// a leaf shape or 0), `calcAabbAndQueryTree` (`00d2d4f0`, cdecl, eight words), `00db00f0`
+/// (cdecl, seven words: two lists of boxes with their counts, the pair buffer, a capacity and a
+/// word it writes; answers the pair count), the pair sort `00d36520` (cdecl: the pairs, the
+/// first and last index and the unused comparison word), `hkAgentNmMachine_Process` (`00da5b80`,
+/// engine map; cdecl, six words), `hkAgent1nMachine_Process` (`00da4aa0`, cdecl, five words)
+/// and `00d33260` (`this` = a new block, one stack word: the agent; copies the words `+0` to
+/// `+0x10` and `+0x20` to `+0x5C`).
+const SOURCE_OF: u32 = 0x00d2_d4b0;
+const LEAF_SHAPE_OF: u32 = 0x00d2_d4c0;
+const CALC_AABB_AND_QUERY_TREE: u32 = 0x00d2_d4f0;
+const PAIR_FINDER: u32 = 0x00db_00f0;
+const PAIR_SORT: u32 = 0x00d3_6520;
+const AGENT_NM_PROCESS: u32 = 0x00da_5b80;
+const AGENT_1N_PROCESS: u32 = 0x00da_4aa0;
+const COPY_INPUT: u32 = 0x00d3_3260;
+/// The sign mask of the lanes `x`, `y` and `z` (`010c4c00`).
+const NEGATE_XYZ_MASK: u32 = 0x010c_4c00;
+/// The profiling labels of `process`: `"LtCollColl3"`, `"StInit"`, `"StqueryTree"`,
+/// `"StConvertHitlist"`, `"StSortHitList"`, `"St1-Axis"`, `"StSortHits"`, `"MiNumHits"`,
+/// `"StNarrow"`, and the shared end label.
+const LABEL_LT_COLL_COLL3: u32 = 0x010c_ed1c;
+const LABEL_ST_INIT: u32 = 0x010c_c5bc;
+const LABEL_ST_QUERY_TREE: u32 = 0x010c_ed10;
+const LABEL_ST_CONVERT_HITLIST: u32 = 0x010c_ecfc;
+const LABEL_ST_SORT_HIT_LIST: u32 = 0x010c_ecec;
+const LABEL_ST_1_AXIS: u32 = 0x010c_ece0;
+const LABEL_ST_SORT_HITS: u32 = 0x010c_ecd4;
+const LABEL_MI_NUM_HITS: u32 = 0x010c_ecc8;
+const LABEL_ST_NARROW: u32 = 0x010c_e7d4;
 
 // Translated from 00d34d30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpCollectionCollectionAgent3::calcStatistics` (name from the engine map, unconfirmed;
@@ -386,6 +427,365 @@ fn sort_boxes(e: &mut Engine, out: u32, count: u32) -> u32 {
     count
 }
 
+/// Appends an 8-byte profiling record (`label`, the value as a `float`) to the thread's record
+/// stream while its cursor (`+4`) is below its limit (`+0xC`).
+fn profile_number(e: &mut Engine, label: u32, value: i32) {
+    let slot: u32 = e.global(PROFILE_SLOT);
+    let stream = e.call(TLS_GET_VALUE, &args![slot]).u32();
+    let cursor = e.mem.u32(stream + 4);
+    if cursor < e.mem.u32(stream + 0xc) {
+        e.mem.set_u32(cursor, label);
+        e.mem.set_f32(cursor + 4, value as f32);
+        e.mem.set_u32(stream + 4, cursor + 8);
+    }
+}
+
+/// Takes `size` bytes off the memory router's stack allocator (the word at `+0` of the
+/// router's object, a top of stack that only grows) and returns where they start.
+fn take_from_stack(e: &mut Engine, size: u32) -> u32 {
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let top = e.mem.u32(router);
+    e.mem.set_u32(router, top.wrapping_add(size));
+    top
+}
+
+/// Puts the stack allocator's top back to `top`.
+fn reset_stack_top(e: &mut Engine, top: u32) {
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    e.mem.set_u32(router, top);
+}
+
+/// The bytes the exe takes for `count` 32-byte boxes: `count * 32 + 0xFF` rounded down to a
+/// multiple of 128 (so there is always room for 4 end markers after the boxes).
+fn box_buffer_size(count: i32) -> u32 {
+    ((count as u32) << 5).wrapping_add(0xff) & 0xffff_ff80
+}
+
+/// Writes `0xFFFFFFFF` to the first word of the four 32-byte entries after the `count` boxes
+/// at `buffer` (the exe loops while `count < count + 4`, which holds for every real count).
+fn pad_with_end_markers(e: &mut Engine, buffer: u32, count: i32) {
+    let mut at = buffer.wrapping_add((count as u32) << 5);
+    for _ in 0..4 {
+        e.mem.set_u32(at, u32::MAX);
+        at = at.wrapping_add(0x20);
+    }
+}
+
+/// A body without a parent (`+0xC`) whose cache pointer (`+0x44`) is set.
+fn has_own_cache(e: &Engine, body: u32) -> bool {
+    e.mem.u32(body + 0xc) == 0 && e.mem.u32(body + 0x44) != 0
+}
+
+/// `count`, raised (as a signed value) to the 16-bit box counter at `body + 0x40` when the
+/// body has its own cache and the unsigned word at `+0x20` is not above the one at `+0x30`
+/// (the condition under which `00d351c0` reads the cached boxes).
+fn at_least_cached_boxes(e: &Engine, body: u32, count: i32) -> i32 {
+    if has_own_cache(e, body) && e.mem.u32(body + 0x20) <= e.mem.u32(body + 0x30) {
+        count.max(i32::from(e.mem.u16(body + 0x40)))
+    } else {
+        count
+    }
+}
+
+/// Whether the dispatcher's word for the body's shape type (`+0x110 + 4 * type`) has bit 8
+/// clear.
+fn dispatcher_bit_clear(e: &Engine, dispatcher: u32, body: u32) -> bool {
+    let shape_type = e.mem.u32(e.mem.u32(body) + 0xc);
+    let word = e.mem.u32(
+        dispatcher
+            .wrapping_add(shape_type.wrapping_mul(4))
+            .wrapping_add(0x110),
+    );
+    (word >> 8) & 1 == 0
+}
+
+/// A leaf shape of type 9 (`+0xC`) gives the signed value `[+0x1C] - u16[+0x26]`.
+fn leaf_cost(e: &Engine, leaf: u32) -> Option<i32> {
+    if leaf != 0 && e.mem.u32(leaf + 0xc) == 9 {
+        Some(
+            e.mem
+                .i32(leaf + 0x1c)
+                .wrapping_sub(i32::from(e.mem.u16(leaf + 0x26))),
+        )
+    } else {
+        None
+    }
+}
+
+/// Which body's tree the process queries when neither dispatcher bit is clear and not both
+/// are: true for the second. Bodies that differ in having their own cache decide first (the
+/// first body having one is true); then the leaf shapes `00d2d4c0` finds (a type 9 leaf
+/// answers `[+0x1C] - u16[+0x26]`, the first body when both are and its value is not above the
+/// second's, else the one that has one); at last the inverse masses (the float at `+0xA0` of
+/// the motion at `+8`), true when the first is not above the second.
+fn query_second_when_unflagged(e: &mut Engine, first: u32, second: u32) -> bool {
+    let (first_own, second_own) = (has_own_cache(e, first), has_own_cache(e, second));
+    if first_own != second_own {
+        return first_own;
+    }
+    let first_leaf = e.call(LEAF_SHAPE_OF, &args![first]).u32();
+    let second_leaf = e.call(LEAF_SHAPE_OF, &args![second]).u32();
+    let first_cost = leaf_cost(e, first_leaf);
+    let second_cost = leaf_cost(e, second_leaf);
+    match (first_cost, second_cost) {
+        (Some(first_cost), Some(second_cost)) => first_cost <= second_cost,
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (None, None) => {
+            let first_mass = e.mem.f32(e.mem.u32(first + 8) + 0xa0);
+            let second_mass = e.mem.f32(e.mem.u32(second + 8) + 0xa0);
+            first_mass <= second_mass
+        }
+    }
+}
+
+// Translated from 00d35770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpCollectionCollectionAgent3::process` (name from the engine map): cdecl, five words (the
+/// agent, one never read, the result block, one never read, the last passed on). The agent
+/// holds the two collidables (`+0`, `+4`), the contact manager (`+8`), the input (`+0xC`), a
+/// transform (`+0x20`) and a velocity vector (`+0x70`). Between profiling records (`"LtCollColl3"`
+/// with `"StInit"` in one 16-byte record, then 12-byte ones `"StqueryTree"`,
+/// `"StConvertHitlist"`, `"StSortHitList"`, `"St1-Axis"`, `"StSortHits"`, an 8-byte one
+/// `"MiNumHits"` with the pair count as a `float`, `"StNarrow"` and the shared end label) it:
+///
+/// - gets the "source" of each collidable (`00d2d4b0`: the object that lists its children, with
+///   a scratch block) and takes 0x8000 bytes off the memory router's stack allocator for the
+///   pairs;
+/// - makes a sorted list of 32-byte integer boxes for the children of one collidable ("tree",
+///   the buffer `boxes1`) and one for the children of the other ("other", `boxes2`). When the
+///   dispatcher word of each shape type (`+0x110 + 4 * type`, bit 8) is clear for both, the
+///   children of both come from `00d351c0` (the tree being the first; `boxes1` is made first
+///   from the child count of its source, raised by `at_least_cached_boxes`). Otherwise the
+///   tree is the second collidable when the first has its bit clear, the first when the second
+///   has, and when neither has by `query_second_when_unflagged`; the other body's box is
+///   carried into the tree's frame by `calcAabbAndQueryTree` (`00d2d4f0`, with the inverse
+///   transform of `agent + 0x20` made by `00cb21e0` and the velocity at `+0x70` when the
+///   second is the tree, with the transform and the velocity's `x`, `y` and `z` negated when
+///   the first is), whose keys are turned into boxes (`fn_00d34e10`'s loop) and sorted
+///   (`00d36360`). The other body's boxes (`boxes2`) are made by `00d351c0` when the tree has
+///   any, else nothing. Each list is followed by four entries whose first word is
+///   `0xFFFFFFFF`;
+/// - gives `00db00f0` the two lists (the first collidable's first, `boxes1` and `boxes2` swapped
+///   when the tree is the second), the pair buffer, 0xFFF (a capacity) and the address of a
+///   word the exe never reads again; it answers the pair count. The boxes are given back, the
+///   count is recorded, pairs are sorted by `00d36520` when more than one and ended with a
+///   pair of `0xFFFFFFFF`, and the stack top is set past them;
+/// - without a contact manager (`agent + 8` is 0) hands the pairs to `00da5b80` (the result
+///   block, the agent, the two sources, the pairs and the last word). With one, copies the
+///   second word of each pair, and the end pair's, to a new array, copies the agent's input
+///   fields into a block (`00d33260` and the words at `+0x60` to `+0x7C`, with the contact
+///   manager at `+0` and 0 at `+8`) and runs `00da4aa0` (the result block, that block, the
+///   second source, the array and the last word);
+/// - gives the stack back and returns the result block plus 0x10.
+///
+/// The fourth word the exe passes to the sorts is a byte store into a dword of stack residue
+/// (the sorts never read it); 0 is passed. The exe passes two words to `00d2d4c0` (the
+/// second the address of a stack block it does not read); the translation passes one. The
+/// frame is 0x4970 bytes as in the exe. The block given to `00da4aa0` has its words `+0x14` to
+/// `+0x1F` and `+0x64` to `+0x6F` unwritten (stack residue in the exe, zero here); whether that
+/// callee reads them is not known.
+pub fn hkp_collection_collection_agent3_process(
+    e: &mut Engine,
+    agent: Ptr,
+    _unused_1: u32,
+    result_block: Ptr,
+    _unused_2: u32,
+    last: u32,
+) -> Ptr {
+    profile_start_record(e, LABEL_LT_COLL_COLL3, LABEL_ST_INIT);
+    let agent = agent.addr();
+    let first = e.mem.u32(agent);
+    let second = e.mem.u32(agent + 4);
+    let input = e.mem.u32(agent + 0xc);
+    let dispatcher = e.mem.u32(input);
+    let first_clear = dispatcher_bit_clear(e, dispatcher, first);
+    let second_clear = dispatcher_bit_clear(e, dispatcher, second);
+    let query_second = if first_clear || second_clear {
+        first_clear
+    } else {
+        query_second_when_unflagged(e, first, second)
+    };
+    e.with_stack(0x4970, |e, frame| {
+        let frame = frame.addr();
+        let first_source = e.call(SOURCE_OF, &args![first, frame + 0x170]).u32();
+        let second_source = e.call(SOURCE_OF, &args![second, frame + 0x378]).u32();
+        let pairs = take_from_stack(e, 0x8000);
+        let (tree, other, other_source, boxes1, count1) = if first_clear && second_clear {
+            let listed = e.vcall(first_source, 4, &args![]).i32();
+            let count = at_least_cached_boxes(e, first, listed);
+            let boxes = take_from_stack(e, box_buffer_size(count));
+            let contact = e.mem.u32(agent + 8);
+            let count = hk_collection_bv_tree_agent3_extract_cached_aabbs_or_recalculate(
+                e,
+                Ptr::new(first),
+                contact,
+                Ptr::new(first_source),
+                Ptr::new(input),
+                Ptr::new(boxes),
+            ) as i32;
+            (first, second, second_source, boxes, count)
+        } else {
+            profile_record(e, LABEL_ST_QUERY_TREE);
+            let hits = frame + 0x970;
+            let (tree, other, tree_source, other_source, found) = if query_second {
+                let inverse = frame + 0xf0;
+                e.call(TRANSFORM_SET_INVERSE, &args![inverse, agent + 0x20]);
+                let found = e
+                    .call(
+                        CALC_AABB_AND_QUERY_TREE,
+                        &args![
+                            first,
+                            second,
+                            inverse,
+                            agent + 0x70,
+                            input,
+                            0u32,
+                            hits,
+                            0x1000i32
+                        ],
+                    )
+                    .i32();
+                (second, first, second_source, first_source, found)
+            } else {
+                let negated = frame + 0xd0;
+                let velocity = load_bits(e, agent + 0x70);
+                let mask = load_bits(e, NEGATE_XYZ_MASK);
+                store_bits(
+                    e,
+                    negated,
+                    std::array::from_fn(|lane| velocity[lane] ^ mask[lane]),
+                );
+                let found = e
+                    .call(
+                        CALC_AABB_AND_QUERY_TREE,
+                        &args![
+                            second,
+                            first,
+                            agent + 0x20,
+                            negated,
+                            input,
+                            0u32,
+                            hits,
+                            0x1000i32
+                        ],
+                    )
+                    .i32();
+                (first, second, first_source, second_source, found)
+            };
+            let boxes = take_from_stack(e, box_buffer_size(found));
+            profile_record(e, LABEL_ST_CONVERT_HITLIST);
+            fn_00d34e10(
+                e,
+                Ptr::new(agent),
+                Ptr::new(tree_source),
+                Ptr::new(tree),
+                Ptr::new(hits),
+                found,
+                Ptr::new(boxes),
+            );
+            profile_record(e, LABEL_ST_SORT_HIT_LIST);
+            sort_boxes(e, boxes, found as u32);
+            (tree, other, other_source, boxes, found)
+        };
+        let (boxes2, count2) = if count1 != 0 {
+            let listed = e.vcall(other_source, 4, &args![]).i32();
+            let wanted = at_least_cached_boxes(e, other, listed);
+            let boxes = take_from_stack(e, box_buffer_size(wanted));
+            let count = hk_collection_bv_tree_agent3_extract_cached_aabbs_or_recalculate(
+                e,
+                Ptr::new(other),
+                0,
+                Ptr::new(other_source),
+                Ptr::new(input),
+                Ptr::new(boxes),
+            ) as i32;
+            (boxes, count)
+        } else {
+            (take_from_stack(e, 0x80), 0)
+        };
+        pad_with_end_markers(e, boxes1, count1);
+        pad_with_end_markers(e, boxes2, count2);
+        profile_record(e, LABEL_ST_1_AXIS);
+        let cell = frame + 0x24;
+        e.mem.set_u32(cell, 0);
+        let pair_count = if tree == first {
+            e.call(
+                PAIR_FINDER,
+                &args![boxes1, count1, boxes2, count2, pairs, 0xfffu32, cell],
+            )
+        } else {
+            e.call(
+                PAIR_FINDER,
+                &args![boxes2, count2, boxes1, count1, pairs, 0xfffu32, cell],
+            )
+        }
+        .i32();
+        reset_stack_top(e, boxes2);
+        reset_stack_top(e, boxes1);
+        profile_record(e, LABEL_ST_SORT_HITS);
+        profile_number(e, LABEL_MI_NUM_HITS, pair_count);
+        if pair_count > 1 {
+            e.call(PAIR_SORT, &args![pairs, 0i32, pair_count - 1, 0u32]);
+        }
+        let end_pair = pairs.wrapping_add((pair_count as u32).wrapping_mul(8));
+        e.mem.set_u32(end_pair, u32::MAX);
+        e.mem.set_u32(end_pair + 4, u32::MAX);
+        let after_end = pair_count.wrapping_add(1);
+        if after_end < 0x1000 {
+            let used = ((after_end as u32).wrapping_mul(8).wrapping_add(0x7f)) & 0xffff_ff80;
+            reset_stack_top(e, pairs.wrapping_add(used));
+        }
+        profile_record(e, LABEL_ST_NARROW);
+        if e.mem.u32(agent + 8) == 0 {
+            e.call(
+                AGENT_NM_PROCESS,
+                &args![
+                    result_block,
+                    agent,
+                    first_source,
+                    second_source,
+                    pairs,
+                    last
+                ],
+            );
+        } else {
+            let seconds = take_from_stack(
+                e,
+                (pair_count as u32).wrapping_mul(4).wrapping_add(0x83) & 0xffff_ff80,
+            );
+            if pair_count >= 0 {
+                for index in 0..=pair_count as u32 {
+                    let word = e.mem.u32(pairs + 4 + 8 * index);
+                    e.mem.set_u32(seconds + 4 * index, word);
+                }
+            }
+            let object = frame + 0xf0;
+            e.call(COPY_INPUT, &args![object, agent]);
+            for (from, to) in [
+                (0x60, 0x150),
+                (0x70, 0x160),
+                (0x78, 0x168),
+                (0x74, 0x164),
+                (0x7c, 0x16c),
+            ] {
+                let word = e.mem.u32(agent + from);
+                e.mem.set_u32(frame + to, word);
+            }
+            let contact = e.mem.u32(agent + 8);
+            e.mem.set_u32(object, contact);
+            e.mem.set_u32(object + 8, 0);
+            e.call(
+                AGENT_1N_PROCESS,
+                &args![result_block, object, second_source, seconds, last],
+            );
+            reset_stack_top(e, seconds);
+        }
+        reset_stack_top(e, pairs);
+        profile_record(e, LABEL_END);
+    });
+    Ptr::new(result_block.addr().wrapping_add(0x10))
+}
+
 // Translated from 00d36270 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Fills an agent3 table entry (the map gives it no name; cdecl): function words `+0`
 /// `00da6fa0`, `+4` `00da6dc0`, `+8`, `+0xC`, `+0x10`, `+0x14` and `+0x28` zero, `+0x18`
@@ -503,6 +903,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 Ptr, u32, Ptr, Ptr, Ptr
             ) -> u32
         ),
+        entry!(
+            0x00d3_5770,
+            hkp_collection_collection_agent3_process(Ptr, u32, Ptr, u32, u32) -> Ptr
+        ),
         entry!(0x00d3_6270, fn_00d36270(Ptr)),
         entry!(0x00d3_62c0, fn_00d362c0(Ptr)),
         entry!(
@@ -516,9 +920,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod tests {
     use super::*;
     use crate::units::havok_sdk::hkpbvagent::test_support::{
-        calls, engine, log_double, logging_object, new_log, Log,
+        calls, engine, log_double, logging_object, monitor, new_log, Log,
     };
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     const COLLECTOR: u32 = 0x0900_0000;
@@ -1244,5 +1648,668 @@ mod tests {
         let (count, out) = extract(&mut s, body, 0, container);
         assert_eq!(count, 1);
         assert_eq!(s.e.mem.u32(out + 0xc), 5);
+    }
+
+    const FIRST_SOURCE: u32 = 0x0970_0000;
+    const SECOND_SOURCE: u32 = 0x0980_0000;
+    const CHILD: u32 = 0x0990_0000;
+    const RESULT_BLOCK: u32 = 0x0abc_0000;
+    const LAST_WORD: u32 = 0x0123;
+    const PROCESS: u32 = 0x00d3_5770;
+
+    /// Words copied at the time of a call.
+    type Words = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// What the pair finder saw: its arguments, the (first word, key) of the boxes of each
+    /// list and the first word of the entry after each list.
+    struct FinderCall {
+        args: Vec<u32>,
+        lists: [Vec<(u32, u32)>; 2],
+        markers: [u32; 2],
+    }
+
+    /// The scene of `process`: an agent over two collidables (shape types 1 and 2, neither
+    /// flagged in the dispatcher, no parent, no cache, inverse masses 1 and 2), doubles for
+    /// the callees outside the unit and sources that list `hits` (the tree query's keys) or
+    /// nothing, with child shapes that answer from `answers`.
+    struct Process {
+        e: Engine,
+        log: Log,
+        agent: u32,
+        first: u32,
+        second: u32,
+        input: u32,
+        dispatcher: u32,
+        first_source: u32,
+        second_source: u32,
+        stack: u32,
+        stream: u32,
+        records: u32,
+        hits: Rc<RefCell<Vec<u32>>>,
+        pairs: Rc<RefCell<Vec<(u32, u32)>>>,
+        answers: Boxes,
+        leaves: Rc<Cell<[u32; 2]>>,
+        calc: Words,
+        finder: Rc<RefCell<Vec<FinderCall>>>,
+        machine: Words,
+    }
+
+    /// The key list a source gives out through its iteration slots (`8`: the first key, `0xC`:
+    /// the key after one, -1 ends).
+    fn list_keys(e: &mut Engine, source: u32, keys: Vec<u32>) {
+        let first = keys.first().copied().unwrap_or(u32::MAX);
+        e.register_double(source + 8, move |_, _| Ret {
+            eax: first,
+            ..Ret::default()
+        });
+        e.register_double(source + 0xc, move |_, a| {
+            let next = keys
+                .iter()
+                .position(|key| *key == a[1])
+                .and_then(|at| keys.get(at + 1).copied())
+                .unwrap_or(u32::MAX);
+            Ret {
+                eax: next,
+                ..Ret::default()
+            }
+        });
+    }
+
+    fn process_scene() -> Process {
+        let mut e = engine();
+        constants(&mut e);
+        store_bits(
+            &mut e,
+            NEGATE_XYZ_MASK,
+            [0x8000_0000, 0x8000_0000, 0x8000_0000, 0],
+        );
+        let (stream, records) = monitor(&mut e, 0x200);
+        let log = new_log();
+        let stack = e.mem.alloc(0x2_0000);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router, stack);
+        log_double(&mut e, &log, MEMORY_ROUTER, router);
+
+        let input = e.mem.alloc(0x100);
+        store_vec(&mut e, input + 0x20, [0.5, 1.5, 2.5, 3.5]);
+        store_vec(&mut e, input + 0x30, [10.0, 20.0, 30.0, 40.0]);
+        store_vec(&mut e, input + 0x40, [2.0, 4.0, 8.0, 16.0]);
+        let sweep = e.mem.alloc(0x20);
+        e.mem.set_u32(input + 0x60, sweep);
+        let dispatcher = e.mem.alloc(0x400);
+        e.mem.set_u32(input, dispatcher);
+        for shape_type in [1, 2] {
+            e.mem.set_u32(dispatcher + 0x110 + 4 * shape_type, 0x100);
+        }
+
+        let collidable = |e: &mut Engine, shape_type: u32, mass: f32| {
+            let shape = e.mem.alloc(0x20);
+            e.mem.set_u32(shape + 0xc, shape_type);
+            let motion = e.mem.alloc(0xb0);
+            e.mem.set_f32(motion + 0xa0, mass);
+            let body = e.mem.alloc(0x50);
+            e.mem.set_u32(body, shape);
+            e.mem.set_u32(body + 8, motion);
+            body
+        };
+        let first = collidable(&mut e, 1, 1.0);
+        let second = collidable(&mut e, 2, 2.0);
+        let agent = e.mem.alloc(0x80);
+        e.mem.set_u32(agent, first);
+        e.mem.set_u32(agent + 4, second);
+        e.mem.set_u32(agent + 0xc, input);
+        for word in 0..16 {
+            e.mem.set_u32(agent + 0x20 + 4 * word, 0x2000 + word);
+        }
+        e.mem.set_u32(agent + 0x60, 0x6000_aaaa);
+        store_vec(&mut e, agent + 0x70, [1.0, 2.0, 3.0, 4.0]);
+
+        let answers: Boxes = Rc::new(RefCell::new(Vec::new()));
+        let child = logging_object(&mut e, &log, CHILD);
+        let queue = Rc::clone(&answers);
+        let notes = Rc::clone(&log);
+        e.register_double(CHILD + 0x1c, move |e, a| {
+            notes.borrow_mut().push((CHILD + 0x1c, a.to_vec()));
+            let [min, max] = if queue.borrow().is_empty() {
+                [[0.0; 4]; 2]
+            } else {
+                queue.borrow_mut().remove(0)
+            };
+            store_vec(e, a[3], min);
+            store_vec(e, a[3] + 0x10, max);
+            Ret::default()
+        });
+        let first_source = logging_object(&mut e, &log, FIRST_SOURCE);
+        let second_source = logging_object(&mut e, &log, SECOND_SOURCE);
+        for source in [FIRST_SOURCE, SECOND_SOURCE] {
+            log_double(&mut e, &log, source + 0x14, child);
+            list_keys(&mut e, source, Vec::new());
+        }
+        let notes = Rc::clone(&log);
+        e.register_double(SOURCE_OF, move |_, a| {
+            notes.borrow_mut().push((SOURCE_OF, a.to_vec()));
+            Ret {
+                eax: if a[0] == first {
+                    first_source
+                } else {
+                    second_source
+                },
+                ..Ret::default()
+            }
+        });
+        let leaves = Rc::new(Cell::new([0, 0]));
+        let which = Rc::clone(&leaves);
+        e.register_double(LEAF_SHAPE_OF, move |_, a| Ret {
+            eax: which.get()[usize::from(a[0] != first)],
+            ..Ret::default()
+        });
+        log_double(&mut e, &log, TRANSFORM_SET_INVERSE, 0);
+        log_double(&mut e, &log, PAIR_SORT, 0);
+
+        let hits: Rc<RefCell<Vec<u32>>> = Rc::new(RefCell::new(Vec::new()));
+        let calc: Words = Rc::new(RefCell::new(Vec::new()));
+        let (keys, seen) = (Rc::clone(&hits), Rc::clone(&calc));
+        e.register_double(CALC_AABB_AND_QUERY_TREE, move |e, a| {
+            let mut noted = a.to_vec();
+            noted.extend(words(e, a[3], 4));
+            seen.borrow_mut().push(noted);
+            for (index, key) in keys.borrow().iter().enumerate() {
+                e.mem.set_u32(a[6] + 4 * index as u32, *key);
+            }
+            Ret {
+                eax: keys.borrow().len() as u32,
+                ..Ret::default()
+            }
+        });
+        let pairs: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(Vec::new()));
+        let finder: Rc<RefCell<Vec<FinderCall>>> = Rc::new(RefCell::new(Vec::new()));
+        let (found, seen) = (Rc::clone(&pairs), Rc::clone(&finder));
+        e.register_double(PAIR_FINDER, move |e, a| {
+            let list = |e: &Engine, boxes: u32, count: u32| -> Vec<(u32, u32)> {
+                (0..count)
+                    .map(|n| {
+                        (
+                            e.mem.u32(boxes + 0x20 * n),
+                            e.mem.u32(boxes + 0x20 * n + 0xc),
+                        )
+                    })
+                    .collect()
+            };
+            seen.borrow_mut().push(FinderCall {
+                args: a.to_vec(),
+                lists: [list(e, a[0], a[1]), list(e, a[2], a[3])],
+                markers: [e.mem.u32(a[0] + 0x20 * a[1]), e.mem.u32(a[2] + 0x20 * a[3])],
+            });
+            for (index, (low, high)) in found.borrow().iter().enumerate() {
+                e.mem.set_u32(a[4] + 8 * index as u32, *low);
+                e.mem.set_u32(a[4] + 8 * index as u32 + 4, *high);
+            }
+            Ret {
+                eax: found.borrow().len() as u32,
+                ..Ret::default()
+            }
+        });
+        let machine: Words = Rc::new(RefCell::new(Vec::new()));
+        let (nm_seen, one_seen, count) =
+            (Rc::clone(&machine), Rc::clone(&machine), Rc::clone(&pairs));
+        e.register_double(AGENT_NM_PROCESS, move |e, a| {
+            let mut noted = a.to_vec();
+            noted.push(e.mem.u32(router));
+            nm_seen.borrow_mut().push(noted);
+            Ret::default()
+        });
+        e.register_double(AGENT_1N_PROCESS, move |e, a| {
+            let mut noted = a.to_vec();
+            noted.push(e.mem.u32(router));
+            noted.extend(words(e, a[1], 0x20));
+            noted.extend(words(e, a[3], count.borrow().len() as u32 + 1));
+            one_seen.borrow_mut().push(noted);
+            Ret::default()
+        });
+        e.register_double(COPY_INPUT, |e, a| {
+            for offset in (0..0x14).chain(0x20..0x60).step_by(4) {
+                let word = e.mem.u32(a[1] + offset);
+                e.mem.set_u32(a[0] + offset, word);
+            }
+            Ret::default()
+        });
+        Process {
+            e,
+            log,
+            agent,
+            first,
+            second,
+            input,
+            dispatcher,
+            first_source,
+            second_source,
+            stack,
+            stream,
+            records,
+            hits,
+            pairs,
+            answers,
+            leaves,
+            calc,
+            finder,
+            machine,
+        }
+    }
+
+    impl Process {
+        /// Sets whether the dispatcher's word for each shape type has bit 8 clear.
+        fn set_clear_bits(&mut self, first: bool, second: bool) {
+            for (shape_type, clear) in [(1, first), (2, second)] {
+                let word = if clear { 0 } else { 0x100 };
+                self.e
+                    .mem
+                    .set_u32(self.dispatcher + 0x110 + 4 * shape_type, word);
+            }
+        }
+
+        /// Child boxes with the minimum `(x, 0, 0, 0)` and maximum `(x + 1, 0, 0, 0)` for
+        /// each `x`.
+        fn answer_boxes(&mut self, xs: &[f32]) {
+            self.answers.borrow_mut().extend(
+                xs.iter()
+                    .map(|x| [[*x, 0.0, 0.0, 0.0], [*x + 1.0, 0.0, 0.0, 0.0]]),
+            );
+        }
+
+        fn run(&mut self) -> u32 {
+            self.e
+                .call(
+                    PROCESS,
+                    &args![self.agent, 0xdeadu32, RESULT_BLOCK, 0xbeefu32, LAST_WORD],
+                )
+                .u32()
+        }
+
+        /// The (label, second word) of the profile records after the 16-byte start record.
+        fn records(&self) -> Vec<(u32, u32)> {
+            assert_eq!(self.e.mem.u32(self.records), LABEL_LT_COLL_COLL3);
+            assert_eq!(self.e.mem.u32(self.records + 0xc), LABEL_ST_INIT);
+            let end = self.e.mem.u32(self.stream + 4);
+            let mut at = self.records + 0x10;
+            let mut all = Vec::new();
+            while at < end {
+                let label = self.e.mem.u32(at);
+                all.push((label, self.e.mem.u32(at + 4)));
+                at += if label == LABEL_MI_NUM_HITS { 8 } else { 12 };
+            }
+            all
+        }
+
+        fn labels(&self) -> Vec<u32> {
+            self.records().into_iter().map(|(label, _)| label).collect()
+        }
+
+        /// Runs the scene: true when the second collidable tree was queried (the tree query then
+        /// starts with the first collidable).
+        fn queried_second(&mut self) -> bool {
+            self.run();
+            let first_argument = self.calc.borrow()[0][0];
+            assert!([self.first, self.second].contains(&first_argument));
+            first_argument == self.first
+        }
+    }
+
+    /// The labels of a run that queried a tree.
+    const QUERY_LABELS: [u32; 8] = [
+        LABEL_ST_QUERY_TREE,
+        LABEL_ST_CONVERT_HITLIST,
+        LABEL_ST_SORT_HIT_LIST,
+        LABEL_ST_1_AXIS,
+        LABEL_ST_SORT_HITS,
+        LABEL_MI_NUM_HITS,
+        LABEL_ST_NARROW,
+        LABEL_END,
+    ];
+
+    /// The value of the `"MiNumHits"` record (a `float`'s bits).
+    fn number_record(p: &Process) -> u32 {
+        p.records()
+            .into_iter()
+            .find(|(label, _)| *label == LABEL_MI_NUM_HITS)
+            .map(|(_, value)| value)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_flag_on_the_first_queries_the_second_tree_and_boxes_the_hits_00d35770() {
+        let mut p = process_scene();
+        p.set_clear_bits(true, false);
+        *p.hits.borrow_mut() = vec![7, 3, 9];
+        list_keys(&mut p.e, FIRST_SOURCE, vec![11]);
+        log_double(&mut p.e, &p.log, FIRST_SOURCE + 4, 1);
+        // The tree children first (minimum x 3, 1, 2), then the other body one (5).
+        p.answer_boxes(&[3.0, 1.0, 2.0, 5.0]);
+        *p.pairs.borrow_mut() = vec![(100, 200), (50, 60)];
+        assert_eq!(p.run(), RESULT_BLOCK + 0x10);
+        let inverse = calls(&p.log, TRANSFORM_SET_INVERSE);
+        assert_eq!(inverse.len(), 1);
+        assert_eq!(inverse[0][1], p.agent + 0x20);
+        let calc = p.calc.borrow();
+        assert_eq!(calc.len(), 1);
+        let hits_at = calc[0][6];
+        assert_eq!(
+            calc[0][..8],
+            [
+                p.first,
+                p.second,
+                inverse[0][0],
+                p.agent + 0x70,
+                p.input,
+                0,
+                hits_at,
+                0x1000
+            ]
+        );
+        assert_eq!(hits_at - inverse[0][0], 0x880);
+        // The children come from the tree source, keyed by the hits; the other body ones from
+        // its own source.
+        let keys_of = |source: u32| -> Vec<u32> {
+            calls(&p.log, source + 0x14)
+                .iter()
+                .map(|call| call[1])
+                .collect()
+        };
+        assert_eq!(keys_of(SECOND_SOURCE), vec![7, 3, 9]);
+        assert_eq!(keys_of(FIRST_SOURCE), vec![11]);
+        let scratch: Vec<u32> = calls(&p.log, SOURCE_OF)
+            .iter()
+            .map(|call| call[1])
+            .collect();
+        assert_eq!(scratch[1] - scratch[0], 0x208);
+        // The tree is the second collidable, so the finder gets the other list first. The
+        // tree boxes are sorted by their first word; each list ends with an end marker.
+        let finder = p.finder.borrow();
+        assert_eq!(finder.len(), 1);
+        let (boxes1, boxes2) = (p.stack + 0x8000, p.stack + 0x8100);
+        assert_eq!(
+            finder[0].args,
+            vec![boxes2, 1, boxes1, 3, p.stack, 0xfff, finder[0].args[6]]
+        );
+        assert_eq!(
+            finder[0].lists,
+            [vec![(11, 11)], vec![(3, 3), (5, 9), (7, 7)]]
+        );
+        assert_eq!(finder[0].markers, [u32::MAX, u32::MAX]);
+        // Two pairs are sorted and followed by the end pair; the stack top is behind them
+        // when the machine runs and back at the start at the end.
+        assert_eq!(calls(&p.log, PAIR_SORT), vec![vec![p.stack, 0, 1, 0]]);
+        assert_eq!(p.e.mem.u32(p.stack + 16), u32::MAX);
+        assert_eq!(p.e.mem.u32(p.stack + 20), u32::MAX);
+        assert_eq!(
+            *p.machine.borrow(),
+            vec![vec![
+                RESULT_BLOCK,
+                p.agent,
+                p.first_source,
+                p.second_source,
+                p.stack,
+                LAST_WORD,
+                p.stack + 0x80
+            ]]
+        );
+        let router = p.e.call(MEMORY_ROUTER, &[]).u32();
+        assert_eq!(p.e.mem.u32(router), p.stack);
+        assert_eq!(p.labels(), QUERY_LABELS);
+        assert_eq!(number_record(&p), 2.0f32.to_bits());
+    }
+
+    #[test]
+    fn a_flag_on_the_second_queries_the_first_tree_with_the_velocity_negated_00d35770() {
+        let mut p = process_scene();
+        p.set_clear_bits(false, true);
+        *p.hits.borrow_mut() = vec![5, 6];
+        list_keys(&mut p.e, SECOND_SOURCE, vec![8]);
+        log_double(&mut p.e, &p.log, SECOND_SOURCE + 4, 1);
+        p.answer_boxes(&[2.0, 1.0, 4.0]);
+        p.run();
+        assert!(calls(&p.log, TRANSFORM_SET_INVERSE).is_empty());
+        let calc = p.calc.borrow();
+        assert_eq!(calc.len(), 1);
+        let (hits_at, negated) = (calc[0][6], calc[0][3]);
+        assert_eq!(
+            calc[0][..8],
+            [
+                p.second,
+                p.first,
+                p.agent + 0x20,
+                negated,
+                p.input,
+                0,
+                hits_at,
+                0x1000
+            ]
+        );
+        // The signs of x, y and z are flipped.
+        assert_eq!(
+            calc[0][8..],
+            [
+                (-1.0f32).to_bits(),
+                (-2.0f32).to_bits(),
+                (-3.0f32).to_bits(),
+                4.0f32.to_bits()
+            ]
+        );
+        assert_eq!(hits_at - negated, 0x8a0);
+        let keys_of = |source: u32| -> Vec<u32> {
+            calls(&p.log, source + 0x14)
+                .iter()
+                .map(|call| call[1])
+                .collect()
+        };
+        assert_eq!(keys_of(FIRST_SOURCE), vec![5, 6]);
+        assert_eq!(keys_of(SECOND_SOURCE), vec![8]);
+        // The tree is the first collidable: the finder gets its list first.
+        let finder = p.finder.borrow();
+        let (boxes1, boxes2) = (p.stack + 0x8000, p.stack + 0x8100);
+        assert_eq!(
+            finder[0].args,
+            vec![boxes1, 2, boxes2, 1, p.stack, 0xfff, finder[0].args[6]]
+        );
+        assert_eq!(finder[0].lists, [vec![(3, 6), (5, 5)], vec![(9, 8)]]);
+        // No pairs: only the end pair, and the stack top just behind it.
+        assert!(calls(&p.log, PAIR_SORT).is_empty());
+        assert_eq!(p.e.mem.u32(p.stack), u32::MAX);
+        assert_eq!(p.e.mem.u32(p.stack + 4), u32::MAX);
+        assert_eq!(p.machine.borrow()[0][6], p.stack + 0x80);
+        assert_eq!(number_record(&p), 0.0f32.to_bits());
+    }
+
+    #[test]
+    fn flags_on_both_make_the_boxes_of_both_children_without_a_tree_query_00d35770() {
+        let mut p = process_scene();
+        p.set_clear_bits(true, true);
+        list_keys(&mut p.e, FIRST_SOURCE, vec![5, 6]);
+        list_keys(&mut p.e, SECOND_SOURCE, vec![8]);
+        log_double(&mut p.e, &p.log, FIRST_SOURCE + 4, 2);
+        log_double(&mut p.e, &p.log, SECOND_SOURCE + 4, 1);
+        p.answer_boxes(&[2.0, 1.0, 4.0]);
+        p.run();
+        assert!(p.calc.borrow().is_empty());
+        assert!(calls(&p.log, TRANSFORM_SET_INVERSE).is_empty());
+        assert_eq!(calls(&p.log, FIRST_SOURCE + 4).len(), 1);
+        assert_eq!(calls(&p.log, SECOND_SOURCE + 4).len(), 1);
+        let finder = p.finder.borrow();
+        let (boxes1, boxes2) = (p.stack + 0x8000, p.stack + 0x8100);
+        assert_eq!(
+            finder[0].args,
+            vec![boxes1, 2, boxes2, 1, p.stack, 0xfff, finder[0].args[6]]
+        );
+        assert_eq!(finder[0].lists, [vec![(3, 6), (5, 5)], vec![(9, 8)]]);
+        assert_eq!(
+            p.labels(),
+            vec![
+                LABEL_ST_1_AXIS,
+                LABEL_ST_SORT_HITS,
+                LABEL_MI_NUM_HITS,
+                LABEL_ST_NARROW,
+                LABEL_END
+            ]
+        );
+    }
+
+    #[test]
+    fn the_first_buffer_has_room_for_the_cached_boxes_when_they_are_more_00d35770() {
+        let mut p = process_scene();
+        p.set_clear_bits(true, true);
+        log_double(&mut p.e, &p.log, FIRST_SOURCE + 4, 5);
+        log_double(&mut p.e, &p.log, COPY_AABB_INT, 0);
+        // The first body has its own cache of 9 boxes, whose block (+0x20) starts ordered.
+        let cache = p.e.mem.alloc(9 * 0x20);
+        let keys = p.e.mem.alloc(9 * 4);
+        p.e.mem.set_u32(p.first + 0x44, cache);
+        p.e.mem.set_u16(p.first + 0x40, 9);
+        p.e.mem.set_u32(p.first + 0x48, keys);
+        p.run();
+        assert_eq!(calls(&p.log, COPY_AABB_INT).len(), 9);
+        let finder = p.finder.borrow();
+        // 9 boxes of 32 bytes (288) and 255, down to a multiple of 128.
+        assert_eq!(finder[0].args[2] - finder[0].args[0], 0x200);
+        assert_eq!(finder[0].args[1], 9);
+        assert_eq!(finder[0].args[3], 0);
+    }
+
+    #[test]
+    fn without_hits_the_other_body_is_not_asked_and_its_buffer_is_one_block_00d35770() {
+        let mut p = process_scene();
+        p.set_clear_bits(true, false);
+        log_double(&mut p.e, &p.log, FIRST_SOURCE + 4, 3);
+        p.run();
+        assert!(calls(&p.log, FIRST_SOURCE + 4).is_empty());
+        assert!(calls(&p.log, FIRST_SOURCE + 0x14).is_empty());
+        let finder = p.finder.borrow();
+        // The tree is the second: the other (empty) list first, both followed by markers; the
+        // empty first buffer takes 0xFF rounded down to 128 bytes, the other 0x80.
+        let (boxes1, boxes2) = (p.stack + 0x8000, p.stack + 0x8080);
+        assert_eq!(
+            finder[0].args,
+            vec![boxes2, 0, boxes1, 0, p.stack, 0xfff, finder[0].args[6]]
+        );
+        assert_eq!(finder[0].markers, [u32::MAX, u32::MAX]);
+        assert_eq!(number_record(&p), 0);
+        assert_eq!(p.labels(), QUERY_LABELS);
+    }
+
+    #[test]
+    fn a_contact_manager_gets_the_second_words_of_the_pairs_and_a_copy_of_the_agent_00d35770() {
+        let mut p = process_scene();
+        p.set_clear_bits(true, false);
+        *p.pairs.borrow_mut() = vec![(100, 200), (50, 60)];
+        p.e.mem.set_u32(p.agent + 8, 0x5150);
+        p.run();
+        assert!(calls(&p.log, AGENT_NM_PROCESS).is_empty());
+        let machine = p.machine.borrow();
+        assert_eq!(machine.len(), 1);
+        let call = &machine[0];
+        let object = call[1];
+        // The second words of the pairs and the end pair go to a block behind the pairs.
+        assert_eq!(
+            call[..5],
+            [
+                RESULT_BLOCK,
+                object,
+                p.second_source,
+                p.stack + 0x80,
+                LAST_WORD
+            ]
+        );
+        assert_eq!(call[5], p.stack + 0x100);
+        let mut expected_object = vec![0u32; 0x20];
+        expected_object[..5].copy_from_slice(&[0x5150, p.second, 0, p.input, 0]);
+        for word in 0..16 {
+            expected_object[8 + word] = 0x2000 + word as u32;
+        }
+        expected_object[24] = 0x6000_aaaa;
+        expected_object[28..].copy_from_slice(&[
+            1.0f32.to_bits(),
+            2.0f32.to_bits(),
+            3.0f32.to_bits(),
+            4.0f32.to_bits(),
+        ]);
+        assert_eq!(call[6..38], expected_object[..]);
+        assert_eq!(call[38..], [200, 60, u32::MAX]);
+        let router = p.e.call(MEMORY_ROUTER, &[]).u32();
+        assert_eq!(p.e.mem.u32(router), p.stack);
+    }
+
+    /// Runs the scene after `setup` and says whether the second collidable tree was queried.
+    fn unflagged_queries_second(setup: impl FnOnce(&mut Process)) -> bool {
+        let mut p = process_scene();
+        setup(&mut p);
+        p.queried_second()
+    }
+
+    #[test]
+    fn unflagged_bodies_differing_in_a_cache_follow_the_first_one_00d35770() {
+        assert!(unflagged_queries_second(|p| {
+            p.e.mem.set_u32(p.first + 0x44, 0x1234);
+        }));
+        assert!(!unflagged_queries_second(|p| {
+            p.e.mem.set_u32(p.second + 0x44, 0x1234);
+        }));
+        // A cache behind a parent does not count.
+        assert!(unflagged_queries_second(|p| {
+            p.e.mem.set_u32(p.first + 0x44, 0x1234);
+            p.e.mem.set_u32(p.second + 0x44, 0x1234);
+            p.e.mem.set_u32(p.second + 0xc, 0x4321);
+        }));
+    }
+
+    /// A leaf shape of type `shape_type` whose cost, when it is of type 9, is `value - sub`
+    /// (`[+0x1C] - u16[+0x26]`).
+    fn leaf(p: &mut Process, shape_type: u32, value: i32, sub: u16) -> u32 {
+        let leaf = p.e.mem.alloc(0x30);
+        p.e.mem.set_u32(leaf + 0xc, shape_type);
+        p.e.mem.set_i32(leaf + 0x1c, value);
+        p.e.mem.set_u16(leaf + 0x26, sub);
+        leaf
+    }
+
+    #[test]
+    fn unflagged_bodies_with_type_9_leaves_compare_their_signed_costs_00d35770() {
+        let costs = |first_cost: (i32, u16), second_cost: (i32, u16)| {
+            unflagged_queries_second(|p| {
+                let first = leaf(p, 9, first_cost.0, first_cost.1);
+                let second = leaf(p, 9, second_cost.0, second_cost.1);
+                p.leaves.set([first, second]);
+            })
+        };
+        assert!(costs((10, 3), (9, 1)));
+        assert!(!costs((9, 1), (10, 3)));
+        assert!(costs((8, 0), (9, 1)));
+        // Signed: -5 is below 3.
+        assert!(costs((-5, 0), (3, 0)));
+        assert!(!costs((3, 0), (-5, 0)));
+        // A single type 9 leaf decides; other types and no leaf are no leaf.
+        assert!(unflagged_queries_second(|p| {
+            let first = leaf(p, 9, 100, 0);
+            let second = leaf(p, 8, 0, 0);
+            p.leaves.set([first, second]);
+        }));
+        assert!(!unflagged_queries_second(|p| {
+            let second = leaf(p, 9, 100, 0);
+            p.leaves.set([0, second]);
+        }));
+    }
+
+    #[test]
+    fn unflagged_bodies_without_leaves_compare_the_inverse_masses_00d35770() {
+        let masses = |first_mass: f32, second_mass: f32| {
+            unflagged_queries_second(|p| {
+                for (body, mass) in [(p.first, first_mass), (p.second, second_mass)] {
+                    let motion = p.e.mem.u32(body + 8);
+                    p.e.mem.set_f32(motion + 0xa0, mass);
+                }
+            })
+        };
+        assert!(masses(1.0, 2.0));
+        assert!(masses(2.0, 2.0));
+        assert!(!masses(3.0, 2.0));
+        assert!(!masses(f32::NAN, 2.0));
+        assert!(!masses(1.0, f32::NAN));
     }
 }

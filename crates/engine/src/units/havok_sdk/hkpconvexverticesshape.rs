@@ -468,6 +468,423 @@ fn cast_ray_against_hull(e: &mut Engine, me: u32, input: u32, out: u32) -> bool 
     true
 }
 
+/// `hkReferencedObject` reference release (`00c905b0`, `this` in `ECX`, nothing on the stack).
+const REMOVE_REFERENCE: u32 = 0x00c9_05b0;
+/// `hkArray::reserve` (`00c908c0`, cdecl `(allocator, array, capacity, element size)`).
+const ARRAY_RESERVE: u32 = 0x00c9_08c0;
+/// `hkAabbUtil::calcAabb` (Xbox PDB name per the engine map, `00cbeaf0`, cdecl `(vertices,
+/// count, stride, out)`): writes the minimum at `out` and the maximum at `out + 0x10`.
+const CALC_AABB: u32 = 0x00cb_eaf0;
+/// `hkVector4::setRotatedDir` (Xbox PDB name per the engine map, `00c7f700`): `ECX` = result,
+/// two stack words (a matrix of three rows, a vector).
+const SET_ROTATED_DIR: u32 = 0x00c7_f700;
+/// The vector constant of four 0.5, and the one of four sign bits.
+const HALF_VECTOR: u32 = 0x010c_71d0;
+const SIGN_MASK: u32 = 0x010c_44d0;
+/// The vtable the shape constructors and destructors leave in the object, and the one the
+/// destructors end with.
+const SHAPE_VTABLE: u32 = 0x010d_0fc4;
+const BASE_VTABLE: u32 = 0x0102_e388;
+/// The `hkArray` capacity word mask, and the empty word (no storage, not owned).
+const CAPACITY_MASK: u32 = 0x3fff_ffff;
+const EMPTY_CAPACITY: u32 = 0x8000_0000;
+
+/// The allocator behind the memory router (`00c85750`, its `+0x10`).
+fn allocator_of_router(e: &mut Engine) -> u32 {
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    e.mem.u32(router + 0x10)
+}
+
+/// Makes room for `wanted` elements of `element_size` bytes in the `hkArray` at `array`
+/// (`00c908c0` with the larger of `wanted` and twice the current capacity) when its capacity,
+/// compared as signed values, is below `wanted`.
+fn reserve_array(e: &mut Engine, array: u32, wanted: i32, element_size: u32) {
+    let allocator = allocator_of_router(e);
+    let capacity = (e.mem.u32(array + 8) & CAPACITY_MASK) as i32;
+    if capacity < wanted {
+        let doubled = capacity.wrapping_add(capacity);
+        let new_capacity = if wanted < doubled { doubled } else { wanted };
+        e.call(
+            ARRAY_RESERVE,
+            &args![allocator, array, new_capacity, element_size],
+        );
+    }
+}
+
+/// Empties the `hkArray` at `array` (size at `+4`, capacity word at `+8`) and frees its data
+/// (allocator slot `0x10`: data, capacity times `element_size` bytes) unless bit 31 of the
+/// capacity word says it is not owned; the data pointer and capacity word are reset.
+fn release_array(e: &mut Engine, array: u32, element_size: u32) {
+    let allocator = allocator_of_router(e);
+    let capacity = e.mem.u32(array + 8);
+    e.mem.set_u32(array + 4, 0);
+    if capacity as i32 >= 0 {
+        let data = e.mem.u32(array);
+        let bytes = (capacity & CAPACITY_MASK).wrapping_mul(element_size);
+        e.vcall(allocator, 0x10, &args![data, bytes]);
+    }
+    e.mem.set_u32(array, 0);
+    e.mem.set_u32(array + 8, EMPTY_CAPACITY);
+}
+
+/// Stores the vertex at `from` (three floats, each through `FLD`/`FSTP`) as vertex `index` of
+/// the rotated vertices of the shape at `this`.
+fn store_vertex(e: &mut Engine, this: u32, index: u32, from: u32) {
+    let (block, lane) = vertex_slot(e, this, index);
+    for axis in 0..3 {
+        let bits = x87_quiet_bits(e.mem.u32(from + 4 * axis));
+        e.mem.set_u32(block + 0x10 * axis + 4 * lane, bits);
+    }
+}
+
+// Translated from 00d58d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConvexVerticesShape::getPlaneEquations` (Xbox PDB): the address of `m_planeEquations`.
+pub fn hkp_convex_vertices_shape_get_plane_equations(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr() + PLANE_EQUATIONS)
+}
+
+// Translated from 00d59200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConvexVerticesShape::getOriginalVertices` (Xbox PDB): fills the `hkArray` at `array`
+/// with one 16-byte vector `(x, y, z, 0.0)` per vertex, growing it first (`00c908c0`, 16-byte
+/// elements) when its capacity is below `m_numVertices`. The loop re-reads `m_numVertices` on
+/// every pass.
+pub fn hkp_convex_vertices_shape_get_original_vertices(e: &mut Engine, this: Ptr, array: Ptr) {
+    let me = this.addr();
+    let array = array.addr();
+    let count = e.mem.i32(me + NUM_VERTICES);
+    reserve_array(e, array, count, 0x10);
+    e.mem.set_u32(array + 4, count as u32);
+    let zero = e.mem.u32(ZERO);
+    let mut index = 0i32;
+    while index < e.mem.i32(me + NUM_VERTICES) {
+        let (block, lane) = vertex_slot(e, me, index as u32);
+        let out = e
+            .mem
+            .u32(array)
+            .wrapping_add((index as u32).wrapping_mul(0x10));
+        for axis in 0..3 {
+            let bits = e.mem.u32(block + 0x10 * axis + 4 * lane);
+            e.mem.set_u32(out + 4 * axis, bits);
+        }
+        e.mem.set_u32(out + 0xc, zero);
+        index += 1;
+    }
+}
+
+// Translated from 00d59710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: `ECX` = object, one stack word (a float). Stores the float
+/// (through `FLD`/`FSTP`) as the radius at `+0x10`, sets the word at `+6` to 1, `+8` to 0, the
+/// shape type at `+0xC` to 6, the vtable `010d0fc4`, and empties both arrays (`+0x40`/`+0x44`/
+/// `+0x48` and `+0x54`/`+0x58`/`+0x5C`) and the words at `+0x50` and `+0x60`. Returns `this`.
+pub fn fn_00d59710(e: &mut Engine, this: Ptr, radius: f32) -> Ptr {
+    let me = this.addr();
+    e.mem.set_f32(me + RADIUS, x87_quiet(radius));
+    e.mem.set_u16(me + 6, 1);
+    e.mem.set_u32(me + 8, 0);
+    e.mem.set_u32(me + 0xc, 6);
+    e.mem.set_u32(me, SHAPE_VTABLE);
+    e.mem.set_u32(me + ROTATED_VERTICES, 0);
+    e.mem.set_u32(me + ROTATED_VERTICES_SIZE, 0);
+    e.mem.set_u32(me + 0x48, EMPTY_CAPACITY);
+    e.mem.set_u32(me + CONVEX_PIECE, 0);
+    e.mem.set_u32(me + PLANE_EQUATIONS, 0);
+    e.mem.set_u32(me + 0x58, 0);
+    e.mem.set_u32(me + 0x5c, EMPTY_CAPACITY);
+    e.mem.set_u32(me + 0x60, 0);
+    this
+}
+
+// Translated from 00d59760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: `ECX` = object, six stack words (the vertex blocks, the vertex
+/// count, the plane vectors, the plane count, a box of two vectors, a radius float). The shape
+/// borrows both blocks: `+0x40` = the vertex blocks with the size `(count + 3 & !3) / 4` (signed
+/// division) and the same size with bit 31 set as capacity word, `+0x4C` = the count, `+0x50` =
+/// 0, `+0x54`..`+0x5C` = the planes, their count and the count with bit 31 set, `+0x60` = 0. The
+/// radius goes through `FLD`/`FSTP` to `+0x10`, `+6` = 1, `+8` = 0, `+0xC` = 6 and the vtable is
+/// `010d0fc4`. `+0x20` = `(max - min) * 0.5` and `+0x30` = `(min + max) * 0.5` of the box (the
+/// minimum at +0, the maximum at +0x10; the 0.5 is the float at `01016248`). Returns `this`.
+pub fn fn_00d59760(
+    e: &mut Engine,
+    this: Ptr,
+    vertices: Ptr,
+    count: i32,
+    planes: Ptr,
+    plane_count: u32,
+    bounds: Ptr,
+    radius: f32,
+) -> Ptr {
+    let me = this.addr();
+    e.mem.set_f32(me + RADIUS, x87_quiet(radius));
+    e.mem.set_u32(me + 8, 0);
+    e.mem.set_u32(me + 0xc, 6);
+    e.mem.set_u32(me, SHAPE_VTABLE);
+    e.mem.set_u16(me + 6, 1);
+    e.mem.set_u32(me + ROTATED_VERTICES, vertices.addr());
+    let rounded = count.wrapping_add(3) & !3;
+    let fours = rounded.wrapping_add((rounded >> 31) & 3) >> 2;
+    e.mem.set_u32(me + ROTATED_VERTICES_SIZE, fours as u32);
+    e.mem.set_u32(me + 0x48, fours as u32 | EMPTY_CAPACITY);
+    e.mem.set_u32(me + NUM_VERTICES, count as u32);
+    e.mem.set_u32(me + CONVEX_PIECE, 0);
+    e.mem.set_u32(me + PLANE_EQUATIONS, planes.addr());
+    e.mem.set_u32(me + 0x58, plane_count);
+    e.mem.set_u32(me + 0x5c, plane_count | EMPTY_CAPACITY);
+    e.mem.set_u32(me + 0x60, 0);
+    let minimum = load_vec(e, bounds.addr());
+    let maximum = load_vec(e, bounds.addr() + 0x10);
+    let half: f32 = e.global(HALF);
+    let extents = std::array::from_fn(|lane| half * (maximum[lane] - minimum[lane]));
+    store_vec(e, me + 0x20, extents);
+    let centre = std::array::from_fn(|lane| half * (minimum[lane] + maximum[lane]));
+    store_vec(e, me + AABB_CENTRE, centre);
+    this
+}
+
+// Translated from 00d59830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: `ECX` = object, one stack word (a flag). Leaves the shape type at
+/// `+0xC` at 0x12, or at 6 when the flag is not 0, and the vtable `010d0fc4` (it passes through
+/// the vtable `010305a8`, and through type 0 when the flag is set, on the way). Returns `this`.
+pub fn fn_00d59830(e: &mut Engine, this: Ptr, flag: u32) -> Ptr {
+    let me = this.addr();
+    e.mem.set_u32(me, 0x0103_05a8);
+    if flag != 0 {
+        e.mem.set_u32(me + 0xc, 0);
+    }
+    e.mem.set_u32(me + 0xc, 0x12);
+    e.mem.set_u32(me, SHAPE_VTABLE);
+    if flag != 0 {
+        e.mem.set_u32(me + 0xc, 6);
+    }
+    this
+}
+
+// Translated from 00d59870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: `ECX` = object, nothing on the stack. Sets the vtable
+/// `010d0fc4`, releases the reference at `+0x60` when it is not 0 (the word is kept), empties
+/// the plane array (`+0x54`/`+0x58`/`+0x5C`, 16-byte elements) and the vertex array
+/// (`+0x40`/`+0x44`/`+0x48`, 48-byte elements) releasing their storage unless it is not owned,
+/// and ends with the vtable `0102e388`.
+pub fn fn_00d59870(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    e.mem.set_u32(me, SHAPE_VTABLE);
+    let held = e.mem.u32(me + 0x60);
+    if held != 0 {
+        e.call(REMOVE_REFERENCE, &args![held]);
+    }
+    release_array(e, me + PLANE_EQUATIONS, 0x10);
+    release_array(e, me + ROTATED_VERTICES, FOUR_VECTORS);
+    e.mem.set_u32(me, BASE_VTABLE);
+}
+
+// Translated from 00d59900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConvexVerticesShape::copyVertexData` (Xbox PDB): `ECX` = object, three stack words
+/// (the address of the first vertex, the stride in bytes, the vertex count). Stores the count
+/// at `+0x4C`, sizes the vertex array to `(count + 3 & !3) / 4` blocks of 48 bytes (growing it
+/// with `00c908c0` when its capacity is smaller), copies each vertex's three floats through
+/// `FLD`/`FSTP` into its lane, repeats the last vertex (the one `stride` before the end of the
+/// source) in the lanes up to the rounded count, then calls `hkAabbUtil::calcAabb` and sets
+/// `+0x20` = `(max - min) * K` and `+0x30` = `(min + max) * K` with the vector `K` at
+/// `010c71d0`.
+pub fn hkp_convex_vertices_shape_copy_vertex_data(
+    e: &mut Engine,
+    this: Ptr,
+    source: Ptr,
+    stride: u32,
+    count: i32,
+) {
+    let me = this.addr();
+    e.mem.set_u32(me + NUM_VERTICES, count as u32);
+    let rounded = count.wrapping_add(3) & !3;
+    let fours = rounded.wrapping_add((rounded >> 31) & 3) >> 2;
+    reserve_array(e, me + ROTATED_VERTICES, fours, FOUR_VECTORS);
+    e.mem.set_u32(me + ROTATED_VERTICES_SIZE, fours as u32);
+    let mut from = source.addr();
+    for index in 0..count {
+        store_vertex(e, me, index as u32, from);
+        from = from.wrapping_add(stride);
+    }
+    let last = from.wrapping_sub(stride);
+    for index in count.max(0)..rounded {
+        store_vertex(e, me, index as u32, last);
+    }
+    let (minimum, maximum) = e.with_stack(0x20, |e, bounds| {
+        e.call(CALC_AABB, &args![source, count, stride, bounds]);
+        (
+            load_vec(e, bounds.addr()),
+            load_vec(e, bounds.addr() + 0x10),
+        )
+    });
+    let scale = load_vec(e, HALF_VECTOR);
+    let extents = std::array::from_fn(|lane| (maximum[lane] - minimum[lane]) * scale[lane]);
+    store_vec(e, me + 0x20, extents);
+    let centre = std::array::from_fn(|lane| (minimum[lane] + maximum[lane]) * scale[lane]);
+    store_vec(e, me + AABB_CENTRE, centre);
+}
+
+// Translated from 00d59bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConvexVerticesShape::hkpConvexVerticesShape` (Xbox PDB): `ECX` = object, three stack
+/// words (a block of three words: the address of the first vertex, the vertex count and the
+/// stride in bytes; an `hkArray` of 16-byte plane vectors; a radius float). Sets the radius
+/// (through `FLD`/`FSTP`), the shape type 6, the vtable `010d0fc4`, empties both arrays, copies
+/// the planes into a block the memory router's allocator gives (slot `0xC`, which returns the
+/// size it granted in the cell it is given; the old block would be freed through slot `0x10`
+/// when the capacity word did not say it is not owned) and calls `copyVertexData` with the
+/// vertex block's address, stride and count. Returns `this`.
+pub fn hkp_convex_vertices_shape_ctor(
+    e: &mut Engine,
+    this: Ptr,
+    vertices: Ptr,
+    planes: Ptr,
+    radius: f32,
+) -> Ptr {
+    let me = this.addr();
+    e.mem.set_f32(me + RADIUS, x87_quiet(radius));
+    e.mem.set_u32(me + 0xc, 6);
+    e.mem.set_u32(me, SHAPE_VTABLE);
+    e.mem.set_u16(me + 6, 1);
+    e.mem.set_u32(me + 8, 0);
+    e.mem.set_u32(me + ROTATED_VERTICES, 0);
+    e.mem.set_u32(me + ROTATED_VERTICES_SIZE, 0);
+    e.mem.set_u32(me + 0x48, EMPTY_CAPACITY);
+    e.mem.set_u32(me + CONVEX_PIECE, 0);
+    e.mem.set_u32(me + PLANE_EQUATIONS, 0);
+    e.mem.set_u32(me + 0x58, 0);
+    e.mem.set_u32(me + 0x5c, EMPTY_CAPACITY);
+    e.mem.set_u32(me + 0x60, 0);
+    let allocator = allocator_of_router(e);
+    let capacity_word = e.mem.u32(me + 0x5c);
+    let capacity = (capacity_word & CAPACITY_MASK) as i32;
+    let wanted = e.mem.i32(planes.addr() + 4);
+    if capacity < wanted {
+        if capacity_word as i32 >= 0 {
+            let data = e.mem.u32(me + PLANE_EQUATIONS);
+            e.vcall(allocator, 0x10, &args![data, (capacity as u32) << 4]);
+        }
+        let (data, granted) = e.with_stack(4, |e, cell| {
+            e.mem.set_u32(cell.addr(), (wanted as u32) << 4);
+            let data = e.vcall(allocator, 0xc, &args![cell]).u32();
+            (data, e.mem.i32(cell.addr()))
+        });
+        e.mem.set_u32(me + PLANE_EQUATIONS, data);
+        e.mem.set_u32(
+            me + 0x5c,
+            (granted.wrapping_add((granted >> 31) & 0xf) >> 4) as u32,
+        );
+    }
+    let wanted = e.mem.i32(planes.addr() + 4);
+    e.mem.set_u32(me + 0x58, wanted as u32);
+    let mut to = e.mem.u32(me + PLANE_EQUATIONS);
+    let mut from = e.mem.u32(planes.addr());
+    for _ in 0..wanted.max(0) {
+        copy_vec(e, from, to);
+        from = from.wrapping_add(0x10);
+        to = to.wrapping_add(0x10);
+    }
+    let first = e.mem.u32(vertices.addr());
+    let stride = e.mem.u32(vertices.addr() + 8);
+    let count = e.mem.i32(vertices.addr() + 4);
+    hkp_convex_vertices_shape_copy_vertex_data(e, this, Ptr::new(first), stride, count);
+    this
+}
+
+// Translated from 00d59cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConvexVerticesShape::transformVerticesAndPlaneEquations` (Xbox PDB): `ECX` = object, one
+/// stack word (a matrix of four rows of four floats). Takes a block from the memory router's
+/// stack allocator (its word at `+0` is the top, advanced by `16 * count` rounded up to 128 and
+/// put back at the end) for the original vertices (`getOriginalVertices`, the count is the
+/// result of the virtual function at `+0x2C`), replaces each vertex `v` by `(v.y * row1 + v.x *
+/// row0) + (v.z * row2 + row3)`, stores them with `copyVertexData` (stride 16), then moves
+/// every plane equation: the normal goes through `hkVector4::setRotatedDir` with the first
+/// three rows and the fourth component becomes `(n.z * t.z + w) + (n.y * t.y + n.x * t.x)`
+/// where `t` is built from the columns of the rotation and the negated fourth row. A plane
+/// count of 0 or less still runs the loop once, as the exe does. Frees the block through the
+/// allocator (slot `0x10`) only if it is owned.
+pub fn hkp_convex_vertices_shape_transform_vertices_and_plane_equations(
+    e: &mut Engine,
+    this: Ptr,
+    matrix: Ptr,
+) {
+    let me = this.addr();
+    let count = e.vcall(me, 0x2c, &args![]).u32();
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let base = e.mem.u32(router);
+    e.mem.set_u32(
+        router,
+        base.wrapping_add((count << 4).wrapping_add(0x7f) & 0xffff_ff80),
+    );
+    e.with_stack(12, |e, array| {
+        let array = array.addr();
+        e.mem.set_u32(array, base);
+        e.mem.set_u32(array + 4, 0);
+        e.mem.set_u32(array + 8, count | EMPTY_CAPACITY);
+        hkp_convex_vertices_shape_get_original_vertices(e, this, Ptr::new(array));
+        let rows: [Vec4; 4] =
+            std::array::from_fn(|row| load_vec(e, matrix.addr() + 0x10 * row as u32));
+        let data = e.mem.u32(array);
+        let size = e.mem.i32(array + 4);
+        let mut index = size - 1;
+        while index >= 0 {
+            let at = data.wrapping_add((index as u32).wrapping_mul(0x10));
+            let vertex = load_vec(e, at);
+            let moved = std::array::from_fn(|lane| {
+                (vertex[1] * rows[1][lane] + vertex[0] * rows[0][lane])
+                    + (vertex[2] * rows[2][lane] + rows[3][lane])
+            });
+            store_vec(e, at, moved);
+            index -= 1;
+        }
+        hkp_convex_vertices_shape_copy_vertex_data(e, this, Ptr::new(data), 0x10, size);
+
+        let rows: [Vec4; 4] =
+            std::array::from_fn(|row| load_vec(e, matrix.addr() + 0x10 * row as u32));
+        let planes = e.mem.u32(me + PLANE_EQUATIONS);
+        let plane_count = e.mem.i32(me + 0x58);
+        let negated: Vec4 = std::array::from_fn(|lane| {
+            f32::from_bits(rows[3][lane].to_bits() ^ e.mem.u32(SIGN_MASK + 4 * lane as u32))
+        });
+        let columns: [Vec4; 3] = [
+            [rows[0][0], rows[1][0], rows[2][0], rows[2][1]],
+            [rows[0][1], rows[1][1], rows[2][1], rows[2][3]],
+            [rows[0][2], rows[1][2], rows[2][2], rows[2][3]],
+        ];
+        let offset: Vec4 = std::array::from_fn(|lane| {
+            (negated[1] * columns[1][lane] + negated[0] * columns[0][lane])
+                + columns[2][lane] * negated[2]
+        });
+        e.with_stack(0x30, |e, rotation| {
+            for row in 0..3 {
+                copy_vec(e, matrix.addr() + 0x10 * row, rotation.addr() + 0x10 * row);
+            }
+            let mut plane = planes;
+            for _ in 0..plane_count.max(1) {
+                let normal = load_vec(e, plane);
+                let product: Vec4 = std::array::from_fn(|lane| normal[lane] * offset[lane]);
+                let distance = (product[2] + normal[3]) + (product[1] + product[0]);
+                e.call(SET_ROTATED_DIR, &args![plane, rotation, plane]);
+                let rotated = load_vec(e, plane);
+                store_vec(e, plane, [rotated[0], rotated[1], rotated[2], distance]);
+                plane = plane.wrapping_add(0x10);
+            }
+        });
+
+        // The block goes back to the router's stack allocator; the size is cleared even
+        // when the block was replaced.
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        e.mem.set_u32(router, base);
+        let allocator = allocator_of_router(e);
+        let capacity = e.mem.u32(array + 8);
+        e.mem.set_u32(array + 4, 0);
+        if capacity as i32 >= 0 {
+            let data = e.mem.u32(array);
+            e.vcall(
+                allocator,
+                0x10,
+                &args![data, (capacity & CAPACITY_MASK) << 4],
+            );
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -503,12 +920,41 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00d592a0,
             hkp_convex_vertices_shape_cast_ray_impl(Ptr, Ptr, Ptr, Ptr) -> Ptr
         ),
+        entry!(
+            0x00d58d50,
+            hkp_convex_vertices_shape_get_plane_equations(Ptr) -> Ptr
+        ),
+        entry!(
+            0x00d59200,
+            hkp_convex_vertices_shape_get_original_vertices(Ptr, Ptr)
+        ),
+        entry!(0x00d59710, fn_00d59710(Ptr, f32) -> Ptr),
+        entry!(
+            0x00d59760,
+            fn_00d59760(Ptr, Ptr, i32, Ptr, u32, Ptr, f32) -> Ptr
+        ),
+        entry!(0x00d59830, fn_00d59830(Ptr, u32) -> Ptr),
+        entry!(0x00d59870, fn_00d59870(Ptr)),
+        entry!(
+            0x00d59900,
+            hkp_convex_vertices_shape_copy_vertex_data(Ptr, Ptr, u32, i32)
+        ),
+        entry!(
+            0x00d59bd0,
+            hkp_convex_vertices_shape_ctor(Ptr, Ptr, Ptr, f32) -> Ptr
+        ),
+        entry!(
+            0x00d59cc0,
+            hkp_convex_vertices_shape_transform_vertices_and_plane_equations(Ptr, Ptr)
+        ),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     fn engine() -> Engine {
         let mut e = Engine::new();
@@ -929,5 +1375,404 @@ mod tests {
         profile_record(&mut e, 0x1234);
         assert_eq!(e.mem.u32(stream + 4), stream + 0x20);
         assert_eq!(e.mem.u32(stream + 0x20), 0);
+    }
+
+    /// What the doubles saw, in order: a tag and the argument words.
+    type Events = Rc<RefCell<Vec<(&'static str, Vec<u32>)>>>;
+
+    /// Doubles for everything the functions call outside this file. The memory router has a
+    /// stack allocator top at `+0` (0) and an allocator at `+0x10` whose slot `0xC` grants 16
+    /// bytes more than asked and whose slot `0x10` logs the free; `hkArray::reserve` gives the
+    /// array new storage of the requested capacity; `calcAabb` writes the box (-1, -2, -3, -4)
+    /// to (3, 2, 1, 0); `setRotatedDir` rotates the source by the three rows it is given. The
+    /// vector of 0.5 and the vector of sign bits are in memory. Returns the router and the
+    /// events.
+    fn services(e: &mut Engine) -> (u32, Events) {
+        let events = Events::default();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0xc, 0x0900_000c);
+        e.mem.set_u32(vtable + 0x10, 0x0900_0010);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| ret(router));
+        let sink = Rc::clone(&events);
+        e.register_double(0x0900_000c, move |e, a| {
+            let size = e.mem.u32(a[1]);
+            sink.borrow_mut().push(("alloc", vec![size]));
+            e.mem.set_u32(a[1], size + 16);
+            ret(e.mem.alloc(size + 16))
+        });
+        let sink = Rc::clone(&events);
+        e.register_double(0x0900_0010, move |_, a| {
+            sink.borrow_mut().push(("free", a[1..].to_vec()));
+            Ret::default()
+        });
+        let sink = Rc::clone(&events);
+        e.register_double(REMOVE_REFERENCE, move |_, a| {
+            sink.borrow_mut().push(("release", a.to_vec()));
+            Ret::default()
+        });
+        let sink = Rc::clone(&events);
+        e.register_double(ARRAY_RESERVE, move |e, a| {
+            sink.borrow_mut().push(("reserve", a[1..].to_vec()));
+            let data = e.mem.alloc(a[2] * a[3]);
+            e.mem.set_u32(a[1], data);
+            e.mem.set_u32(a[1] + 8, a[2]);
+            Ret::default()
+        });
+        let sink = Rc::clone(&events);
+        e.register_double(CALC_AABB, move |e, a| {
+            sink.borrow_mut().push(("aabb", a.to_vec()));
+            store_vec(e, a[3], [-1.0, -2.0, -3.0, -4.0]);
+            store_vec(e, a[3] + 0x10, [3.0, 2.0, 1.0, 0.0]);
+            Ret::default()
+        });
+        let sink = Rc::clone(&events);
+        e.register_double(SET_ROTATED_DIR, move |e, a| {
+            sink.borrow_mut().push(("rotate", a.to_vec()));
+            let rows: Vec<f32> = (0..12).map(|word| e.mem.f32(a[1] + 4 * word)).collect();
+            let source = load_vec(e, a[2]);
+            let rotated = std::array::from_fn(|lane| {
+                source[1] * rows[4 + lane] + source[0] * rows[lane] + source[2] * rows[8 + lane]
+            });
+            store_vec(e, a[0], rotated);
+            Ret::default()
+        });
+        store_vec(e, HALF_VECTOR, [0.5; 4]);
+        for lane in 0..4 {
+            e.mem.set_u32(SIGN_MASK + 4 * lane, 0x8000_0000);
+        }
+        (router, events)
+    }
+
+    /// The raw words of vertex `index` of the shape at `this`.
+    fn vertex_bits(e: &Engine, this: u32, index: u32) -> [u32; 3] {
+        let (block, lane) = vertex_slot(e, this, index);
+        std::array::from_fn(|axis| e.mem.u32(block + 0x10 * axis as u32 + 4 * lane))
+    }
+
+    /// The bits of the floats `x`, `y`, `z`.
+    fn bits3(x: f32, y: f32, z: f32) -> [u32; 3] {
+        [x.to_bits(), y.to_bits(), z.to_bits()]
+    }
+
+    #[test]
+    fn plane_equations_is_the_address_of_the_array() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x70);
+        assert_eq!(e.call(0x00d5_8d50, &args![this]).u32(), this + 0x54);
+    }
+
+    #[test]
+    fn original_vertices_grow_the_array_and_fill_it() {
+        let mut e = engine();
+        let (_, events) = services(&mut e);
+        let this = hull(&mut e).addr();
+        let array = e.mem.alloc(0xc);
+        e.mem.set_u32(array + 8, 2);
+        e.call(0x00d5_9200, &args![this, array]);
+        // The capacity 2 doubled is 4, below 6, so 6 is asked for.
+        assert_eq!(*events.borrow(), vec![("reserve", vec![array, 6, 0x10])]);
+        assert_eq!(e.mem.u32(array + 4), 6);
+        let data = e.mem.u32(array);
+        let expected = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [2.0, 3.0, 4.0],
+            [-1.0, -2.0, -3.0],
+        ];
+        for (index, vertex) in expected.into_iter().enumerate() {
+            let at = data + 0x10 * index as u32;
+            assert_eq!(load_vec(&e, at), [vertex[0], vertex[1], vertex[2], 0.0]);
+        }
+        // A large enough array is not grown.
+        events.borrow_mut().clear();
+        e.mem.set_u32(array + 8, 8);
+        e.call(0x00d5_9200, &args![this, array]);
+        assert!(events.borrow().is_empty());
+    }
+
+    #[test]
+    fn fn_00d59710_empties_the_shape() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x70);
+        for offset in (0x40..0x64).step_by(4) {
+            e.mem.set_u32(this + offset, 0xdead_beef);
+        }
+        let returned = e.call(0x00d5_9710, &args![this, f32::from_bits(0x7f80_0001)]);
+        assert_eq!(returned.u32(), this);
+        assert_eq!(e.mem.u32(this + 0x10), 0x7fc0_0001);
+        assert_eq!(e.mem.u16(this + 6), 1);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 6);
+        assert_eq!(e.mem.u32(this), 0x010d_0fc4);
+        for offset in [0x40, 0x44, 0x50, 0x54, 0x58, 0x60] {
+            assert_eq!(e.mem.u32(this + offset), 0, "{offset:#x}");
+        }
+        assert_eq!(e.mem.u32(this + 0x48), 0x8000_0000);
+        assert_eq!(e.mem.u32(this + 0x5c), 0x8000_0000);
+        // The count word is not touched.
+        assert_eq!(e.mem.u32(this + 0x4c), 0xdead_beef);
+    }
+
+    #[test]
+    fn fn_00d59760_borrows_the_blocks_and_derives_the_box() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x70);
+        let bounds = e.mem.alloc(0x20);
+        store_vec(&mut e, bounds, [-2.0, -1.0, 0.0, 0.0]);
+        store_vec(&mut e, bounds + 0x10, [2.0, 3.0, 4.0, 0.0]);
+        let returned = e.call(
+            0x00d5_9760,
+            &args![
+                this,
+                0x1111_0000u32,
+                6i32,
+                0x2222_0000u32,
+                3u32,
+                bounds,
+                0.25f32
+            ],
+        );
+        assert_eq!(returned.u32(), this);
+        assert_eq!(e.mem.f32(this + 0x10), 0.25);
+        assert_eq!(e.mem.u16(this + 6), 1);
+        assert_eq!(e.mem.u32(this + 0xc), 6);
+        assert_eq!(e.mem.u32(this), 0x010d_0fc4);
+        assert_eq!(e.mem.u32(this + 0x40), 0x1111_0000);
+        // 6 vertices round up to 8, which is 2 blocks.
+        assert_eq!(e.mem.u32(this + 0x44), 2);
+        assert_eq!(e.mem.u32(this + 0x48), 0x8000_0002);
+        assert_eq!(e.mem.u32(this + 0x4c), 6);
+        assert_eq!(e.mem.u32(this + 0x50), 0);
+        assert_eq!(e.mem.u32(this + 0x54), 0x2222_0000);
+        assert_eq!(e.mem.u32(this + 0x58), 3);
+        assert_eq!(e.mem.u32(this + 0x5c), 0x8000_0003);
+        assert_eq!(e.mem.u32(this + 0x60), 0);
+        assert_eq!(load_vec(&e, this + 0x20), [2.0, 2.0, 2.0, 0.0]);
+        assert_eq!(load_vec(&e, this + 0x30), [0.0, 1.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn fn_00d59830_ends_with_type_6_only_when_the_flag_is_set() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x70);
+        assert_eq!(e.call(0x00d5_9830, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this + 0xc), 6);
+        assert_eq!(e.mem.u32(this), 0x010d_0fc4);
+        e.call(0x00d5_9830, &args![this, 0u32]);
+        assert_eq!(e.mem.u32(this + 0xc), 0x12);
+        assert_eq!(e.mem.u32(this), 0x010d_0fc4);
+    }
+
+    #[test]
+    fn fn_00d59870_releases_the_reference_and_the_owned_storage() {
+        let mut e = engine();
+        let (_, events) = services(&mut e);
+        let this = e.mem.alloc(0x70);
+        let planes = e.mem.alloc(0x40);
+        let vertices = e.mem.alloc(0x60);
+        e.mem.set_u32(this + 0x60, 0xa0);
+        e.mem.set_u32(this + 0x54, planes);
+        e.mem.set_u32(this + 0x58, 2);
+        e.mem.set_u32(this + 0x5c, 4);
+        e.mem.set_u32(this + 0x40, vertices);
+        e.mem.set_u32(this + 0x44, 2);
+        e.mem.set_u32(this + 0x48, 2);
+        e.call(0x00d5_9870, &args![this]);
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                ("release", vec![0xa0]),
+                ("free", vec![planes, 0x40]),
+                ("free", vec![vertices, 0x60]),
+            ]
+        );
+        for offset in [0x40, 0x44, 0x54, 0x58] {
+            assert_eq!(e.mem.u32(this + offset), 0, "{offset:#x}");
+        }
+        assert_eq!(e.mem.u32(this + 0x48), 0x8000_0000);
+        assert_eq!(e.mem.u32(this + 0x5c), 0x8000_0000);
+        // The reference word is kept and the vtable is the base one.
+        assert_eq!(e.mem.u32(this + 0x60), 0xa0);
+        assert_eq!(e.mem.u32(this), 0x0102_e388);
+        // Borrowed storage and no reference: nothing is released or freed.
+        events.borrow_mut().clear();
+        e.mem.set_u32(this + 0x60, 0);
+        e.mem.set_u32(this + 0x54, planes);
+        e.mem.set_u32(this + 0x5c, 0x8000_0004);
+        e.mem.set_u32(this + 0x40, vertices);
+        e.mem.set_u32(this + 0x48, 0x8000_0002);
+        e.call(0x00d5_9870, &args![this]);
+        assert!(events.borrow().is_empty());
+        assert_eq!(e.mem.u32(this + 0x54), 0);
+        assert_eq!(e.mem.u32(this + 0x40), 0);
+    }
+
+    /// `count` vertices of 20 bytes each, `(i, i + 0.5, -i)` after a first vertex that starts
+    /// with a signalling NaN.
+    fn vertex_block(e: &mut Engine, count: u32) -> u32 {
+        let source = e.mem.alloc(20 * count + 4);
+        for index in 0..count {
+            let at = source + 20 * index;
+            e.mem.set_f32(at, index as f32);
+            e.mem.set_f32(at + 4, index as f32 + 0.5);
+            e.mem.set_f32(at + 8, -(index as f32));
+        }
+        e.mem.set_u32(source, 0x7f80_0001);
+        source
+    }
+
+    #[test]
+    fn copy_vertex_data_fills_lanes_pads_with_the_last_vertex_and_sets_the_box() {
+        let mut e = engine();
+        let (_, events) = services(&mut e);
+        let this = e.mem.alloc(0x70);
+        let source = vertex_block(&mut e, 5);
+        e.call(0x00d5_9900, &args![this, source, 20u32, 5i32]);
+        assert_eq!(e.mem.u32(this + 0x4c), 5);
+        assert_eq!(e.mem.u32(this + 0x44), 2);
+        let events_seen = events.borrow().clone();
+        assert_eq!(events_seen[0], ("reserve", vec![this + 0x40, 2, 0x30]));
+        assert_eq!(events_seen[1].0, "aabb");
+        assert_eq!(events_seen[1].1[..3], [source, 5, 20]);
+        // The signalling NaN is quieted by the x87 copy.
+        assert_eq!(
+            vertex_bits(&e, this, 0),
+            [0x7fc0_0001, 0.5f32.to_bits(), (-0.0f32).to_bits()]
+        );
+        for index in 1..5 {
+            let value = index as f32;
+            assert_eq!(
+                vertex_bits(&e, this, index),
+                bits3(value, value + 0.5, -value)
+            );
+        }
+        // Lanes 5 to 7 repeat vertex 4.
+        for index in 5..8 {
+            assert_eq!(vertex_bits(&e, this, index), bits3(4.0, 4.5, -4.0));
+        }
+        assert_eq!(load_vec(&e, this + 0x20), [2.0, 2.0, 2.0, 2.0]);
+        assert_eq!(load_vec(&e, this + 0x30), [1.0, 0.0, -1.0, -2.0]);
+        // No vertices: nothing is copied and the size is 0, with enough capacity left over.
+        events.borrow_mut().clear();
+        e.call(0x00d5_9900, &args![this, source, 20u32, 0i32]);
+        assert_eq!(e.mem.u32(this + 0x4c), 0);
+        assert_eq!(e.mem.u32(this + 0x44), 0);
+        assert_eq!(events.borrow().len(), 1);
+        assert_eq!(events.borrow()[0].0, "aabb");
+    }
+
+    #[test]
+    fn constructor_copies_the_planes_and_the_vertices() {
+        let mut e = engine();
+        let (_, events) = services(&mut e);
+        let this = e.mem.alloc(0x70);
+        let source = vertex_block(&mut e, 2);
+        let strided = e.mem.alloc(0xc);
+        e.mem.set_u32(strided, source);
+        e.mem.set_u32(strided + 4, 2);
+        e.mem.set_u32(strided + 8, 20);
+        let plane_data = e.mem.alloc(0x20);
+        store_vec(&mut e, plane_data, [1.0, 0.0, 0.0, 5.0]);
+        store_vec(&mut e, plane_data + 0x10, [0.0, 1.0, 0.0, 6.0]);
+        let planes = e.mem.alloc(0xc);
+        e.mem.set_u32(planes, plane_data);
+        e.mem.set_u32(planes + 4, 2);
+        let returned = e.call(0x00d5_9bd0, &args![this, strided, planes, 0.5f32]);
+        assert_eq!(returned.u32(), this);
+        assert_eq!(e.mem.f32(this + 0x10), 0.5);
+        assert_eq!(e.mem.u32(this + 0xc), 6);
+        assert_eq!(e.mem.u32(this), 0x010d_0fc4);
+        assert_eq!(e.mem.u16(this + 6), 1);
+        // The allocator grants 48 bytes for the 32 asked: 3 planes of capacity.
+        assert_eq!(events.borrow()[0], ("alloc", vec![0x20]));
+        assert_eq!(e.mem.u32(this + 0x5c), 3);
+        assert_eq!(e.mem.u32(this + 0x58), 2);
+        let copied = e.mem.u32(this + 0x54);
+        assert_ne!(copied, plane_data);
+        assert_eq!(load_vec(&e, copied), [1.0, 0.0, 0.0, 5.0]);
+        assert_eq!(load_vec(&e, copied + 0x10), [0.0, 1.0, 0.0, 6.0]);
+        // The vertices went through copyVertexData: 2 vertices fill one block.
+        assert_eq!(e.mem.u32(this + 0x4c), 2);
+        assert_eq!(e.mem.u32(this + 0x44), 1);
+        assert_eq!(vertex_bits(&e, this, 1), bits3(1.0, 1.5, -1.0));
+        assert_eq!(vertex_bits(&e, this, 3), bits3(1.0, 1.5, -1.0));
+        // Without planes nothing is allocated for them.
+        events.borrow_mut().clear();
+        let other = e.mem.alloc(0x70);
+        e.mem.set_u32(planes + 4, 0);
+        e.call(0x00d5_9bd0, &args![other, strided, planes, 0.5f32]);
+        assert!(events.borrow().iter().all(|(tag, _)| *tag != "alloc"));
+        assert_eq!(e.mem.u32(other + 0x54), 0);
+        assert_eq!(e.mem.u32(other + 0x58), 0);
+    }
+
+    #[test]
+    fn transform_moves_the_vertices_and_the_planes() {
+        let mut e = engine();
+        let (router, events) = services(&mut e);
+        let this = hull(&mut e).addr();
+        let table = e.mem.alloc(0x40);
+        e.mem.set_u32(table + 0x2c, 0x0900_002c);
+        e.mem.set_u32(this, table);
+        e.register_double(0x0900_002c, move |_, _| ret(6));
+        let base = e.mem.alloc(0x400);
+        e.mem.set_u32(router, base);
+        let planes = e.mem.alloc(0x20);
+        store_vec(&mut e, planes, [1.0, 0.0, 0.0, 5.0]);
+        store_vec(&mut e, planes + 0x10, [0.0, 0.0, 1.0, -2.0]);
+        e.mem.set_u32(this + 0x54, planes);
+        e.mem.set_u32(this + 0x58, 2);
+        e.mem.set_u32(this + 0x5c, 0x8000_0002);
+        // A quarter turn about z followed by the translation (1, 2, 3).
+        let matrix = e.mem.alloc(0x40);
+        store_vec(&mut e, matrix, [0.0, 1.0, 0.0, 0.0]);
+        store_vec(&mut e, matrix + 0x10, [-1.0, 0.0, 0.0, 0.0]);
+        store_vec(&mut e, matrix + 0x20, [0.0, 0.0, 1.0, 0.0]);
+        store_vec(&mut e, matrix + 0x30, [1.0, 2.0, 3.0, 1.0]);
+        e.call(0x00d5_9cc0, &args![this, matrix]);
+        let expected = [
+            (1.0, 2.0, 3.0),
+            (1.0, 3.0, 3.0),
+            (0.0, 2.0, 3.0),
+            (1.0, 2.0, 4.0),
+            (-2.0, 4.0, 7.0),
+            (3.0, 1.0, 0.0),
+            (3.0, 1.0, 0.0),
+            (3.0, 1.0, 0.0),
+        ];
+        for (index, (x, y, z)) in expected.into_iter().enumerate() {
+            assert_eq!(vertex_bits(&e, this, index as u32), bits3(x, y, z));
+        }
+        // The vertices were gathered in the stack block and handed to calcAabb.
+        let aabb: Vec<_> = events
+            .borrow()
+            .iter()
+            .filter(|(tag, _)| *tag == "aabb")
+            .map(|(_, words)| words[..3].to_vec())
+            .collect();
+        assert_eq!(aabb, vec![vec![base, 6, 0x10]]);
+        assert_eq!(load_vec(&e, planes), [0.0, 1.0, 0.0, 3.0]);
+        assert_eq!(load_vec(&e, planes + 0x10), [0.0, 0.0, 1.0, -5.0]);
+        // setRotatedDir got the plane twice and a copy of the first three rows.
+        let rotations: Vec<_> = events
+            .borrow()
+            .iter()
+            .filter(|(tag, _)| *tag == "rotate")
+            .map(|(_, words)| words.clone())
+            .collect();
+        assert_eq!(rotations.len(), 2);
+        assert_eq!(rotations[0][0], planes);
+        assert_eq!(rotations[0][2], planes);
+        assert_eq!(rotations[1][0], planes + 0x10);
+        assert_ne!(rotations[0][1], matrix);
+        // The stack allocator is back where it started and nothing was freed.
+        assert_eq!(e.mem.u32(router), base);
+        assert!(events.borrow().iter().all(|(tag, _)| *tag != "free"));
     }
 }

@@ -19,9 +19,13 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::havok_sdk::hkpboxmotion::{add, cross, mul, rows_times, sub};
 use crate::units::havok_sdk::hkpbvagent::{
-    flip_toi_words, symmetric_linear_cast, symmetric_process_collision, with_flip_body_collector,
-    with_flip_collector,
+    flip_toi_words, profile_start_record, symmetric_linear_cast, symmetric_process_collision,
+    with_flip_body_collector, with_flip_collector, LABEL_END,
+};
+use crate::units::havok_sdk::hkpsphereshape::{
+    load_bits, load_vec, maxps, minps, profile_record, store_vec, zip_with, Vec4, SIGN_MASK,
 };
 
 /// The memory router (`00c85750`, no arguments): its field `+0x10` is the allocator.
@@ -66,6 +70,25 @@ const SHAPE_COLLECTION_PROCESS_COLLISION: u32 = 0x00d4_37a0;
 const SHAPE_COLLECTION_LINEAR_CAST: u32 = 0x00d4_3aa0;
 /// `hkpBvTreeStreamAgent::processCollision` (the function of this unit below).
 const PROCESS_COLLISION: u32 = 0x00d2_df90;
+/// `hkTransform::setMulInverseMul` (`00cb22f0`, `this` = result, `(a, b)`) and
+/// `hkTransform::setInverse` (`00cb21e0`, `this` = result, one word).
+const TRANSFORM_SET_MUL_INVERSE_MUL: u32 = 0x00cb_22f0;
+const TRANSFORM_SET_INVERSE: u32 = 0x00cb_21e0;
+/// `hkAgent1nMachine_Process` (`00da4aa0`, cdecl, five words), the unsigned word sort
+/// (`00d2da70`, cdecl, four words) and the out-of-memory state setter (`00d88040`, cdecl, one
+/// word).
+const AGENT_1N_PROCESS: u32 = 0x00da_4aa0;
+const QUICK_SORT: u32 = 0x00d2_da70;
+const SET_OUT_OF_MEMORY_STATE: u32 = 0x00d8_8040;
+/// The profiling labels of `processCollision`: `"LtBvTree3"`, `"StQueryTree"` and
+/// `"StNarrow"`.
+const LABEL_LT_BV_TREE3: u32 = 0x010c_e7ec;
+const LABEL_ST_QUERY_TREE: u32 = 0x010c_e7e0;
+const LABEL_ST_NARROW: u32 = 0x010c_e7d4;
+/// The `double` 0.5 and the two `float` constants (0.4 and -2.0) that grow the cached box.
+const HALF_F64: u32 = 0x0101_1588;
+const GROWTH_FACTOR: u32 = 0x0102_31a8;
+const SWEEP_FACTOR: u32 = 0x0104_a494;
 
 /// The allocator of the memory router (`[router + 0x10]`).
 fn allocator(e: &mut Engine) -> u32 {
@@ -705,6 +728,228 @@ pub fn hkp_symmetric_agent_shape_collection_agent_linear_cast(
     );
 }
 
+/// The step of `processCollision` (`00d2df90`) between the tree query and the 1:N machine:
+/// asks the memory router's allocator (slot `0x24`) for `((size / 4) - agent.size + 1) << 9`
+/// where `size` is the size of the stack `array`; on success sorts the array as unsigned
+/// words (`00d2da70`: data, first and last index, and a fourth word that is stack residue the
+/// sort never reads, passed as 0) when it holds more than one entry, and returns true.
+fn hit_storage_ready(e: &mut Engine, agent: u32, array: u32) -> bool {
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let hits = e.mem.i32(array + 4);
+    let wanted = (hits / 4)
+        .wrapping_sub(e.mem.i32(agent + 0x34))
+        .wrapping_add(1)
+        << 9;
+    if !e.vcall(allocator, 0x24, &args![wanted]).bool() {
+        return false;
+    }
+    let hits = e.mem.i32(array + 4);
+    if hits > 1 {
+        let data = e.mem.u32(array);
+        e.call(QUICK_SORT, &args![data, 0i32, hits - 1, 0u32]);
+    }
+    true
+}
+
+// Translated from 00d2df90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpBvTreeStreamAgent::processCollision` (Xbox PDB): `this` is the agent, the bodies are
+/// `hkpCdBody`s whose motion states (`+8`) carry the transforms, `input` the
+/// `hkpProcessCollisionInput` and `output` the result block of the agent stream. Between
+/// profiling records (`"LtBvTree3"` with `"StQueryTree"` in one 16-byte record, `"StNarrow"`
+/// and the shared end label in 12-byte ones) it:
+///
+/// - builds the relative transform of the two motion states (`00cb22f0`) and its inverse
+///   (`00cb21e0`), and the displacement `W` of body A relative to body B over the time step
+///   `input[0x58]`, carried into B's frame by B's rotation rows (the lanes follow the SSE
+///   code; `W[3]` is stored but never used);
+/// - asks body A's shape (slot `0x1C`: the inverse transform, a tolerance, a 32-byte box) for
+///   its box in B's frame; when `[[input + 0x60] + 0x10]` is not 0 the tolerance and a
+///   widening of the box by the swept radius terms are added, and, when B's field `+0x9C` is
+///   positive, a velocity term from B's `+0x80`/`+0x90` is added to the displacement;
+/// - compares the box with the agent's cached box (`this + 0x10` and `+0x20`, three lanes):
+///   when the cached box holds it the tree query is skipped; otherwise the box is grown (by
+///   0.4 of its extents and -2 times the displacement, constants read from the exe's data) and
+///   written to the cached box, and body B's shape (slot `0x30`: the box, a stack array that
+///   starts with one entry, `0xFFFFFFFF`, and room for 0x80) fills the array;
+/// - runs the 1:N machine (`00da4aa0`: the agent's array at `this + 0x30`, the query block
+///   `{body A, body B, 0, input, this[8]}`, the value of B's shape slot `0x10`, then 0 when
+///   the cached box held the box or the array data, and `output`). Before that, when the
+///   array was queried, it asks the memory router's allocator (slot `0x24`) for
+///   `((size / 4) - this.size + 1) << 9`; on failure it sets the out-of-memory state
+///   (`00d88040`) and ends, otherwise it sorts the array as unsigned words (`00d2da70`) when
+///   it holds more than one entry;
+/// - finally empties the stack array and frees its storage (allocator slot `0x10`) when it
+///   owns heap memory.
+///
+/// The exe's `JZ` after `ADD EAX, 0x10` on the agent address is taken only for an agent at
+/// `0xFFFFFFF0`, which no object can be; it is not modelled. The fourth word of the sort call
+/// is the stack residue of a byte store; the sort never reads it, so 0 is passed.
+pub fn hkp_bv_tree_stream_agent_process_collision(
+    e: &mut Engine,
+    this: Ptr,
+    body_a: Ptr,
+    body_b: Ptr,
+    input: Ptr,
+    output: Ptr,
+) {
+    profile_start_record(e, LABEL_LT_BV_TREE3, LABEL_ST_QUERY_TREE);
+    let agent = this.addr();
+    let input_address = input.addr();
+    let state_a = e.mem.u32(body_a.addr() + 8);
+    let state_b = e.mem.u32(body_b.addr() + 8);
+    let shape_a = e.mem.u32(body_a.addr());
+    let shape_b = e.mem.u32(body_b.addr());
+    let half: f64 = e.global(HALF_F64);
+    // The exe's frame: the box at +0x20 (minimum) and +0x30 (maximum), the displacement in
+    // B's frame at +0x40, the query block at +0x50, the relative transform at +0x70, the
+    // displacement W at +0xC0, its inverse at +0xD0 and the stack array (data, size,
+    // capacity) at +0x110 with its 0x80 entries at +0x11C.
+    e.with_stack(0x320, |e, frame| {
+        let frame = frame.addr();
+        let bounds = frame + 0x20;
+        let query = frame + 0x50;
+        let transform = frame + 0x70;
+        let inverse = frame + 0xd0;
+        let array = frame + 0x110;
+        e.mem.set_u32(query, body_a.addr());
+        e.mem.set_u32(query + 4, body_b.addr());
+        e.mem.set_u32(query + 8, 0);
+        e.mem.set_u32(query + 0xc, input_address);
+        e.mem.set_u32(query + 0x10, e.mem.u32(agent + 8));
+
+        let time = x87_quiet(e.mem.f32(input_address + 0x58));
+        let a_scale = (f64::from(x87_quiet(e.mem.f32(state_a + 0x5c))) * f64::from(time)) as f32;
+        let b_scale = (f64::from(time) * f64::from(e.mem.f32(state_b + 0x5c))) as f32;
+        let a_offset = sub(load_vec(e, state_a + 0x40), load_vec(e, state_a + 0x50));
+        let b_offset = sub(load_vec(e, state_b + 0x50), load_vec(e, state_b + 0x40));
+        let mut moved = add(mul(b_offset, [b_scale; 4]), mul(a_offset, [a_scale; 4]));
+        moved[3] = (f64::from(x87_quiet(e.mem.f32(state_b + 0x9c)))
+            * f64::from(b_scale)
+            * f64::from(e.mem.f32(state_b + 0xa0))
+            + f64::from(x87_quiet(e.mem.f32(state_a + 0x9c)))
+                * f64::from(a_scale)
+                * f64::from(e.mem.f32(state_a + 0xa0))) as f32;
+        store_vec(e, frame + 0xc0, moved);
+        e.call(
+            TRANSFORM_SET_MUL_INVERSE_MUL,
+            &args![transform, state_a, state_b],
+        );
+        e.mem.set_u32(array, frame + 0x11c);
+        e.mem.set_u32(array + 8, 0x8000_0080);
+        e.mem.set_u32(array + 0xc, 0xffff_ffff);
+        e.mem.set_u32(array + 4, 1);
+        e.call(TRANSFORM_SET_INVERSE, &args![inverse, transform]);
+
+        let rows = [
+            load_vec(e, state_b),
+            load_vec(e, state_b + 0x10),
+            load_vec(e, state_b + 0x20),
+        ];
+        let carried = rows_times(moved, rows[0], rows[1], rows[2]);
+        store_vec(e, frame + 0x40, carried);
+        let sweeping = e.mem.u32(e.mem.u32(input_address + 0x60) + 0x10) != 0;
+        let (lower, upper, extents, motion) = if sweeping {
+            let radius = x87_quiet(e.mem.f32(state_b + 0x9c));
+            let mass = e.mem.f32(state_b + 0xa0);
+            let own_term = (f64::from(radius) * f64::from(radius) * f64::from(mass)) as f32;
+            let other_radius = x87_quiet(e.mem.f32(state_a + 0x9c));
+            let other_mass = e.mem.f32(state_a + 0xa0);
+            let combined =
+                ((f64::from(other_radius) + f64::from(radius)) * f64::from(other_mass)) as f32;
+            let margin = f64::from(x87_quiet(e.mem.f32(input_address + 8))) * half;
+            let tolerance = ((f64::from(combined) + f64::from(own_term)) + margin) as f32;
+            e.vcall(shape_a, 0x1c, &args![inverse, tolerance, bounds]);
+            let margin = f64::from(x87_quiet(e.mem.f32(input_address + 8))) * half;
+            let growth =
+                ((margin + f64::from(e.mem.f32(state_a + 0xa0))) + f64::from(own_term)) as f32;
+            let difference = sub(load_vec(e, state_a + 0x50), load_vec(e, state_b + 0x30));
+            let local = rows_times(difference, rows[0], rows[1], rows[2]);
+            let box_lower = load_vec(e, bounds);
+            let box_upper = load_vec(e, bounds + 0x10);
+            let spread = [growth; 4];
+            let widened_lower = zip_with(box_lower, sub(local, spread), maxps);
+            let widened_upper = zip_with(box_upper, add(local, spread), minps);
+            store_vec(e, bounds, widened_lower);
+            store_vec(e, bounds + 0x10, widened_upper);
+            let box_extents = sub(widened_upper, widened_lower);
+            let radius_positive = 0.0 < f64::from(radius);
+            let total = if radius_positive {
+                let scale = (f64::from(x87_quiet(e.mem.f32(state_b + 0x5c)))
+                    * f64::from(e.mem.f32(input_address + 0x58)))
+                    as f32;
+                let offset = sub(local, load_vec(e, state_b + 0x80));
+                let spin = mul(cross(offset, load_vec(e, state_b + 0x90)), [scale; 4]);
+                add(spin, carried)
+            } else {
+                carried
+            };
+            let zero = [0.0; 4];
+            let below = zip_with(zero, total, minps);
+            let above = zip_with(zero, total, maxps);
+            let lower = add(below, widened_lower);
+            let upper = add(above, widened_upper);
+            store_vec(e, bounds, lower);
+            store_vec(e, bounds + 0x10, upper);
+            (lower, upper, box_extents, total)
+        } else {
+            let margin = f64::from(x87_quiet(e.mem.f32(input_address + 8))) * half;
+            e.vcall(shape_a, 0x1c, &args![inverse, margin as f32, bounds]);
+            let lower = load_vec(e, bounds);
+            let upper = load_vec(e, bounds + 0x10);
+            (lower, upper, sub(upper, lower), carried)
+        };
+
+        let cached = agent + 0x10;
+        let cached_lower = load_vec(e, cached);
+        let cached_upper = load_vec(e, cached + 0x10);
+        let inside = (0..3)
+            .all(|lane| cached_lower[lane] <= lower[lane] && upper[lane] <= cached_upper[lane]);
+        if !inside {
+            let margin = (f64::from(x87_quiet(e.mem.f32(input_address + 8))) * half) as f32;
+            let growth_factor = x87_quiet(e.global::<f32>(GROWTH_FACTOR));
+            let sweep_factor = x87_quiet(e.global::<f32>(SWEEP_FACTOR));
+            let margin_vector = [margin; 4];
+            let lowered = sub(lower, margin_vector);
+            let raised = add(margin_vector, upper);
+            let zero = [0.0; 4];
+            let forward = mul([sweep_factor; 4], zip_with(zero, motion, maxps));
+            let grown = mul([growth_factor; 4], extents);
+            let sign = load_bits(e, SIGN_MASK);
+            let negated: Vec4 =
+                std::array::from_fn(|lane| f32::from_bits(grown[lane].to_bits() ^ sign[lane]));
+            let backward = mul([sweep_factor; 4], zip_with(zero, motion, minps));
+            let new_lower = add(zip_with(forward, negated, maxps), lowered);
+            let new_upper = add(zip_with(backward, grown, minps), raised);
+            store_vec(e, bounds, new_lower);
+            store_vec(e, bounds + 0x10, new_upper);
+            store_vec(e, cached, new_lower);
+            store_vec(e, cached + 0x10, new_upper);
+            e.vcall(shape_b, 0x30, &args![bounds, array]);
+        }
+        profile_record(e, LABEL_ST_NARROW);
+        if inside || hit_storage_ready(e, agent, array) {
+            let source = e.vcall(shape_b, 0x10, &args![]).u32();
+            let data = if inside { 0 } else { e.mem.u32(array) };
+            e.call(
+                AGENT_1N_PROCESS,
+                &args![agent + 0x30, query, source, data, output],
+            );
+        } else {
+            e.call(SET_OUT_OF_MEMORY_STATE, &args![1u32]);
+        }
+        profile_record(e, LABEL_END);
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x10);
+        let capacity = e.mem.u32(array + 8);
+        e.mem.set_u32(array + 4, 0);
+        if (capacity as i32) >= 0 {
+            let data = e.mem.u32(array);
+            e.vcall(allocator, 0x10, &args![data, (capacity & 0x3fff_ffff) * 4]);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -738,6 +983,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             hkp_bv_tree_stream_agent_calc_content_statistics(Ptr, Ptr, u32)
         ),
         entry!(0x00d2_def0, fn_00d2def0(Ptr, u32, u32, Ptr, u32) -> Ptr),
+        entry!(
+            0x00d2_df90,
+            hkp_bv_tree_stream_agent_process_collision(Ptr, Ptr, Ptr, Ptr, Ptr)
+        ),
         entry!(0x00d2_e5a0, fn_00d2e5a0(Ptr, Ptr, Ptr, u32) -> u32),
         entry!(0x00d2_e6d0, fn_00d2e6d0(Ptr)),
         entry!(0x00d2_e760, fn_00d2e760(Ptr)),
@@ -800,12 +1049,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 mod tests {
     use super::*;
     use crate::units::havok_sdk::hkpbvagent::test_support::{
-        calls, engine, log_double, logging_object, new_log, Log,
+        body, calls, engine, log_double, logging_object, monitor, new_log, profile_labels, Log,
     };
     use crate::units::havok_sdk::hkpbvagent::{
         FLIP_BODY_COLLECTOR_VTABLE, FLIP_CAST_COLLECTOR_VTABLE, FLIP_COLLECTOR_VTABLE, LARGE_FLOAT,
     };
-    use crate::units::havok_sdk::hkpsphereshape::{load_vec, store_vec};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -1523,5 +1771,379 @@ mod tests {
         let (log, _) = destroy(0xc000_0004, 0);
         assert!(calls(&log, ALLOCATOR + 0x10).is_empty());
         assert!(calls(&log, ALLOCATOR + 8).is_empty());
+    }
+
+    const SHAPE_A: u32 = 0x0950_0000;
+    const SHAPE_B: u32 = 0x0960_0000;
+    const HIT_SOURCE: u32 = 0x1234_0000;
+    const OUTPUT: u32 = 0x0abc_0000;
+
+    /// A box: minimum and maximum vector.
+    type Bounds = (Vec4, Vec4);
+    /// The boxes body B's shape was asked about.
+    type BoxesSeen = Rc<RefCell<Vec<Bounds>>>;
+
+    /// Everything a run of `processCollision` needs: an agent (word `0x77` at `+8`, three
+    /// entries in its array), two bodies with motion states, an input and the doubles of the
+    /// callees.
+    struct Collision {
+        e: Engine,
+        log: Log,
+        agent: u32,
+        body_a: u32,
+        body_b: u32,
+        input: u32,
+        state_b: u32,
+        stream: u32,
+        records: u32,
+        process: Words,
+    }
+
+    /// Body A's shape answers its box query with `shape_box`; `sweeping` is the flag word
+    /// the input points to. The motion states are chosen so the displacement carried into B's
+    /// frame is `(1, -0.5, 0)` (time step 2, B's rotation the identity), and the constants
+    /// the code reads from the exe's data are set to values exact in binary (growth factor
+    /// 0.5 instead of 0.4).
+    fn collision(sweeping: bool, shape_box: Bounds) -> Collision {
+        let mut e = engine();
+        let log = new_log();
+        let (stream, records) = monitor(&mut e, 0x100);
+        e.set_global(HALF_F64, 0.5f64);
+        e.set_global(GROWTH_FACTOR, 0.5f32);
+        e.set_global(SWEEP_FACTOR, -2.0f32);
+        for lane in 0..4 {
+            e.mem.set_u32(SIGN_MASK + 4 * lane, 0x8000_0000);
+        }
+        let allocator = logging_object(&mut e, &log, ALLOCATOR);
+        log_double(&mut e, &log, ALLOCATOR + 0x24, 1);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        log_double(&mut e, &log, MEMORY_ROUTER, router);
+        for callee in [
+            TRANSFORM_SET_MUL_INVERSE_MUL,
+            TRANSFORM_SET_INVERSE,
+            QUICK_SORT,
+            SET_OUT_OF_MEMORY_STATE,
+        ] {
+            log_double(&mut e, &log, callee, 0);
+        }
+        let process: Words = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&process);
+        e.register_double(AGENT_1N_PROCESS, move |e, a| {
+            let mut seen = a.to_vec();
+            seen.extend(words(e, a[1], 5));
+            sink.borrow_mut().push(seen);
+            Ret::default()
+        });
+
+        let shape_a = logging_object(&mut e, &log, SHAPE_A);
+        let notes = Rc::clone(&log);
+        e.register_double(SHAPE_A + 0x1c, move |e, a| {
+            notes.borrow_mut().push((SHAPE_A + 0x1c, a.to_vec()));
+            store_vec(e, a[3], shape_box.0);
+            store_vec(e, a[3] + 0x10, shape_box.1);
+            Ret::default()
+        });
+        let shape_b = logging_object(&mut e, &log, SHAPE_B);
+        log_double(&mut e, &log, SHAPE_B + 0x10, HIT_SOURCE);
+
+        let state_a = e.mem.alloc(0xc0);
+        store_vec(&mut e, state_a + 0x40, [2.0, 0.0, 0.0, 0.0]);
+        store_vec(&mut e, state_a + 0x50, [1.0, 0.0, 0.0, 0.0]);
+        e.mem.set_f32(state_a + 0x5c, 0.5);
+        e.mem.set_f32(state_a + 0x9c, 1.0);
+        e.mem.set_f32(state_a + 0xa0, 0.25);
+        let state_b = e.mem.alloc(0xc0);
+        store_vec(&mut e, state_b, [1.0, 0.0, 0.0, 0.0]);
+        store_vec(&mut e, state_b + 0x10, [0.0, 1.0, 0.0, 0.0]);
+        store_vec(&mut e, state_b + 0x20, [0.0, 0.0, 1.0, 0.0]);
+        store_vec(&mut e, state_b + 0x30, [0.5, 0.0, 0.0, 0.0]);
+        store_vec(&mut e, state_b + 0x50, [0.0, -0.5, 0.0, 0.0]);
+        e.mem.set_f32(state_b + 0x5c, 0.5);
+        store_vec(&mut e, state_b + 0x90, [0.0, 1.0, 0.0, 0.0]);
+        e.mem.set_f32(state_b + 0x9c, 2.0);
+        e.mem.set_f32(state_b + 0xa0, 0.5);
+        let body_a = body(&mut e, shape_a, state_a);
+        let body_b = body(&mut e, shape_b, state_b);
+
+        let input = e.mem.alloc(0x70);
+        e.mem.set_f32(input + 8, 0.5);
+        e.mem.set_f32(input + 0x58, 2.0);
+        let flags = e.mem.alloc(0x20);
+        e.mem.set_u32(flags + 0x10, u32::from(sweeping));
+        e.mem.set_u32(input + 0x60, flags);
+
+        let agent = e.mem.alloc(0x40);
+        e.mem.set_u32(agent + 8, 0x77);
+        e.mem.set_u32(agent + 0x34, 3);
+        Collision {
+            e,
+            log,
+            agent,
+            body_a,
+            body_b,
+            input,
+            state_b,
+            stream,
+            records,
+            process,
+        }
+    }
+
+    impl Collision {
+        fn set_cached_box(&mut self, bounds: Bounds) {
+            store_vec(&mut self.e, self.agent + 0x10, bounds.0);
+            store_vec(&mut self.e, self.agent + 0x20, bounds.1);
+        }
+
+        fn cached_box(&self) -> Bounds {
+            (
+                load_vec(&self.e, self.agent + 0x10),
+                load_vec(&self.e, self.agent + 0x20),
+            )
+        }
+
+        /// Body B's shape answers its box query (slot `0x30`) by noting the box and, when
+        /// `hits` is not empty, giving the stack array heap storage (room for 16 entries,
+        /// owned) holding `hits`.
+        fn answer_shape_query(&mut self, hits: Vec<u32>) -> BoxesSeen {
+            let seen: BoxesSeen = Rc::new(RefCell::new(Vec::new()));
+            let sink = Rc::clone(&seen);
+            let notes = Rc::clone(&self.log);
+            self.e.register_double(SHAPE_B + 0x30, move |e, a| {
+                notes.borrow_mut().push((SHAPE_B + 0x30, a.to_vec()));
+                sink.borrow_mut()
+                    .push((load_vec(e, a[1]), load_vec(e, a[1] + 0x10)));
+                if !hits.is_empty() {
+                    let data = e.mem.alloc(0x40);
+                    for (index, hit) in hits.iter().enumerate() {
+                        e.mem.set_u32(data + 4 * index as u32, *hit);
+                    }
+                    e.mem.set_u32(a[2], data);
+                    e.mem.set_u32(a[2] + 4, hits.len() as u32);
+                    e.mem.set_u32(a[2] + 8, 0x10);
+                }
+                Ret::default()
+            });
+            seen
+        }
+
+        fn run(&mut self) {
+            self.e.call(
+                PROCESS_COLLISION,
+                &[self.agent, self.body_a, self.body_b, self.input, OUTPUT],
+            );
+        }
+
+        /// The labels of the profile records after the 16-byte start record.
+        fn labels(&self) -> Vec<u32> {
+            assert_eq!(self.e.mem.u32(self.records), LABEL_LT_BV_TREE3);
+            assert_eq!(self.e.mem.u32(self.records + 0xc), LABEL_ST_QUERY_TREE);
+            profile_labels(&self.e, self.stream, self.records + 0x10)
+        }
+
+        /// The addresses of the logged calls among `addresses`, in order.
+        fn order(&self, addresses: &[u32]) -> Vec<u32> {
+            self.log
+                .borrow()
+                .iter()
+                .map(|(address, _)| *address)
+                .filter(|address| addresses.contains(address))
+                .collect()
+        }
+
+        /// The first word after `this` of every logged call to `address`.
+        fn first_words(&self, address: u32) -> Vec<u32> {
+            calls(&self.log, address).iter().map(|a| a[1]).collect()
+        }
+    }
+
+    const SHAPE_BOX: Bounds = ([1.0, 2.0, 3.0, 0.0], [5.0, 6.0, 7.0, 0.0]);
+    const SWEEP_BOX: Bounds = ([-3.0, -1.0, -3.0, -1.0], [3.0, 1.0, 3.0, 1.0]);
+    const SMALL_CACHED_BOX: Bounds = ([0.0; 4], [1.0; 4]);
+
+    #[test]
+    fn process_collision_skips_the_shape_query_when_the_cached_box_holds_the_box_00d2df90() {
+        let mut c = collision(false, SHAPE_BOX);
+        // Lane 3 is outside the cached box but only lanes 0 to 2 are compared.
+        let cached = ([0.0, 0.0, 0.0, 1000.0], [10.0, 10.0, 10.0, -1000.0]);
+        c.set_cached_box(cached);
+        c.run();
+        let aabb = calls(&c.log, SHAPE_A + 0x1c);
+        assert_eq!(aabb.len(), 1);
+        let (inverse, bounds) = (aabb[0][1], aabb[0][3]);
+        assert_eq!(f32::from_bits(aabb[0][2]), 0.25);
+        assert_eq!(inverse, bounds + 0xb0);
+        let relative = inverse - 0x60;
+        let (state_a, state_b) = (c.e.mem.u32(c.body_a + 8), c.e.mem.u32(c.body_b + 8));
+        assert_eq!(
+            calls(&c.log, TRANSFORM_SET_MUL_INVERSE_MUL),
+            vec![vec![relative, state_a, state_b]]
+        );
+        assert_eq!(
+            calls(&c.log, TRANSFORM_SET_INVERSE),
+            vec![vec![inverse, relative]]
+        );
+        assert!(calls(&c.log, SHAPE_B + 0x30).is_empty());
+        assert!(calls(&c.log, ALLOCATOR + 0x24).is_empty());
+        assert!(calls(&c.log, QUICK_SORT).is_empty());
+        assert!(calls(&c.log, ALLOCATOR + 0x10).is_empty());
+        assert_eq!(
+            *c.process.borrow(),
+            vec![vec![
+                c.agent + 0x30,
+                bounds + 0x30,
+                HIT_SOURCE,
+                0,
+                OUTPUT,
+                c.body_a,
+                c.body_b,
+                0,
+                c.input,
+                0x77
+            ]]
+        );
+        assert_eq!(c.cached_box(), cached);
+        assert_eq!(c.labels(), vec![LABEL_ST_NARROW, LABEL_END]);
+    }
+
+    #[test]
+    fn process_collision_grows_the_cached_box_and_asks_the_shape_00d2df90() {
+        let mut c = collision(false, SHAPE_BOX);
+        c.set_cached_box(([2.0, 0.0, 0.0, 0.0], [10.0; 4]));
+        let seen = c.answer_shape_query(Vec::new());
+        c.run();
+        let grown = ([-1.25, 1.75, 2.75, -0.25], [5.25, 7.25, 7.25, 0.25]);
+        assert_eq!(c.cached_box(), grown);
+        assert_eq!(*seen.borrow(), vec![grown]);
+        let query = calls(&c.log, SHAPE_B + 0x30);
+        assert_eq!(query.len(), 1);
+        let (bounds, array) = (query[0][1], query[0][2]);
+        assert_eq!(array, bounds + 0xf0);
+        // (0 / 4 - 3 + 1) << 9
+        assert_eq!(c.first_words(ALLOCATOR + 0x24), vec![0xffff_fc00]);
+        assert_eq!(
+            c.order(&[SHAPE_B + 0x30, ALLOCATOR + 0x24, SHAPE_B + 0x10]),
+            vec![SHAPE_B + 0x30, ALLOCATOR + 0x24, SHAPE_B + 0x10]
+        );
+        assert!(calls(&c.log, QUICK_SORT).is_empty());
+        assert!(calls(&c.log, ALLOCATOR + 0x10).is_empty());
+        // The array still holds its first entry in the frame, 0xFFFFFFFF.
+        assert_eq!(
+            *c.process.borrow(),
+            vec![vec![
+                c.agent + 0x30,
+                bounds + 0x30,
+                HIT_SOURCE,
+                array + 0xc,
+                OUTPUT,
+                c.body_a,
+                c.body_b,
+                0,
+                c.input,
+                0x77
+            ]]
+        );
+        assert_eq!(c.labels(), vec![LABEL_ST_NARROW, LABEL_END]);
+    }
+
+    #[test]
+    fn process_collision_sorts_the_hits_and_frees_their_storage_00d2df90() {
+        let mut c = collision(false, SHAPE_BOX);
+        c.set_cached_box(([2.0, 0.0, 0.0, 0.0], [10.0; 4]));
+        c.e.mem.set_u32(c.agent + 0x34, 1);
+        c.answer_shape_query((0..10).rev().collect());
+        c.run();
+        // (10 / 4 - 1 + 1) << 9
+        assert_eq!(c.first_words(ALLOCATOR + 0x24), vec![0x400]);
+        let sort = calls(&c.log, QUICK_SORT);
+        assert_eq!(sort.len(), 1);
+        let heap = sort[0][0];
+        assert_eq!(sort[0][1..3], [0, 9]);
+        assert_eq!(
+            c.order(&[
+                ALLOCATOR + 0x24,
+                QUICK_SORT,
+                SHAPE_B + 0x10,
+                ALLOCATOR + 0x10
+            ]),
+            vec![
+                ALLOCATOR + 0x24,
+                QUICK_SORT,
+                SHAPE_B + 0x10,
+                ALLOCATOR + 0x10
+            ]
+        );
+        let process = c.process.borrow();
+        assert_eq!(process.len(), 1);
+        assert_eq!(process[0][3], heap);
+        // The storage holds 16 entries of 4 bytes.
+        assert_eq!(
+            calls(&c.log, ALLOCATOR + 0x10)
+                .iter()
+                .map(|a| a[1..].to_vec())
+                .collect::<Vec<_>>(),
+            vec![vec![heap, 0x40]]
+        );
+    }
+
+    #[test]
+    fn process_collision_gives_up_when_the_allocator_refuses_00d2df90() {
+        let mut c = collision(false, SHAPE_BOX);
+        c.set_cached_box(([2.0, 0.0, 0.0, 0.0], [10.0; 4]));
+        c.answer_shape_query(vec![5, 4]);
+        log_double(&mut c.e, &c.log, ALLOCATOR + 0x24, 0);
+        c.run();
+        assert_eq!(
+            c.order(&[ALLOCATOR + 0x24, SET_OUT_OF_MEMORY_STATE]),
+            vec![ALLOCATOR + 0x24, SET_OUT_OF_MEMORY_STATE]
+        );
+        assert_eq!(calls(&c.log, SET_OUT_OF_MEMORY_STATE), vec![vec![1]]);
+        assert!(calls(&c.log, QUICK_SORT).is_empty());
+        assert!(calls(&c.log, SHAPE_B + 0x10).is_empty());
+        assert!(c.process.borrow().is_empty());
+        let freed = calls(&c.log, ALLOCATOR + 0x10);
+        assert_eq!(freed.len(), 1);
+        assert_eq!(freed[0][2], 0x40);
+        assert_eq!(c.labels(), vec![LABEL_ST_NARROW, LABEL_END]);
+    }
+
+    #[test]
+    fn process_collision_widens_a_sweeping_box_by_the_spin_when_the_radius_is_positive_00d2df90() {
+        let mut c = collision(true, SWEEP_BOX);
+        c.set_cached_box(SMALL_CACHED_BOX);
+        c.run();
+        let aabb = calls(&c.log, SHAPE_A + 0x1c);
+        // ((1 + 2) * 0.25 + 2 * 2 * 0.5) + 0.5 * 0.5
+        assert_eq!(f32::from_bits(aabb[0][2]), 3.0);
+        assert_eq!(
+            c.cached_box(),
+            ([-4.25, -1.75, -3.75, -1.25], [4.25, 2.25, 3.25, 1.25])
+        );
+    }
+
+    #[test]
+    fn process_collision_leaves_a_sweeping_box_without_the_spin_for_no_radius_00d2df90() {
+        let mut c = collision(true, SWEEP_BOX);
+        c.set_cached_box(SMALL_CACHED_BOX);
+        c.e.mem.set_f32(c.state_b + 0x9c, 0.0);
+        c.run();
+        let aabb = calls(&c.log, SHAPE_A + 0x1c);
+        // (1 * 0.25 + 0) + 0.5 * 0.5
+        assert_eq!(f32::from_bits(aabb[0][2]), 0.5);
+        assert_eq!(
+            c.cached_box(),
+            ([-0.75, -1.25, -0.75, -0.75], [2.25, 1.25, 0.75, 0.75])
+        );
+    }
+
+    #[test]
+    fn process_collision_writes_no_records_when_the_stream_is_full_00d2df90() {
+        let mut c = collision(false, SHAPE_BOX);
+        c.set_cached_box(([0.0; 4], [10.0; 4]));
+        c.e.mem.set_u32(c.stream + 0xc, c.records);
+        c.run();
+        assert_eq!(c.e.mem.u32(c.stream + 4), c.records);
+        assert_eq!(c.process.borrow().len(), 1);
     }
 }

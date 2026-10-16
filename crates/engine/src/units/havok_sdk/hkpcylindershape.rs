@@ -711,6 +711,187 @@ fn cast_ray_against_cylinder(
     true
 }
 
+/// `hkReferencedObject::calcContentStatistics` (`this` in `ECX`, collector, class) and the class
+/// word `hkpCylinderShape::calcContentStatistics` passes to it.
+const REFERENCED_OBJECT_CALC_CONTENT_STATISTICS: u32 = 0x00c9_0360;
+const CYLINDER_SHAPE_CLASS: u32 = 0x0126_8940;
+/// The vtable the constructors install first (`010305a8`) and the cylinder's own (`010d0f1c`).
+const BASE_SHAPE_VTABLE: u32 = 0x0103_05a8;
+const CYLINDER_VTABLE: u32 = 0x010d_0f1c;
+/// The two values `+0xC` takes in the constructors: `0x12` while the first one runs and `2` at
+/// the end.
+const TYPE_INTERIM: u32 = 0x12;
+const TYPE_FINAL: u32 = 2;
+/// The step (a `double`, 0.01 as a `float`) and the limit (a `float`, 1.1) of the search in
+/// `fn_00d571d0`.
+const SEARCH_STEP: u32 = 0x0101_6408;
+const SEARCH_LIMIT: u32 = 0x0105_6528;
+/// The `float` the full constructor copies into `+0x18`.
+const DEFAULT_RADIUS_FACTOR: u32 = 0x0103_0ff0;
+
+// Translated from 00d571a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpCylinderShape::getCylinderRadius` (Ghidra name): the `float` at `+0x14`, returned in
+/// `ST0`.
+pub fn hkp_cylinder_shape_get_cylinder_radius(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + CYLINDER_RADIUS)
+}
+
+// Translated from 00d571c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpCylinderShape::calcContentStatistics` (Ghidra name): `ECX` = shape, the collector and one
+/// more word on the stack that the code overwrites with the class word `01268940` before it
+/// jumps to `hkReferencedObject::calcContentStatistics`.
+pub fn hkp_cylinder_shape_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr,
+    collector: u32,
+    _unused_1: u32,
+) {
+    e.call(
+        REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
+        &args![this, collector, CYLINDER_SHAPE_CLASS],
+    );
+}
+
+// Translated from 00d571d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A function with no name in the engine map and no arguments, result in `ST0`. Starts from
+/// 0 and adds the `double` at `01016408` (stored back as a `float`) until the value rounds to a
+/// non-zero integer, which it then returns. If the value reaches the `float` limit at `01056528`
+/// first (or the compare is unordered) it returns 1.0.
+pub fn fn_00d571d0(e: &mut Engine) -> f32 {
+    let step: f64 = e.global(SEARCH_STEP);
+    let limit: f32 = e.global(SEARCH_LIMIT);
+    let mut value = 0.0f32;
+    while fistp(value) == 0 {
+        value = (f64::from(value) + step) as f32;
+        if limit.partial_cmp(&value) != Some(std::cmp::Ordering::Greater) {
+            return 1.0;
+        }
+    }
+    value
+}
+
+/// The lazy fix-up both constructors share: while the `float` at `INDEX_OFFSET` is negative
+/// (it is -1.0 until then) it becomes `1 - fn_00d571d0()`.
+fn settle_index_offset(e: &mut Engine) {
+    let current: f32 = e.global(INDEX_OFFSET);
+    if 0.0 > current {
+        let found = fn_00d571d0(e);
+        e.set_global(INDEX_OFFSET, (1.0 - f64::from(found)) as f32);
+    }
+}
+
+// Translated from 00d57220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A function with no name in the engine map: `ECX` = shape, nothing on the stack. Builds the
+/// two cross section directions from the axis `B - A` (`+0x30` minus `+0x20`): the axis is
+/// scaled by its inverse length (the `RSQRTSS` estimate refined once, as elsewhere in this
+/// file). Of the magnitudes of its first two components the smaller one (the first when they
+/// are equal) is compared with the third; the vector that has the larger of the first two
+/// components' slot set to the axis component at the "other" index (the third, unless the
+/// smaller magnitude is above the third's, then the smaller of the first two) and that other
+/// slot set to the negated axis component of the larger slot, is normalised and stored at
+/// `+0x40`; `axis x u` goes to `+0x50`.
+pub fn fn_00d57220(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    let a = load_vec(e, me + VERTEX_A);
+    let b = load_vec(e, me + VERTEX_B);
+    let span = zip_with(b, a, |p, q| p - q);
+    let squared = sum3(zip_with(span, span, |p, q| p * q));
+    let scale = inverse_length(e, squared);
+    let axis = span.map(|lane| scale * lane);
+    let magnitude: [f32; 3] = std::array::from_fn(|lane| x87_quiet(axis[lane].abs()));
+    let (smaller, larger_index, smaller_index) = if magnitude[0] > magnitude[1] {
+        (magnitude[1], 0, 1)
+    } else {
+        (magnitude[0], 1, 0)
+    };
+    let other_index = if smaller > magnitude[2] {
+        smaller_index
+    } else {
+        2
+    };
+    let mut perpendicular = [0.0f32; 4];
+    perpendicular[larger_index] = x87_quiet(axis[other_index]);
+    perpendicular[other_index] = -x87_quiet(axis[larger_index]);
+    let length_squared = sum3(zip_with(perpendicular, perpendicular, |p, q| p * q));
+    let unit_scale = inverse_length(e, length_squared);
+    let unit = perpendicular.map(|lane| unit_scale * lane);
+    store_vec(e, me + DIRECTION_U, unit);
+    let forward = zip_with(shuffle_zxy(unit), shuffle_yzx(axis), |p, q| p * q);
+    let backward = zip_with(shuffle_yzx(unit), shuffle_zxy(axis), |p, q| p * q);
+    store_vec(
+        e,
+        me + DIRECTION_V,
+        zip_with(forward, backward, |p, q| p - q),
+    );
+}
+
+// Translated from 00d573e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A function with no name in the engine map: `ECX` = shape, one `float` on the stack. Stores
+/// it as the cylinder radius (`+0x14`) and the sum of the `+0x10` radius and it in the fourth
+/// lane of both axis end points (`+0x2c` and `+0x3c`).
+pub fn fn_00d573e0(e: &mut Engine, this: Ptr, radius: f32) {
+    let me = this.addr();
+    let radius = x87_quiet(radius);
+    e.mem.set_f32(me + CYLINDER_RADIUS, radius);
+    let convex = e.mem.f32(me + CONVEX_RADIUS);
+    let sum = (f64::from(convex) + f64::from(radius)) as f32;
+    e.mem.set_f32(me + VERTEX_A + 0xc, sum);
+    let sum = (f64::from(radius) + f64::from(convex)) as f32;
+    e.mem.set_f32(me + VERTEX_B + 0xc, sum);
+}
+
+// Translated from 00d57aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpCylinderShape::hkpCylinderShape` (Ghidra name): `ECX` = shape; the stack holds the
+/// addresses of the two axis end points, the cylinder radius and the `+0x10` radius (`float`s).
+/// Sets the `+0x10` radius, `1` at `+6`, 0 at `+8`, the type 2 at `+0xC` and the vtable
+/// `010d0f1c`; fixes up the constant at `011b5be8` the first time (see `settle_index_offset`);
+/// copies the end points to `+0x20` and `+0x30`; runs `fn_00d573e0` and `fn_00d57220`; copies
+/// the `float` at `01030ff0` into `+0x18`. Returns `this`.
+pub fn hkp_cylinder_shape_constructor(
+    e: &mut Engine,
+    this: Ptr,
+    end_a: u32,
+    end_b: u32,
+    radius: f32,
+    convex_radius: f32,
+) -> Ptr {
+    let me = this.addr();
+    e.mem.set_f32(me + CONVEX_RADIUS, x87_quiet(convex_radius));
+    e.mem.set_u16(me + 6, 1);
+    e.mem.set_u32(me + 8, 0);
+    e.mem.set_u32(me + 0xc, TYPE_FINAL);
+    e.mem.set_u32(me, CYLINDER_VTABLE);
+    settle_index_offset(e);
+    copy_vec(e, end_a, me + VERTEX_A);
+    copy_vec(e, end_b, me + VERTEX_B);
+    fn_00d573e0(e, this, radius);
+    fn_00d57220(e, this);
+    let factor = e.mem.u32(DEFAULT_RADIUS_FACTOR);
+    e.mem.set_u32(me + RADIUS_FACTOR, x87_quiet_bits(factor));
+    this
+}
+
+// Translated from 00d57b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A constructor with no name in the engine map: `ECX` = shape, one stack word (`flag`).
+/// Installs the vtable `010305a8`, then (with a non-zero `flag` the code clears `+0xC` first)
+/// sets the interim type `0x12` and the cylinder vtable `010d0f1c`; with a non-zero `flag` it
+/// also fixes up the constant at `011b5be8` the first time (see `settle_index_offset`). `+0xC`
+/// ends as 2. Returns `this`.
+pub fn fn_00d57b20(e: &mut Engine, this: Ptr, flag: u32) -> Ptr {
+    let me = this.addr();
+    e.mem.set_u32(me, BASE_SHAPE_VTABLE);
+    if flag != 0 {
+        e.mem.set_u32(me + 0xc, 0);
+    }
+    e.mem.set_u32(me + 0xc, TYPE_INTERIM);
+    e.mem.set_u32(me, CYLINDER_VTABLE);
+    if flag != 0 {
+        settle_index_offset(e);
+    }
+    e.mem.set_u32(me + 0xc, TYPE_FINAL);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -740,6 +921,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00d57d50,
             hkp_cylinder_shape_cast_ray_impl(Ptr, Ptr, Ptr, Ptr) -> Ptr
         ),
+        entry!(
+            0x00d571a0,
+            hkp_cylinder_shape_get_cylinder_radius(Ptr) -> f32
+        ),
+        entry!(
+            0x00d571c0,
+            hkp_cylinder_shape_calc_content_statistics(Ptr, u32, u32)
+        ),
+        entry!(0x00d571d0, fn_00d571d0() -> f32),
+        entry!(0x00d57220, fn_00d57220(Ptr)),
+        entry!(0x00d573e0, fn_00d573e0(Ptr, f32)),
+        entry!(
+            0x00d57aa0,
+            hkp_cylinder_shape_constructor(Ptr, u32, u32, f32, f32) -> Ptr
+        ),
+        entry!(0x00d57b20, fn_00d57b20(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -1206,5 +1403,137 @@ mod tests {
         assert_eq!(fistp(-0.5), 0);
         assert_eq!(fistp(f32::NAN), i32::MIN);
         assert_eq!(fistp(3.0e9), i32::MIN);
+    }
+
+    fn near(actual: f32, expected: f32) -> bool {
+        (actual - expected).abs() < 1e-3
+    }
+
+    #[test]
+    fn cylinder_radius_is_returned_in_st0() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x60);
+        e.mem.set_f32(this + CYLINDER_RADIUS, 0.75);
+        assert_eq!(e.call(0x00d5_71a0, &args![this]).f32(), 0.75);
+    }
+
+    #[test]
+    fn calc_content_statistics_jumps_to_the_base_with_the_class() {
+        let mut e = engine();
+        e.register_double(REFERENCED_OBJECT_CALC_CONTENT_STATISTICS, |_, _| {
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00d5_71c0, &args![0x1000u32, 0x2000u32, 0x9999u32]);
+        assert_eq!(
+            calls_to(&e, REFERENCED_OBJECT_CALC_CONTENT_STATISTICS),
+            vec![vec![0x1000, 0x2000, 0x0126_8940]]
+        );
+    }
+
+    #[test]
+    fn the_search_stops_at_the_first_step_that_rounds_to_one() {
+        let mut e = engine();
+        e.set_global(SEARCH_STEP, f64::from(0.01f32));
+        e.set_global(SEARCH_LIMIT, 1.1f32);
+        let found = e.call(0x00d5_71d0, &args![]).f32();
+        assert!((0.5..0.52).contains(&found), "{found}");
+        // A limit at or below the first step ends the search with 1.0.
+        e.set_global(SEARCH_LIMIT, 0.01f32);
+        assert_eq!(e.call(0x00d5_71d0, &args![]).f32(), 1.0);
+    }
+
+    #[test]
+    fn directions_follow_the_axis() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x60);
+        store_vec(&mut e, this + VERTEX_A, [1.0, 2.0, 3.0, 5.0]);
+        store_vec(&mut e, this + VERTEX_B, [1.0, 2.0, 7.0, 5.0]);
+        e.call(0x00d5_7220, &args![this]);
+        let u = load_vec(&e, this + DIRECTION_U);
+        let v = load_vec(&e, this + DIRECTION_V);
+        // The axis is +z: the first two components tie at zero, the third wins.
+        assert!(near(u[0], 0.0) && near(u[1], 1.0) && near(u[2], 0.0) && u[3] == 0.0);
+        assert!(near(v[0], -1.0) && near(v[1], 0.0) && near(v[2], 0.0));
+    }
+
+    #[test]
+    fn directions_avoid_the_smallest_component() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x60);
+        store_vec(&mut e, this + VERTEX_A, [0.0, 0.0, 0.0, 0.0]);
+        store_vec(&mut e, this + VERTEX_B, [2.0, 3.0, 1.0, 0.0]);
+        e.call(0x00d5_7220, &args![this]);
+        let u = load_vec(&e, this + DIRECTION_U);
+        let v = load_vec(&e, this + DIRECTION_V);
+        // The third component is the smallest, so the first perpendicular has none of it.
+        let length = 13.0f32.sqrt();
+        assert!(near(u[0], -3.0 / length) && near(u[1], 2.0 / length) && u[2] == 0.0);
+        let axis = [
+            2.0 / 14.0f32.sqrt(),
+            3.0 / 14.0f32.sqrt(),
+            1.0 / 14.0f32.sqrt(),
+        ];
+        let dot = u[0] * axis[0] + u[1] * axis[1] + u[2] * axis[2];
+        assert!(near(dot, 0.0));
+        let dot = v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2];
+        assert!(near(dot, 0.0));
+    }
+
+    #[test]
+    fn radius_setter_fills_the_end_point_fourth_lanes() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x60);
+        e.mem.set_f32(this + CONVEX_RADIUS, 0.5);
+        e.call(0x00d5_73e0, &args![this, 0.25f32]);
+        assert_eq!(e.mem.f32(this + CYLINDER_RADIUS), 0.25);
+        assert_eq!(e.mem.f32(this + VERTEX_A + 0xc), 0.75);
+        assert_eq!(e.mem.f32(this + VERTEX_B + 0xc), 0.75);
+    }
+
+    #[test]
+    fn constructor_builds_the_shape_and_settles_the_constant_once() {
+        let mut e = engine();
+        e.set_global(SEARCH_STEP, f64::from(0.01f32));
+        e.set_global(SEARCH_LIMIT, 1.1f32);
+        e.set_global(DEFAULT_RADIUS_FACTOR, 0.7f32);
+        let this = e.mem.alloc(0x60);
+        let end_a = vector_at(&mut e, [0.0, 0.0, 0.0, 9.0]).addr();
+        let end_b = vector_at(&mut e, [0.0, 0.0, 2.0, 9.0]).addr();
+        let returned = e
+            .call(0x00d5_7aa0, &args![this, end_a, end_b, 0.25f32, 0.5f32])
+            .u32();
+        assert_eq!(returned, this);
+        assert_eq!(e.mem.f32(this + CONVEX_RADIUS), 0.5);
+        assert_eq!(e.mem.u16(this + 6), 1);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 2);
+        assert_eq!(e.mem.u32(this), 0x010d_0f1c);
+        assert_eq!(e.mem.f32(this + CYLINDER_RADIUS), 0.25);
+        assert_eq!(load_vec(&e, this + VERTEX_A), [0.0, 0.0, 0.0, 0.75]);
+        assert_eq!(load_vec(&e, this + VERTEX_B), [0.0, 0.0, 2.0, 0.75]);
+        assert!(near(e.mem.f32(this + DIRECTION_U + 4), 1.0));
+        assert_eq!(e.mem.f32(this + RADIUS_FACTOR), 0.7);
+        let settled: f32 = e.global(INDEX_OFFSET);
+        assert!((0.0..0.5).contains(&settled), "{settled}");
+        // Once positive the constant is left alone.
+        e.set_global(INDEX_OFFSET, 0.25f32);
+        e.call(0x00d5_7aa0, &args![this, end_a, end_b, 0.25f32, 0.5f32]);
+        assert_eq!(e.global::<f32>(INDEX_OFFSET), 0.25);
+    }
+
+    #[test]
+    fn loaded_object_constructor_only_settles_the_constant_when_asked() {
+        let mut e = engine();
+        e.set_global(SEARCH_STEP, f64::from(0.01f32));
+        e.set_global(SEARCH_LIMIT, 1.1f32);
+        let this = e.mem.alloc(0x60);
+        assert_eq!(e.call(0x00d5_7b20, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x010d_0f1c);
+        assert_eq!(e.mem.u32(this + 0xc), 2);
+        assert_eq!(e.global::<f32>(INDEX_OFFSET), -1.0);
+        e.call(0x00d5_7b20, &args![this, 1u32]);
+        let settled: f32 = e.global(INDEX_OFFSET);
+        assert!((0.0..0.5).contains(&settled), "{settled}");
     }
 }

@@ -354,6 +354,76 @@ pub fn acos(_e: &mut Engine, x: f64) -> f64 {
     x.acos()
 }
 
+// Platform: replaces 00ec9050 (x87 arctangent, LIBCMT; the name is unconfirmed): argument
+// in ST0. Dispatches on the SSE2 flag (`01270a64`) and the masked exception state to the
+// SSE2 routine `00ed5d80`, otherwise computes `FPATAN` of the argument and 1 through
+// `00ec90a8`; the error handling for NaN and infinite arguments is not modelled.
+pub fn ci_atan(_e: &mut Engine, v: f64) -> f64 {
+    v.atan()
+}
+
+// Platform: replaces 00ec8660 (__alloca_probe, LIBCMT)
+/// The stack probe the compiler calls before a large frame. It takes its inputs in
+/// registers, so they come first: `size` is `EAX` (the bytes wanted) and `esp` the value
+/// of `ESP` at entry (it points at the return address). It touches each page between the
+/// current stack page and the new top (a read of `[page]`), moves the return address to the
+/// new top and returns. The return value is the `ESP` the caller continues with
+/// (`esp - size + 4`; when `size` is above `esp` the new top is address 0 and the return
+/// address is stored there); `EAX` on return holds the return address (the word at `esp`).
+pub fn alloca_probe(e: &mut Engine, size: u32, esp: u32) -> u32 {
+    // `LEA ECX, [ESP + 4]` after the `PUSH ECX`, minus `EAX`; zero when that borrows.
+    let top = esp.saturating_sub(size);
+    let mut page = esp.wrapping_sub(4) & 0xffff_f000;
+    while top < page {
+        page = page.wrapping_sub(0x1000);
+        // `TEST [EAX], EAX`: a read that commits the guard page.
+        let _ = e.mem.u32(page);
+    }
+    let return_address = e.mem.u32(esp);
+    e.mem.set_u32(top, return_address);
+    top.wrapping_add(4)
+}
+
+/// The import slot of KERNEL32 `GetSystemTimeAsFileTime` (`00fdf184`) and `__aulldiv`
+/// (`00ecc590`, four words `(low, high, divisor low, divisor high)`, 64-bit unsigned
+/// quotient in `EDX:EAX`).
+const GET_SYSTEM_TIME_AS_FILE_TIME_SLOT: u32 = 0x00fd_f184;
+const AULLDIV: u32 = 0x00ec_c590;
+
+// Platform: replaces 00ecadda (__time64, LIBCMT)
+/// `__time64(__time64_t *)` (cdecl): the seconds since 1970-01-01. The `FILETIME` from
+/// `GetSystemTimeAsFileTime` (100 ns units since 1601) has 116444736000000000 added (as the
+/// exe does, `0xfe624e212ac18000` modulo 2^64) and is divided by 10000000 through
+/// `__aulldiv`. A result above 0x793406fff (the year 3000) becomes -1. The result is stored
+/// to `out` when it is not null and returned (`EDX:EAX`).
+pub fn time64(e: &mut Engine, out: Ptr) -> u64 {
+    let (low, high) = e.with_stack(8, |e, filetime| {
+        let function = e.mem.u32(GET_SYSTEM_TIME_AS_FILE_TIME_SLOT);
+        e.call(function, &args![filetime]);
+        (e.mem.u32(filetime.addr()), e.mem.u32(filetime.addr() + 4))
+    });
+    let (low, carry) = low.overflowing_add(0x2ac1_8000);
+    let high = high
+        .wrapping_add(0xfe62_4e21)
+        .wrapping_add(u32::from(carry));
+    let quotient = e
+        .call(AULLDIV, &args![low, high, 0x0098_9680u32, 0u32])
+        .u64();
+    let (quotient_low, quotient_high) = (quotient as u32, (quotient >> 32) as u32);
+    let result = if (quotient_high as i32) < 7 {
+        quotient
+    } else if (quotient_high as i32) > 7 || quotient_low > 0x9340_6fff {
+        u64::MAX
+    } else {
+        quotient
+    };
+    if out.addr() != 0 {
+        e.mem.set_u32(out.addr(), result as u32);
+        e.mem.set_u32(out.addr() + 4, (result >> 32) as u32);
+    }
+    result
+}
+
 /// The state of `rand`, per engine (MSVC keeps it per thread; one thread
 /// here). Starts at 1 like MSVC's `holdrand`.
 const RAND_STATE: u32 = 0x0e00;
@@ -1046,6 +1116,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00eca060, sin(f64) -> f64),
         entry!(0x00ec9b00, pow(f64, f64) -> f64),
         entry!(0x00eca1d0, acos(f64) -> f64),
+        entry!(0x00ec9050, ci_atan(f64) -> f64),
+        entry!(0x00ec8660, alloca_probe(u32, u32) -> u32),
+        entry!(0x00ecadda, time64(Ptr) -> u64),
         entry!(0x00ecadb8, rand() -> i32),
         entry!(0x00ec658f, atexit(Ptr) -> i32),
         entry!(0x00ec6cc4, vsprintf(Ptr, Ptr, u32) -> i32),
@@ -1515,5 +1588,91 @@ mod tests {
         let mut e = Engine::new();
         let f = cstr(&mut e, b"x");
         e.call(0x00eca38d, &args![0u32, 4u32, f]);
+    }
+
+    #[test]
+    fn the_arctangent_takes_its_argument_in_st0() {
+        let mut e = Engine::new();
+        let r = e.call(0x00ec9050, &args![1.0f64]).f64();
+        assert!((r - std::f64::consts::FRAC_PI_4).abs() < 1e-15);
+        assert!(e.call(0x00ec9050, &args![f64::NAN]).f64().is_nan());
+    }
+
+    #[test]
+    fn the_stack_probe_returns_the_new_stack_pointer_and_moves_the_return_address() {
+        let mut e = Engine::new();
+        let stack = e.mem.alloc(0x3000);
+        // ESP at entry in the top page, 0x2400 bytes wanted: the probe walks two pages down.
+        let esp = stack + 0x2f00;
+        e.mem.set_u32(esp, 0x00c0_ffee);
+        let new_esp = e.call(0x00ec8660, &args![0x2400u32, esp]).u32();
+        assert_eq!(new_esp, esp - 0x2400 + 4);
+        assert_eq!(e.mem.u32(esp - 0x2400), 0x00c0_ffee);
+    }
+
+    #[test]
+    #[should_panic]
+    fn the_stack_probe_stores_at_address_zero_when_the_size_borrows() {
+        let mut e = Engine::new();
+        let stack = e.mem.alloc(0x100);
+        e.mem.set_u32(stack, 1);
+        e.call(0x00ec8660, &args![stack + 1, stack]);
+    }
+
+    #[test]
+    fn time64_adds_the_epoch_offset_divides_and_stores() {
+        let mut e = Engine::new();
+        e.map(0x00fd_f000, 0x1000);
+        e.mem
+            .set_u32(GET_SYSTEM_TIME_AS_FILE_TIME_SLOT, 0x0900_0010);
+        // The FILETIME for 2020-01-01 00:00:00 UTC: 132223104000000000.
+        e.register(0x0900_0010, |e, a| {
+            e.mem.set_u32(a[0], 0x6905_0000);
+            e.mem.set_u32(a[0] + 4, 0x01d5_c036);
+            Ret::default()
+        });
+        e.register(AULLDIV, |_, a| {
+            let dividend = a[0] as u64 | (a[1] as u64) << 32;
+            let divisor = a[2] as u64 | (a[3] as u64) << 32;
+            let q = dividend / divisor;
+            Ret {
+                eax: q as u32,
+                edx: (q >> 32) as u32,
+                ..Ret::default()
+            }
+        });
+        let out = e.mem.alloc(8);
+        let now = e.call(0x00ecadda, &args![out]).u64();
+        assert_eq!(now, 1_577_836_800);
+        assert_eq!(e.mem.u32(out), 1_577_836_800);
+        assert_eq!(e.mem.u32(out + 4), 0);
+        // A null pointer is allowed.
+        assert_eq!(e.call(0x00ecadda, &args![0u32]).u64(), 1_577_836_800);
+    }
+
+    #[test]
+    fn time64_gives_minus_one_beyond_the_year_3000() {
+        let mut e = Engine::new();
+        e.map(0x00fd_f000, 0x1000);
+        e.mem
+            .set_u32(GET_SYSTEM_TIME_AS_FILE_TIME_SLOT, 0x0900_0010);
+        e.register(0x0900_0010, |_, _| Ret::default());
+        // The quotient is the high word and low word the double returns.
+        for (high, low, expected) in [
+            (6u32, 0xffff_ffffu32, (6u64 << 32) | 0xffff_ffff),
+            (7, 0x9340_6fff, (7u64 << 32) | 0x9340_6fff),
+            (7, 0x9340_7000, u64::MAX),
+            (8, 0, u64::MAX),
+        ] {
+            // Plain functions cannot capture the case: drive it through memory.
+            e.mem.set_u32(0x00fd_f400, high);
+            e.mem.set_u32(0x00fd_f404, low);
+            e.register(AULLDIV, |e, _| Ret {
+                eax: e.mem.u32(0x00fd_f404),
+                edx: e.mem.u32(0x00fd_f400),
+                ..Ret::default()
+            });
+            assert_eq!(e.call(0x00ecadda, &args![0u32]).u64(), expected);
+        }
     }
 }

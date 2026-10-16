@@ -119,6 +119,148 @@ pub fn fn_00c86530(e: &mut Engine, this: Ptr, first: Ptr, second: u32, use_class
     this
 }
 
+/// `hkSweptTransformUtil::setCentreOfRotationLocal` (cdecl, `(centre, motion state)`).
+const SET_CENTRE_OF_ROTATION_LOCAL: u32 = 0x00cf_14a0;
+/// `hkSweptTransformUtil::warpToPosition` (cdecl, `(position, motion state)`).
+const WARP_TO_POSITION: u32 = 0x00cf_20d0;
+/// `hkSweptTransformUtil::warpToRotation` (cdecl, `(rotation, motion state)`).
+const WARP_TO_ROTATION: u32 = 0x00cf_2160;
+/// `hkSweptTransformUtil::warpTo` (cdecl, `(position, rotation, motion state)`).
+const WARP_TO: u32 = 0x00cf_1f80;
+/// The transform overload of `hkSweptTransformUtil::warpTo` (cdecl, `(transform, motion
+/// state)`).
+const WARP_TO_TRANSFORM: u32 = 0x00cf_2020;
+/// `hkSweptTransform::approxTransformAt` (`this` is the swept transform at +0x50 of the
+/// motion, `(time, transform)`).
+const APPROX_TRANSFORM_AT: u32 = 0x00cf_22d0;
+
+// Translated from 00c86330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::setMass` (Xbox PDB): calls the virtual at vtable offset 0x10 (the inverse-mass
+/// setter) with `0.0` when `mass` equals zero (`-0.0` too) and with `1 / mass` otherwise
+/// (a NaN divides, and stays NaN).
+pub fn hkp_motion_set_mass(e: &mut Engine, this: Ptr, mass: f32) {
+    let inverse_mass = if mass == 0.0 {
+        0.0
+    } else if mass.is_nan() {
+        x87_quiet(mass)
+    } else {
+        (1.0 / f64::from(mass)) as f32
+    };
+    e.vcall(this.addr(), 0x10, &args![inverse_mass.to_bits()]);
+}
+
+// Translated from 00c86380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::setCenterOfMassInLocal` (Xbox PDB): `setCentreOfRotationLocal(centre, motion
+/// state at +0x10)`.
+pub fn hkp_motion_set_center_of_mass_in_local(e: &mut Engine, this: Ptr, centre: u32) {
+    e.call(
+        SET_CENTRE_OF_ROTATION_LOCAL,
+        &args![centre, this.addr() + MOTION_STATE],
+    );
+}
+
+// Translated from 00c863a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::setPosition` (Xbox PDB): `warpToPosition(position, motion state at +0x10)`.
+pub fn hkp_motion_set_position(e: &mut Engine, this: Ptr, position: u32) {
+    e.call(
+        WARP_TO_POSITION,
+        &args![position, this.addr() + MOTION_STATE],
+    );
+}
+
+// Translated from 00c863c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::setRotation` (Xbox PDB): `warpToRotation(rotation, motion state at +0x10)`.
+pub fn hkp_motion_set_rotation(e: &mut Engine, this: Ptr, rotation: u32) {
+    e.call(
+        WARP_TO_ROTATION,
+        &args![rotation, this.addr() + MOTION_STATE],
+    );
+}
+
+// Translated from 00c863e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::setPositionAndRotation` (Xbox PDB): `warpTo(position, rotation, motion state
+/// at +0x10)`.
+pub fn hkp_motion_set_position_and_rotation(
+    e: &mut Engine,
+    this: Ptr,
+    position: u32,
+    rotation: u32,
+) {
+    e.call(
+        WARP_TO,
+        &args![position, rotation, this.addr() + MOTION_STATE],
+    );
+}
+
+// Translated from 00c86400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::setTransform` (Xbox PDB): the transform overload of `warpTo(transform, motion
+/// state at +0x10)`.
+pub fn hkp_motion_set_transform(e: &mut Engine, this: Ptr, transform: u32) {
+    e.call(
+        WARP_TO_TRANSFORM,
+        &args![transform, this.addr() + MOTION_STATE],
+    );
+}
+
+// Translated from 00c86420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::setDeactivationClass` (Xbox PDB): stores the byte at +0xBE.
+pub fn hkp_motion_set_deactivation_class(e: &mut Engine, this: Ptr, class: u8) {
+    e.mem.set_u8(this.addr() + 0xbe, class);
+}
+
+// Translated from 00c86480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::setMassInv` (Xbox PDB): stores the float at +0xCC through the x87 (a
+/// signalling NaN comes out quiet).
+pub fn hkp_motion_set_mass_inv(e: &mut Engine, this: Ptr, inverse_mass: u32) {
+    e.mem
+        .set_u32(this.addr() + 0xcc, x87_quiet_bits(inverse_mass));
+}
+
+// Translated from 00c86490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::approxTransformAt` (Xbox PDB): `this` in `ECX`; calls
+/// `hkSweptTransform::approxTransformAt` on the swept transform at +0x50 with the time (a
+/// float, copied through the x87) and `transform`.
+pub fn hkp_motion_approx_transform_at(e: &mut Engine, this: Ptr, time: u32, transform: u32) {
+    e.call(
+        APPROX_TRANSFORM_AT,
+        &args![this.addr() + 0x50, x87_quiet_bits(time), transform],
+    );
+}
+
+// Translated from 00c864b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::setLinearVelocity` (Xbox PDB): copies the sixteen-byte vector at `velocity`
+/// (aligned) to +0xD0.
+pub fn hkp_motion_set_linear_velocity(e: &mut Engine, this: Ptr, velocity: Ptr) {
+    for lane in 0..4 {
+        let word = e.mem.u32(velocity.addr() + 4 * lane);
+        e.mem.set_u32(this.addr() + 0xd0 + 4 * lane, word);
+    }
+}
+
+// Translated from 00c864d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::setAngularVelocity` (Xbox PDB): copies the sixteen-byte vector at `velocity`
+/// (aligned) to +0xE0.
+pub fn hkp_motion_set_angular_velocity(e: &mut Engine, this: Ptr, velocity: Ptr) {
+    for lane in 0..4 {
+        let word = e.mem.u32(velocity.addr() + 4 * lane);
+        e.mem.set_u32(this.addr() + 0xe0 + 4 * lane, word);
+    }
+}
+
+// Translated from 00c864f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::applyLinearImpulse` (Xbox PDB): adds `impulse * inverse mass` (the fourth lane
+/// of the vector at +0xC0, +0xCC) to the linear velocity at +0xD0, four lanes of `MULPS` and
+/// `ADDPS`.
+pub fn hkp_motion_apply_linear_impulse(e: &mut Engine, this: Ptr, impulse: Ptr) {
+    let inverse_mass = e.mem.f32(this.addr() + 0xcc);
+    for lane in 0..4 {
+        let scaled = inverse_mass * e.mem.f32(impulse.addr() + 4 * lane);
+        let velocity = e.mem.f32(this.addr() + 0xd0 + 4 * lane);
+        e.mem
+            .set_f32(this.addr() + 0xd0 + 4 * lane, scaled + velocity);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -129,6 +271,24 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             hkp_motion_get_motion_state_and_velocities_and_deactivation_type(Ptr, Ptr)
         ),
         entry!(0x00c8_6530, fn_00c86530(Ptr, Ptr, u32, u8) -> Ptr),
+        entry!(0x00c8_6330, hkp_motion_set_mass(Ptr, f32)),
+        entry!(
+            0x00c8_6380,
+            hkp_motion_set_center_of_mass_in_local(Ptr, u32)
+        ),
+        entry!(0x00c8_63a0, hkp_motion_set_position(Ptr, u32)),
+        entry!(0x00c8_63c0, hkp_motion_set_rotation(Ptr, u32)),
+        entry!(
+            0x00c8_63e0,
+            hkp_motion_set_position_and_rotation(Ptr, u32, u32)
+        ),
+        entry!(0x00c8_6400, hkp_motion_set_transform(Ptr, u32)),
+        entry!(0x00c8_6420, hkp_motion_set_deactivation_class(Ptr, u8)),
+        entry!(0x00c8_6480, hkp_motion_set_mass_inv(Ptr, u32)),
+        entry!(0x00c8_6490, hkp_motion_approx_transform_at(Ptr, u32, u32)),
+        entry!(0x00c8_64b0, hkp_motion_set_linear_velocity(Ptr, Ptr)),
+        entry!(0x00c8_64d0, hkp_motion_set_angular_velocity(Ptr, Ptr)),
+        entry!(0x00c8_64f0, hkp_motion_apply_linear_impulse(Ptr, Ptr)),
     ]
 }
 
@@ -248,5 +408,157 @@ mod tests {
         assert_eq!(e.mem.u8(this + 9), 0);
         let (e, this) = construct(1.0e20, 1);
         assert_eq!(e.mem.u8(this + 9), 0);
+    }
+
+    /// A motion whose vtable has a double at slot +0x10 (the inverse-mass setter).
+    fn motion_with_setter() -> (Engine, u32) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x10, 0x0900_0001);
+        e.register_double(0x0900_0001, |_, _| Ret::default());
+        let motion = e.mem.alloc(0x130);
+        e.mem.set_u32(motion, vtable);
+        e.call_log = Some(vec![]);
+        (e, motion)
+    }
+
+    fn setter_calls(e: &mut Engine) -> Vec<Vec<u32>> {
+        let log = e.call_log.take().unwrap();
+        log.into_iter()
+            .filter(|c| c.0 == 0x0900_0001)
+            .map(|c| c.1)
+            .collect()
+    }
+
+    #[test]
+    fn set_mass_passes_the_reciprocal_or_zero_to_the_virtual() {
+        let (mut e, motion) = motion_with_setter();
+        e.call(0x00c8_6330, &args![motion, 4.0f32.to_bits()]);
+        e.call(0x00c8_6330, &args![motion, 0.0f32.to_bits()]);
+        e.call(0x00c8_6330, &args![motion, (-0.0f32).to_bits()]);
+        e.call(0x00c8_6330, &args![motion, 3.0f32.to_bits()]);
+        e.call(0x00c8_6330, &args![motion, 0x7f80_0001u32]);
+        let calls = setter_calls(&mut e);
+        assert_eq!(
+            calls,
+            [
+                vec![motion, 0.25f32.to_bits()],
+                vec![motion, 0],
+                vec![motion, 0],
+                vec![motion, (1.0f32 / 3.0).to_bits()],
+                vec![motion, 0x7fc0_0001],
+            ]
+        );
+    }
+
+    /// Registers a recording double for each address.
+    fn record_calls(e: &mut Engine, addresses: &[u32]) {
+        for &address in addresses {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+    }
+
+    fn logged(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_warp_setters_pass_their_argument_and_the_motion_state() {
+        let mut e = Engine::new();
+        record_calls(
+            &mut e,
+            &[
+                SET_CENTRE_OF_ROTATION_LOCAL,
+                WARP_TO_POSITION,
+                WARP_TO_ROTATION,
+                WARP_TO,
+                WARP_TO_TRANSFORM,
+            ],
+        );
+        let motion = e.mem.alloc(0x130);
+        e.call(0x00c8_6380, &args![motion, 0x11u32]);
+        e.call(0x00c8_63a0, &args![motion, 0x22u32]);
+        e.call(0x00c8_63c0, &args![motion, 0x33u32]);
+        e.call(0x00c8_63e0, &args![motion, 0x44u32, 0x55u32]);
+        e.call(0x00c8_6400, &args![motion, 0x66u32]);
+        let state = motion + 0x10;
+        assert_eq!(
+            logged(&e, SET_CENTRE_OF_ROTATION_LOCAL),
+            [vec![0x11, state]]
+        );
+        assert_eq!(logged(&e, WARP_TO_POSITION), [vec![0x22, state]]);
+        assert_eq!(logged(&e, WARP_TO_ROTATION), [vec![0x33, state]]);
+        assert_eq!(logged(&e, WARP_TO), [vec![0x44, 0x55, state]]);
+        assert_eq!(logged(&e, WARP_TO_TRANSFORM), [vec![0x66, state]]);
+    }
+
+    #[test]
+    fn set_deactivation_class_and_mass_inv_store_their_fields() {
+        let mut e = Engine::new();
+        let motion = e.mem.alloc(0x130);
+        e.call(0x00c8_6420, &args![motion, 7u8]);
+        assert_eq!(e.mem.u8(motion + 0xbe), 7);
+        e.call(0x00c8_6480, &args![motion, 0.5f32.to_bits()]);
+        assert_eq!(e.mem.f32(motion + 0xcc), 0.5);
+        e.call(0x00c8_6480, &args![motion, 0xff80_0001u32]);
+        assert_eq!(e.mem.u32(motion + 0xcc), 0xffc0_0001);
+    }
+
+    #[test]
+    fn approx_transform_at_calls_the_swept_transform_with_the_time() {
+        let mut e = Engine::new();
+        record_calls(&mut e, &[APPROX_TRANSFORM_AT]);
+        let motion = e.mem.alloc(0x130);
+        e.call(0x00c8_6490, &args![motion, 1.5f32.to_bits(), 0x77u32]);
+        e.call(0x00c8_6490, &args![motion, 0x7f80_0001u32, 0x78u32]);
+        assert_eq!(
+            logged(&e, APPROX_TRANSFORM_AT),
+            [
+                vec![motion + 0x50, 1.5f32.to_bits(), 0x77],
+                vec![motion + 0x50, 0x7fc0_0001, 0x78],
+            ]
+        );
+    }
+
+    #[test]
+    fn velocity_setters_copy_four_lanes() {
+        let mut e = Engine::new();
+        let motion = e.mem.alloc(0x130);
+        let vector = e.mem.alloc(0x10);
+        for lane in 0..4 {
+            e.mem.set_u32(vector + 4 * lane, 0x7f80_0001 + lane);
+        }
+        e.call(0x00c8_64b0, &args![motion, vector]);
+        e.call(0x00c8_64d0, &args![motion, vector]);
+        for lane in 0..4 {
+            assert_eq!(e.mem.u32(motion + 0xd0 + 4 * lane), 0x7f80_0001 + lane);
+            assert_eq!(e.mem.u32(motion + 0xe0 + 4 * lane), 0x7f80_0001 + lane);
+        }
+        assert_eq!(e.mem.u32(motion + 0xcc), 0);
+        assert_eq!(e.mem.u32(motion + 0xf0), 0);
+    }
+
+    #[test]
+    fn apply_linear_impulse_adds_the_scaled_impulse_to_the_velocity() {
+        let mut e = Engine::new();
+        let motion = e.mem.alloc(0x130);
+        let impulse = e.mem.alloc(0x10);
+        e.mem.set_f32(motion + 0xcc, 0.5);
+        for (lane, value) in [2.0f32, -4.0, 6.0, 8.0].into_iter().enumerate() {
+            e.mem.set_f32(impulse + 4 * lane as u32, value);
+            e.mem.set_f32(motion + 0xd0 + 4 * lane as u32, 1.0);
+        }
+        e.call(0x00c8_64f0, &args![motion, impulse]);
+        let velocity: Vec<f32> = (0..4)
+            .map(|lane| e.mem.f32(motion + 0xd0 + 4 * lane))
+            .collect();
+        assert_eq!(velocity, [2.0, -1.0, 4.0, 5.0]);
     }
 }

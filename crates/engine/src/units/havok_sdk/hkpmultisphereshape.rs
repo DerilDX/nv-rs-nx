@@ -436,9 +436,73 @@ pub fn hkp_multi_sphere_shape_cast_ray_with_collector_impl(
     });
 }
 
+/// `hkReferencedObject::calcContentStatistics` (`00c90360`, `this`, collector, class record).
+const REFERENCED_OBJECT_CALC_CONTENT_STATISTICS: u32 = 0x00c9_0360;
+/// The class record `calcContentStatistics` hands on (`01268910`).
+const MULTI_SPHERE_CLASS: u32 = 0x0126_8910;
+/// The vtable the constructor stores (`010ce4bc`) and the shape type it sets (0x15).
+const MULTI_SPHERE_VTABLE: u32 = 0x010c_e4bc;
+const MULTI_SPHERE_TYPE: u32 = 0x15;
+
+// Translated from 00d2a600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMultiSphereShape::calcContentStatistics` (Xbox PDB): `ECX` = shape and two stack words,
+/// the collector and a second word the function never reads (it jumps to the base function
+/// with the class record `01268910` in its place). Calls
+/// `hkReferencedObject::calcContentStatistics` (`00c90360`) with `(this, collector, 01268910)`.
+pub fn hkp_multi_sphere_shape_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr<HkpMultiSphereShape>,
+    collector: u32,
+    _unused_1: u32,
+) {
+    e.call(
+        REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
+        &args![this, collector, MULTI_SPHERE_CLASS],
+    );
+}
+
+// Translated from 00d2a760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMultiSphereShape::hkpMultiSphereShape` (Xbox PDB): `ECX` = the block and two stack words,
+/// `spheres` (an array of `hkVector4`, centre and radius) and `count`. Sets the 16-bit field at
+/// `+6` to 1, `m_userData` to 0, `m_type` to 0x15 and the vtable `010ce4bc`; when `count` is
+/// positive copies that many vectors (16 bytes each, bit for bit) to `+0x20`, with no limit on
+/// `count`; then stores `count` in `m_numSpheres`. Returns `this`.
+pub fn hkp_multi_sphere_shape_construct(
+    e: &mut Engine,
+    this: Ptr<HkpMultiSphereShape>,
+    spheres: u32,
+    count: i32,
+) -> Ptr<HkpMultiSphereShape> {
+    e.set(this, HkpMultiSphereShape::m_referenceCount, 1);
+    e.set(this, HkpMultiSphereShape::m_userData, 0);
+    e.set(this, HkpMultiSphereShape::m_type, MULTI_SPHERE_TYPE);
+    e.set(this, HkpMultiSphereShape::vtable, MULTI_SPHERE_VTABLE);
+    for index in 0..count.max(0) as u32 {
+        copy_vec(
+            e,
+            spheres + 0x10 * index,
+            this.addr() + SPHERES + 0x10 * index,
+        );
+    }
+    e.set(this, HkpMultiSphereShape::m_numSpheres, count);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00d2a600,
+            hkp_multi_sphere_shape_calc_content_statistics(Ptr<HkpMultiSphereShape>, u32, u32)
+        ),
+        entry!(
+            0x00d2a760,
+            hkp_multi_sphere_shape_construct(
+                Ptr<HkpMultiSphereShape>,
+                u32,
+                i32,
+            ) -> Ptr<HkpMultiSphereShape>
+        ),
         entry!(
             0x00d2a5f0,
             hkp_multi_sphere_shape_get_num_collision_spheres_impl(Ptr<HkpMultiSphereShape>) -> i32
@@ -835,5 +899,57 @@ mod tests {
         e.call(0x00d2_abe0, &args![this, input, 0x1000u32, 0x2000u32]);
         let log = e.call_log.take().unwrap();
         assert!(!log.iter().any(|(a, _)| *a == GET_BEST_HIT));
+    }
+    #[test]
+    fn calc_content_statistics_hands_the_class_record_to_the_base_function() {
+        let mut e = Engine::new();
+        e.register(REFERENCED_OBJECT_CALC_CONTENT_STATISTICS, |_, _| {
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00d2_a600, &args![0x1000u32, 0x2000u32, 0x3000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(
+            log[1],
+            (
+                REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
+                args![0x1000u32, 0x2000u32, 0x0126_8910u32]
+            )
+        );
+    }
+
+    #[test]
+    fn constructor_copies_the_spheres_and_sets_the_header() {
+        let mut e = Engine::new();
+        let source = e.mem.alloc(0x30);
+        store_vec(&mut e, source, [1.0, 2.0, 3.0, 0.5]);
+        store_vec(&mut e, source + 0x10, [4.0, 5.0, 6.0, 0.75]);
+        store_vec(&mut e, source + 0x20, [7.0, 8.0, 9.0, 1.0]);
+        let this = e.new_object::<HkpMultiSphereShape>();
+        e.mem.set_u32(this.addr() + 8, 0xdead);
+        let result = e.call(0x00d2_a760, &args![this, source, 3i32]).ptr::<()>();
+        assert_eq!(result.addr(), this.addr());
+        assert_eq!(e.get(this, HkpMultiSphereShape::vtable), 0x010c_e4bc);
+        assert_eq!(e.get(this, HkpMultiSphereShape::m_referenceCount), 1);
+        assert_eq!(e.get(this, HkpMultiSphereShape::m_userData), 0);
+        assert_eq!(e.get(this, HkpMultiSphereShape::m_type), 0x15);
+        assert_eq!(e.get(this, HkpMultiSphereShape::m_numSpheres), 3);
+        assert_eq!(load_vec(&e, this.addr() + SPHERES), [1.0, 2.0, 3.0, 0.5]);
+        assert_eq!(
+            load_vec(&e, this.addr() + SPHERES + 0x20),
+            [7.0, 8.0, 9.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn constructor_copies_nothing_for_a_count_of_zero_or_less() {
+        let mut e = Engine::new();
+        let source = e.mem.alloc(0x10);
+        store_vec(&mut e, source, [1.0, 2.0, 3.0, 4.0]);
+        let this = e.new_object::<HkpMultiSphereShape>();
+        e.call(0x00d2_a760, &args![this, source, -2i32]);
+        assert_eq!(e.get(this, HkpMultiSphereShape::m_numSpheres), -2);
+        assert_eq!(load_vec(&e, this.addr() + SPHERES), [0.0; 4]);
     }
 }

@@ -29,10 +29,99 @@ pub fn fn_00dff970(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// The vtables the destructor installs on its way (the object has sub-objects at `+8`, `+0xC`,
+/// `+0x10`, `+0x14` and `+0x30`) and the ones it ends with.
+const INTERIM_VTABLES: [(u32, u32); 6] = [
+    (0x00, 0x010e_7700),
+    (0x08, 0x010e_76f4),
+    (0x0c, 0x010e_76e0),
+    (0x10, 0x010e_76d4),
+    (0x14, 0x010e_76c8),
+    (0x30, 0x010e_76ac),
+];
+const FINAL_VTABLES: [(u32, u32); 6] = [
+    (0x30, 0x0102_f13c),
+    (0x14, 0x010c_3b8c),
+    (0x10, 0x010c_3bac),
+    (0x0c, 0x010c_3b98),
+    (0x08, 0x010c_3b80),
+    (0x00, 0x0102_e388),
+];
+/// The routine `00c9c670` (`this` = entity in `ECX`, one stack word: a listener) that removes a
+/// listener from an entity's listener array.
+const ENTITY_REMOVE_LISTENER: u32 = 0x00c9_c670;
+/// The `hkArray` empty capacity word (no storage, not owned).
+const EMPTY_CAPACITY: u32 = 0x8000_0000;
+
+// Translated from 00e46900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor `deleting_destructor_00dff930` runs (no name in the engine map; `ECX` =
+/// object, nothing on the stack; the class is unconfirmed). Sets the interim vtables. For every
+/// entity of its array (data `+0x34`, size `+0x38`, capacity word `+0x3c`) it makes sure the
+/// entity has its 16-byte listener record (the pointer at entity `+0x214`, allocated through the
+/// memory router's allocator, slot `4`, when it is 0), looks for the sub-object at `this + 0x30`
+/// in that record's array of 16-bit size at `+0xC` (data at `+8`) and, if it is there, calls
+/// `00c9c670` on the entity with it. Then the entity array is freed (slot `0x10`, capacity times
+/// 4 bytes, unless bit 31 of the capacity word says it is not owned), the array is reset and the
+/// final vtables are installed.
+pub fn fn_00e46900(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    for (offset, vtable) in INTERIM_VTABLES {
+        e.mem.set_u32(me + offset, vtable);
+    }
+    let listener = me + 0x30;
+    let mut index = 0u32;
+    if e.mem.i32(me + 0x38) > 0 {
+        loop {
+            let entity = e.mem.u32(e.mem.u32(me + 0x34) + 4 * index);
+            if e.mem.u32(entity + 0x214) == 0 {
+                let router = e.call(MEMORY_ROUTER, &args![]).u32();
+                let allocator = e.mem.u32(router + 0x10);
+                let record = e.vcall(allocator, 4, &args![0x10u32]).u32();
+                if record != 0 {
+                    e.mem.set_u32(record, 0);
+                    e.mem.set_u16(record + 4, 0);
+                    e.mem.set_u16(record + 6, 0x8000);
+                    e.mem.set_u32(record + 8, 0);
+                    e.mem.set_u16(record + 0xc, 0);
+                    e.mem.set_u16(record + 0xe, 0x8000);
+                }
+                e.mem.set_u32(entity + 0x214, record);
+            }
+            let record = e.mem.u32(entity + 0x214);
+            let count = u32::from(e.mem.u16(record + 0xc));
+            let data = e.mem.u32(record + 8);
+            let found = (0..count).any(|slot| e.mem.u32(data + 4 * slot) == listener);
+            if found {
+                let entity = e.mem.u32(e.mem.u32(me + 0x34) + 4 * index);
+                e.call(ENTITY_REMOVE_LISTENER, &args![entity, listener]);
+            }
+            index += 1;
+            if index as i32 >= e.mem.i32(me + 0x38) {
+                break;
+            }
+        }
+    }
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let capacity = e.mem.u32(me + 0x3c);
+    e.mem.set_u32(me + 0x38, 0);
+    if capacity as i32 >= 0 {
+        let data = e.mem.u32(me + 0x34);
+        let bytes = (capacity & 0x3fff_ffff) * 4;
+        e.vcall(allocator, 0x10, &args![data, bytes]);
+    }
+    e.mem.set_u32(me + 0x34, 0);
+    e.mem.set_u32(me + 0x3c, EMPTY_CAPACITY);
+    for (offset, vtable) in FINAL_VTABLES {
+        e.mem.set_u32(me + offset, vtable);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00df_f930, deleting_destructor_00dff930(Ptr, u8) -> Ptr),
+        entry!(0x00e4_6900, fn_00e46900(Ptr)),
         entry!(0x00df_f970, fn_00dff970(Ptr, u32) -> u32),
     ]
 }
@@ -98,6 +187,100 @@ mod tests {
     #[test]
     fn deleting_destructor_00dff930_frees_only_when_bit_zero_is_set() {
         check(0x00df_f930, 0x00e4_6900);
+    }
+
+    #[test]
+    fn destructor_00e46900_detaches_the_listener_and_frees_the_entity_array() {
+        let mut e = engine();
+
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, 0x0900_0004);
+        e.mem.set_u32(vtable + 0x10, 0x0900_0010);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        // The record the allocator hands out for the entity that has none yet.
+        let fresh = e.mem.alloc(0x10);
+        for word in 0..4 {
+            e.mem.set_u32(fresh + 4 * word, 0xdddd_dddd);
+        }
+        let sink = Rc::clone(&log);
+        e.register_double(0x0900_0004, move |_, a| {
+            sink.borrow_mut().push(vec![4, a[0], a[1]]);
+            Ret {
+                eax: fresh,
+                ..Ret::default()
+            }
+        });
+        let sink = Rc::clone(&log);
+        e.register_double(0x0900_0010, move |_, a| {
+            sink.borrow_mut().push(vec![0x10, a[0], a[1], a[2]]);
+            Ret::default()
+        });
+        let sink = Rc::clone(&log);
+        e.register_double(0x00c9_c670, move |_, a| {
+            sink.borrow_mut().push(vec![0x670, a[0], a[1]]);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x50);
+        let bare = e.mem.alloc(0x220);
+        let attached = e.mem.alloc(0x220);
+        // `attached` already has a record whose array holds another listener and ours.
+        let record = e.mem.alloc(0x10);
+        let listeners = e.mem.alloc(8);
+        e.mem.set_u32(listeners, 0x4444);
+        e.mem.set_u32(listeners + 4, this + 0x30);
+        e.mem.set_u32(record + 8, listeners);
+        e.mem.set_u16(record + 0xc, 2);
+        e.mem.set_u32(attached + 0x214, record);
+        let entities = e.mem.alloc(8);
+        e.mem.set_u32(entities, bare);
+        e.mem.set_u32(entities + 4, attached);
+        e.mem.set_u32(this + 0x34, entities);
+        e.mem.set_u32(this + 0x38, 2);
+        e.mem.set_u32(this + 0x3c, 6);
+        e.call(0x00e4_6900, &args![this]);
+
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                vec![4, allocator, 0x10],
+                vec![0x670, attached, this + 0x30],
+                vec![0x10, allocator, entities, 24],
+            ]
+        );
+        // The fresh record was initialised as an empty small-array pair.
+        assert_eq!(e.mem.u32(bare + 0x214), fresh);
+        assert_eq!(e.mem.u32(fresh), 0);
+        assert_eq!(e.mem.u16(fresh + 4), 0);
+        assert_eq!(e.mem.u16(fresh + 6), 0x8000);
+        assert_eq!(e.mem.u32(fresh + 8), 0);
+        assert_eq!(e.mem.u16(fresh + 0xc), 0);
+        assert_eq!(e.mem.u16(fresh + 0xe), 0x8000);
+        assert_eq!(e.mem.u32(this + 0x34), 0);
+        assert_eq!(e.mem.u32(this + 0x38), 0);
+        assert_eq!(e.mem.u32(this + 0x3c), 0x8000_0000);
+        let vtables: Vec<u32> = [0, 8, 0xc, 0x10, 0x14, 0x30]
+            .iter()
+            .map(|offset| e.mem.u32(this + offset))
+            .collect();
+        assert_eq!(
+            vtables,
+            vec![
+                0x0102_e388,
+                0x010c_3b80,
+                0x010c_3b98,
+                0x010c_3bac,
+                0x010c_3b8c,
+                0x0102_f13c
+            ]
+        );
     }
 }
 
