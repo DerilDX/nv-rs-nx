@@ -343,6 +343,85 @@ fn cast_ray_against_box(e: &mut Engine, this: Ptr<HkpBoxShape>, input: Ptr, outp
     true
 }
 
+/// `hkReferencedObject::calcContentStatistics` (`this` in `ECX`, collector, class) and the
+/// `hkClass` of the box shape that `hkpBoxShape::calcContentStatistics` passes to it.
+const REFERENCED_OBJECT_CALC_CONTENT_STATISTICS: u32 = 0x00c9_0360;
+const BOX_SHAPE_CLASS: u32 = 0x0126_8940;
+/// The vtable `00c9db80` stores, and the vtable of `hkpBoxShape` the constructor stores.
+const BASE_VTABLE: u32 = 0x0102_e388;
+const BOX_SHAPE_VTABLE: u32 = 0x010c_70b4;
+/// The shape type the constructor stores in `m_type`.
+const BOX_SHAPE_TYPE: u32 = 4;
+
+// Translated from 00c9db60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpBoxShape::calcContentStatistics` (engine map): `this` in `ECX`, the collector and one
+/// more word on the stack; jumps to `hkReferencedObject::calcContentStatistics` with the
+/// second word replaced by the class at `01268940`.
+pub fn hkp_box_shape_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr<HkpBoxShape>,
+    collector: u32,
+    _unused_1: u32,
+) {
+    e.call(
+        REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
+        &args![this, collector, BOX_SHAPE_CLASS],
+    );
+}
+
+// Translated from 00c9db80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the vtable at `0102e388` (a scalar deleting destructor table, class unconfirmed)
+/// into `this` (`ECX`, `__fastcall`).
+pub fn fn_00c9db80(e: &mut Engine, this: Ptr<HkpBoxShape>) {
+    e.mem.set_u32(this.addr(), BASE_VTABLE);
+}
+
+/// Stores the smallest of the three half extents in `+0x2c`, the way the x87 code does:
+/// `y` unless `y > x`, then that unless `z < it`, each loaded value quieted.
+fn store_smallest_half_extent(e: &mut Engine, shape: u32) {
+    let x = e.mem.f32(shape + HALF_EXTENTS);
+    let y = e.mem.f32(shape + HALF_EXTENTS + 4);
+    let z = e.mem.f32(shape + HALF_EXTENTS + 8);
+    let first = x87_quiet(if y > x { x } else { y });
+    let smallest = if z < first { z } else { first };
+    e.mem.set_u32(
+        shape + HALF_EXTENTS + 0xc,
+        x87_quiet_bits(smallest.to_bits()),
+    );
+}
+
+// Translated from 00c9db90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the vector at `half_extents` (16 bytes) to `+0x20` and stores the smallest of its
+/// first three lanes in `+0x2c` (`this` in `ECX`; no engine-map name, the box shape's
+/// half-extents setter by its effect).
+pub fn fn_00c9db90(e: &mut Engine, this: Ptr<HkpBoxShape>, half_extents: Ptr) {
+    copy_vec(e, half_extents.addr(), this.addr() + HALF_EXTENTS);
+    store_smallest_half_extent(e, this.addr());
+}
+
+// Translated from 00c9ddb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpBoxShape::hkpBoxShape` (engine map): `this` in `ECX`, the half extents vector and the
+/// radius (a `float`, loaded and stored on the x87 stack, so a signalling NaN is quieted) on
+/// the stack. Sets the reference count word `+6` to 1, the radius, user data 0, type 4, the
+/// vtable `010c70b4`, the half extents and their smallest in `+0x2c`. Returns `this`.
+pub fn hkp_box_shape_construct(
+    e: &mut Engine,
+    this: Ptr<HkpBoxShape>,
+    half_extents: Ptr,
+    radius: f32,
+) -> Ptr<HkpBoxShape> {
+    let shape = this.addr();
+    e.mem.set_u16(shape + 6, 1);
+    e.mem
+        .set_u32(shape + 0x10, x87_quiet_bits(radius.to_bits()));
+    e.mem.set_u32(shape + 8, 0);
+    e.mem.set_u32(shape + 0xc, BOX_SHAPE_TYPE);
+    e.mem.set_u32(shape, BOX_SHAPE_VTABLE);
+    copy_vec(e, half_extents.addr(), shape + HALF_EXTENTS);
+    store_smallest_half_extent(e, shape);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -377,6 +456,16 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00c9de40,
             hkp_box_shape_cast_ray_impl(Ptr<HkpBoxShape>, Ptr, Ptr, Ptr) -> Ptr
+        ),
+        entry!(
+            0x00c9db60,
+            hkp_box_shape_calc_content_statistics(Ptr<HkpBoxShape>, u32, u32)
+        ),
+        entry!(0x00c9db80, fn_00c9db80(Ptr<HkpBoxShape>)),
+        entry!(0x00c9db90, fn_00c9db90(Ptr<HkpBoxShape>, Ptr)),
+        entry!(
+            0x00c9ddb0,
+            hkp_box_shape_construct(Ptr<HkpBoxShape>, Ptr, f32) -> Ptr<HkpBoxShape>
         ),
     ]
 }
@@ -625,5 +714,121 @@ mod tests {
         let c = cast(&mut e, [-5.0, 0.0, 0.0, 0.0], [5.0, 0.0, 0.0, 0.0], 0.1);
         assert!(!c.hit);
         assert_eq!(e.mem.f32(c.output + 0x10), 0.1);
+    }
+}
+
+#[cfg(test)]
+mod movement_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e
+    }
+
+    fn extents(e: &mut Engine, v: [u32; 4]) -> u32 {
+        let address = e.mem.alloc(0x10);
+        for (lane, word) in v.into_iter().enumerate() {
+            e.mem.set_u32(address + 4 * lane as u32, word);
+        }
+        address
+    }
+
+    fn bits(values: [f32; 4]) -> [u32; 4] {
+        values.map(f32::to_bits)
+    }
+
+    #[test]
+    fn calc_content_statistics_passes_the_box_class() {
+        let mut e = engine();
+        let log: Log = Rc::default();
+        let sink = Rc::clone(&log);
+        e.register_double(REFERENCED_OBJECT_CALC_CONTENT_STATISTICS, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let this = e.new_object::<HkpBoxShape>();
+        e.call(0x00c9_db60, &args![this, 0x1111u32, 0x2222u32]);
+        assert_eq!(*log.borrow(), vec![vec![this.addr(), 0x1111, 0x0126_8940]]);
+    }
+
+    #[test]
+    fn base_vtable_store_changes_only_the_vtable() {
+        let mut e = engine();
+        let this = e.new_object::<HkpBoxShape>();
+        e.mem.set_u32(this.addr() + 8, 0x1234_5678);
+        e.call(0x00c9_db80, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), 0x0102_e388);
+        assert_eq!(e.mem.u32(this.addr() + 8), 0x1234_5678);
+    }
+
+    #[test]
+    fn half_extent_setter_stores_the_vector_and_its_smallest_lane() {
+        let mut e = engine();
+        let this = e.new_object::<HkpBoxShape>();
+        for (v, smallest) in [
+            ([3.0, 2.0, 5.0, 9.0], 2.0),
+            ([1.0, 2.0, 5.0, 9.0], 1.0),
+            ([4.0, 6.0, 2.5, 9.0], 2.5),
+            ([4.0, 4.0, 4.0, 0.5], 4.0),
+        ] {
+            let half = extents(&mut e, bits(v));
+            e.call(0x00c9_db90, &args![this, half]);
+            assert_eq!(load_vec(&e, this.addr() + 0x20)[..3], v[..3]);
+            assert_eq!(e.mem.f32(this.addr() + 0x2c), smallest);
+        }
+    }
+
+    #[test]
+    fn half_extent_setter_follows_the_flag_tests_for_nan() {
+        let mut e = engine();
+        let this = e.new_object::<HkpBoxShape>();
+        let nan = 0x7f80_0001;
+        let nan_bits = 0x7fc0_0001;
+        // y is a NaN: the unordered compare takes y; z is then not below it.
+        let half = extents(&mut e, [1.0f32.to_bits(), nan, 0.5f32.to_bits(), 0]);
+        e.call(0x00c9_db90, &args![this, half]);
+        assert_eq!(e.mem.u32(this.addr() + 0x2c), nan_bits);
+        // x is a NaN: y > x is false, so y wins and z below it takes over.
+        let half = extents(&mut e, [nan, 3.0f32.to_bits(), 2.0f32.to_bits(), 0]);
+        e.call(0x00c9_db90, &args![this, half]);
+        assert_eq!(e.mem.f32(this.addr() + 0x2c), 2.0);
+        // z is a NaN: never below, so the first result stays.
+        let half = extents(&mut e, [5.0f32.to_bits(), 3.0f32.to_bits(), nan, 0]);
+        e.call(0x00c9_db90, &args![this, half]);
+        assert_eq!(e.mem.f32(this.addr() + 0x2c), 3.0);
+        // The copy itself keeps the signalling NaN bits.
+        assert_eq!(e.mem.u32(this.addr() + 0x28), nan);
+    }
+
+    #[test]
+    fn construct_fills_the_box_shape() {
+        let mut e = engine();
+        let this = e.new_object::<HkpBoxShape>();
+        let half = extents(&mut e, bits([3.0, 1.5, 2.0, 7.0]));
+        let got = e.call(0x00c9_ddb0, &args![this, half, 0.25f32]).u32();
+        assert_eq!(got, this.addr());
+        let shape = this.addr();
+        assert_eq!(e.mem.u16(shape + 6), 1);
+        assert_eq!(e.mem.f32(shape + 0x10), 0.25);
+        assert_eq!(e.mem.u32(shape + 8), 0);
+        assert_eq!(e.mem.u32(shape + 0xc), 4);
+        assert_eq!(e.mem.u32(shape), 0x010c_70b4);
+        assert_eq!(load_vec(&e, shape + 0x20)[..3], [3.0, 1.5, 2.0]);
+        assert_eq!(e.mem.f32(shape + 0x2c), 1.5);
+    }
+
+    #[test]
+    fn construct_quiets_a_signalling_nan_radius() {
+        let mut e = engine();
+        let this = e.new_object::<HkpBoxShape>();
+        let half = extents(&mut e, bits([1.0, 1.0, 1.0, 1.0]));
+        e.call(0x00c9_ddb0, &args![this, half, f32::from_bits(0x7f80_0001)]);
+        assert_eq!(e.mem.u32(this.addr() + 0x10), 0x7fc0_0001);
     }
 }

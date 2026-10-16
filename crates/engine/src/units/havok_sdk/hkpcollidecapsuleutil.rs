@@ -901,12 +901,184 @@ fn edge_contacts(
     }
 }
 
+// Translated from 00cd6120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A helper of the unit with register inputs (the map gives it no name; the registers come
+/// first, alphabetically, then the stack word; `RET`): `matrix` is EAX, `normal` EDX,
+/// `triangle` ESI and `scales` the first stack word. From the three vertices of `triangle`
+/// (at `+0`, `+0x10`, `+0x20`) it takes the edges `v2 - v1`, `v1 - v0` and `v0 - v2` and
+/// writes the cross product of the first and the third, times `scales[3]`, to `normal` (16
+/// bytes). The first, second and third edge scaled by `scales[0]`, `scales[1]` and `scales[2]`
+/// are crossed with that normal into the three rows at `matrix` (`+0`, `+0x10`, `+0x20`); then
+/// the words `+4`/`+0x10`, `+8`/`+0x20` and `+0x18`/`+0x24` are exchanged (a transpose; x87
+/// loads and stores, so a signalling NaN is quieted), the normal's three lanes go to
+/// `+0xC`, `+0x1C` and `+0x2C`, and `matrix + 0x30` gets `(scales[4] * -scales[0], 0, 0, 0)`
+/// (x87 product rounded to a float).
+pub fn fn_00cd6120(e: &mut Engine, matrix: Ptr, normal: Ptr, triangle: Ptr, scales: Ptr) {
+    let (matrix, normal, triangle, scales) =
+        (matrix.addr(), normal.addr(), triangle.addr(), scales.addr());
+    let first = load(e, triangle);
+    let second = load(e, triangle + 0x10);
+    let third = load(e, triangle + 0x20);
+    let edge_second_third = sub(third, second);
+    let edge_first_second = sub(second, first);
+    let edge_third_first = sub(first, third);
+    let factor = e.mem.f32(scales + 0xc);
+    let cross_normal = mul(cross(edge_second_third, edge_third_first), splat(factor));
+    store(e, normal, cross_normal);
+    let along_first = mul(splat(e.mem.f32(scales)), edge_second_third);
+    let along_second = mul(splat(e.mem.f32(scales + 4)), edge_third_first);
+    let along_third = mul(splat(e.mem.f32(scales + 8)), edge_first_second);
+    store(e, matrix, cross(along_first, cross_normal));
+    store(e, matrix + 0x10, cross(along_second, cross_normal));
+    store(e, matrix + 0x20, cross(along_third, cross_normal));
+    for (high, low) in [(0x10u32, 4u32), (0x20, 8), (0x24, 0x18)] {
+        let from_low = x87_quiet_bits(e.mem.u32(matrix + low));
+        let from_high = x87_quiet_bits(e.mem.u32(matrix + high));
+        e.mem.set_u32(matrix + high, from_low);
+        e.mem.set_u32(matrix + low, from_high);
+    }
+    for (lane, offset) in [0xcu32, 0x1c, 0x2c].into_iter().enumerate() {
+        let word = x87_quiet_bits(e.mem.u32(normal + 4 * lane as u32));
+        e.mem.set_u32(matrix + offset, word);
+    }
+    store(e, matrix + 0x30, [0.0; 4]);
+    let scale = x87_quiet(e.mem.f32(scales + 0x10));
+    let reversed = -x87_quiet(e.mem.f32(scales));
+    e.mem.set_f32(
+        matrix + 0x30,
+        (f64::from(scale) * f64::from(reversed)) as f32,
+    );
+}
+
+/// The frame of `00cd6260`: the directions of the two segments (`+0x18`, `+0x28`) and the
+/// answer of `closestLineSegLineSeg` (`+0x38`: the closest point, a vector, the squared
+/// distance at `+0x20`).
+const DIRECTION_A: u32 = 0x18;
+const DIRECTION_B: u32 = 0x28;
+const SEGMENTS: u32 = 0x38;
+const CLOSEST_FRAME_SIZE: u32 = 0x68;
+
+// Translated from 00cd6260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkCollideCapsuleUtilClostestPointCapsVsCaps` (name from the engine map, unconfirmed;
+/// cdecl; `RSQRTSS` is the host CPU's estimate): the closest point query of two capsules
+/// (`ends_a`, `ends_b`: two end point vectors each). `closestLineSegLineSeg` (`00d22e40`)
+/// finds the closest points of the axes; when the squared distance (`+0x20` of its answer) is
+/// above the square of `radius_a + radius_b + tolerance` (each sum rounded to a float; x87)
+/// the capsules are too far and the answer is 1, `out` untouched. Else the distance is the
+/// CRT square root (`00ec6040`) of it, and the contact normal at `out + 0x10` is: when the
+/// segment function answered non-zero and the squared distance is above 0 the
+/// vector it made at `+0x10`; when it answered 0 the cross product of the two axis directions
+/// if its squared length is above `FLT_EPSILON`, turned around when its dot product with the
+/// answer's vector is negative; else a vector perpendicular to the first axis made from its
+/// two larger components (the smallest of their absolute values is left at 0: `normal[i] =
+/// axis[j]`, `normal[j] = -axis[i]`). The normal is scaled to unit length (the `RSQRTSS`
+/// estimate refined by one step; zero stays zero), the position `out` is the segment answer's
+/// closest point plus `(radius_b - distance)` times the normal, and the gap
+/// `distance - (radius_a + radius_b)` replaces the normal's fourth lane. Answers 0.
+pub fn hk_collide_capsule_util_clostest_point_caps_vs_caps(
+    e: &mut Engine,
+    ends_a: Ptr,
+    radius_a: f32,
+    ends_b: Ptr,
+    radius_b: f32,
+    tolerance: f32,
+    out: Ptr,
+) -> u32 {
+    let out = out.addr();
+    e.with_stack(CLOSEST_FRAME_SIZE, |e, frame| {
+        let frame = frame.addr();
+        let direction_a = sub(load(e, ends_a.addr() + 0x10), load(e, ends_a.addr()));
+        store(e, frame + DIRECTION_A, direction_a);
+        let direction_b = sub(load(e, ends_b.addr() + 0x10), load(e, ends_b.addr()));
+        store(e, frame + DIRECTION_B, direction_b);
+        let status = e
+            .call(
+                CLOSEST_LINE_SEG_LINE_SEG,
+                &args![
+                    ends_a,
+                    frame + DIRECTION_A,
+                    ends_b,
+                    frame + DIRECTION_B,
+                    frame + SEGMENTS
+                ],
+            )
+            .u32();
+        let radius_sum = (f64::from(x87_quiet(radius_a)) + f64::from(x87_quiet(radius_b))) as f32;
+        let limit = (f64::from(radius_sum) + f64::from(x87_quiet(tolerance))) as f32;
+        let squared = e.mem.f32(frame + SEGMENTS + 0x20);
+        if f64::from(squared) > f64::from(limit) * f64::from(limit) {
+            return 1;
+        }
+        let distance = e.call(X87_SQRT, &args![f64::from(squared)]).f32();
+        let normal = out + 0x10;
+        let found = if status != 0 {
+            let positive = 0.0 < squared;
+            if positive {
+                for word in 0..4 {
+                    let value = e.mem.u32(frame + SEGMENTS + 0x10 + 4 * word);
+                    e.mem.set_u32(normal + 4 * word, value);
+                }
+            }
+            positive
+        } else {
+            let product = cross(direction_a, direction_b);
+            let usable = EPSILON < dot3(product, product);
+            if usable {
+                let answer = load(e, frame + SEGMENTS + 0x10);
+                let turned = if 0.0 > dot3(product, answer) {
+                    flip(e, product)
+                } else {
+                    product
+                };
+                store(e, normal, turned);
+            }
+            usable
+        };
+        if !found {
+            let magnitude = |e: &Engine, lane: u32| {
+                f32::from_bits(
+                    x87_quiet_bits(e.mem.u32(frame + DIRECTION_A + 4 * lane)) & 0x7fff_ffff,
+                )
+            };
+            let (x, y, z) = (magnitude(e, 0), magnitude(e, 1), magnitude(e, 2));
+            let (mut low, mut first, mut second) = (0u32, 1u32, 2u32);
+            let mut least = x;
+            if x > y {
+                least = y;
+                first = 0;
+                low = second - 1;
+            }
+            if least > z {
+                second = low;
+            }
+            store(e, normal, [0.0; 4]);
+            let kept = x87_quiet_bits(e.mem.u32(frame + DIRECTION_A + 4 * second));
+            e.mem.set_u32(normal + 4 * first, kept);
+            let turned = x87_quiet_bits(e.mem.u32(frame + DIRECTION_A + 4 * first));
+            e.mem.set_u32(normal + 4 * second, turned ^ 0x8000_0000);
+        }
+        let unit = normalize(e, load(e, normal));
+        store(e, normal, unit);
+        let depth = (f64::from(x87_quiet(radius_b)) - f64::from(distance)) as f32;
+        let position = scaled_add(depth, load(e, normal), load(e, frame + SEGMENTS));
+        store(e, out, position);
+        let gap = (f64::from(distance) - f64::from(radius_sum)) as f32;
+        e.mem.set_f32(out + 0x1c, gap);
+        0
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(
             0x00cd58b0,
             hk_collide_capsule_util_manifold_caps_vs_caps(Ptr, f32, Ptr, f32, Ptr) -> u32
+        ),
+        entry!(0x00cd6120, fn_00cd6120(Ptr, Ptr, Ptr, Ptr)),
+        entry!(
+            0x00cd6260,
+            hk_collide_capsule_util_clostest_point_caps_vs_caps(Ptr, f32, Ptr, f32, f32, Ptr) -> u32
         ),
         entry!(
             0x00cd6520,
@@ -1434,5 +1606,205 @@ mod tests {
         close(read(&e, out), [1.0, 0.0, 0.5]);
         assert!((e.mem.f32(out + 0x1c) - 0.5).abs() < 1e-5);
         assert_eq!(feature(&e, features, 0), (2, 0, 1, 0xeeee));
+    }
+
+    #[test]
+    fn the_triangle_helper_makes_the_normal_and_the_transposed_matrix_00cd6120() {
+        let mut e = Engine::new();
+        let triangle = e.mem.alloc(0x30);
+        for (n, vertex) in [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]]
+            .into_iter()
+            .enumerate()
+        {
+            put(&mut e, triangle + 0x10 * n as u32, vertex);
+        }
+        let scales = e.mem.alloc(0x14);
+        for (n, value) in [2.0f32, 3.0, 5.0, 7.0, 11.0].into_iter().enumerate() {
+            e.mem.set_f32(scales + 4 * n as u32, value);
+        }
+        let matrix = e.mem.alloc(0x40);
+        for word in 0..16 {
+            e.mem.set_u32(matrix + 4 * word, 0xdead_beef);
+        }
+        let normal = e.mem.alloc(0x10);
+        e.call(0x00cd_6120, &[matrix, normal, triangle, scales]);
+        let floats = |at: u32, count: u32| -> Vec<f32> {
+            (0..count).map(|n| e.mem.f32(at + 4 * n)).collect()
+        };
+        assert_eq!(floats(normal, 4), vec![0.0, -7.0, 7.0, 0.0]);
+        assert_eq!(
+            floats(matrix, 16),
+            vec![
+                28.0, -42.0, 0.0, 0.0, 14.0, 0.0, -35.0, -7.0, 14.0, 0.0, -35.0, 7.0, -22.0, 0.0,
+                0.0, 0.0
+            ]
+        );
+    }
+
+    /// Capsule A from the origin to `end_a`, capsule B from (1, 1, -1) to (1, 1, 1), the
+    /// segment function answering `reply`, the radii `(a, b)` and the tolerance; the output
+    /// is filled with 7.0.
+    struct Closest {
+        e: Engine,
+        calls: SegmentCalls,
+        a: Ptr,
+        b: Ptr,
+        out: u32,
+        status: u32,
+    }
+
+    fn closest_case(end_a: [f32; 3], reply: SegmentReply, radii: (f32, f32, f32)) -> Closest {
+        let mut e = Engine::new();
+        exe_constants(&mut e);
+        e.call_log = Some(vec![]);
+        let calls = segments(&mut e, vec![reply]);
+        let a = capsule(&mut e, [0.0, 0.0, 0.0], end_a);
+        let b = capsule(&mut e, [1.0, 1.0, -1.0], [1.0, 1.0, 1.0]);
+        let out = e.mem.alloc(0x20);
+        for word in 0..8 {
+            e.mem.set_f32(out + 4 * word, 7.0);
+        }
+        let status = e
+            .call(0x00cd_6260, &args![a, radii.0, b, radii.1, radii.2, out])
+            .u32();
+        Closest {
+            e,
+            calls,
+            a,
+            b,
+            out,
+            status,
+        }
+    }
+
+    fn unit(v: [f32; 3]) -> [f32; 3] {
+        let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        v.map(|lane| lane / length)
+    }
+
+    #[test]
+    fn capsules_beyond_the_radii_and_tolerance_answer_1_00cd6260() {
+        let reply = SegmentReply {
+            status: 0,
+            point: [1.0, 0.0, 0.0],
+            difference: [0.0, 1.0, 0.0],
+            squared: 1.6,
+        };
+        // (0.5 + 0.5 + 0.25)^2 = 1.5625 < 1.6.
+        let s = closest_case([2.0, 0.0, 0.0], reply, (0.5, 0.5, 0.25));
+        assert_eq!(s.status, 1);
+        assert!(sqrt_arguments(&s.e).is_empty());
+        assert_eq!(read(&s.e, s.out), [7.0; 3]);
+        let calls = s.calls.borrow();
+        assert_eq!(calls[0].start_a, s.a.addr());
+        assert_eq!(calls[0].start_b, s.b.addr());
+        assert_eq!(calls[0].direction_a, [2.0, 0.0, 0.0]);
+        assert_eq!(calls[0].direction_b, [0.0, 0.0, 2.0]);
+        // At the limit the capsules still count.
+        let reply = SegmentReply {
+            squared: 1.5625,
+            ..reply
+        };
+        let s = closest_case([2.0, 0.0, 0.0], reply, (0.5, 0.5, 0.25));
+        assert_eq!(s.status, 0);
+        // A NaN squared distance is never above the limit.
+        let reply = SegmentReply {
+            squared: f32::NAN,
+            ..reply
+        };
+        let s = closest_case([2.0, 0.0, 0.0], reply, (0.5, 0.5, 0.25));
+        assert_eq!(s.status, 0);
+    }
+
+    #[test]
+    fn crossing_axes_get_the_cross_product_turned_towards_the_answer_00cd6260() {
+        // The axes' cross product is (0, -4, 0); the answer's vector (0, 1, 0) is opposite.
+        let reply = SegmentReply {
+            status: 0,
+            point: [1.0, 0.0, 0.0],
+            difference: [0.0, 1.0, 0.0],
+            squared: 0.25,
+        };
+        let s = closest_case([2.0, 0.0, 0.0], reply, (0.5, 1.0, 0.25));
+        assert_eq!(s.status, 0);
+        assert_eq!(sqrt_arguments(&s.e), vec![0.25]);
+        // Distance 0.5, radius sum 1.5: gap -1, depth 0.5.
+        close(read(&s.e, s.out + 0x10), [0.0, 1.0, 0.0]);
+        close(read(&s.e, s.out), [1.0, 0.5, 0.0]);
+        assert!((s.e.mem.f32(s.out + 0x1c) + 1.0).abs() < 1e-5);
+        // With the answer's vector on the same side the cross product keeps its direction.
+        let reply = SegmentReply {
+            difference: [0.0, -1.0, 0.0],
+            ..reply
+        };
+        let s = closest_case([2.0, 0.0, 0.0], reply, (0.5, 1.0, 0.25));
+        close(read(&s.e, s.out + 0x10), [0.0, -1.0, 0.0]);
+        close(read(&s.e, s.out), [1.0, -0.5, 0.0]);
+        // A vector at a right angle (dot product 0) does not turn it either.
+        let reply = SegmentReply {
+            difference: [1.0, 0.0, 0.0],
+            ..reply
+        };
+        let s = closest_case([2.0, 0.0, 0.0], reply, (0.5, 1.0, 0.25));
+        close(read(&s.e, s.out + 0x10), [0.0, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn a_non_zero_answer_keeps_the_vector_of_the_segment_function_00cd6260() {
+        let reply = SegmentReply {
+            status: 1,
+            point: [1.0, 0.0, 0.0],
+            difference: [0.0, 0.0, 3.0],
+            squared: 4.0,
+        };
+        let s = closest_case([2.0, 0.0, 0.0], reply, (1.5, 1.5, 0.0));
+        assert_eq!(s.status, 0);
+        assert_eq!(sqrt_arguments(&s.e), vec![4.0]);
+        // Distance 2, radius sum 3: gap -1; depth 1.5 - 2 = -0.5 along (0, 0, 1).
+        close(read(&s.e, s.out + 0x10), [0.0, 0.0, 1.0]);
+        close(read(&s.e, s.out), [1.0, 0.0, -0.5]);
+        assert!((s.e.mem.f32(s.out + 0x1c) + 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn without_a_usable_vector_the_normal_is_perpendicular_to_the_first_axis_00cd6260() {
+        // (first axis, zeroed component by the order of the absolute values)
+        let cases: [([f32; 3], [f32; 3]); 4] = [
+            ([3.0, -1.0, 2.0], [2.0, 0.0, -3.0]),
+            ([1.0, 2.0, -3.0], [0.0, -3.0, -2.0]),
+            ([3.0, 2.0, 1.0], [2.0, -3.0, 0.0]),
+            ([2.0, 3.0, 1.0], [-3.0, 2.0, 0.0]),
+        ];
+        for (axis, normal) in cases {
+            // A zero squared distance with a non-zero answer.
+            let reply = SegmentReply {
+                status: 1,
+                point: [1.0, 2.0, 3.0],
+                difference: [5.0, 5.0, 5.0],
+                squared: 0.0,
+            };
+            let s = closest_case(axis, reply, (0.5, 0.5, 0.0));
+            assert_eq!(s.status, 0, "axis {axis:?}");
+            close(read(&s.e, s.out + 0x10), unit(normal));
+            // Distance 0: the position moves by the radius of B along the normal.
+            let expected = unit(normal).map(|lane| lane * 0.5);
+            close(
+                read(&s.e, s.out),
+                [1.0 + expected[0], 2.0 + expected[1], 3.0 + expected[2]],
+            );
+            assert!((s.e.mem.f32(s.out + 0x1c) + 1.0).abs() < 1e-5);
+        }
+        // Parallel axes (zero cross product) with the answer 0 go the same way.
+        let reply = SegmentReply {
+            status: 0,
+            point: [0.0, 0.0, 0.0],
+            difference: [1.0, 1.0, 1.0],
+            squared: 0.0,
+        };
+        let s = closest_case([0.0, 0.0, 2.0], reply, (0.5, 0.5, 0.0));
+        assert_eq!(s.status, 0);
+        // Axis (0, 0, 2): the order of the absolute values leaves the x lane at 0 and turns the
+        // y and z lanes: (0, 2, -0).
+        close(read(&s.e, s.out + 0x10), [0.0, 1.0, 0.0]);
     }
 }

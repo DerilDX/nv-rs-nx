@@ -1,4 +1,4 @@
-# Handoff: engine port push (2026-10-10, evening)
+# Handoff: engine port push (updated 2026-10-16)
 
 For the next Claude session leading the nv-rs engine port. Read AGENTS.md,
 docs/MILESTONES.md, docs/ENGINE_PORT_PLAN.md, docs/FRAME_SKELETON.md and
@@ -7,7 +7,52 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-14 (current; give this to the next account first)
+### Claude lead, 2026-10-16 (current; give this to the next account first)
+
+**State:**
+- **Merged this session:** #203 (GPL-3.0-or-later as the single licence),
+  #204 to #206 and the PR that carries this note. About 20,500
+  hand-translated functions (31 %), about 55 % covered with the start-up
+  table, about 25,300 engine tests. #197 and #198 are fixed.
+- **Contributor PRs:** reviewed on 10-16. #91 (Wayland): CI approved, Linux
+  job needs `libwayland-dev` and `libxkbcommon-dev`, then rebase. #29 and
+  #87: changes requested. #50, #62 and #108: rebase, then merge. #48, #59
+  and #93 closed with thanks. #200 (pointer oracle): changes requested (the
+  NvPurity phi rule must keep an offset only when all inputs match).
+
+**Maintainer decisions (2026-10-16):**
+- **Translate first, wire later.** Movement wiring (Build 43) is paused so
+  the compile capacity goes to translation. The wiring branch
+  `claude/build43-movement` is kept locally with a status note; it runs the
+  game's own `PlayerMover::Update` path and falls back to `crates/physics`
+  on any untranslated function. Resume it once Havok and the start-up code
+  are translated: run its static_init test first.
+- **All of Havok is being translated** (about 6,900 functions at the start,
+  about 4,900 open now), BSHavok glue first, then hkp*, then the rest, in
+  batches of about 120 whole units per agent. Most "Translation incomplete"
+  markers in these batches are only the FS:[0] unwinding frame or the /GS
+  cookie; every branch is translated.
+- **Real-game movement capture** works (`nv-movecap`, kept on a local
+  branch for now): it starts the real game unattended, dismisses the add-on
+  notices like a player, drives scenarios and records every frame. Ground
+  truth: walk about 85, run about 340, sneak about 49 units/s; jump apex
+  59-61.6 (the controller's `fJumpHeight` is 64); take-off 275-286 units/s.
+  Replay each frame's recorded dt when comparing.
+
+**Machinery notes:**
+- An engine test compile now peaks near 15 GB. Two at once filled the 31 GB
+  machine and swapped, so the second compile slot opens only with 16 GB of
+  free physical memory. Run about 5-6 translation agents, not 8. Splitting
+  the engine crate would allow more parallel compiles.
+- When collecting, a clean git cherry-pick can still duplicate a function
+  when two batches add items next to each other: the compiler reports
+  E0428, and the second copy goes. Never rewrite `funcs()` with a tool that
+  only understands `entry!`: some units register hand-written
+  `(addr, f as AbiFn)` tuples.
+- Refresh the private ledger snapshot before handing out work, or batches
+  get assigned functions that are already done.
+
+### Claude lead, 2026-10-14 (previous)
 
 The maintainer alternates two Claude Max accounts on this one machine, never
 both at once. This session stopped at the weekly limit (95-96 % rule); the

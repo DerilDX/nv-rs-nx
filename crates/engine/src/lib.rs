@@ -35,8 +35,13 @@
 #![allow(clippy::neg_multiply)]
 // Branch structure follows the exe's compare-and-jump order.
 #![allow(clippy::collapsible_match)]
+// Allocation sizes spell out the exe's "all ones on carry" (`SETO`/`NEG`/`OR`)
+// as `checked_mul(..).unwrap_or(u32::MAX)`, next to the instructions it mirrors.
+#![allow(clippy::manual_saturating_arithmetic)]
 // Test doubles record calls in shared logs.
 #![cfg_attr(test, allow(clippy::type_complexity))]
+// Tests build their expected call lists and buffers with `vec!`.
+#![cfg_attr(test, allow(clippy::useless_vec))]
 
 pub mod abi;
 mod engine;
