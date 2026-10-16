@@ -25,6 +25,16 @@ const LABEL_ADDED: u32 = 0x010c_c9dc;
 const LABEL_REMOVED: u32 = 0x010c_c9e8;
 const LABEL_SET_MOTION_TYPE: u32 = 0x010c_ca04;
 const LABEL_END: u32 = 0x010c_41f8;
+/// Profiling labels of the functions below (`"TtsetShapeCb"`, `"TtentDelCb"`, `"TtcpCb"`,
+/// `"TtNewCollCb"`, `"TtFinCollCb"`, `"TtcpAddCb"`, `"TtcpRemCb"`, `"TtcpProCb"`).
+const LABEL_SHAPE_SET: u32 = 0x010c_c9f4;
+const LABEL_DELETED: u32 = 0x010c_ca18;
+const LABEL_CONTACT_POINT: u32 = 0x010c_ca24;
+const LABEL_CONSTRAINT_ADDED: u32 = 0x010c_ca2c;
+const LABEL_CONSTRAINT_REMOVED: u32 = 0x010c_ca38;
+const LABEL_POINT_ADDED: u32 = 0x010c_ca44;
+const LABEL_POINT_REMOVED: u32 = 0x010c_ca50;
+const LABEL_PROCESS: u32 = 0x010c_ca5c;
 /// `hkpEntity::sortConstraintsSlavesDeterministically` (Xbox PDB, `00c9c860`, `this` only).
 const SORT_CONSTRAINTS_SLAVES: u32 = 0x00c9_c860;
 
@@ -52,6 +62,54 @@ layout! {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00cff9b0, cleanup_null_pointers(Ptr)),
+        entry!(
+            0x00cffcf0,
+            hkp_entity_callback_util_fire_entity_shape_set(Ptr<HkpEntityCallbacks>)
+        ),
+        entry!(
+            0x00cffe50,
+            hkp_entity_callback_util_fire_entity_deleted(Ptr<HkpEntityCallbacks>)
+        ),
+        entry!(
+            0x00cfff00,
+            hkp_entity_callback_util_fire_contact_point_callback_internal(
+                Ptr<HkpEntityCallbacks>,
+                u32,
+            )
+        ),
+        entry!(
+            0x00cfffb0,
+            hkp_entity_callback_util_fire_contact_constraint_added_callback(
+                Ptr<HkpEntityCallbacks>,
+                u32,
+            )
+        ),
+        entry!(
+            0x00d00060,
+            hkp_entity_callback_util_fire_contact_constraint_removed_callback(
+                Ptr<HkpEntityCallbacks>,
+                u32,
+            )
+        ),
+        entry!(
+            0x00d00110,
+            hkp_entity_callback_util_fire_contact_point_added_internal(
+                Ptr<HkpEntityCallbacks>,
+                u32,
+            )
+        ),
+        entry!(
+            0x00d001c0,
+            hkp_entity_callback_util_fire_contact_point_removed_internal(
+                Ptr<HkpEntityCallbacks>,
+                u32,
+            )
+        ),
+        entry!(
+            0x00d00270,
+            hkp_entity_callback_util_fire_contact_process_internal(Ptr<HkpEntityCallbacks>, u32)
+        ),
         entry!(
             0x00cffa00,
             hkp_entity_callback_util_fire_entity_added(Ptr<HkpEntityCallbacks>)
@@ -126,6 +184,158 @@ fn drain_callbacks(
         e.vcall(object, slot, &args![entity]);
         profile_record(e, LABEL_END);
     }
+}
+
+// Translated from 00cff9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cleanupNullPointers` (Xbox PDB): takes the `hkSmallArray<T*>` (data +0, 16-bit size +4) in
+/// the register `EAX` (here the argument `array`; no stack argument). Walking from the last
+/// entry to the first, every null entry shrinks the size by one and the entries after it are
+/// moved down by one place, so the array ends without nulls (entries past the new size keep
+/// stale values).
+pub fn cleanup_null_pointers(e: &mut Engine, array: Ptr) {
+    let array = array.addr();
+    let mut index = i32::from(e.mem.u16(array + 4)) - 1;
+    while index >= 0 {
+        let data = e.mem.u32(array);
+        if e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4))) == 0 {
+            let size = e.mem.u16(array + 4);
+            e.mem.set_u16(array + 4, size.wrapping_add(0xffff));
+            let mut at = index;
+            if index < i32::from(e.mem.u16(array + 4)) {
+                loop {
+                    let data = e.mem.u32(array);
+                    let place = data.wrapping_add((at as u32).wrapping_mul(4));
+                    let next = e.mem.u32(place.wrapping_add(4));
+                    e.mem.set_u32(place, next);
+                    at += 1;
+                    if at >= i32::from(e.mem.u16(array + 4)) {
+                        break;
+                    }
+                }
+            }
+        }
+        index -= 1;
+    }
+}
+
+/// Calls vtable slot `slot` (with `argument`) of every listener of the small array at
+/// `entity + 0x200` (the collision listeners; data +0, 16-bit size +4), last first, null ones
+/// skipped, each between a profiling record `label` and an end record; then removes the nulls
+/// (`cleanupNullPointers`).
+fn fire_collision_listeners(
+    e: &mut Engine,
+    entity: Ptr<HkpEntityCallbacks>,
+    label: u32,
+    slot: u32,
+    argument: u32,
+) {
+    let array = entity.addr() + 0x200;
+    let mut index = i32::from(e.mem.u16(array + 4)) - 1;
+    while index >= 0 {
+        let at = (index as u32).wrapping_mul(4);
+        let data = e.mem.u32(array);
+        if e.mem.u32(data.wrapping_add(at)) != 0 {
+            profile_record(e, label);
+            let data = e.mem.u32(array);
+            let listener = e.mem.u32(data.wrapping_add(at));
+            e.vcall(listener, slot, &args![argument]);
+            profile_record(e, LABEL_END);
+        }
+        index -= 1;
+    }
+    cleanup_null_pointers(e, Ptr::new(array));
+}
+
+// Translated from 00cffcf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpEntityCallbackUtil::fireEntityShapeSet` (Xbox PDB): `entityShapeSetCallback` (slot
+/// `0x0c`; name unconfirmed) of every entity listener.
+pub fn hkp_entity_callback_util_fire_entity_shape_set(
+    e: &mut Engine,
+    entity: Ptr<HkpEntityCallbacks>,
+) {
+    fire_listeners(e, entity, LABEL_SHAPE_SET, 0xc);
+}
+
+// Translated from 00cffe50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpEntityCallbackUtil::fireEntityDeleted` (Xbox PDB): `entityDeletedCallback` (slot `0x14`;
+/// name unconfirmed) of every entity listener.
+pub fn hkp_entity_callback_util_fire_entity_deleted(
+    e: &mut Engine,
+    entity: Ptr<HkpEntityCallbacks>,
+) {
+    fire_listeners(e, entity, LABEL_DELETED, 0x14);
+}
+
+// Translated from 00cfff00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpEntityCallbackUtil::fireContactPointCallbackInternal` (Xbox PDB): slot `0x00` of every
+/// collision listener of the entity, with `event`, then `cleanupNullPointers`.
+pub fn hkp_entity_callback_util_fire_contact_point_callback_internal(
+    e: &mut Engine,
+    entity: Ptr<HkpEntityCallbacks>,
+    event: u32,
+) {
+    fire_collision_listeners(e, entity, LABEL_CONTACT_POINT, 0x0, event);
+}
+
+// Translated from 00cfffb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpEntityCallbackUtil::fireContactConstraintAddedCallback` (Xbox PDB): slot `0x04` of every
+/// collision listener of the entity, with `event`, then `cleanupNullPointers`.
+pub fn hkp_entity_callback_util_fire_contact_constraint_added_callback(
+    e: &mut Engine,
+    entity: Ptr<HkpEntityCallbacks>,
+    event: u32,
+) {
+    fire_collision_listeners(e, entity, LABEL_CONSTRAINT_ADDED, 0x4, event);
+}
+
+// Translated from 00d00060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpEntityCallbackUtil::fireContactConstraintRemovedCallback` (Xbox PDB): slot `0x08` of
+/// every collision listener of the entity, with `event`, then `cleanupNullPointers`.
+pub fn hkp_entity_callback_util_fire_contact_constraint_removed_callback(
+    e: &mut Engine,
+    entity: Ptr<HkpEntityCallbacks>,
+    event: u32,
+) {
+    fire_collision_listeners(e, entity, LABEL_CONSTRAINT_REMOVED, 0x8, event);
+}
+
+// Translated from 00d00110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpEntityCallbackUtil::fireContactPointAddedInternal` (Xbox PDB): stores `entity` in the
+/// word at `event + 0xc`, then calls slot `0x10` of every collision listener with `event` and
+/// runs `cleanupNullPointers`.
+pub fn hkp_entity_callback_util_fire_contact_point_added_internal(
+    e: &mut Engine,
+    entity: Ptr<HkpEntityCallbacks>,
+    event: u32,
+) {
+    e.mem.set_u32(event + 0xc, entity.addr());
+    fire_collision_listeners(e, entity, LABEL_POINT_ADDED, 0x10, event);
+}
+
+// Translated from 00d001c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpEntityCallbackUtil::fireContactPointRemovedInternal` (Xbox PDB): stores `entity` in the
+/// word at `event + 0x10`, then calls slot `0x14` of every collision listener with `event` and
+/// runs `cleanupNullPointers`.
+pub fn hkp_entity_callback_util_fire_contact_point_removed_internal(
+    e: &mut Engine,
+    entity: Ptr<HkpEntityCallbacks>,
+    event: u32,
+) {
+    e.mem.set_u32(event + 0x10, entity.addr());
+    fire_collision_listeners(e, entity, LABEL_POINT_REMOVED, 0x14, event);
+}
+
+// Translated from 00d00270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpEntityCallbackUtil::fireContactProcessInternal` (Xbox PDB): stores `entity` in the word
+/// at `event + 8`, then calls slot `0x18` of every collision listener with `event` and runs
+/// `cleanupNullPointers`.
+pub fn hkp_entity_callback_util_fire_contact_process_internal(
+    e: &mut Engine,
+    entity: Ptr<HkpEntityCallbacks>,
+    event: u32,
+) {
+    e.mem.set_u32(event + 8, entity.addr());
+    fire_collision_listeners(e, entity, LABEL_PROCESS, 0x18, event);
 }
 
 // Translated from 00cffa00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -374,5 +584,121 @@ mod tests {
         );
         // Records: two listener calls, then 2 + 1 constraint calls and 1 action call.
         assert_eq!(records(&r).len(), 2 * (2 + 3 + 1));
+    }
+
+    const FULL_VTABLE: u32 = 0x0200_0080;
+    const SLOT_DOUBLES: u32 = 0x0200_0200;
+
+    /// The rig with a vtable of seven slots whose doubles sit at `SLOT_DOUBLES + 4 * slot`.
+    fn full_rig() -> Rig {
+        let mut r = rig();
+        let slots: Vec<u32> = (0..7).map(|n| SLOT_DOUBLES + n * 4).collect();
+        r.e.put_vtable(FULL_VTABLE, &slots);
+        for slot in slots {
+            r.e.register(slot, |_, _| Ret::default());
+        }
+        r
+    }
+
+    #[test]
+    fn shape_set_and_deleted_call_their_slots_last_first() {
+        let mut r = full_rig();
+        let listeners = add_listeners(&mut r);
+        for listener in listeners {
+            r.e.mem.set_u32(listener, FULL_VTABLE);
+        }
+        let entity = r.entity.addr();
+        r.e.call(0x00cf_fcf0, &args![r.entity]);
+        assert_eq!(
+            calls(&r.e, SLOT_DOUBLES + 0xc),
+            vec![vec![listeners[1], entity], vec![listeners[0], entity]]
+        );
+        assert_eq!(
+            records(&r),
+            vec![LABEL_SHAPE_SET, LABEL_END, LABEL_SHAPE_SET, LABEL_END]
+        );
+        r.e.call(0x00cf_fe50, &args![r.entity]);
+        assert_eq!(
+            calls(&r.e, SLOT_DOUBLES + 0x14),
+            vec![vec![listeners[1], entity], vec![listeners[0], entity]]
+        );
+        assert_eq!(records(&r)[4], LABEL_DELETED);
+        // Without an extended block nothing is called.
+        let mut r = full_rig();
+        r.e.call(0x00cf_fe50, &args![r.entity]);
+        assert!(records(&r).is_empty());
+    }
+
+    #[test]
+    fn contact_callbacks_call_collision_listeners_then_drop_the_nulls() {
+        // (function, label, vtable slot, event word that receives the entity)
+        let table = [
+            (0x00cf_ff00, LABEL_CONTACT_POINT, 0x0, None),
+            (0x00cf_ffb0, LABEL_CONSTRAINT_ADDED, 0x4, None),
+            (0x00d0_0060, LABEL_CONSTRAINT_REMOVED, 0x8, None),
+            (0x00d0_0110, LABEL_POINT_ADDED, 0x10, Some(0xc)),
+            (0x00d0_01c0, LABEL_POINT_REMOVED, 0x14, Some(0x10)),
+            (0x00d0_0270, LABEL_PROCESS, 0x18, Some(0x8)),
+        ];
+        for (address, label, slot, event_word) in table {
+            let mut r = full_rig();
+            let listeners = [r.e.mem.alloc(4), r.e.mem.alloc(4)];
+            for listener in listeners {
+                r.e.mem.set_u32(listener, FULL_VTABLE);
+            }
+            let entity = r.entity.addr();
+            let data = r.e.mem.alloc(16);
+            r.e.mem.set_u32(data, listeners[0]);
+            r.e.mem.set_u32(data + 8, listeners[1]);
+            r.e.mem.set_u32(entity + 0x200, data);
+            r.e.mem.set_u16(entity + 0x204, 3);
+            let event = r.e.mem.alloc(0x20);
+            r.e.call(address, &args![r.entity, event]);
+            assert_eq!(
+                calls(&r.e, SLOT_DOUBLES + slot),
+                vec![vec![listeners[1], event], vec![listeners[0], event]]
+            );
+            assert_eq!(records(&r), vec![label, LABEL_END, label, LABEL_END]);
+            assert_eq!(r.e.mem.u16(entity + 0x204), 2);
+            assert_eq!(r.e.mem.u32(data), listeners[0]);
+            assert_eq!(r.e.mem.u32(data + 4), listeners[1]);
+            if let Some(word) = event_word {
+                assert_eq!(r.e.mem.u32(event + word), entity);
+            }
+        }
+    }
+
+    #[test]
+    fn contact_point_added_stores_the_entity_even_without_listeners() {
+        let mut r = full_rig();
+        let event = r.e.mem.alloc(0x20);
+        r.e.call(0x00d0_0110, &args![r.entity, event]);
+        assert_eq!(r.e.mem.u32(event + 0xc), r.entity.addr());
+        assert!(records(&r).is_empty());
+    }
+
+    #[test]
+    fn cleanup_removes_every_null_and_keeps_the_order() {
+        let mut r = rig();
+        let array = r.e.mem.alloc(8);
+        let data = r.e.mem.alloc(20);
+        for (index, value) in [1u32, 0, 0, 2, 0].into_iter().enumerate() {
+            r.e.mem.set_u32(data + index as u32 * 4, value);
+        }
+        r.e.mem.set_u32(array, data);
+        r.e.mem.set_u16(array + 4, 5);
+        r.e.call(0x00cf_f9b0, &args![array]);
+        assert_eq!(r.e.mem.u16(array + 4), 2);
+        assert_eq!(r.e.mem.u32(data), 1);
+        assert_eq!(r.e.mem.u32(data + 4), 2);
+        // An empty array stays empty.
+        r.e.mem.set_u16(array + 4, 0);
+        r.e.call(0x00cf_f9b0, &args![array]);
+        assert_eq!(r.e.mem.u16(array + 4), 0);
+        // A single null empties the array.
+        r.e.mem.set_u32(data, 0);
+        r.e.mem.set_u16(array + 4, 1);
+        r.e.call(0x00cf_f9b0, &args![array]);
+        assert_eq!(r.e.mem.u16(array + 4), 0);
     }
 }

@@ -127,12 +127,42 @@ pub fn hkp_constraint_data_get_constraint_info_util(
     }
 }
 
+// Translated from 00d21a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConstraintData::addInstance` (Xbox PDB): `this` is the data (ECX, unused), then
+/// `constraint` (unused), `runtime` and `size`. When `runtime` is not null the `size` bytes
+/// there are cleared with `hkString::memSet(runtime, 0, size)` (`00cb1280`).
+pub fn hkp_constraint_data_add_instance(
+    e: &mut Engine,
+    _this: Ptr,
+    _constraint: Ptr,
+    runtime: Ptr,
+    size: u32,
+) {
+    if !runtime.is_null() {
+        e.call(0x00cb_1280, &args![runtime, 0u32, size]);
+    }
+}
+
+// Translated from 00d21a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConstraintData::getSolverResults` (Xbox PDB): `this` is the data (ECX, unused);
+/// returns `runtime` as it is.
+pub fn hkp_constraint_data_get_solver_results(_e: &mut Engine, _this: Ptr, runtime: Ptr) -> Ptr {
+    runtime
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00d21a60,
-        hkp_constraint_data_get_constraint_info_util(Ptr, u32, Ptr)
-    )]
+    vec![
+        entry!(
+            0x00d2_1a30,
+            hkp_constraint_data_add_instance(Ptr, Ptr, Ptr, u32)
+        ),
+        entry!(0x00d2_1a50, hkp_constraint_data_get_solver_results(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00d21a60,
+            hkp_constraint_data_get_constraint_info_util(Ptr, u32, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -205,5 +235,37 @@ mod tests {
     #[should_panic(expected = "loops forever")]
     fn hkp_constraint_data_get_constraint_info_util_panics_where_the_game_hangs() {
         info_00d21a60(&[(0, 21)], 8);
+    }
+}
+
+#[cfg(test)]
+mod havok_a03_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[test]
+    fn add_instance_clears_the_runtime_only_when_there_is_one() {
+        let mut e = Engine::new();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        e.register_double(0x00cb_1280, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.call(0x00d2_1a30, &args![0x10u32, 0x20u32, 0u32, 0x40u32]);
+        assert!(seen.borrow().is_empty());
+        e.call(0x00d2_1a30, &args![0x10u32, 0x20u32, 0x9000u32, 0x40u32]);
+        assert_eq!(*seen.borrow(), [[0x9000, 0, 0x40]]);
+    }
+
+    #[test]
+    fn get_solver_results_answers_the_runtime() {
+        let mut e = Engine::new();
+        assert_eq!(
+            e.call(0x00d2_1a50, &args![0x10u32, 0x9876u32]).u32(),
+            0x9876
+        );
+        assert_eq!(e.call(0x00d2_1a50, &args![0x10u32, 0u32]).u32(), 0);
     }
 }

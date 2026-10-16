@@ -25,9 +25,64 @@ pub fn hkp_fixed_rigid_motion_construct(
     this
 }
 
+/// `hkMotionState::operator=` (Xbox PDB, `00c86660`, `this` = the destination, one argument =
+/// the source).
+const MOTION_STATE_ASSIGN: u32 = 0x00c8_6660;
+
+// Translated from 00d1e130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpFixedRigidMotion::setStepPosition` (Xbox PDB): a fixed body does not move, so this
+/// does nothing. `this` and two arguments are ignored.
+pub fn hkp_fixed_rigid_motion_set_step_position(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+) {
+}
+
+// Translated from 00d1e140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpFixedRigidMotion::setLinearVelocity` (Xbox PDB): does nothing. `this` and one argument
+/// are ignored.
+pub fn hkp_fixed_rigid_motion_set_linear_velocity(_e: &mut Engine, _this: Ptr, _unused_1: u32) {}
+
+// Translated from 00d1e150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpFixedRigidMotion::setAngularVelocity` (Xbox PDB): does nothing. `this` and one argument
+/// are ignored.
+pub fn hkp_fixed_rigid_motion_set_angular_velocity(_e: &mut Engine, _this: Ptr, _unused_1: u32) {}
+
+// Translated from 00d1e190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpFixedRigidMotion::getPositionAndVelocities` (Xbox PDB): copies the motion state (`this +
+/// 0x10`) into the one in `out` (`out + 0x10`, `hkMotionState::operator=`) and zeroes the
+/// two velocity vectors at `out + 0xd0` and `out + 0xe0`.
+pub fn hkp_fixed_rigid_motion_get_position_and_velocities(e: &mut Engine, this: Ptr, out: Ptr) {
+    let out = out.addr();
+    e.call(MOTION_STATE_ASSIGN, &args![out + 0x10, this.addr() + 0x10]);
+    for word in 0..8 {
+        e.mem.set_u32(out + 0xd0 + 4 * word, 0);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d1_e160, hkp_fixed_rigid_motion_construct(Ptr, Ptr, Ptr) -> Ptr)]
+    vec![
+        entry!(0x00d1_e160, hkp_fixed_rigid_motion_construct(Ptr, Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00d1_e130,
+            hkp_fixed_rigid_motion_set_step_position(Ptr, u32, u32)
+        ),
+        entry!(
+            0x00d1_e140,
+            hkp_fixed_rigid_motion_set_linear_velocity(Ptr, u32)
+        ),
+        entry!(
+            0x00d1_e150,
+            hkp_fixed_rigid_motion_set_angular_velocity(Ptr, u32)
+        ),
+        entry!(
+            0x00d1_e190,
+            hkp_fixed_rigid_motion_get_position_and_velocities(Ptr, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -58,5 +113,53 @@ mod movement_tests {
         assert_eq!(*seen.borrow(), vec![vec![this, 5, 6]]);
         assert_eq!(e.mem.u32(this), FIXED_MOTION_VTABLE);
         assert_eq!(e.mem.u8(this + 8), 5);
+    }
+
+    /// Calls `address` on a block with the given argument words and checks nothing changed.
+    fn assert_no_effect(address: u32, extra: &[u32]) {
+        let mut e = test_engine();
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x10, 0x1234);
+        let before = e.mem.bytes(this, 0x20);
+        let mut words = vec![this];
+        words.extend_from_slice(extra);
+        e.call(address, &words);
+        assert_eq!(e.mem.bytes(this, 0x20), before);
+    }
+
+    #[test]
+    fn set_step_position_does_nothing() {
+        assert_no_effect(0x00d1_e130, &[1, 2]);
+    }
+
+    #[test]
+    fn set_linear_velocity_does_nothing() {
+        assert_no_effect(0x00d1_e140, &[1]);
+    }
+
+    #[test]
+    fn set_angular_velocity_does_nothing() {
+        assert_no_effect(0x00d1_e150, &[1]);
+    }
+
+    #[test]
+    fn get_position_and_velocities_copies_the_motion_state_and_clears_the_velocities() {
+        let mut e = test_engine();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        e.register_double(MOTION_STATE_ASSIGN, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x20);
+        let out = e.mem.alloc(0x100);
+        for word in 0..8 {
+            e.mem.set_u32(out + 0xd0 + 4 * word, 0xdead_beef);
+        }
+        e.mem.set_u32(out + 0xf0, 0x55);
+        e.call(0x00d1_e190, &args![this, out]);
+        assert_eq!(*seen.borrow(), vec![vec![out + 0x10, this + 0x10]]);
+        assert_eq!(e.mem.bytes(out + 0xd0, 32), vec![0; 32]);
+        assert_eq!(e.mem.u32(out + 0xf0), 0x55);
     }
 }

@@ -50,6 +50,20 @@ const FINISH: u32 = 0x00df_9d90;
 const RANDOM_VALUE: u32 = 0x00df_9ae0;
 /// `(arg1, arg2, transform, arg5, arg6, arg9)`, cdecl: the exact answer for outcome 3.
 const EXACT_DEPTH: u32 = 0x00e2_db70;
+/// The memory router (`00c85750`, no arguments): its first word is the cursor of a stack-like
+/// allocation area.
+const MEMORY_ROUTER: u32 = 0x00c8_5750;
+/// The float `0.0001` splatted into the radius lanes of every search state of the multi search.
+const MULTI_RADIUS: u32 = 0x0101_41cc;
+/// The float stored as the radius squared of every state of the multi search.
+const MULTI_RADIUS_SQUARED: u32 = 0x010d_bb58;
+/// The vector with the sign bit of every lane (for `XORPS`).
+const SIGN_MASK: u32 = 0x010c_44d0;
+/// `(first header, second header, &result vector, &first direction, &second direction)`,
+/// cdecl (`00e2d6c0`): works on the headers of two simplexes and writes the vector.
+const PAIR_SEARCH: u32 = 0x00e2_d6c0;
+/// The bytes of one search record of the multi search (state, three points, header, vertices).
+const RECORD_SIZE: u32 = 0x3000;
 
 /// Vertices the simplex may hold before the search gives up with outcome 2.
 const VERTEX_LIMIT: i32 = 0x37;
@@ -84,6 +98,7 @@ layout! {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00dfa940, fn_00dfa940(Ptr<PenetrationState>, u32) -> i32),
+        entry!(0x00dfaba0, hk_calc_multi_penetration_depth(Ptr, Ptr, Ptr, i32, Ptr, Ptr) -> u32),
         entry!(0x00dfaac0, hk_calculate_penetration_depth(u32, u32, Ptr, f32, u32, u32, u32, u32, u32) -> i32),
         entry!(
             0x00dfb1e0,
@@ -282,6 +297,276 @@ pub fn hk_calculate_penetration_depth(
     });
     profile_record(e, LABEL_END);
     outcome
+}
+
+/// Four SSE lanes as bits.
+type Lanes = [u32; 4];
+
+/// `FSUB` on two stack values with the hardware NaN rules: with a NaN operand the one with
+/// the larger significand wins (a NaN against a number: the NaN), made quiet.
+fn x87_sub(first: f64, second: f64) -> f64 {
+    let quiet = 1u64 << 51;
+    let significand = 0x000f_ffff_ffff_ffffu64;
+    match (first.is_nan(), second.is_nan()) {
+        (true, true) => {
+            if first.to_bits() & significand >= second.to_bits() & significand {
+                f64::from_bits(first.to_bits() | quiet)
+            } else {
+                f64::from_bits(second.to_bits() | quiet)
+            }
+        }
+        (true, false) => f64::from_bits(first.to_bits() | quiet),
+        (false, true) => f64::from_bits(second.to_bits() | quiet),
+        (false, false) => first - second,
+    }
+}
+
+/// `FLD dword`: the float's bits (a signalling NaN quieted) as the stack value.
+fn x87_load32(bits: u32) -> f64 {
+    f64::from(f32::from_bits(x87_quiet_bits(bits)))
+}
+
+/// One lane of an SSE arithmetic instruction: a NaN in the destination operand wins
+/// (quieted), then a NaN in the source operand, otherwise `op`.
+fn sse(dest: u32, source: u32, op: fn(f32, f32) -> f32) -> u32 {
+    let quiet = 0x0040_0000;
+    if f32::from_bits(dest).is_nan() {
+        dest | quiet
+    } else if f32::from_bits(source).is_nan() {
+        source | quiet
+    } else {
+        op(f32::from_bits(dest), f32::from_bits(source)).to_bits()
+    }
+}
+
+fn lanes_op(dest: Lanes, source: Lanes, op: fn(f32, f32) -> f32) -> Lanes {
+    [0, 1, 2, 3].map(|lane| sse(dest[lane], source[lane], op))
+}
+
+fn add(a: f32, b: f32) -> f32 {
+    a + b
+}
+
+fn mul(a: f32, b: f32) -> f32 {
+    a * b
+}
+
+/// `SHUFPS` of a register with itself that copies one lane to all four.
+fn broadcast(lanes: Lanes, lane: usize) -> Lanes {
+    [lanes[lane]; 4]
+}
+
+/// A `MOVAPS` load of four lanes.
+fn load_lanes(e: &Engine, addr: u32) -> Lanes {
+    [0, 1, 2, 3].map(|lane| e.mem.u32(addr + 4 * lane))
+}
+
+/// A `MOVAPS` store of four lanes.
+fn store_lanes(e: &mut Engine, addr: u32, lanes: Lanes) {
+    for (lane, value) in lanes.into_iter().enumerate() {
+        e.mem.set_u32(addr + 4 * lane as u32, value);
+    }
+}
+
+// Translated from 00dfaba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkCalcMultiPenetrationDepth` (Ghidra label): cdecl with six words, answers `1` when the
+/// search is unusable and `0` when the results are written. For `count` shapes (the pointers
+/// at `shapes`, the result records at `outputs`, both with a stride of four bytes) it takes a
+/// search record of `0x3000` bytes each from the memory router's cursor (the area is rounded
+/// up to 128 bytes in all). A record holds the search state in the layout of
+/// [`fn_00dfb1e0`] (the `transform` copied to `+0`, the radius lanes `0.0001` at `+0x40`, a
+/// constant radius squared at `+0x50`, `reference` at `+0x54`, the shape at `+0x58`, the
+/// points `+0x70`, `+0xb0` and `+0xf0` named at `+0x60` to `+0x68`), then the shape at
+/// `+0x130`, its result record at `+0x134` and the simplex header at `+0x140` (vertex count
+/// at `+8`, the direction word at `+0x2ff0` is written by the pair search). A search step
+/// that settles at once (answers `1`) drops the shape and the next one reuses the record.
+/// With fewer than two records left the answer is `1`; with more only the first two are
+/// used. The pair search (`00e2d6c0`) then runs, and every record whose outcome word is not
+/// `2` and whose simplex holds `0x37` or more vertices takes one more vertex; rounds repeat
+/// while one of those is undecided, and a decided one with outcome `3` gives up with `1`.
+/// Finally the result vector of the pair search, negated, and the contact vector of the
+/// final computation are rotated by the matrix `matrix` (rows at `+0`, `+0x10`, `+0x20`, the
+/// translation at `+0x30`) into each result record: the rotated vector at `+0x10`, the
+/// rotated and translated contact point at `+0`, and at `+0x1c` (over the rotated vector's
+/// fourth lane) the depth: the negated fourth lane of the pair search's vector less
+/// `reference[4]` less the shape's float at `+0x10`. The cursor is restored on every exit.
+pub fn hk_calc_multi_penetration_depth(
+    e: &mut Engine,
+    matrix: Ptr,
+    reference: Ptr,
+    shapes: Ptr,
+    count: i32,
+    transform: Ptr,
+    outputs: Ptr,
+) -> u32 {
+    e.with_stack(0xa0, |e, frame| {
+        let frame = frame.addr();
+        let (matrix, reference, shapes, transform, outputs) = (
+            matrix.addr(),
+            reference.addr(),
+            shapes.addr(),
+            transform.addr(),
+            outputs.addr(),
+        );
+        let mut count = count;
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let base = e.mem.u32(router);
+        let area = (count.wrapping_mul(RECORD_SIZE as i32).wrapping_add(0x7f) as u32) & 0xffff_ff80;
+        e.mem.set_u32(router, area.wrapping_add(base));
+        let restore = |e: &mut Engine| {
+            let router = e.call(MEMORY_ROUTER, &args![]).u32();
+            e.mem.set_u32(router, base);
+        };
+        if count > 0 {
+            let radius = x87_quiet_bits(e.mem.u32(MULTI_RADIUS));
+            let radius_squared = x87_quiet_bits(e.mem.u32(MULTI_RADIUS_SQUARED));
+            let output_offset = outputs.wrapping_sub(shapes);
+            let mut record = base;
+            let mut shape_cursor = shapes;
+            let mut index = 0;
+            loop {
+                let shape = e.mem.u32(shape_cursor);
+                e.mem.set_u32(record + 0x130, shape);
+                let output = e.mem.u32(shape_cursor.wrapping_add(output_offset));
+                e.mem.set_u32(record + 0x134, output);
+                for row in 0..4 {
+                    let lanes = load_lanes(e, transform + 0x10 * row);
+                    store_lanes(e, record + 0x10 * row, lanes);
+                }
+                e.mem.set_u32(record + 0x50, radius_squared);
+                e.mem.set_u32(record + 0x58, shape);
+                e.mem.set_u32(record + 0x54, reference);
+                e.mem.set_u32(record + 0x60, record + 0x70);
+                e.mem.set_u32(record + 0x5c, 0);
+                e.mem.set_u32(record + 0x6c, 0);
+                e.mem.set_u32(record + 0x64, record + 0xb0);
+                e.mem.set_u32(record + 0x68, record + 0xf0);
+                store_lanes(e, record + 0x40, [radius; 4]);
+                let settled = e
+                    .call(SEARCH_STEP, &args![record, frame + 0x70, frame + 0x28])
+                    .u32();
+                if settled == 1 {
+                    count -= 1;
+                } else {
+                    e.call(
+                        SIMPLEX_INIT,
+                        &args![record + 0x140, record + 0x70, record + 0xb0, record + 0xf0],
+                    );
+                    record += RECORD_SIZE;
+                }
+                index += 1;
+                shape_cursor = shape_cursor.wrapping_add(4);
+                if index >= count {
+                    break;
+                }
+            }
+        }
+        if count > 2 {
+            count = 2;
+        } else if count < 2 {
+            restore(e);
+            return 1;
+        }
+        e.mem.set_u32(frame + 0x28, 0);
+        e.mem.set_u32(frame + 0x2c, 0);
+        loop {
+            e.call(
+                PAIR_SEARCH,
+                &args![
+                    base + 0x140,
+                    base + 0x140 + RECORD_SIZE,
+                    frame + 0x40,
+                    base + 0x2ff0,
+                    base + 0x2ff0 + RECORD_SIZE
+                ],
+            );
+            let mut undecided = false;
+            let mut outcome = frame + 0x28;
+            let mut header_count = base + 0x148;
+            for _ in 0..count {
+                let vertices = e.mem.i32(header_count);
+                if e.mem.i32(outcome) != 2 && vertices >= 0x37 {
+                    let state = header_count - 0x148;
+                    let header = header_count - 8;
+                    let vertex = header + 0x20 + ((vertices as u32) << 6);
+                    e.mem.set_i32(header_count, vertices.wrapping_add(1));
+                    e.mem.set_u32(vertex + 0x30, 0);
+                    let direction = e.mem.u32(header_count + 0x2ea8);
+                    e.call(FILL_VERTEX, &args![state, direction, vertex]);
+                    let direction = e.mem.u32(header_count + 0x2ea8);
+                    let decided = e
+                        .call(
+                            ADD_VERTEX,
+                            &args![state, header, direction, vertex, outcome],
+                        )
+                        .u32();
+                    if decided == 1 {
+                        if e.mem.i32(outcome) == 3 {
+                            restore(e);
+                            return 1;
+                        }
+                    } else {
+                        undecided = true;
+                    }
+                }
+                outcome += 4;
+                header_count += RECORD_SIZE;
+            }
+            if !undecided {
+                break;
+            }
+        }
+        // The pair search's result vector, negated, rotated into every result record.
+        let depth = x87_quiet_bits(e.mem.u32(frame + 0x4c)) ^ 0x8000_0000;
+        let mask = load_lanes(e, SIGN_MASK);
+        let found = load_lanes(e, frame + 0x40);
+        let vector: Lanes = std::array::from_fn(|lane| found[lane] ^ mask[lane]);
+        let reference_float = x87_quiet_bits(e.mem.u32(reference + 0x10));
+        if count <= 0 {
+            restore(e);
+            return 0;
+        }
+        let offset = x87_sub(x87_load32(depth), x87_load32(reference_float));
+        e.mem.set_f64(frame + 0x28, offset);
+        let mut state_cursor = base + 0x134;
+        for _ in 0..count {
+            let state = state_cursor - 0x134;
+            let direction = e.mem.u32(state_cursor + 0x2ebc);
+            e.call(
+                FINISH,
+                &args![state, state_cursor + 0xc, direction, frame + 0x70],
+            );
+            let rows = [0, 0x10, 0x20, 0x30].map(|row| load_lanes(e, matrix + row));
+            let output = e.mem.u32(state_cursor);
+            let turned = lanes_op(
+                lanes_op(
+                    lanes_op(broadcast(vector, 1), rows[1], mul),
+                    lanes_op(rows[0], broadcast(vector, 0), mul),
+                    add,
+                ),
+                lanes_op(broadcast(vector, 2), rows[2], mul),
+                add,
+            );
+            store_lanes(e, output + 0x10, turned);
+            let contact = load_lanes(e, frame + 0x80);
+            let shape = e.mem.u32(state_cursor - 4);
+            let shape_float = x87_quiet_bits(e.mem.u32(shape + 0x10));
+            let lowered = x87_sub(e.mem.f64(frame + 0x28), x87_load32(shape_float));
+            let sideways = lanes_op(
+                lanes_op(broadcast(contact, 1), rows[1], mul),
+                lanes_op(broadcast(contact, 0), rows[0], mul),
+                add,
+            );
+            let forward = lanes_op(lanes_op(broadcast(contact, 2), rows[2], mul), rows[3], add);
+            let point = lanes_op(sideways, forward, add);
+            store_lanes(e, output, point);
+            let output = e.mem.u32(state_cursor);
+            e.mem.set_u32(output + 0x1c, (lowered as f32).to_bits());
+            state_cursor += RECORD_SIZE;
+        }
+        restore(e);
+        0
+    })
 }
 
 #[cfg(test)]
@@ -513,5 +798,339 @@ mod tests {
         assert_eq!(e.mem.u32(STREAM + 4), STREAM + 0x40 + 24);
         assert_eq!(e.mem.u32(STREAM + 0x40), LABEL_PENETRATION);
         assert_eq!(e.mem.u32(STREAM + 0x4c), LABEL_END);
+    }
+}
+
+#[cfg(test)]
+mod havok_a03_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// What the doubles answer: the search step per shape, the added vertices as
+    /// `(decided, outcome written)`, and an outcome the pair search writes into the first
+    /// outcome slot.
+    struct Script {
+        step: Vec<u32>,
+        add: Vec<(u32, i32)>,
+        pair_outcome: Option<i32>,
+    }
+
+    struct Rig {
+        e: Engine,
+        log: Log,
+        base: u32,
+        cursor: u32,
+        matrix: u32,
+        reference: u32,
+        shapes: u32,
+        outputs: u32,
+        transform: u32,
+    }
+
+    fn put(e: &mut Engine, addr: u32, values: [f32; 4]) {
+        for (lane, value) in values.into_iter().enumerate() {
+            e.mem.set_f32(addr + 4 * lane as u32, value);
+        }
+    }
+
+    fn floats(e: &Engine, addr: u32) -> [f32; 4] {
+        [0, 1, 2, 3].map(|lane| e.mem.f32(addr + 4 * lane))
+    }
+
+    /// Doubles for the memory router and all the callees, two shapes whose floats at `+0x10`
+    /// are `0.25` and `0.5`, two result records, a matrix with the translation
+    /// `(10, 20, 30, 1)` and a reference float of `0.5`. The pair search writes
+    /// `(1, 2, 3, 4)` and the final computation `(0.5, 0.25, 0.125, 9)` at `+0x10` of its
+    /// output.
+    fn rig(script: Script) -> Rig {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.mem.set_u32(MULTI_RADIUS, 0x38d1_b717);
+        e.mem.set_u32(MULTI_RADIUS_SQUARED, 0x322b_cc76);
+        for lane in 0..4 {
+            e.mem.set_u32(SIGN_MASK + 4 * lane, 0x8000_0000);
+        }
+        let arena = e.mem.alloc(0x8000);
+        let cursor = e.mem.alloc(0x20);
+        e.mem.set_u32(cursor, arena);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: cursor,
+            ..Ret::default()
+        });
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let turn = Rc::new(Cell::new(0usize));
+        let (sink, steps, counter) = (Rc::clone(&log), script.step, Rc::clone(&turn));
+        e.register_double(SEARCH_STEP, move |_, a| {
+            sink.borrow_mut().push((SEARCH_STEP, a.to_vec()));
+            let answer = steps[counter.get().min(steps.len() - 1)];
+            counter.set(counter.get() + 1);
+            Ret {
+                eax: answer,
+                ..Ret::default()
+            }
+        });
+        for address in [SIMPLEX_INIT, FILL_VERTEX] {
+            let sink = Rc::clone(&log);
+            e.register_double(address, move |_, a| {
+                sink.borrow_mut().push((address, a.to_vec()));
+                Ret::default()
+            });
+        }
+        let (sink, pair_outcome) = (Rc::clone(&log), script.pair_outcome);
+        e.register_double(PAIR_SEARCH, move |e, a| {
+            sink.borrow_mut().push((PAIR_SEARCH, a.to_vec()));
+            put(e, a[2], [1.0, 2.0, 3.0, 4.0]);
+            if let Some(outcome) = pair_outcome {
+                e.mem.set_i32(a[2] - 0x18, outcome);
+            }
+            Ret::default()
+        });
+        let (sink, adds, counter) = (Rc::clone(&log), script.add, Rc::new(Cell::new(0usize)));
+        e.register_double(ADD_VERTEX, move |e, a| {
+            sink.borrow_mut().push((ADD_VERTEX, a.to_vec()));
+            let (decided, outcome) = adds[counter.get().min(adds.len() - 1)];
+            counter.set(counter.get() + 1);
+            e.mem.set_i32(a[4], outcome);
+            Ret {
+                eax: decided,
+                ..Ret::default()
+            }
+        });
+        let sink = Rc::clone(&log);
+        e.register_double(FINISH, move |e, a| {
+            sink.borrow_mut().push((FINISH, a.to_vec()));
+            put(e, a[3] + 0x10, [0.5, 0.25, 0.125, 9.0]);
+            Ret::default()
+        });
+        let matrix = e.mem.alloc(0x40);
+        put(&mut e, matrix, [1.0, 0.0, 0.0, 0.0]);
+        put(&mut e, matrix + 0x10, [0.0, 1.0, 0.0, 0.0]);
+        put(&mut e, matrix + 0x20, [0.0, 0.0, 1.0, 0.0]);
+        put(&mut e, matrix + 0x30, [10.0, 20.0, 30.0, 1.0]);
+        let reference = e.mem.alloc(0x20);
+        e.mem.set_f32(reference + 0x10, 0.5);
+        let transform = e.mem.alloc(0x40);
+        for word in 0..16 {
+            e.mem.set_u32(transform + 4 * word, 0x4000_0000 + word);
+        }
+        let shapes = e.mem.alloc(0x10);
+        let outputs = e.mem.alloc(0x10);
+        for (index, height) in [0.25f32, 0.5].into_iter().enumerate() {
+            let shape = e.mem.alloc(0x20);
+            e.mem.set_f32(shape + 0x10, height);
+            let output = e.mem.alloc(0x30);
+            e.mem.set_u32(shapes + 4 * index as u32, shape);
+            e.mem.set_u32(outputs + 4 * index as u32, output);
+        }
+        Rig {
+            e,
+            log,
+            base: arena,
+            cursor,
+            matrix,
+            reference,
+            shapes,
+            outputs,
+            transform,
+        }
+    }
+
+    impl Rig {
+        fn run(&mut self, count: i32) -> u32 {
+            let (matrix, reference, shapes, transform, outputs) = (
+                self.matrix,
+                self.reference,
+                self.shapes,
+                self.transform,
+                self.outputs,
+            );
+            self.e
+                .call(
+                    0x00df_aba0,
+                    &args![matrix, reference, shapes, count, transform, outputs],
+                )
+                .u32()
+        }
+
+        fn calls_to(&self, address: u32) -> Vec<Vec<u32>> {
+            self.log
+                .borrow()
+                .iter()
+                .filter(|(called, _)| *called == address)
+                .map(|(_, words)| words.clone())
+                .collect()
+        }
+
+        /// The result record of shape `index`.
+        fn output(&self, index: u32) -> u32 {
+            self.e.mem.u32(self.outputs + 4 * index)
+        }
+
+        fn shape(&self, index: u32) -> u32 {
+            self.e.mem.u32(self.shapes + 4 * index)
+        }
+    }
+
+    fn quiet() -> Script {
+        Script {
+            step: vec![0],
+            add: vec![(1, 0)],
+            pair_outcome: None,
+        }
+    }
+
+    #[test]
+    fn a_single_shape_lays_out_its_record_and_answers_one() {
+        let mut r = rig(quiet());
+        assert_eq!(r.run(1), 1);
+        let base = r.base;
+        // The state: the transform, the radius lanes, the constants and the pointers.
+        for word in 0..16 {
+            assert_eq!(r.e.mem.u32(base + 4 * word), 0x4000_0000 + word);
+        }
+        for lane in 0..4 {
+            assert_eq!(r.e.mem.u32(base + 0x40 + 4 * lane), 0x38d1_b717);
+        }
+        assert_eq!(r.e.mem.u32(base + 0x50), 0x322b_cc76);
+        assert_eq!(r.e.mem.u32(base + 0x54), r.reference);
+        assert_eq!(r.e.mem.u32(base + 0x58), r.shape(0));
+        assert_eq!(r.e.mem.u32(base + 0x5c), 0);
+        assert_eq!(r.e.mem.u32(base + 0x60), base + 0x70);
+        assert_eq!(r.e.mem.u32(base + 0x64), base + 0xb0);
+        assert_eq!(r.e.mem.u32(base + 0x68), base + 0xf0);
+        assert_eq!(r.e.mem.u32(base + 0x6c), 0);
+        assert_eq!(r.e.mem.u32(base + 0x130), r.shape(0));
+        assert_eq!(r.e.mem.u32(base + 0x134), r.output(0));
+        let frame_pointers = &r.calls_to(SEARCH_STEP)[0];
+        assert_eq!(frame_pointers[0], base);
+        assert_eq!(frame_pointers[1] - frame_pointers[2], 0x70 - 0x28);
+        assert_eq!(
+            r.calls_to(SIMPLEX_INIT),
+            vec![vec![base + 0x140, base + 0x70, base + 0xb0, base + 0xf0]]
+        );
+        // One shape is too few: the cursor is back where it was.
+        assert_eq!(r.e.mem.u32(r.cursor), base);
+        assert!(r.calls_to(PAIR_SEARCH).is_empty());
+    }
+
+    #[test]
+    fn a_settled_shape_is_dropped_and_the_next_one_takes_its_record() {
+        let mut r = rig(Script {
+            step: vec![1, 0, 0],
+            ..quiet()
+        });
+        // Records of the third shape would be read stale: the second record needs a shape.
+        let base = r.base;
+        r.e.mem.set_u32(base + RECORD_SIZE + 0x130, r.shape(1));
+        r.e.mem.set_u32(base + RECORD_SIZE + 0x134, r.output(1));
+        let shapes = r.e.mem.alloc(0x10);
+        let outputs = r.e.mem.alloc(0x10);
+        for (index, address) in [r.shape(0), r.shape(1), 0xdead_0000]
+            .into_iter()
+            .enumerate()
+        {
+            r.e.mem.set_u32(shapes + 4 * index as u32, address);
+        }
+        for index in 0..2 {
+            let output = r.output(index);
+            r.e.mem.set_u32(outputs + 4 * index, output);
+        }
+        r.shapes = shapes;
+        r.outputs = outputs;
+        assert_eq!(r.run(3), 0);
+        // Two search steps: the second shape sits in the first record, and the loop ends
+        // because only two shapes remain counted.
+        assert_eq!(r.calls_to(SEARCH_STEP).len(), 2);
+        assert_eq!(r.e.mem.u32(base + 0x130), r.e.mem.u32(shapes + 4));
+        assert_eq!(r.calls_to(SIMPLEX_INIT).len(), 1);
+        assert_eq!(r.calls_to(PAIR_SEARCH).len(), 1);
+        assert_eq!(r.calls_to(FINISH).len(), 2);
+        assert_eq!(r.e.mem.u32(r.cursor), base);
+    }
+
+    #[test]
+    fn the_found_vector_is_rotated_into_the_result_records() {
+        let mut r = rig(quiet());
+        assert_eq!(r.run(2), 0);
+        let base = r.base;
+        assert_eq!(
+            r.calls_to(PAIR_SEARCH),
+            vec![vec![
+                base + 0x140,
+                base + 0x140 + RECORD_SIZE,
+                r.calls_to(PAIR_SEARCH)[0][2],
+                base + 0x2ff0,
+                base + 0x2ff0 + RECORD_SIZE
+            ]]
+        );
+        // The pair search wrote (1, 2, 3, 4) and the vector is negated: (-1, -2, -3).
+        // The depth, -4 - 0.5 less the shape's float at +0x10, overwrites the fourth lane.
+        assert_eq!(floats(&r.e, r.output(0) + 0x10), [-1.0, -2.0, -3.0, -4.75]);
+        assert_eq!(floats(&r.e, r.output(1) + 0x10), [-1.0, -2.0, -3.0, -5.0]);
+        // The point: (0.5, 0.25, 0.125) turned (the identity) and moved by (10, 20, 30);
+        // the fourth lane is 1 (the translation row's).
+        assert_eq!(floats(&r.e, r.output(0)), [10.5, 20.25, 30.125, 1.0]);
+        assert_eq!(floats(&r.e, r.output(1)), [10.5, 20.25, 30.125, 1.0]);
+        let finishes = r.calls_to(FINISH);
+        assert_eq!(finishes.len(), 2);
+        assert_eq!(finishes[0][..3], [base, base + 0x140, 0]);
+        assert_eq!(
+            finishes[1][..2],
+            [base + RECORD_SIZE, base + RECORD_SIZE + 0x140]
+        );
+        assert_eq!(r.e.mem.u32(r.cursor), base);
+    }
+
+    #[test]
+    fn a_full_simplex_takes_vertices_until_it_is_decided() {
+        let mut r = rig(Script {
+            add: vec![(0, 0), (1, 0)],
+            ..quiet()
+        });
+        let base = r.base;
+        r.e.mem.set_u32(base + 0x148, 0x37);
+        r.e.mem.set_u32(base + 0x2ff0, 0xd1d1);
+        assert_eq!(r.run(2), 0);
+        let vertex = base + 0x140 + 0x20 + 0x37 * 0x40;
+        let adds = r.calls_to(ADD_VERTEX);
+        assert_eq!(adds.len(), 2);
+        assert_eq!(adds[0][..4], [base, base + 0x140, 0xd1d1, vertex]);
+        assert_eq!(adds[1][3], vertex + 0x40);
+        assert_eq!(adds[0][4], adds[1][4]);
+        assert_eq!(r.calls_to(FILL_VERTEX)[0], vec![base, 0xd1d1, vertex]);
+        // The undecided vertex made another round of the pair search.
+        assert_eq!(r.calls_to(PAIR_SEARCH).len(), 2);
+        assert_eq!(r.e.mem.u32(base + 0x148), 0x39);
+        assert_eq!(r.e.mem.u32(vertex + 0x30), 0);
+    }
+
+    #[test]
+    fn a_record_with_outcome_two_takes_no_vertex() {
+        let mut r = rig(Script {
+            pair_outcome: Some(2),
+            ..quiet()
+        });
+        let base = r.base;
+        r.e.mem.set_u32(base + 0x148, 0x40);
+        assert_eq!(r.run(2), 0);
+        assert!(r.calls_to(ADD_VERTEX).is_empty());
+        assert!(r.calls_to(FILL_VERTEX).is_empty());
+        assert_eq!(r.e.mem.u32(base + 0x148), 0x40);
+    }
+
+    #[test]
+    fn a_decided_simplex_with_outcome_three_gives_up() {
+        let mut r = rig(Script {
+            add: vec![(1, 3)],
+            ..quiet()
+        });
+        let base = r.base;
+        r.e.mem.set_u32(base + 0x148, 0x37);
+        assert_eq!(r.run(2), 1);
+        assert!(r.calls_to(FINISH).is_empty());
+        assert_eq!(r.e.mem.u32(r.cursor), base);
     }
 }

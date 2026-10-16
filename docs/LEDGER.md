@@ -31,15 +31,15 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 20958 | 31.6% |
+| translated | 21220 | 32.0% |
 | static init (table) | 15762 | 23.8% |
-| traced | 4453 | 6.7% |
+| traced | 4475 | 6.8% |
 | platform | 3325 | 5.0% |
 | library | 6169 | 9.3% |
-| open | 15592 | 23.5% |
+| open | 15308 | 23.1% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **1944** engine functions
+Translation totals count markers, not complete behavior. **1946** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -1963,6 +1963,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00d2c8a0` | `crates/engine/src/units/unplaced/run_00d2c7e0.rs:17` |
 | `00d2c960` | `crates/engine/src/units/bshavok/hkliquidaction.rs:48` |
 | `00d2c9d0` | `crates/engine/src/units/bshavok/hkliquidaction.rs:71` |
+| `00d32cd0` | `crates/engine/src/units/havok_sdk/hkpconvexlistagent3.rs:423` |
 | `00d50020` | `crates/engine/src/units/bshavok/bhkgenericconstraint.rs:68` |
 | `00d50090` | `crates/engine/src/units/bshavok/bhkgenericconstraint.rs:81` |
 | `00d50140` | `crates/engine/src/units/bshavok/bhkgenericconstraint.rs:94` |
@@ -1979,6 +1980,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00d5a510` | `crates/engine/src/units/bshavok/bhkgeometryutil.rs:15` |
 | `00d86300` | `crates/engine/src/units/bshavok/bhkpointtopathconstraint.rs:29` |
 | `00d86470` | `crates/engine/src/units/bshavok/bhkpointtopathconstraint.rs:73` |
+| `00dae220` | `crates/engine/src/units/havok_sdk/hkpgskmanifoldutil.rs:380` |
 | `00daf540` | `crates/engine/src/units/havok_sdk/hkpiterativelinearcastagent.rs:72` |
 | `00dcf460` | `crates/engine/src/units/havok_sdk/hkp1dbilateralconstraintbuildjacobian.rs:276` |
 | `00dd0660` | `crates/engine/src/units/havok_sdk/hkpchainbuildjacobian.rs:160` |
@@ -1989,9 +1991,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00ec5ec0` | `crates/engine/src/units/fallout_shared/bgslistform.rs:226, crates/engine/src/units/fallout_shared_magic/effectsetting.rs:348, crates/engine/src/units/unplaced/run_00471400.rs:87` |
 | `00ec8660` | `crates/engine/src/units/fallout_misc/bgssaveloadstructs.rs:412` |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 24925 (61.5%) are translated, run from the static-initializer table, or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 25209 (62.2%) are translated, run from the static-initializer table, or traced.
 
-Rust cites 43282 distinct `.text` addresses; 1327 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 43578 distinct `.text` addresses; 1339 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -2023,7 +2025,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 2 | 15762 | 22 | 0 | 5549 | 0 | - |
 | fallout shared | 10470 | 2065 | 3149 | 7800 | 0 | 851 | 0 | 0 | 1819 | 82.6% |
-| Havok SDK | 6591 | 1555 | 3499 | 1616 | 0 | 422 | 0 | 0 | 4553 | 30.9% |
+| Havok SDK | 6591 | 1555 | 3499 | 1878 | 0 | 444 | 0 | 0 | 4269 | 35.2% |
 | fallout/ai | 4849 | 1475 | 1888 | 3452 | 0 | 445 | 0 | 0 | 952 | 80.4% |
 | fallout/interface | 2645 | 991 | 1247 | 1330 | 0 | 598 | 0 | 0 | 717 | 72.9% |
 | (unplaced) | 2353 | 470 | 0 | 518 | 0 | 462 | 4 | 0 | 1369 | 41.6% |

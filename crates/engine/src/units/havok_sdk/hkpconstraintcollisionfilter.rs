@@ -50,9 +50,27 @@ pub fn fn_00d87ff0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// Translated from 00d87bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: the base destructor of the deleting destructor `00d88000`. `this` is the object
+/// (ECX): stores the class's vtables (`010d3d18` at +0, `010d3d0c` at +8, `010d3cf8` at +0xc,
+/// `010d3cec` at +0x10, `010d3ce0` at +0x14 and `010cb1e4` at +0x40) and ends in the base
+/// destructor `00def160(this)`. The class is unconfirmed (the unit name suggests
+/// `hkpConstraintCollisionFilter`).
+pub fn fn_00d87bf0(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.mem.set_u32(at, 0x010d_3d18);
+    e.mem.set_u32(at + 8, 0x010d_3d0c);
+    e.mem.set_u32(at + 0xc, 0x010d_3cf8);
+    e.mem.set_u32(at + 0x10, 0x010d_3cec);
+    e.mem.set_u32(at + 0x14, 0x010d_3ce0);
+    e.mem.set_u32(at + 0x40, 0x010c_b1e4);
+    e.call(0x00de_f160, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d8_7bf0, fn_00d87bf0(Ptr)),
         entry!(0x00d8_8000, deleting_destructor_00d88000(Ptr, u8) -> Ptr),
         entry!(0x00d8_7fc0, fn_00d87fc0(Ptr, u32) -> u32),
         entry!(0x00d8_7fd0, fn_00d87fd0(Ptr, u32) -> u32),
@@ -166,5 +184,32 @@ mod a07_thunk_tests {
     #[test]
     fn thunk_00d87ff0() {
         assert_eq!(check(0x00d8_7ff0, 0x00d8_8000, 0x10), 0xdead_beef);
+    }
+}
+
+#[cfg(test)]
+mod havok_a03_tests {
+    use super::*;
+
+    #[test]
+    fn the_base_destructor_sets_the_vtables_then_runs_the_next_one() {
+        let mut e = Engine::new();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = std::rc::Rc::clone(&seen);
+        e.register_double(0x00de_f160, move |e, a| {
+            // The vtables are in place by the time the next destructor runs.
+            sink.borrow_mut()
+                .push((a[0], e.mem.u32(a[0]), e.mem.u32(a[0] + 0x40)));
+            Ret::default()
+        });
+        let object = e.mem.alloc(0x50);
+        e.mem.set_u32(object + 4, 0x4444);
+        e.call(0x00d8_7bf0, &args![object]);
+        assert_eq!(*seen.borrow(), [(object, 0x010d_3d18, 0x010c_b1e4)]);
+        assert_eq!(e.mem.u32(object + 4), 0x4444);
+        assert_eq!(e.mem.u32(object + 8), 0x010d_3d0c);
+        assert_eq!(e.mem.u32(object + 0xc), 0x010d_3cf8);
+        assert_eq!(e.mem.u32(object + 0x10), 0x010d_3cec);
+        assert_eq!(e.mem.u32(object + 0x14), 0x010d_3ce0);
     }
 }
