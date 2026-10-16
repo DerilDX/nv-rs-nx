@@ -179,6 +179,8 @@ const MOTION_FIXED: u32 = 5;
 const MOTION_KEYFRAMED: u32 = 4;
 /// Size of the embedded `hkpMotion` copied when the motion object is replaced.
 const MOTION_BYTES: u32 = 0x120;
+/// The vtable pointer the exe stores at the start of its motion copy before the copy loop.
+const MOTION_COPY_VTABLE: u32 = 0x010c_6c64;
 /// The "not in the dirty list" value of an island's 16-bit dirty index.
 const NOT_IN_DIRTY_LIST: u16 = 0xffff;
 
@@ -545,8 +547,10 @@ pub fn fn_00cb4000(e: &mut Engine, world: Ptr, island: Ptr) {
 /// hands the old saved motion on. Switching to a dynamic motion: either restores the motion
 /// saved at +0x1f8 (when the old one was not dynamic) or builds a dynamic motion with
 /// `hkpRigidBody::createDynamicRigidMotion` from the old one's mass and inertia. The exe's
-/// first stores to the copy (vtable pointer and the saved-motion word) are overwritten by the
-/// copy and are not repeated.
+/// first stores to the copy (vtable pointer `0x010c6c64` and a zero saved-motion word at
+/// +0x118) are overwritten by the copy loop; they are kept as the exe makes them. The two
+/// `if (this)` tests of the placement new in front of the fixed and keyframed motion
+/// constructors (`ECX = entity + 0xe0`) are kept too: a null motion gives a null new motion.
 pub fn hkp_world_operation_util_replace_motion_object(
     e: &mut Engine,
     entity: Ptr,
@@ -564,17 +568,23 @@ pub fn hkp_world_operation_util_replace_motion_object(
     let copy = e.mem.alloc(0x160);
     let mut copied = false;
     if !new_is_dynamic {
+        // The exe stores the copy's vtable pointer and a zero at +0x118 first.
+        e.mem.set_u32(copy, MOTION_COPY_VTABLE);
+        e.mem.set_u32(copy + 0x118, 0);
         let bytes = e.mem.bytes(motion, MOTION_BYTES);
         e.mem.write(copy, &bytes);
         copied = true;
         let new_motion;
         if new_type == MOTION_FIXED {
-            new_motion = e
-                .call(
+            new_motion = if motion != 0 {
+                e.call(
                     FIXED_MOTION_CONSTRUCTOR,
                     &args![motion, entity_addr + 0x120, entity_addr + 0x160],
                 )
-                .u32();
+                .u32()
+            } else {
+                0
+            };
             e.call(MOTION_STATE_ASSIGN, &args![new_motion + 0x10, copy + 0x10]);
             let flag = e.mem.u8(copy + 9);
             e.mem.set_u8(new_motion + 9, flag);
@@ -592,18 +602,25 @@ pub fn hkp_world_operation_util_replace_motion_object(
                 );
             }
         } else {
-            new_motion = e
-                .call(
+            new_motion = if motion != 0 {
+                e.call(
                     KEYFRAMED_MOTION_CONSTRUCTOR,
                     &args![motion, entity_addr + 0x120, entity_addr + 0x160],
                 )
-                .u32();
+                .u32()
+            } else {
+                0
+            };
             e.call(MOTION_COPY_STATE_AND_VELOCITIES, &args![copy, new_motion]);
         }
         if old_is_dynamic {
             let router = e.call(MEMORY_ROUTER, &args![]).u32();
             let allocator = e.mem.u32(router + 0x10);
             let block = e.vcall(allocator, 4, &args![MOTION_BYTES]).u32();
+            // The exe's stores into the new block that the copy overwrites.
+            e.mem.set_u16(block + 4, MOTION_BYTES as u16);
+            e.mem.set_u32(block + 0x118, 0);
+            e.mem.set_u32(block, MOTION_COPY_VTABLE);
             let bytes = e.mem.bytes(copy, MOTION_BYTES);
             e.mem.write(block, &bytes);
             e.mem.set_u16(block + 4, MOTION_BYTES as u16);
@@ -647,6 +664,8 @@ pub fn hkp_world_operation_util_replace_motion_object(
         }
         let old_type = e.mem.u8(entity_addr + ENTITY_MOTION_TYPE) as u32;
         if old_type != new_type && new_type != 1 {
+            e.mem.set_u32(copy, MOTION_COPY_VTABLE);
+            e.mem.set_u32(copy + 0x118, 0);
             let bytes = e.mem.bytes(motion, MOTION_BYTES);
             e.mem.write(copy, &bytes);
             copied = true;

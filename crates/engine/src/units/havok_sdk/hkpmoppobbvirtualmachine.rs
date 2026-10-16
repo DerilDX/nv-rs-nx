@@ -21,8 +21,6 @@ const OSTREAM_DESTRUCT: u32 = 0x00cc_00e0;
 /// The global pointer to the Havok error reporter (`01268360`); its vtable offset 0xc reports
 /// a message `(level, id, text, file, line)` and returns non-zero to request a break.
 const ERROR_REPORTER: u32 = 0x0126_8360;
-/// The `DebugBreak` import slot, standing for the `INT3` the exe executes.
-const IMPORT_DEBUG_BREAK: u32 = 0x00fd_f0c8;
 /// The message `Unknown command - This mopp data has been corrupted (check for m...` (`010d5100`)
 /// and the source file string `.\Collide\Mopp\Machine\hkpMoppObbVirtualMachine.cpp`
 /// (`010d7af8`).
@@ -110,10 +108,21 @@ fn copy_record(e: &mut Engine, from: u32, to: u32) {
 /// or recurse into sub-trees; 0x13 to 0x1c compare combined bounds; 0x30 to 0x53 append an id
 /// to the array and return; 0x60 to 0x6b store a value into a local slot; 0x70 and 0xc jump
 /// relative to the code base; any other command reports the "Unknown command" error
-/// (`hkErrStream`, `00cb1600`, the reporter's virtual function at 0xc, `INT3` as the
-/// `DebugBreak` import) and continues with the same byte. The command meanings beyond this
-/// are unconfirmed. The record that the exe leaves uninitialised on its stack (the unwritten
-/// slots of the local frame) reads as zero here.
+/// (`hkErrStream`, `00cb1600`, the reporter's virtual function at 0xc, then `INT3`, which
+/// this translation panics on: it is a breakpoint trap in the exe, not a call) and continues
+/// with the same byte. The command meanings beyond this are unconfirmed.
+///
+/// Uninitialised stack words (checked against the disassembly): the exe's frame words
+/// `ESP+0x10/0x14/0x18` are written before every read; the local 0x40-byte record at
+/// `ESP+0x20` is built by command 1 or copied whole from the state record (`REP MOVSD`)
+/// before any read of its fields, and the words the exe never writes in it (+0xc, +0x1c,
+/// +0x38, +0x3c, and the frame word at `ESP+0x60`) are only ever copied on (into the local
+/// record of a recursive call), never compared, stored to the array or returned. The one
+/// read of an unwritten word is the `ESP+0x54` (+0x34, the mask word) kept across the copy by
+/// commands 0x61 to 0x6b; it lands in the local record's +0x34, which is only copied by
+/// command 1 (the mask the results use is `this + 0x34`). They read as zero here, with no
+/// effect on the results; the callers' own state records (`00dd1bf0`, `00dd1da0`) write every
+/// word the interpreter reads.
 pub fn hkp_mopp_obb_virtual_machine_query_aabb_on_tree(
     e: &mut Engine,
     this: Ptr,
@@ -414,7 +423,9 @@ pub fn hkp_mopp_obb_virtual_machine_query_aabb_on_tree(
                         )
                         .u32();
                     if wanted_break != 0 {
-                        e.call(IMPORT_DEBUG_BREAK, &[]);
+                        panic!(
+                            "00dd1400: the exe's INT3 trap (the error reporter asked for a break)"
+                        );
                     }
                     e.call(OSTREAM_DESTRUCT, &args![stream]);
                 }
@@ -807,6 +818,16 @@ mod movement_tests {
 
     #[test]
     fn an_unknown_command_reports_and_continues_on_the_same_byte() {
+        unknown_command(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "00dd1400: the exe's INT3 trap")]
+    fn an_unknown_command_traps_with_int3_when_the_reporter_asks() {
+        unknown_command(1);
+    }
+
+    fn unknown_command(wanted: u32) {
         let mut r = rig(&[0x08]);
         let code = r.code;
         let sink = Rc::clone(&r.log);
@@ -825,17 +846,12 @@ mod movement_tests {
             Ret::default()
         });
         let sink = Rc::clone(&r.log);
-        r.e.register_double(IMPORT_DEBUG_BREAK, move |_, a| {
-            sink.borrow_mut().push((IMPORT_DEBUG_BREAK, a.to_vec()));
-            Ret::default()
-        });
-        let sink = Rc::clone(&r.log);
         r.e.register_double(0x0900_000c, move |e, a| {
             sink.borrow_mut().push((0x0900_000c, a.to_vec()));
             // The handler "repairs" the byte so the next pass ends the query.
             e.mem.set_u8(code, 0);
             Ret {
-                eax: 1,
+                eax: wanted,
                 ..Ret::default()
             }
         });
@@ -859,8 +875,7 @@ mod movement_tests {
                 vec![reporter, 3, 0x1298_fedd, stream + 0xc, ERROR_FILE, 0x1cb]
             )
         );
-        assert_eq!(log[3].0, IMPORT_DEBUG_BREAK);
-        assert_eq!(log[4], (OSTREAM_DESTRUCT, vec![stream]));
+        assert_eq!(log[3], (OSTREAM_DESTRUCT, vec![stream]));
     }
 
     fn query_rig(first_code_byte: u8) -> (Engine, u32, u32) {

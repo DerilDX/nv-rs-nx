@@ -117,12 +117,23 @@ pub fn fn_0051b280(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+// Translated from 0051b1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor shape (the engine map gives it no name; the class is unconfirmed): runs the destructor body `0051b200` on `this`, then frees `this` with `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_0051b1d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0051_b200, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_b140, fn_0051b140(Ptr) -> Ptr),
         entry!(0x0051_b130, fn_0051b130(Ptr, u32) -> u32),
         entry!(0x0051_b280, fn_0051b280(Ptr, Ptr) -> bool),
+        entry!(0x0051_b1d0, fn_0051b1d0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -284,5 +295,29 @@ mod movement_path_tests {
         assert!(answer);
         assert_eq!(calls_to(&calls, 0x0047_27f0).len(), 1);
         assert_eq!(e.mem.u32(this + 0x54), CHUNK_VALUE);
+    }
+    #[test]
+    fn at_0051b1d0_runs_destructor_body_then_deletes_on_flag_one() {
+        use crate::prelude::*;
+
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(16));
+        e.register(0x0051_b200, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        for (flags, deletes) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            e.call_log = Some(vec![]);
+            let result = e.call(0x0051_b1d0, &args![this, flags]);
+            assert_eq!(result.u32(), this.addr());
+            let log = e.call_log.take().unwrap();
+            let calls: Vec<(u32, Vec<u32>)> = log
+                .into_iter()
+                .filter(|(address, _)| *address != 0x0051_b1d0)
+                .collect();
+            let mut expected = vec![(0x0051_b200, vec![this.addr()])];
+            if deletes {
+                expected.push((0x0040_1030, vec![this.addr()]));
+            }
+            assert_eq!(calls, expected);
+        }
     }
 }

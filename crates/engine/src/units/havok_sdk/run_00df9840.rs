@@ -217,7 +217,11 @@ pub fn fn_00df9c40(e: &mut Engine, this: Ptr, vecs: Ptr) {
 /// bytes, is copied into `c`).
 pub fn fn_00df9ef0(e: &mut Engine, this: Ptr, a: Ptr, b: Ptr, c: Ptr, d: Ptr) {
     // The word at +0x30 of the local record is never written by the callee
-    // in the executable; zeros stand in for the stack garbage.
+    // (`00df9b50` writes only +0, +0x10 and +0x20), so the exe copies a stack
+    // word it never initialised into `c + 0x30` (at `00df9fa3`/`00df9fba`);
+    // zeros stand in for it. Nothing reads it: the only caller (`00df9fe0`, three call
+    // sites) hands `c` on to `00df9c40`, which copies only the first three
+    // vectors, and `00df9fe0` has no other access to those records' +0x30 words.
     e.with_stack(0x60, |e, frame| {
         let negative = frame.addr();
         let first = frame.addr() + 0x10;

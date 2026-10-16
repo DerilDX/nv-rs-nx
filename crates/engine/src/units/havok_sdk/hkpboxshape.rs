@@ -243,7 +243,10 @@ pub fn hkp_box_shape_get_collision_spheres_impl(e: &mut Engine, this: Ptr<HkpBox
 /// entry fraction. On a hit the normal and the entry fraction are written
 /// and the shape key at `m_shapeKeyIndex` is set to -1. When no face ever
 /// raised the entry fraction (a start beyond a face that gives a NaN
-/// fraction) the exe writes an uninitialized stack normal; zeros stand in.
+/// fraction) the exe stores its 16-byte stack normal (`ESP+0x30`, loaded at
+/// `00c9e009` and stored to `output + 0` at `00c9e016`) without ever having
+/// written it, so that output normal is stack garbage; zeros stand in.
+// Translation incomplete: 00c9de40 - reads uninitialised stack word at ESP+0x30 (the 16-byte hit normal stored to output+0 when no face raised the entry fraction)
 pub fn hkp_box_shape_cast_ray_impl(
     e: &mut Engine,
     this: Ptr<HkpBoxShape>,

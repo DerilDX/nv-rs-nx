@@ -21,9 +21,41 @@ pub fn fn_0058e810(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 0058f850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMap<BGSImpactData_P_BGSImpactData_P>` scalar deleting destructor (engine map name): runs the destructor body `0058f900` on `this`, then frees `this` with `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_map_bgs_impact_data_p_bgs_impact_data_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(0x0058_f900, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0058f9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMapBase<BGSImpactData_P_BGSImpactData_P>` scalar deleting destructor (engine map name): runs the destructor body `0058f960` on `this`, then frees `this` with `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_map_base_bgs_impact_data_p_bgs_impact_data_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(0x0058_f960, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0058_e810, fn_0058e810(Ptr) -> Ptr)]
+    vec![
+        entry!(0x0058_e810, fn_0058e810(Ptr) -> Ptr),
+        entry!(0x0058_f850, bs_map_bgs_impact_data_p_bgs_impact_data_p_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x0058_f9a0, bs_map_base_bgs_impact_data_p_bgs_impact_data_p_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -45,5 +77,54 @@ mod tests {
             ],
             stores: &[(0x0, 4, 0x0103_323c), (0x18, 4, 0x0103_3224)],
         });
+    }
+    #[test]
+    fn at_0058f850_runs_destructor_body_then_deletes_on_flag_one() {
+        use crate::prelude::*;
+
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(16));
+        e.register(0x0058_f900, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        for (flags, deletes) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            e.call_log = Some(vec![]);
+            let result = e.call(0x0058_f850, &args![this, flags]);
+            assert_eq!(result.u32(), this.addr());
+            let log = e.call_log.take().unwrap();
+            let calls: Vec<(u32, Vec<u32>)> = log
+                .into_iter()
+                .filter(|(address, _)| *address != 0x0058_f850)
+                .collect();
+            let mut expected = vec![(0x0058_f900, vec![this.addr()])];
+            if deletes {
+                expected.push((0x0040_1030, vec![this.addr()]));
+            }
+            assert_eq!(calls, expected);
+        }
+    }
+
+    #[test]
+    fn at_0058f9a0_runs_destructor_body_then_deletes_on_flag_one() {
+        use crate::prelude::*;
+
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(16));
+        e.register(0x0058_f960, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        for (flags, deletes) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            e.call_log = Some(vec![]);
+            let result = e.call(0x0058_f9a0, &args![this, flags]);
+            assert_eq!(result.u32(), this.addr());
+            let log = e.call_log.take().unwrap();
+            let calls: Vec<(u32, Vec<u32>)> = log
+                .into_iter()
+                .filter(|(address, _)| *address != 0x0058_f9a0)
+                .collect();
+            let mut expected = vec![(0x0058_f960, vec![this.addr()])];
+            if deletes {
+                expected.push((0x0040_1030, vec![this.addr()]));
+            }
+            assert_eq!(calls, expected);
+        }
     }
 }

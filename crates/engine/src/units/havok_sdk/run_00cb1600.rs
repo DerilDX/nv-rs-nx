@@ -35,8 +35,6 @@ const ADD_REFERENCE: u32 = 0x00c9_03a0;
 /// The global pointer to the Havok error reporter (`01268360`); its vtable offset 0xc reports
 /// a message `(level, id, text, file, line)` and returns non-zero to request a break.
 const ERROR_REPORTER: u32 = 0x0126_8360;
-/// The `DebugBreak` import slot, standing for the `INT3` the exe executes.
-const IMPORT_DEBUG_BREAK: u32 = 0x00fd_f0c8;
 /// The source file string `.\System\Error\hkError.cpp` (`010c85ac`).
 const ERROR_FILE: u32 = 0x010c_85ac;
 
@@ -75,8 +73,9 @@ pub fn hk_err_stream_construct(e: &mut Engine, this: Ptr, buffer: u32, size: u32
 /// Reports a Havok error, cdecl `(text)`: builds an `hkErrStream` (`00cb1600`) over a local
 /// 0x200-byte buffer, writes `text` into it (`00cc01c0`), asks the error reporter's virtual
 /// function at 0xc to report `(3, 0x2636fe25, buffer, ".\System\Error\hkError.cpp", 0x28)` and
-/// executes `INT3` (the `DebugBreak` import here) when it returns non-zero; then destroys the
-/// stream (`00cc00e0`). The function's name in the exe is unknown.
+/// executes `INT3` (a breakpoint trap, not a call; the translation panics there) when it
+/// returns non-zero; then destroys the stream (`00cc00e0`). The function's name in the exe is
+/// unknown.
 pub fn fn_00cb1750(e: &mut Engine, text: u32) {
     e.with_stack(0x20c, |e, frame| {
         let s = frame.addr();
@@ -91,7 +90,7 @@ pub fn fn_00cb1750(e: &mut Engine, text: u32) {
             )
             .u32();
         if wanted_break != 0 {
-            e.call(IMPORT_DEBUG_BREAK, &[]);
+            panic!("00cb1750: the exe's INT3 trap (the error reporter asked for a break)");
         }
         e.call(OSTREAM_DESTRUCT, &args![s]);
     });
@@ -238,8 +237,18 @@ mod movement_tests {
     }
 
     #[test]
-    fn reporting_writes_the_text_and_breaks_when_asked() {
-        for wanted in [0u32, 1] {
+    fn reporting_writes_the_text_and_does_not_break_when_not_asked() {
+        reporting(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "00cb1750: the exe's INT3 trap")]
+    fn reporting_traps_with_int3_when_asked() {
+        reporting(1);
+    }
+
+    fn reporting(wanted: u32) {
+        {
             let mut e = test_engine();
             let log: Log = Rc::new(RefCell::new(Vec::new()));
             log_double(&mut e, &log, OSTREAM_CONSTRUCT, 0);
@@ -247,7 +256,6 @@ mod movement_tests {
             log_double(&mut e, &log, ADD_REFERENCE, 0);
             log_double(&mut e, &log, OSTREAM_WRITE_TEXT, 0);
             log_double(&mut e, &log, OSTREAM_DESTRUCT, 0);
-            log_double(&mut e, &log, IMPORT_DEBUG_BREAK, 0);
             log_double(&mut e, &log, 0x0900_000c, wanted);
             let vtable = e.mem.alloc(0x20);
             e.mem.set_u32(vtable + 0xc, 0x0900_000c);
@@ -262,8 +270,6 @@ mod movement_tests {
             assert_eq!(report.1[0], reporter);
             assert_eq!(report.1[1..3], [3, 0x2636_fe25]);
             assert_eq!(report.1[4..], [ERROR_FILE, 0x28]);
-            let broke = calls.iter().any(|c| c.0 == IMPORT_DEBUG_BREAK);
-            assert_eq!(broke, wanted != 0);
             assert_eq!(calls.last().unwrap().0, OSTREAM_DESTRUCT);
         }
     }

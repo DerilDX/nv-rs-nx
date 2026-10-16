@@ -121,6 +121,49 @@ pub fn ni_mem_stream_read(
     count
 }
 
+// Translated from 00aa2dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The write body that `00aa2ea0` (the `m_pfnWrite` function) calls: unnamed in
+/// the engine map (`thiscall`, `RET 8`: source, byte count). A stream over user
+/// memory refuses (answers 0). Otherwise, when `count` is more than the room left
+/// in the allocation (`m_uiAllocSize - m_uiPos`), a larger buffer is allocated
+/// (`00aa1070`): `m_uiAllocSize * 2`, unless `count` is also more than the
+/// allocation plus that room, in which case `m_uiPos + count`. The old bytes
+/// (`m_uiEnd` of them) are copied across (`memcpy`), the old buffer is freed
+/// (`00aa10f0`) and the new one and its size are stored. Then `count` bytes from
+/// `source` are copied to `m_pBuffer + m_uiPos`, `m_uiPos` advances by `count`,
+/// `m_uiEnd` follows it when the position passes it, and `count` is answered.
+pub fn fn_00aa2dd0(e: &mut Engine, this: Ptr<NiMemStream>, source: u32, count: u32) -> u32 {
+    if e.get(this, NiMemStream::m_bUserMemory) {
+        return 0;
+    }
+    let allocated = e.get(this, NiMemStream::m_uiAllocSize);
+    let room = allocated.wrapping_sub(e.get(this, NiMemStream::m_uiPos));
+    if count > room {
+        let new_size = if count > allocated.wrapping_add(room) {
+            allocated.wrapping_sub(room).wrapping_add(count)
+        } else {
+            allocated.wrapping_add(allocated)
+        };
+        let new_buffer = e.call(ALLOCATE, &args![new_size]).u32();
+        let old_buffer = e.get(this, NiMemStream::m_pBuffer);
+        let end = e.get(this, NiMemStream::m_uiEnd);
+        e.call(MEMCPY, &args![new_buffer, old_buffer, end]);
+        let old_buffer = e.get(this, NiMemStream::m_pBuffer);
+        e.call(FREE, &args![old_buffer]);
+        e.set(this, NiMemStream::m_pBuffer, new_buffer);
+        e.set(this, NiMemStream::m_uiAllocSize, new_size);
+    }
+    let buffer = e.get(this, NiMemStream::m_pBuffer);
+    let position = e.get(this, NiMemStream::m_uiPos);
+    e.call(MEMCPY, &args![buffer.wrapping_add(position), source, count]);
+    let position = position.wrapping_add(count);
+    e.set(this, NiMemStream::m_uiPos, position);
+    if position > e.get(this, NiMemStream::m_uiEnd) {
+        e.set(this, NiMemStream::m_uiEnd, position);
+    }
+    count
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -130,6 +173,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00aa_2d30, ni_mem_stream_destructor(Ptr<NiMemStream>)),
         entry!(0x00aa_2d60, fn_00aa2d60(Ptr<NiMemStream>) -> u32),
+        entry!(0x00aa_2dd0, fn_00aa2dd0(Ptr<NiMemStream>, u32, u32) -> u32),
         entry!(
             0x00aa_2e60,
             ni_mem_stream_read(Ptr<NiMemStream>, u32, u32, u32, u32) -> u32
@@ -245,5 +289,102 @@ mod tests {
         assert_eq!(e.call(MEM_STREAM_READ, &words).u32(), 0);
         let log = e.call_log.take().unwrap();
         assert_eq!(calls_to(&log, MEMCPY), vec![vec![0x9000, 0x7020, 0]]);
+    }
+
+    fn copying_memcpy(e: &mut Engine) {
+        e.register(MEMCPY, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+    }
+
+    /// A growing stream: buffer of `allocated` bytes holding `end` bytes of
+    /// 0xaa, the position at `position`.
+    fn write_stream(e: &mut Engine, allocated: u32, position: u32, end: u32) -> Ptr<NiMemStream> {
+        copying_memcpy(e);
+        e.register(ALLOCATE, |e, a| Ret {
+            eax: e.mem.alloc(a[0]),
+            ..Ret::default()
+        });
+        e.register(FREE, |_, _| Ret::default());
+        let stream = e.new_object::<NiMemStream>();
+        let buffer = e.mem.alloc(allocated);
+        e.mem.write(buffer, &vec![0xaa; end as usize]);
+        e.set(stream, NiMemStream::m_pBuffer, buffer);
+        e.set(stream, NiMemStream::m_uiAllocSize, allocated);
+        e.set(stream, NiMemStream::m_uiPos, position);
+        e.set(stream, NiMemStream::m_uiEnd, end);
+        stream
+    }
+
+    #[test]
+    fn writing_to_user_memory_answers_zero() {
+        let mut e = Engine::new();
+        let stream = e.new_object::<NiMemStream>();
+        e.set(stream, NiMemStream::m_bUserMemory, true);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00aa_2dd0, &args![stream, 0x9000u32, 4u32]).u32(),
+            0
+        );
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn writing_within_the_room_copies_and_moves_the_end() {
+        let mut e = Engine::new();
+        let stream = write_stream(&mut e, 0x40, 0x10, 0x14);
+        let buffer = e.get(stream, NiMemStream::m_pBuffer);
+        let source = e.mem.alloc(8);
+        e.mem.write(source, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_2dd0, &args![stream, source, 8u32]).u32(), 8);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, ALLOCATE).is_empty());
+        assert_eq!(calls_to(&log, MEMCPY), vec![vec![buffer + 0x10, source, 8]]);
+        assert_eq!(e.get(stream, NiMemStream::m_uiPos), 0x18);
+        assert_eq!(e.get(stream, NiMemStream::m_uiEnd), 0x18);
+        assert_eq!(e.mem.bytes(buffer + 0x10, 8), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        // A write that stays inside the stored bytes leaves the end alone.
+        e.set(stream, NiMemStream::m_uiPos, 0);
+        e.call(0x00aa_2dd0, &args![stream, source, 4u32]);
+        assert_eq!(e.get(stream, NiMemStream::m_uiPos), 4);
+        assert_eq!(e.get(stream, NiMemStream::m_uiEnd), 0x18);
+    }
+
+    #[test]
+    fn a_write_past_the_room_doubles_the_allocation() {
+        let mut e = Engine::new();
+        let stream = write_stream(&mut e, 0x10, 0xc, 0xc);
+        let old = e.get(stream, NiMemStream::m_pBuffer);
+        let source = e.mem.alloc(8);
+        e.mem.write(source, &[9; 8]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_2dd0, &args![stream, source, 8u32]).u32(), 8);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, ALLOCATE), vec![vec![0x20]]);
+        let new = e.get(stream, NiMemStream::m_pBuffer);
+        assert_ne!(new, old);
+        assert_eq!(calls_to(&log, MEMCPY)[0], vec![new, old, 0xc]);
+        assert_eq!(calls_to(&log, FREE), vec![vec![old]]);
+        assert_eq!(e.get(stream, NiMemStream::m_uiAllocSize), 0x20);
+        assert_eq!(e.mem.bytes(new, 0xc), vec![0xaa; 0xc]);
+        assert_eq!(e.mem.bytes(new + 0xc, 8), vec![9; 8]);
+        assert_eq!(e.get(stream, NiMemStream::m_uiEnd), 0x14);
+    }
+
+    #[test]
+    fn a_write_past_double_the_room_allocates_position_plus_count() {
+        let mut e = Engine::new();
+        // room 4, allocation 0x10: count 0x20 is more than 0x10 + 4.
+        let stream = write_stream(&mut e, 0x10, 0xc, 0xc);
+        let source = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_2dd0, &args![stream, source, 0x20u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, ALLOCATE), vec![vec![0x2c]]);
+        assert_eq!(e.get(stream, NiMemStream::m_uiAllocSize), 0x2c);
+        assert_eq!(e.get(stream, NiMemStream::m_uiPos), 0x2c);
     }
 }

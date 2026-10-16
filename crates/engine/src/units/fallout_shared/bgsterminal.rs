@@ -39,12 +39,23 @@ pub fn fn_00500910(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 005010c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor shape (the engine map gives it no name; the class is unconfirmed): runs the destructor body `005010f0` on `this`, then frees `this` with `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_005010c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0050_10f0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x004fffe0, fn_004fffe0(u32)),
         entry!(0x00500910, fn_00500910(Ptr) -> Ptr),
         entry!(0x00500940, fn_00500940(Ptr) -> Ptr),
+        entry!(0x0050_10c0, fn_005010c0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -89,6 +100,30 @@ mod tests {
                 e.call(0x00500940, &[receiver]).u32(),
                 receiver.wrapping_add(24)
             );
+        }
+    }
+    #[test]
+    fn at_005010c0_runs_destructor_body_then_deletes_on_flag_one() {
+        use crate::prelude::*;
+
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(16));
+        e.register(0x0050_10f0, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        for (flags, deletes) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            e.call_log = Some(vec![]);
+            let result = e.call(0x0050_10c0, &args![this, flags]);
+            assert_eq!(result.u32(), this.addr());
+            let log = e.call_log.take().unwrap();
+            let calls: Vec<(u32, Vec<u32>)> = log
+                .into_iter()
+                .filter(|(address, _)| *address != 0x0050_10c0)
+                .collect();
+            let mut expected = vec![(0x0050_10f0, vec![this.addr()])];
+            if deletes {
+                expected.push((0x0040_1030, vec![this.addr()]));
+            }
+            assert_eq!(calls, expected);
         }
     }
 }

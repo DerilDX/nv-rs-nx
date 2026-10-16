@@ -7661,8 +7661,10 @@ pub fn animation_save_animation(e: &mut Engine, actor: Ptr, animation: Ptr<Anima
 // Translated from 0049ab00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Reads a 16-bit length from the save game (`__cdecl`) and, when it is not 0,
 /// has the save game object consume that many bytes into `destination`
-/// (`0085f010`); the map has no name for it.
-pub fn fn_0049ab00(e: &mut Engine, destination: Ptr) {
+/// (`0085f010`); the map has no name for it. The exe's callers push two words
+/// (the object, then a word from it); the body reads only the first
+/// (`[EBP+8]`) and returns with a plain `RET`, so `_unused` is the second.
+pub fn fn_0049ab00(e: &mut Engine, destination: Ptr, _unused: u32) {
     e.with_stack(4, |e, cell| {
         let save = e.global::<u32>(SAVE_GAME_OBJECT);
         e.call(SAVE_READ, &args![save, cell, 2u32]);
@@ -8909,7 +8911,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0049a920, fn_0049a920(Ptr<Animation>)),
         entry!(0x0049aa20, fn_0049aa20(Ptr, Ptr<Animation>) -> u16),
         entry!(0x0049aa80, animation_save_animation(Ptr, Ptr<Animation>)),
-        entry!(0x0049ab00, fn_0049ab00(Ptr)),
+        entry!(0x0049ab00, fn_0049ab00(Ptr, u32)),
         entry!(0x0049ab40, fn_0049ab40(Ptr<Animation>, Ptr)),
         entry!(0x0049b050, fn_0049b050(Ptr<Animation>, Ptr)),
         entry!(0x0049baa0, fn_0049baa0(Ptr) -> Ptr),
@@ -16642,14 +16644,14 @@ mod tests {
         let io = save_io(&mut e, false, 0x3f, true, &[3, 0, 0, 0]);
         e.register(SAVE_GAME_CONSUME, |_, _| Ret::default());
         start_log(&mut e);
-        e.call(0x0049_ab00, &args![0x5000u32]);
+        e.call(0x0049_ab00, &args![0x5000u32, 0x1c0u32]);
         let log = end_log(&mut e);
         assert_eq!(arguments_of(&log, SAVE_GAME_CONSUME), [[0x7000, 0x5000, 3]]);
         assert_eq!(e.mem.u32(io.pos), 2);
         // A length of 0 consumes nothing.
         e.mem.set_u32(io.pos, 2);
         start_log(&mut e);
-        e.call(0x0049_ab00, &args![0x5000u32]);
+        e.call(0x0049_ab00, &args![0x5000u32, 0x1c0u32]);
         assert!(arguments_of(&end_log(&mut e), SAVE_GAME_CONSUME).is_empty());
     }
 

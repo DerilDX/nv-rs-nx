@@ -3722,6 +3722,52 @@ pub fn fn_009a3280(e: &mut Engine, this: Ptr, index: u32) -> Ptr {
     e.call(ELEMENT_TARGET_009052C0, &args![this, index]).ptr()
 }
 
+/// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@PAVTESObjectWEAP@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
+const ARRAY_VTABLE_0108E068: u32 = 0x0108_e068;
+/// `008454f0` (unnamed in the engine map): `thiscall`, `this` plus one stack word (`RET 4`). When the
+/// buffer pointer (+4) is set it runs the instance's element destroy step; with the word non-zero it
+/// then calls the array's virtual slot +8 on the buffer and clears the buffer pointer and the reserved
+/// size (+0xc); finally it clears the size (+8).
+const ARRAY_RELEASE_008454F0: u32 = 0x0084_54f0;
+/// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@VUnreachableCoverLocation@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
+const ARRAY_VTABLE_0108E07C: u32 = 0x0108_e07c;
+/// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@VUnreachableLocation@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
+const ARRAY_VTABLE_0108E090: u32 = 0x0108_e090;
+/// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@UWeaponData@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
+const ARRAY_VTABLE_0108E0A4: u32 = 0x0108_e0a4;
+
+// Translated from 009a3410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@PAVTESObjectWEAP@@$0EAA@@` (`thiscall`): stores the
+/// instance's vtable at `this`, then calls `008454f0(this, 1)`.
+pub fn fn_009a3410(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ARRAY_VTABLE_0108E068);
+    e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
+}
+
+// Translated from 009a3460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@VUnreachableCoverLocation@@$0EAA@@` (`thiscall`): stores the
+/// instance's vtable at `this`, then calls `008454f0(this, 1)`.
+pub fn fn_009a3460(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ARRAY_VTABLE_0108E07C);
+    e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
+}
+
+// Translated from 009a35f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@VUnreachableLocation@@$0EAA@@` (`thiscall`): stores the
+/// instance's vtable at `this`, then calls `008454f0(this, 1)`.
+pub fn fn_009a35f0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ARRAY_VTABLE_0108E090);
+    e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
+}
+
+// Translated from 009a3810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@UWeaponData@@$0EAA@@` (`thiscall`): stores the
+/// instance's vtable at `this`, then calls `008454f0(this, 1)`.
+pub fn fn_009a3810(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ARRAY_VTABLE_0108E0A4);
+    e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3831,6 +3877,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         (0x0099c230, fn_0099c230_entry as AbiFn),
         entry!(0x0099ca00, fn_0099ca00(Ptr<CombatState>, u32, u32) -> bool),
         entry!(0x0099cb00, fn_0099cb00(u32, u32) -> bool),
+        entry!(0x009a_3410, fn_009a3410(Ptr)),
+        entry!(0x009a_3460, fn_009a3460(Ptr)),
+        entry!(0x009a_35f0, fn_009a35f0(Ptr)),
+        entry!(0x009a_3810, fn_009a3810(Ptr)),
     ]
 }
 
@@ -5223,5 +5273,43 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
         assert_eq!(result.u32(), 0x4000_2000);
+    }
+}
+
+#[cfg(test)]
+mod array_destructor_tests {
+    use super::*;
+
+    fn check_array_destructor(address: u32, vtable: u32, release: u32) {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        e.register(release, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(address, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(this), vtable);
+        let hits: Vec<_> = log.iter().filter(|c| c.0 == release).collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![this, 1]);
+    }
+
+    #[test]
+    fn fn_009a3410_sets_the_vtable_then_releases_the_buffer() {
+        check_array_destructor(0x009a_3410, ARRAY_VTABLE_0108E068, ARRAY_RELEASE_008454F0);
+    }
+
+    #[test]
+    fn fn_009a3460_sets_the_vtable_then_releases_the_buffer() {
+        check_array_destructor(0x009a_3460, ARRAY_VTABLE_0108E07C, ARRAY_RELEASE_008454F0);
+    }
+
+    #[test]
+    fn fn_009a35f0_sets_the_vtable_then_releases_the_buffer() {
+        check_array_destructor(0x009a_35f0, ARRAY_VTABLE_0108E090, ARRAY_RELEASE_008454F0);
+    }
+
+    #[test]
+    fn fn_009a3810_sets_the_vtable_then_releases_the_buffer() {
+        check_array_destructor(0x009a_3810, ARRAY_VTABLE_0108E0A4, ARRAY_RELEASE_008454F0);
     }
 }

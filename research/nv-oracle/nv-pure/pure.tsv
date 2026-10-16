@@ -478,17 +478,24 @@ address	cc	params	ret	unit	callees	consts
 00d47f90	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d47f90.rs		
 00d48360	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d48360.rs		
 00d495f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d49530.rs		
+00d6ae50	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d6ae10.rs	00cb0a70	i32768
 00d9f6e0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00d9f6e0.rs		
 00d9fc60	cdecl		u32	crates/engine/src/units/havok_sdk/hkpdefaulttoiresourcemgr.rs		
+00da0780	cdecl		u32	crates/engine/src/units/havok_sdk/run_00da0010.rs	00cb0a70	
+00da07d0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00da0010.rs	00cb0a70	
 00da0910	cdecl		u32	crates/engine/src/units/havok_sdk/run_00da0910.rs		
 00da0950	cdecl		u32	crates/engine/src/units/havok_sdk/run_00da0910.rs		
 00da0b20	cdecl		u32	crates/engine/src/units/havok_sdk/run_00da0910.rs		
+00db7c40	cdecl		u32	crates/engine/src/units/havok_sdk/run_00db7c40.rs	00cb0a70	
 00dc0eb0	cdecl		u32	crates/engine/src/units/havok_sdk/hknativepackfileutils.rs		
 00dc0fb0	cdecl		u32	crates/engine/src/units/havok_sdk/hkversionutil.rs		
+00dd73d0	cdecl	u32,u32	u32	crates/engine/src/units/havok_sdk/hkfreelist.rs		i16
 00dfb590	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfb2b0.rs		
 00dfb8d0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfb8d0.rs		
+00dfba10	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfba10.rs	00cb0a70	
 00dfbb70	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfba10.rs		
 00dfbd30	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfbd30.rs		
+00dfbe20	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfbdf0.rs	00cb0a70	
 00dfbf60	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfbf60.rs		
 00dfc070	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc070.rs		
 00dfc140	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc140.rs		
@@ -502,3 +509,109 @@ address	cc	params	ret	unit	callees	consts
 00dfc910	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc630.rs		
 00dfc9a0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc630.rs		
 00dfca30	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc630.rs		
+00dfcaa0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc630.rs		
+00dfcb10	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc630.rs		
+00dfcc00	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc630.rs		
+00dfcc70	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc630.rs		
+00dfcce0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc630.rs		
+00dfcd50	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc630.rs		
+00dfcea0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc630.rs		
+00dfd120	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfc630.rs		
+00dfd800	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfd200.rs	00cb0a70	
+00dfd9b0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfd9b0.rs	00cb0a70	
+00dfdb60	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfda80.rs		
+00dfdb80	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfda80.rs		
+00dfde50	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfde50.rs		
+00dfdfc0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfde50.rs		
+00dfe2f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfe280.rs	00ce5360	
+00dfe350	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfe280.rs		
+00dfe4a0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfe440.rs		
+00dfe510	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfe510.rs		
+00dfe5e0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfe5b0.rs	00cb0a70	
+00dfe6a0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfe6a0.rs		
+00dfe710	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfe710.rs		
+00dfe9b0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfe9b0.rs	00cb0a70	
+00dfeb00	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfeb00.rs		
+00dfeb70	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfeb70.rs		
+00dfebe0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfebe0.rs		
+00dfec20	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfebe0.rs		
+00dfec80	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfebe0.rs		
+00dfeca0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfebe0.rs		
+00dfece0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfebe0.rs		
+00dfed20	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfebe0.rs		
+00dfee10	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfee10.rs		
+00dfeeb0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfeeb0.rs		
+00dfeef0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfeeb0.rs		
+00dfef40	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfeeb0.rs		
+00dfef90	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfeeb0.rs	00cb0a70	
+00dff000	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfeeb0.rs		
+00dff0e0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff0e0.rs		
+00dff130	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff0e0.rs	00cb0a70	
+00dff220	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff0e0.rs	00cb0a70	
+00dff2b0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff0e0.rs	00cb0a70	
+00dff380	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff0e0.rs	00cb0a70	
+00dff430	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff0e0.rs		
+00dff5f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff0e0.rs		
+00dff610	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff0e0.rs		
+00dff630	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff0e0.rs		
+00dff9f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dff990.rs	00cb0a70	
+00dffc20	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffb60.rs	00cb0a70	
+00dffc90	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffb60.rs		
+00dffdb0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffdb0.rs		
+00dffe10	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffdb0.rs		
+00dffe50	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffdb0.rs		
+00dffeb0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffdb0.rs		
+00dffef0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffdb0.rs		
+00dfff50	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffdb0.rs		
+00dffff0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dffdb0.rs		
+00e00150	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e000e0.rs		
+00e00190	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e000e0.rs		
+00e001f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e000e0.rs	00cb0a70	
+00e00290	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e000e0.rs	00cb0a70	i32768
+00e00320	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e000e0.rs		
+00e00360	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e000e0.rs		
+00e00480	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e000e0.rs		
+00e005a0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e000e0.rs		
+00e00780	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e000e0.rs		
+00e007e0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e000e0.rs		
+00e00820	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e000e0.rs		
+00e00970	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e00970.rs		
+00e00a10	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e00970.rs		
+00e00b30	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e00970.rs		
+00e00d20	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e00970.rs		
+00e00dc0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e00970.rs		
+00e00ed0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e00ed0.rs		
+00e00f40	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e00ed0.rs		
+00e010b0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e00ed0.rs		
+00e01130	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e00ed0.rs		
+00e01370	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01230.rs		
+00e013e0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01230.rs		
+00e01440	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01230.rs		
+00e01490	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01230.rs	00cb0a70	
+00e01540	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01540.rs		
+00e01580	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01540.rs		
+00e015c0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01540.rs		
+00e01670	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01540.rs		
+00e016b0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01540.rs		
+00e01710	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01540.rs	00cb0a70	
+00e01830	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e017f0.rs	00cb0a70	
+00e018f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e018f0.rs		
+00e01a00	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01a00.rs		
+00e01a40	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01a00.rs		
+00e01b20	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01b20.rs		
+00e01c60	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01c30.rs	00cb0a70	
+00e01d10	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01d10.rs	00cb0a70	
+00e01eb0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01e50.rs	00cb0a70	
+00e01f60	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e01f60.rs		
+00e02180	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e020f0.rs	00cb0a70	
+00e022a0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e022a0.rs	00cb0a70	
+00e02370	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e02370.rs		
+00e023b0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e02370.rs		
+00e02490	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e02490.rs		
+00e024d0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e02490.rs		
+00e02510	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e02490.rs		
+00e02550	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e02490.rs		
+00e02590	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e02490.rs		
+00e02640	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e02640.rs		
+00e026f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e026f0.rs		
+00e027a0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e026f0.rs		

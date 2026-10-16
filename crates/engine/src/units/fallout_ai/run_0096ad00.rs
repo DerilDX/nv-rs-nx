@@ -86,11 +86,47 @@ pub fn fn_0096ae90(e: &mut Engine, this: Ptr, index: u32, value: Ptr) {
     e.mem.set_u32(elements + index.wrapping_mul(4), pointer);
 }
 
+// Translated from 0096afe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the pointer array `0096ad30` manages (the engine map gives it no name). Stores
+/// the vtable `0108c0c8` at `+0`, the low word of `capacity` at `+8` and the low word of
+/// `second_word` at `+0xe`, clears the count (`+0xa`) and the non-null count (`+0xc`), and
+/// takes the element block (`+4`) from `0096afc0` when the capacity word is above zero
+/// (otherwise `+4` is 0). Parameters: two words, `RET 8`, `this` in `ECX`; both are pushed as
+/// whole words and only their low 16 bits are read. Returns `this` (`EAX`).
+pub fn fn_0096afe0(e: &mut Engine, this: Ptr, capacity: u32, second_word: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0108_c0c8);
+    e.mem.set_u16(base + 8, capacity as u16);
+    e.mem.set_u16(base + 0xe, second_word as u16);
+    e.mem.set_u16(base + 0xa, 0);
+    e.mem.set_u16(base + 0xc, 0);
+    let words = u32::from(e.mem.u16(base + 8));
+    if words > 0 {
+        let block = e.call(0x0096_afc0, &args![words]).u32();
+        e.mem.set_u32(base + 4, block);
+    } else {
+        e.mem.set_u32(base + 4, 0);
+    }
+    this
+}
+
+// Translated from 0096af30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A subclass constructor of the array `0096afe0` builds (the engine map gives it no name): runs
+/// `0096afe0(this, capacity, second_word)` of this unit, then overwrites the vtable at `+0`
+/// with `0108c0d0`. Returns `this`. Parameters: two words, `RET 8`, `this` in `ECX`.
+pub fn fn_0096af30(e: &mut Engine, this: Ptr, capacity: u32, second_word: u32) -> Ptr {
+    fn_0096afe0(e, this, capacity, second_word);
+    e.mem.set_u32(this.addr(), 0x0108_c0d0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0096_ad30, fn_0096ad30(Ptr, u32)),
         entry!(0x0096_ae90, fn_0096ae90(Ptr, u32, Ptr)),
+        entry!(0x0096_af30, fn_0096af30(Ptr, u32, u32) -> Ptr),
+        entry!(0x0096_afe0, fn_0096afe0(Ptr, u32, u32) -> Ptr),
     ]
 }
 
@@ -221,5 +257,66 @@ mod movement_path_tests {
         e.call(0x0096_ae90, &[this, 3, value]);
         assert_eq!(e.mem.u16(this + 0xa), 4);
         assert_eq!(e.mem.u16(this + 0xc), 2);
+    }
+}
+
+#[cfg(test)]
+mod process_list_tests {
+    use super::*;
+
+    fn block_double(e: &mut Engine) {
+        e.register(0x0096_afc0, |_, _| Ret {
+            eax: 0x0009_0000,
+            ..Ret::default()
+        });
+    }
+
+    #[test]
+    fn constructor_takes_the_element_block_for_a_positive_capacity() {
+        let mut e = Engine::new();
+        block_double(&mut e);
+        let this = e.mem.alloc(0x10);
+        e.mem.write(this, &[0xee; 0x10]);
+        e.call_log = Some(vec![]);
+        // The high halves of the pushed words are not read.
+        let result = e.call(0x0096_afe0, &[this, 0xabcd_0007, 0x1234_0001]).u32();
+        assert_eq!(result, this);
+        let log = e.call_log.take().unwrap();
+        let allocations: Vec<_> = log.iter().filter(|(a, _)| *a == 0x0096_afc0).collect();
+        assert_eq!(allocations.len(), 1);
+        assert_eq!(allocations[0].1, vec![7]);
+        assert_eq!(e.mem.u32(this), 0x0108_c0c8);
+        assert_eq!(e.mem.u32(this + 4), 0x0009_0000);
+        assert_eq!(e.mem.u16(this + 8), 7);
+        assert_eq!(e.mem.u16(this + 0xa), 0);
+        assert_eq!(e.mem.u16(this + 0xc), 0);
+        assert_eq!(e.mem.u16(this + 0xe), 1);
+    }
+
+    #[test]
+    fn constructor_without_capacity_allocates_nothing() {
+        let mut e = Engine::new();
+        block_double(&mut e);
+        let this = e.mem.alloc(0x10);
+        e.mem.write(this, &[0xee; 0x10]);
+        e.call_log = Some(vec![]);
+        e.call(0x0096_afe0, &[this, 0, 1]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|(a, _)| *a != 0x0096_afc0));
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(e.mem.u16(this + 0xe), 1);
+    }
+
+    #[test]
+    fn subclass_constructor_replaces_the_vtable_and_returns_this() {
+        let mut e = Engine::new();
+        block_double(&mut e);
+        let this = e.mem.alloc(0x10);
+        let result = e.call(0x0096_af30, &[this, 0, 1]).u32();
+        assert_eq!(result, this);
+        assert_eq!(e.mem.u32(this), 0x0108_c0d0);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(e.mem.u16(this + 8), 0);
+        assert_eq!(e.mem.u16(this + 0xe), 1);
     }
 }

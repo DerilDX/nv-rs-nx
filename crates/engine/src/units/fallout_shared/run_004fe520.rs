@@ -31,11 +31,22 @@ pub fn fn_004fe630(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// Translated from 004fe6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor shape (the engine map gives it no name; the class is unconfirmed): runs the destructor body `004fe710` on `this`, then frees `this` with `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_004fe6e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x004f_e710, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x004f_e640, fn_004fe640(Ptr) -> Ptr),
         entry!(0x004f_e630, fn_004fe630(Ptr, u32) -> u32),
+        entry!(0x004f_e6e0, fn_004fe6e0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -99,5 +110,29 @@ mod le81_thunk_tests {
             check(0x004f_e630, 0x004f_e2e0, 0x30, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+    #[test]
+    fn at_004fe6e0_runs_destructor_body_then_deletes_on_flag_one() {
+        use crate::prelude::*;
+
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(16));
+        e.register(0x004f_e710, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        for (flags, deletes) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            e.call_log = Some(vec![]);
+            let result = e.call(0x004f_e6e0, &args![this, flags]);
+            assert_eq!(result.u32(), this.addr());
+            let log = e.call_log.take().unwrap();
+            let calls: Vec<(u32, Vec<u32>)> = log
+                .into_iter()
+                .filter(|(address, _)| *address != 0x004f_e6e0)
+                .collect();
+            let mut expected = vec![(0x004f_e710, vec![this.addr()])];
+            if deletes {
+                expected.push((0x0040_1030, vec![this.addr()]));
+            }
+            assert_eq!(calls, expected);
+        }
     }
 }

@@ -63,11 +63,22 @@ pub fn fn_0066eba0(_e: &mut Engine, index: u32) -> bool {
     matches!(index, 0x12..=0x14 | 0x34 | 0x3a..=0x3d)
 }
 
+// Translated from 0066ef90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `actorvalue.cpp`): clears the first 0x4d words (0x134
+/// bytes) of `this`, signed loop. Returns `this`.
+pub fn fn_0066ef90(e: &mut Engine, this: Ptr) -> Ptr {
+    for index in 0..0x4d_u32 {
+        e.mem.set_u32(this.addr() + index * 4, 0);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0066_fe40, fn_0066fe40(Ptr, u32, u32) -> Ptr),
         entry!(0x0066_eba0, fn_0066eba0(u32) -> bool),
+        entry!(0x0066_ef90, fn_0066ef90(Ptr) -> Ptr),
     ]
 }
 
@@ -204,5 +215,24 @@ mod table_tests {
         assert!(!e
             .call(0x0066_eba0, &args![0x12u32.wrapping_add(0x1_0000)])
             .bool());
+    }
+}
+
+#[cfg(test)]
+mod static_init_callee_tests {
+    use super::*;
+
+    #[test]
+    fn clears_the_first_4d_words_only() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x140);
+        for i in 0..0x50u32 {
+            e.mem.set_u32(this + i * 4, 0xffff_ffff);
+        }
+        assert_eq!(e.call(0x0066_ef90, &args![this]).u32(), this);
+        for i in 0..0x4du32 {
+            assert_eq!(e.mem.u32(this + i * 4), 0);
+        }
+        assert_eq!(e.mem.u32(this + 0x4d * 4), 0xffff_ffff);
     }
 }

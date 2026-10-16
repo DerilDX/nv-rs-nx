@@ -25,11 +25,23 @@ pub fn fn_00682680(e: &mut Engine, this: Ptr) {
     e.call(0x0068_26d0, &args![this]);
 }
 
+/// The constructor body `00682530` (`this` plus one stack word, `RET 4`).
+const CONSTRUCTOR_BODY_00682530: u32 = 0x0068_2530;
+
+// Translated from 00682510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: forwards `this` and its one stack word to `00682530` and
+/// returns `this`.
+pub fn fn_00682510(e: &mut Engine, this: Ptr, argument: u32) -> Ptr {
+    e.call(CONSTRUCTOR_BODY_00682530, &args![this, argument]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0068_25e0, fn_006825e0(Ptr)),
         entry!(0x0068_2680, fn_00682680(Ptr)),
+        entry!(0x0068_2510, fn_00682510(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -63,5 +75,38 @@ mod thunk_tests {
         e.call_log = Some(vec![]);
         e.call(0x0068_2680, &args![0x0000_5000u32]);
         assert_eq!(calls_to(&e, 0x0068_26d0), vec![vec![0x5000]]);
+    }
+}
+
+#[cfg(test)]
+mod static_init_callee_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    #[test]
+    fn forwards_this_and_the_word_and_returns_this() {
+        let mut e = Engine::new();
+        e.register(CONSTRUCTOR_BODY_00682530, |_, _| Ret {
+            eax: 0x999,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0068_2510, &args![0x2000u32, 0x33u32]).u32(),
+            0x2000
+        );
+        assert_eq!(
+            calls_to(&mut e, CONSTRUCTOR_BODY_00682530),
+            vec![vec![0x2000, 0x33]]
+        );
     }
 }

@@ -23,11 +23,27 @@ pub fn fn_00682ac0(_e: &mut Engine, _this: Ptr) -> u32 {
     0x011d_6a90
 }
 
+/// The base constructor `00683760` (`this` only, plain `RET`).
+const BASE_CONSTRUCTOR_00683760: u32 = 0x0068_3760;
+/// The vtable stored at `+0` (RTTI class `BSList<BSTempEffectDebris*>`).
+const VTABLE_006836F0: u32 = 0x0106_9948;
+
+// Translated from 006836f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bstempeffectdebris.cpp`): runs `00683760` on `this`, then
+/// stores the vtable `01069948` (RTTI class `BSList<BSTempEffectDebris*>`) at `+0`. Returns
+/// `this`.
+pub fn fn_006836f0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(BASE_CONSTRUCTOR_00683760, &args![this]);
+    e.mem.set_u32(this.addr(), VTABLE_006836F0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0068_2ac0, fn_00682ac0(Ptr) -> u32),
         entry!(0x0068_3480, fn_00683480(Ptr, u32) -> bool),
+        entry!(0x0068_36f0, fn_006836f0(Ptr) -> Ptr),
     ]
 }
 
@@ -66,5 +82,37 @@ mod constant_getter_tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x0068_2ac0, &args![0x1000u32]).u32(), 0x011d_6a90);
         assert_eq!(e.call(0x0068_2ac0, &args![0u32]).u32(), 0x011d_6a90);
+    }
+}
+
+#[cfg(test)]
+mod static_init_callee_tests {
+    use super::*;
+
+    fn calls_to(e: &mut Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    #[test]
+    fn runs_the_base_constructor_then_stores_the_vtable() {
+        let mut e = Engine::new();
+        e.register(BASE_CONSTRUCTOR_00683760, |e, a| {
+            e.mem.set_u32(a[0], 0x1111);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0068_36f0, &args![this]).u32(), this);
+        assert_eq!(
+            calls_to(&mut e, BASE_CONSTRUCTOR_00683760),
+            vec![vec![this]]
+        );
+        assert_eq!(e.mem.u32(this), VTABLE_006836F0);
     }
 }

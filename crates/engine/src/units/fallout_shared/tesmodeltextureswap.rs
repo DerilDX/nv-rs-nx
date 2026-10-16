@@ -74,6 +74,48 @@ pub fn tesmodeltextureswap_init_item(e: &mut Engine, this: Ptr, owner: Ptr) {
     }
 }
 
+// Translated from 0048a440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESModelTextureSwap` scalar deleting destructor (engine map name): runs the destructor body `0048a490` on `this`, then frees `this` with `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn tes_model_texture_swap_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(0x0048_a490, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0048b3b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMap<int_TEX_SWAP_P>` scalar deleting destructor (engine map name): runs the destructor body `0048b460` on `this`, then frees `this` with `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_map_int_tex_swap_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(0x0048_b460, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0048b530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMapBase<int_TEX_SWAP_P>` scalar deleting destructor (engine map name): runs the destructor body `0048b4c0` on `this`, then frees `this` with `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_map_base_int_tex_swap_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(0x0048_b4c0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -82,6 +124,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             tes_model_texture_swap_initialize_data_component(Ptr)
         ),
         entry!(0x0048_aa80, tesmodeltextureswap_init_item(Ptr, Ptr)),
+        entry!(0x0048_a440, tes_model_texture_swap_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x0048_b3b0, bs_map_int_tex_swap_p_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x0048_b530, bs_map_base_int_tex_swap_p_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -266,5 +311,85 @@ mod movement_path_tests {
             calls_to(&calls, 0x0082_56d0),
             [vec![FIRST_NODE], vec![FIRST_NODE]]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn at_0048a440_runs_destructor_body_then_deletes_on_flag_one() {
+        use crate::prelude::*;
+
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(16));
+        e.register(0x0048_a490, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        for (flags, deletes) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            e.call_log = Some(vec![]);
+            let result = e.call(0x0048_a440, &args![this, flags]);
+            assert_eq!(result.u32(), this.addr());
+            let log = e.call_log.take().unwrap();
+            let calls: Vec<(u32, Vec<u32>)> = log
+                .into_iter()
+                .filter(|(address, _)| *address != 0x0048_a440)
+                .collect();
+            let mut expected = vec![(0x0048_a490, vec![this.addr()])];
+            if deletes {
+                expected.push((0x0040_1030, vec![this.addr()]));
+            }
+            assert_eq!(calls, expected);
+        }
+    }
+
+    #[test]
+    fn at_0048b3b0_runs_destructor_body_then_deletes_on_flag_one() {
+        use crate::prelude::*;
+
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(16));
+        e.register(0x0048_b460, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        for (flags, deletes) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            e.call_log = Some(vec![]);
+            let result = e.call(0x0048_b3b0, &args![this, flags]);
+            assert_eq!(result.u32(), this.addr());
+            let log = e.call_log.take().unwrap();
+            let calls: Vec<(u32, Vec<u32>)> = log
+                .into_iter()
+                .filter(|(address, _)| *address != 0x0048_b3b0)
+                .collect();
+            let mut expected = vec![(0x0048_b460, vec![this.addr()])];
+            if deletes {
+                expected.push((0x0040_1030, vec![this.addr()]));
+            }
+            assert_eq!(calls, expected);
+        }
+    }
+
+    #[test]
+    fn at_0048b530_runs_destructor_body_then_deletes_on_flag_one() {
+        use crate::prelude::*;
+
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(16));
+        e.register(0x0048_b4c0, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        for (flags, deletes) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            e.call_log = Some(vec![]);
+            let result = e.call(0x0048_b530, &args![this, flags]);
+            assert_eq!(result.u32(), this.addr());
+            let log = e.call_log.take().unwrap();
+            let calls: Vec<(u32, Vec<u32>)> = log
+                .into_iter()
+                .filter(|(address, _)| *address != 0x0048_b530)
+                .collect();
+            let mut expected = vec![(0x0048_b4c0, vec![this.addr()])];
+            if deletes {
+                expected.push((0x0040_1030, vec![this.addr()]));
+            }
+            assert_eq!(calls, expected);
+        }
     }
 }

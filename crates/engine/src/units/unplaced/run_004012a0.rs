@@ -30,12 +30,23 @@ pub fn fn_00401680(e: &mut Engine, file: Ptr<TESFile>) -> bool {
     e.get(file, TESFile::bMustEndianConvert)
 }
 
+// Translated from 004012a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor shape (the engine map gives it no name; the class is unconfirmed): runs the destructor body `004012d0` on `this`, then frees `this` with `00401030` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_004012a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0040_12d0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00401500, fn_00401500() -> u8),
         entry!(0x00401660, fn_00401660(Ptr<TESFile>) -> u32),
         entry!(0x00401680, fn_00401680(Ptr<TESFile>) -> bool),
+        entry!(0x0040_12a0, fn_004012a0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -63,5 +74,29 @@ mod tests {
         assert!(!e.call(0x0040_1680, &args![file]).bool());
         e.set(file, TESFile::bMustEndianConvert, true);
         assert!(e.call(0x0040_1680, &args![file]).bool());
+    }
+    #[test]
+    fn at_004012a0_runs_destructor_body_then_deletes_on_flag_one() {
+        use crate::prelude::*;
+
+        let mut e = Engine::new();
+        let this: Ptr = Ptr::new(e.mem.alloc(16));
+        e.register(0x0040_12d0, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        for (flags, deletes) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            e.call_log = Some(vec![]);
+            let result = e.call(0x0040_12a0, &args![this, flags]);
+            assert_eq!(result.u32(), this.addr());
+            let log = e.call_log.take().unwrap();
+            let calls: Vec<(u32, Vec<u32>)> = log
+                .into_iter()
+                .filter(|(address, _)| *address != 0x0040_12a0)
+                .collect();
+            let mut expected = vec![(0x0040_12d0, vec![this.addr()])];
+            if deletes {
+                expected.push((0x0040_1030, vec![this.addr()]));
+            }
+            assert_eq!(calls, expected);
+        }
     }
 }

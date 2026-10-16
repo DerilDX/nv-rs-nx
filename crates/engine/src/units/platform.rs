@@ -282,6 +282,12 @@ fn try_enter_critical_section(_e: &mut Engine, _section: Ptr) -> i32 {
     1
 }
 
+// Platform: replaces KERNEL32.DLL InitializeCriticalSectionAndSpinCount
+// (import, slot 00fdf130): one thread, nothing to set up; nonzero is success.
+fn initialize_critical_section_and_spin_count(_e: &mut Engine, _section: Ptr, _spin: u32) -> i32 {
+    1
+}
+
 // Platform: replaces KERNEL32.DLL GetCurrentThreadId (import): the main
 // thread's id. Code that compares thread ids sees the main thread.
 pub const MAIN_THREAD_ID: u32 = 1;
@@ -856,6 +862,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             k,
             "DeleteCriticalSection",
             entry!(0, critical_section_nop(Ptr)).1,
+        ),
+        (
+            k,
+            "InitializeCriticalSectionAndSpinCount",
+            entry!(0, initialize_critical_section_and_spin_count(Ptr, u32) -> i32).1,
         ),
         (
             k,

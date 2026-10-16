@@ -47,8 +47,16 @@ const LIST_CHANGED: u32 = 0x16c;
 /// record (words 0 to 5, 16-byte blocks at `+0x20`, `+0x30` and `+0x40`, the word at `+0x70`),
 /// the displacement and its length, and the floats `to[5]` and `to[4]`, and calls, for each
 /// entry of the overlapping list from the last to the first, the agent's vtable offset `0x14`
-/// with `(this + 0x10, collidable, record, arg3, arg4)`. The record's gaps keep whatever the
-/// stack held in the exe; they are zero here.
+/// with `(this + 0x10, collidable, record, arg3, arg4)`.
+///
+/// Uninitialised stack words: the exe never writes the record's words at +0x18 and +0x1c
+/// (between the six copied words and the 16-byte blocks) nor the word at +0x6c (after the
+/// `+0x68` tail word), and the dead store of 0 to +0x4 is overwritten by the word copy. They
+/// are alignment padding of the cast-input struct: the callee that was checked
+/// (`00daf540`, `hkpIterativeLinearCastAgent::linearCast`) copies the first 0x50 bytes whole
+/// into a local `hkpCollisionInput` and reads only +0x08, +0x50, +0x60, +0x64 and +0x68 of the
+/// input itself, never the padding words. The other agents behind the virtual call (slot
+/// `0x14`) were not enumerated, so that no agent reads them is unconfirmed; they are zero here.
 pub fn hkp_caching_shape_phantom_set_position_and_linear_cast(
     e: &mut Engine,
     this: Ptr,

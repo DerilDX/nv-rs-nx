@@ -4,7 +4,24 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+// Translated from 00dfe710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010e_59ac.
+pub fn return_constant_00dfe710(_e: &mut Engine) -> u32 {
+    0x010e_59ac
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x00dfe710, return_constant_00dfe710() -> u32)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn return_constant_00dfe710_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00df_e710, &args![]).u32(), 0x010e_59ac);
+    }
 }

@@ -50,6 +50,49 @@ pub fn fn_00e012e0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// Translated from 00e01230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (class unconfirmed): builds a temporary object in a 0x40-byte frame with
+/// the constructor at `00e01250` (`this` = the frame, one argument 0) and returns the word at the
+/// start of the object, the vtable pointer the constructor stored there. The temporary is not
+/// destroyed.
+pub fn fn_00e01230(e: &mut Engine) -> u32 {
+    e.with_stack(0x40, |e, record| {
+        e.call(0x00e0_1250, &args![record, 0u32]);
+        e.mem.u32(record.addr())
+    })
+}
+
+// Translated from 00e01370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010c_e25c.
+pub fn return_constant_00e01370(_e: &mut Engine) -> u32 {
+    0x010c_e25c
+}
+
+// Translated from 00e013e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010c_6ff8.
+pub fn return_constant_00e013e0(_e: &mut Engine) -> u32 {
+    0x010c_6ff8
+}
+
+// Translated from 00e01440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010c_70b4.
+pub fn return_constant_00e01440(_e: &mut Engine) -> u32 {
+    0x010c_70b4
+}
+
+// Translated from 00e01490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (class unconfirmed): in a 0x30-byte frame stores the vtable word 0x010e_929c at
+/// its start, runs the constructor at `00cb0a70` on the member at frame+0x2c (argument 0) and
+/// returns the word at the start of the frame. Nothing is destroyed.
+pub fn fn_00e01490(e: &mut Engine) -> u32 {
+    e.with_stack(0x30, |e, frame| {
+        let base = frame.addr();
+        e.mem.set_u32(base, 0x010e_929c);
+        e.call(0x00cb_0a70, &args![base + 0x2c, 0u32]);
+        e.mem.u32(base)
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -58,6 +101,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e0_12c0, fn_00e012c0(Ptr, u32) -> u32),
         entry!(0x00e0_12d0, fn_00e012d0(Ptr, u32) -> u32),
         entry!(0x00e0_12e0, fn_00e012e0(Ptr, u32) -> u32),
+        entry!(0x00e01230, fn_00e01230() -> u32),
+        entry!(0x00e01370, return_constant_00e01370() -> u32),
+        entry!(0x00e013e0, return_constant_00e013e0() -> u32),
+        entry!(0x00e01440, return_constant_00e01440() -> u32),
+        entry!(0x00e01490, fn_00e01490() -> u32),
     ]
 }
 
@@ -166,5 +214,106 @@ mod a07_thunk_tests {
     #[test]
     fn thunk_00e012e0() {
         assert_eq!(check(0x00e0_12e0, 0x00e0_12f0, 0x14), 0xdead_beef);
+    }
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type ConstructorLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// Double for a constructor: logs its argument words and writes `vtable` at the start of `this`.
+    fn constructor_double(e: &mut Engine, address: u32, vtable: u32) -> ConstructorLog {
+        let log: ConstructorLog = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&log);
+        e.register_double(address, move |e, a| {
+            seen.borrow_mut().push(a.to_vec());
+            e.mem.set_u32(a[0], vtable);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        log
+    }
+
+    /// What the probe saw on one call: `this`, the argument, the word `behind` bytes before `this`
+    /// (the frame's vtable slot) and, when asked for, the `u32` at +0x20, `u16` at +0x24 and `u16`
+    /// at +0x26 of the frame.
+    type ProbeCall = (u32, u32, u32, [u32; 3]);
+    type ProbeLog = Rc<RefCell<Vec<ProbeCall>>>;
+
+    /// Double for the member constructor: logs, per call, what `ProbeCall` describes, with the
+    /// vtable slot `behind[call]` bytes before `this`.
+    fn frame_probe(e: &mut Engine, address: u32, behind: &[u32], with_tail: bool) -> ProbeLog {
+        let log: ProbeLog = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&log);
+        let behind = behind.to_vec();
+        e.register_double(address, move |e, a| {
+            let call = seen.borrow().len();
+            let slot = a[0] - behind[call];
+            let mut tail = [0; 3];
+            if with_tail {
+                tail = [
+                    e.mem.u32(slot + 0x20),
+                    u32::from(e.mem.u16(slot + 0x24)),
+                    u32::from(e.mem.u16(slot + 0x26)),
+                ];
+            }
+            seen.borrow_mut().push((a[0], a[1], e.mem.u32(slot), tail));
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        log
+    }
+
+    #[test]
+    fn fn_00e01230_constructs_a_temporary_and_returns_its_vtable_word() {
+        let mut e = Engine::new();
+        let log = constructor_double(&mut e, 0x00e0_1250, 0x0a0b_0c0d);
+        let result = e.call(0x00e0_1230, &args![]).u32();
+        assert_eq!(result, 0x0a0b_0c0d);
+        let calls = log.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].len(), 2);
+        assert_ne!(calls[0][0], 0);
+        assert_eq!(calls[0][1], 0);
+    }
+
+    #[test]
+    fn return_constant_00e01370_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e0_1370, &args![]).u32(), 0x010c_e25c);
+    }
+
+    #[test]
+    fn return_constant_00e013e0_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e0_13e0, &args![]).u32(), 0x010c_6ff8);
+    }
+
+    #[test]
+    fn return_constant_00e01440_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e0_1440, &args![]).u32(), 0x010c_70b4);
+    }
+
+    #[test]
+    fn fn_00e01490_stores_the_vtable_and_constructs_its_member() {
+        let mut e = Engine::new();
+        let log = frame_probe(&mut e, 0x00cb_0a70, &[0x2c], false);
+        let result = e.call(0x00e0_1490, &args![]).u32();
+        assert_eq!(result, 0x010e_929c);
+        let calls = log.borrow();
+        assert_eq!(calls.len(), 1);
+        for call in calls.iter() {
+            assert_eq!(call.1, 0);
+            assert_eq!(call.2, 0x010e_929c);
+        }
     }
 }

@@ -18,6 +18,16 @@ pub fn fn_00c85750(e: &mut Engine) -> u32 {
     e.call(TLS_GET_VALUE, &args![index]).u32()
 }
 
+// Translated from 00c85770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkMemoryRouter::hkMemoryRouter` (Xbox PDB), `thiscall`, no stack arguments:
+/// clears the first eight words (0x20 bytes) of the router. Returns `this`.
+pub fn hk_memory_router_hk_memory_router(e: &mut Engine, this: Ptr) -> Ptr {
+    for word in 0..8 {
+        e.mem.set_u32(this.addr() + word * 4, 0);
+    }
+    this
+}
+
 // Translated from 00c856c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkMemoryRouter::easyFree` (Xbox PDB): does nothing for a null `block`.
 /// Otherwise the allocation starts 0x10 bytes before `block`: zeroes its
@@ -36,6 +46,7 @@ pub fn hk_memory_router_easy_free(e: &mut Engine, router: u32, block: u32) {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c85770, hk_memory_router_hk_memory_router(Ptr) -> Ptr),
         entry!(0x00c856c0, hk_memory_router_easy_free(u32, u32)),
         entry!(0x00c85750, fn_00c85750() -> u32),
     ]
@@ -83,5 +94,15 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00c8_56c0, &args![0x1000u32, 0u32]);
         assert_eq!(e.call_log.clone().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_constructor_clears_eight_words_and_nothing_more() {
+        let mut e = Engine::new();
+        let router = e.mem.alloc(0x30);
+        e.mem.write(router, &[0xcd; 0x30]);
+        assert_eq!(e.call(0x00c8_5770, &args![router]).u32(), router);
+        assert_eq!(e.mem.bytes(router, 0x20), vec![0; 0x20]);
+        assert_eq!(e.mem.u32(router + 0x20), 0xcdcd_cdcd);
     }
 }

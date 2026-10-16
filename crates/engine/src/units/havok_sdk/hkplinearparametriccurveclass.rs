@@ -373,3 +373,48 @@ mod a07_thunk_tests {
         assert_eq!(check(0x00e0_1040, 0x00e0_1010, 0x10), 0xdead_beef);
     }
 }
+
+#[cfg(test)]
+mod a07_first_word_tests {
+    use crate::prelude::*;
+
+    const BUILT_WORD: u32 = 0x0abc_def0;
+
+    /// A double over `callee` writes `BUILT_WORD` at the buffer it is given; `function`
+    /// must call it once with that buffer and a zero flag word, and return the word.
+    fn check(function: u32, callee: u32) {
+        let mut e = Engine::new();
+        e.register(callee, |e, a| {
+            e.mem.set_u32(a[0], BUILT_WORD);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let result = e.call(function, &args![]).u32();
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == callee).collect();
+        assert_eq!(calls.len(), 1);
+        assert_ne!(calls[0].1[0], 0);
+        assert_eq!(calls[0].1[1], 0);
+        assert_eq!(result, BUILT_WORD);
+    }
+
+    macro_rules! first_word_test {
+        ($name:ident, $function:expr, $callee:expr) => {
+            #[test]
+            fn $name() {
+                check($function, $callee);
+            }
+        };
+    }
+
+    first_word_test!(
+        fn_00e01230_returns_first_word_of_built_object,
+        0x00e0_1230,
+        0x00e0_1250
+    );
+    first_word_test!(
+        fn_00e02730_returns_first_word_of_built_object,
+        0x00e0_2730,
+        0x00e4_af80
+    );
+}

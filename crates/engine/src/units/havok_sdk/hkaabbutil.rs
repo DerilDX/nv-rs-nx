@@ -97,6 +97,10 @@ fn recentre(e: &mut Engine, input: u32, base: u32) {
 /// +0x110). The last lane of the first two forms is the reciprocal `1 / (1 - angle^2 / 2)`
 /// or `1 / (1 - angle^2 / 8)`, and of the later steps the constant at `010c9240`.
 pub fn hk_aabb_util_init_offset_aabb_input(e: &mut Engine, input: Ptr, output: Ptr) {
+    // Stack words (checked against the disassembly of `00cbec90`): the exe reads no stack word
+    // it has not written first. The zero lanes in the 16-byte slots at +0x30, +0x40 and +0x50 are
+    // written zeros (`XORPS` then `MOVSS` of a constant into a zeroed register), not garbage;
+    // the slots at +0x10, +0x14, +0x18 and +0x1c are stored before each read.
     let p = input.addr();
     let o = output.addr();
     e.mem.set_u32(o, p);

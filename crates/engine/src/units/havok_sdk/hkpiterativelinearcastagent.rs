@@ -62,6 +62,14 @@ fn dot3(a: Vec4, b: Vec4) -> f32 {
 /// refined by `d2 / -dot(input + 0x50, record2 + 0x20)`; the loop ends when the refinement
 /// exceeds the allowed distance or `output[1]`, or when the list's first float is not below
 /// `d2`; the last hit goes to `output` (slot 4).
+///
+/// Uninitialised stack words: the second hit record (`second` here, at `f + 0x84`) is only
+/// initialised in its vtable word, hit byte and the two floats at +4 and +0x2c; the loop
+/// reads its normal (`second + 0x20`, `MOVAPS` at `00daf7d1`) without testing the hit byte, so
+/// when the closest-point query misses on the first pass the exe uses stack garbage there (its
+/// position at +0x10 can reach `hit` through the copies at `00daf872` the same way). Zeros
+/// stand in, which ends the loop (`slope < 0` fails); a garbage normal can take other paths.
+// Translation incomplete: 00daf540 - reads uninitialised stack word at ESP+0xb0 (second hit record normal, 00daf7d1)
 pub fn hkp_iterative_linear_cast_agent_linear_cast(
     e: &mut Engine,
     this: Ptr,
