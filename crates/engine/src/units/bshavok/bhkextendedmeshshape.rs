@@ -40,9 +40,23 @@ pub fn bhk_extended_mesh_shape_data_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00ccb990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkExtendedMeshShapeData::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_8684.
+pub fn bhk_extended_mesh_shape_data_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_8684
+}
+
+// Translated from 00ccbb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkExtendedMeshShape::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_867c.
+pub fn bhk_extended_mesh_shape_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_867c
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ccb990, bhk_extended_mesh_shape_data_get_r_t_t_i() -> u32),
+        entry!(0x00ccbb30, bhk_extended_mesh_shape_get_r_t_t_i() -> u32),
         entry!(0x00ccc420, bhk_extended_mesh_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00cccfb0, bhk_extended_mesh_shape_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
@@ -96,5 +110,17 @@ mod tests {
         assert_eq!(e.call(0x00cccfb0, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x10]]);
         assert_eq!(calls_to(&e, 0x00cc_c720), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn bhk_extended_mesh_shape_data_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_b990, &args![]).u32(), 0x0126_8684);
+    }
+
+    #[test]
+    fn bhk_extended_mesh_shape_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_bb30, &args![]).u32(), 0x0126_867c);
     }
 }

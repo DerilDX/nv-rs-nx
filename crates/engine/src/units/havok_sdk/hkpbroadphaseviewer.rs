@@ -22,9 +22,35 @@ pub fn deleting_destructor_00d6ada0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00d6ad70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0x20` (`SUB ECX,0x20`) and jumps to `00d6ada0`, which (`RET 4`) has the shape of a scalar deleting destructor: it reads bit 0 of the one stack word. The caller gets its `EAX`; the class is unconfirmed.
+pub fn fn_00d6ad70(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00d6_ada0, &args![this.addr().wrapping_sub(0x20), flags])
+        .u32()
+}
+
+// Translated from 00d6ad80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0x8` (`SUB ECX,0x8`) and jumps to `00d6ada0`, which (`RET 4`) has the shape of a scalar deleting destructor: it reads bit 0 of the one stack word. The caller gets its `EAX`; the class is unconfirmed.
+pub fn fn_00d6ad80(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00d6_ada0, &args![this.addr().wrapping_sub(0x8), flags])
+        .u32()
+}
+
+// Translated from 00d6ad90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0x28` (`SUB ECX,0x28`) and jumps to `00d6ada0`, which (`RET 4`) has the shape of a scalar deleting destructor: it reads bit 0 of the one stack word. The caller gets its `EAX`; the class is unconfirmed.
+pub fn fn_00d6ad90(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00d6_ada0, &args![this.addr().wrapping_sub(0x28), flags])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d6_ada0, deleting_destructor_00d6ada0(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00d6_ada0, deleting_destructor_00d6ada0(Ptr, u8) -> Ptr),
+        entry!(0x00d6_ad70, fn_00d6ad70(Ptr, u32) -> u32),
+        entry!(0x00d6_ad80, fn_00d6ad80(Ptr, u32) -> u32),
+        entry!(0x00d6_ad90, fn_00d6ad90(Ptr, u32) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +114,44 @@ mod tests {
     #[test]
     fn deleting_destructor_00d6ada0_frees_only_when_bit_zero_is_set() {
         check(0x00d6_ada0, 0x00d6_ac40);
+    }
+}
+
+#[cfg(test)]
+mod a07_thunk_tests {
+    use crate::prelude::*;
+
+    /// Calls `thunk` with `this = 0x2000` and one flags word, with a double
+    /// over `target` that returns `0xdeadbeef`; checks that the double ran
+    /// once, with `this` moved back by `back` and the flags passed on, and
+    /// returns the thunk's `EAX`.
+    fn check(thunk: u32, target: u32, back: u32) -> u32 {
+        let mut e = Engine::new();
+        e.register(target, |_, _| Ret {
+            eax: 0xdead_beef,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let result = e.call(thunk, &[0x2000u32, 0x1]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == target).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![0x2000 - back, 0x1]);
+        result.u32()
+    }
+
+    #[test]
+    fn thunk_00d6ad70() {
+        assert_eq!(check(0x00d6_ad70, 0x00d6_ada0, 0x20), 0xdead_beef);
+    }
+
+    #[test]
+    fn thunk_00d6ad80() {
+        assert_eq!(check(0x00d6_ad80, 0x00d6_ada0, 0x8), 0xdead_beef);
+    }
+
+    #[test]
+    fn thunk_00d6ad90() {
+        assert_eq!(check(0x00d6_ad90, 0x00d6_ada0, 0x28), 0xdead_beef);
     }
 }

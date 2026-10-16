@@ -62,9 +62,16 @@ pub fn bs_strip_particle_system_save_binary(e: &mut Engine, this: Ptr, stream: P
     e.call(JUMP_TARGET_00C25720, &args![this, stream]);
 }
 
+// Translated from 00c257c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSStripParticleSystem::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_2560.
+pub fn b_s_strip_particle_system_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_2560
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c257c0, b_s_strip_particle_system_get_r_t_t_i() -> u32),
         entry!(0x00c2_1940, bs_strip_particle_system_register_streamables(Ptr, Ptr) -> bool),
         entry!(0x00c2_1950, bs_strip_particle_system_is_equal(Ptr, Ptr) -> bool),
         entry!(0x00c2_56f0, bs_strip_particle_system_on_visible(Ptr, Ptr)),
@@ -170,5 +177,11 @@ mod tests {
         let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+    }
+
+    #[test]
+    fn b_s_strip_particle_system_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_57c0, &args![]).u32(), 0x0120_2560);
     }
 }

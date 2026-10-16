@@ -22,9 +22,18 @@ pub fn deleting_destructor_00dfbd40(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00dfbd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010d_ec3c.
+pub fn return_constant_00dfbd30(_e: &mut Engine) -> u32 {
+    0x010d_ec3c
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00df_bd40, deleting_destructor_00dfbd40(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00dfbd30, return_constant_00dfbd30() -> u32),
+        entry!(0x00df_bd40, deleting_destructor_00dfbd40(Ptr, u8) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +97,11 @@ mod tests {
     #[test]
     fn deleting_destructor_00dfbd40_frees_only_when_bit_zero_is_set() {
         check(0x00df_bd40, 0x00e3_60f0);
+    }
+
+    #[test]
+    fn return_constant_00dfbd30_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00df_bd30, &args![]).u32(), 0x010d_ec3c);
     }
 }

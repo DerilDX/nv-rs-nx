@@ -26,9 +26,16 @@ pub fn ni_p_sys_air_field_modifier_register_streamables(
     e.call(JUMP_TARGET_00C2F4F0, &args![this, stream]).bool()
 }
 
+// Translated from 00c2f590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysAirFieldModifier::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_27a8.
+pub fn ni_p_sys_air_field_modifier_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_27a8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c2f590, ni_p_sys_air_field_modifier_get_r_t_t_i() -> u32),
         entry!(
             0x00c2_f4e0,
             ni_p_sys_air_field_modifier_link_object(Ptr, Ptr)
@@ -72,5 +79,11 @@ mod tests {
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
         e.register(TARGET, |_, _| Ret::default());
         assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
+
+    #[test]
+    fn ni_p_sys_air_field_modifier_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_f590, &args![]).u32(), 0x0120_27a8);
     }
 }

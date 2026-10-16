@@ -27,9 +27,16 @@ pub fn fn_00c60ec0(e: &mut Engine, this: Ptr, stream: Ptr) {
     e.call(LINK_OBJECT_TARGET_00C4FA10, &args![this, stream]);
 }
 
+// Translated from 00c61270 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 01204398 without reading the receiver. The map names this body `BSMultiBoundCapsule::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c61270(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_4398
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c6_1270, fn_00c61270(Ptr) -> u32),
         entry!(0x00526ac0, fn_00526ac0(Ptr) -> f64),
         entry!(0x00c6_0ec0, fn_00c60ec0(Ptr, Ptr)),
     ]
@@ -69,5 +76,17 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c61270_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c6_1270, &args![0x1000u32]).u32(), 0x0120_4398);
+        assert_eq!(e.call(0x00c6_1270, &args![0u32]).u32(), 0x0120_4398);
     }
 }

@@ -88,9 +88,16 @@ pub fn furniture_mark_set_heading(e: &mut Engine, this: Ptr<FurnitureMark>, head
     e.set(this, FurnitureMark::sHeading, scaled as u16);
 }
 
+// Translated from 00c54d60 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 012031c4 without reading the receiver. The map names this body `BSFurnitureMarker::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c54d60(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_31c4
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c5_4d60, fn_00c54d60(Ptr) -> u32),
         entry!(0x00c5_4130, fn_00c54130(Ptr, Ptr)),
         entry!(0x00c5_4150, bs_furniture_marker_register_streamables(Ptr, Ptr) -> bool),
         entry!(
@@ -200,5 +207,17 @@ mod tests_b {
         e.set_global(FULL_CIRCLE, 100.0f32);
         // 70.0 * 1000 = 70000 = 0x11170.
         assert_eq!(heading_of(&mut e, 70.0), 0x1170);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c54d60_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c5_4d60, &args![0x1000u32]).u32(), 0x0120_31c4);
+        assert_eq!(e.call(0x00c5_4d60, &args![0u32]).u32(), 0x0120_31c4);
     }
 }

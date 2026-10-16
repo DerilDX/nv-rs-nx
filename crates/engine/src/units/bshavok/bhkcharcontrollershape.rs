@@ -26,12 +26,21 @@ pub fn hk_char_controller_shape_get_aabb(
     }
 }
 
+// Translated from 00cd7f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkCharControllerShape::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_86e8.
+pub fn bhk_char_controller_shape_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_86e8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00cd7d20,
-        hk_char_controller_shape_get_aabb(Ptr, Ptr, f32, Ptr)
-    )]
+    vec![
+        entry!(0x00cd7f20, bhk_char_controller_shape_get_r_t_t_i() -> u32),
+        entry!(
+            0x00cd7d20,
+            hk_char_controller_shape_get_aabb(Ptr, Ptr, f32, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -66,5 +75,11 @@ mod tests {
             [16, 20, 24, 28].map(|o| read(&e, o)),
             [11.5, 22.5, 33.5, 44.5]
         );
+    }
+
+    #[test]
+    fn bhk_char_controller_shape_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cd_7f20, &args![]).u32(), 0x0126_86e8);
     }
 }

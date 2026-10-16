@@ -46,9 +46,16 @@ pub fn fn_00c4abb0(e: &mut Engine, this: Ptr, stream: Ptr) {
     e.call(SAVE_BINARY_TARGET_00C452F0, &args![this, stream]);
 }
 
+// Translated from 00c4ac90 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 01202e7c without reading the receiver. The map names this body `BSBlastNode::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c4ac90(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_2e7c
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c4_ac90, fn_00c4ac90(Ptr) -> u32),
         entry!(0x00c4_ab40, fn_00c4ab40(Ptr, Ptr)),
         entry!(0x00c4_ab60, fn_00c4ab60(Ptr, Ptr)),
         entry!(0x00c4_abb0, fn_00c4abb0(Ptr, Ptr)),
@@ -102,5 +109,17 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c4ac90_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c4_ac90, &args![0x1000u32]).u32(), 0x0120_2e7c);
+        assert_eq!(e.call(0x00c4_ac90, &args![0u32]).u32(), 0x0120_2e7c);
     }
 }

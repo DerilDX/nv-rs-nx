@@ -22,9 +22,18 @@ pub fn ni_p_sys_sphere_emitter_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00c1fe10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysSphereEmitter::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_2510.
+pub fn ni_p_sys_sphere_emitter_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_2510
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00c20020, ni_p_sys_sphere_emitter_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x00c1fe10, ni_p_sys_sphere_emitter_get_r_t_t_i() -> u32),
+        entry!(0x00c20020, ni_p_sys_sphere_emitter_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -52,5 +61,11 @@ mod tests {
         assert_eq!(e.call(0x00c20020, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x5c]]);
         assert_eq!(calls_to(&e, 0x00c3_1750), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn ni_p_sys_sphere_emitter_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c1_fe10, &args![]).u32(), 0x0120_2510);
     }
 }

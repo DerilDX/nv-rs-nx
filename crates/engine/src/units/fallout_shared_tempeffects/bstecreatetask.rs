@@ -16,9 +16,18 @@ pub fn ni_task_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32)
     this
 }
 
+// Translated from 00682480 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011f5afc without reading the receiver. The map names this body `NiTask::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00682480(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011f_5afc
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0068_2490, ni_task_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x0068_2480, fn_00682480(Ptr) -> u32),
+        entry!(0x0068_2490, ni_task_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -51,5 +60,17 @@ mod tests {
     #[test]
     fn ni_task_scalar_deleting_destructor_frees_only_with_flag_bit_zero() {
         check_deleting_destructor(0x0068_2490, 0x0068_24c0, 0xc);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00682480_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0068_2480, &args![0x1000u32]).u32(), 0x011f_5afc);
+        assert_eq!(e.call(0x0068_2480, &args![0u32]).u32(), 0x011f_5afc);
     }
 }

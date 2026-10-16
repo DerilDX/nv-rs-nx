@@ -187,6 +187,20 @@ pub fn deleting_destructor_00e46750(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00e00980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0x8` (`SUB ECX,0x8`) and jumps to `00e00990`, which (`RET 4`) has the shape of a scalar deleting destructor: it reads bit 0 of the one stack word. The caller gets its `EAX`; the class is unconfirmed.
+pub fn fn_00e00980(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00e0_0990, &args![this.addr().wrapping_sub(0x8), flags])
+        .u32()
+}
+
+// Translated from 00e01040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0x10` (`SUB ECX,0x10`) and jumps to `00e01010`, which (`RET 4`) has the shape of a scalar deleting destructor: it reads bit 0 of the one stack word. The caller gets its `EAX`; the class is unconfirmed.
+pub fn fn_00e01040(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00e0_1010, &args![this.addr().wrapping_sub(0x10), flags])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -202,6 +216,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e3_4920, deleting_destructor_00e34920(Ptr, u8) -> Ptr),
         entry!(0x00e4_1050, deleting_destructor_00e41050(Ptr, u8) -> Ptr),
         entry!(0x00e4_6750, deleting_destructor_00e46750(Ptr, u8) -> Ptr),
+        entry!(0x00e0_0980, fn_00e00980(Ptr, u32) -> u32),
+        entry!(0x00e0_1040, fn_00e01040(Ptr, u32) -> u32),
     ]
 }
 
@@ -321,5 +337,39 @@ mod tests {
     #[test]
     fn deleting_destructor_00e46750_frees_only_when_bit_zero_is_set() {
         check(0x00e4_6750, 0x00e4_66e0);
+    }
+}
+
+#[cfg(test)]
+mod a07_thunk_tests {
+    use crate::prelude::*;
+
+    /// Calls `thunk` with `this = 0x2000` and one flags word, with a double
+    /// over `target` that returns `0xdeadbeef`; checks that the double ran
+    /// once, with `this` moved back by `back` and the flags passed on, and
+    /// returns the thunk's `EAX`.
+    fn check(thunk: u32, target: u32, back: u32) -> u32 {
+        let mut e = Engine::new();
+        e.register(target, |_, _| Ret {
+            eax: 0xdead_beef,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let result = e.call(thunk, &[0x2000u32, 0x1]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == target).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![0x2000 - back, 0x1]);
+        result.u32()
+    }
+
+    #[test]
+    fn thunk_00e00980() {
+        assert_eq!(check(0x00e0_0980, 0x00e0_0990, 0x8), 0xdead_beef);
+    }
+
+    #[test]
+    fn thunk_00e01040() {
+        assert_eq!(check(0x00e0_1040, 0x00e0_1010, 0x10), 0xdead_beef);
     }
 }

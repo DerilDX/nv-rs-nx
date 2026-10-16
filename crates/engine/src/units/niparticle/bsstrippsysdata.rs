@@ -22,9 +22,16 @@ pub fn bs_strip_p_sys_data_register_streamables(e: &mut Engine, this: Ptr, strea
     e.call(JUMP_TARGET_00A817B0, &args![this, stream]).bool()
 }
 
+// Translated from 00c25ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSStripPSysData::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_2680.
+pub fn b_s_strip_p_sys_data_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_2680
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c25ee0, b_s_strip_p_sys_data_get_r_t_t_i() -> u32),
         entry!(0x00a8_17a0, bs_strip_p_sys_data_link_object(Ptr, Ptr)),
         entry!(0x00a8_17b0, bs_strip_p_sys_data_register_streamables(Ptr, Ptr) -> bool),
     ]
@@ -65,5 +72,11 @@ mod tests {
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
         e.register(TARGET, |_, _| Ret::default());
         assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
+
+    #[test]
+    fn b_s_strip_p_sys_data_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_5ee0, &args![]).u32(), 0x0120_2680);
     }
 }

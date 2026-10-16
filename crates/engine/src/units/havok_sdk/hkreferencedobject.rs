@@ -145,9 +145,16 @@ pub fn fn_00c905b0(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 00c903d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x0102_e388.
+pub fn return_constant_00c903d0(_e: &mut Engine) -> u32 {
+    0x0102_e388
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c903d0, return_constant_00c903d0() -> u32),
         entry!(0x00c9_03a0, add_reference_lock_unchecked(Ptr)),
         entry!(0x00c9_03b0, remove_reference_lock_unchecked(Ptr)),
         entry!(0x00c9_0490, fn_00c90490()),
@@ -352,5 +359,11 @@ mod tests {
         let (plain, _) = object(&mut e, 0, 3);
         e.call(0x00c9_05b0, &args![plain]);
         assert_eq!(e.mem.u16(plain + 6), 3);
+    }
+
+    #[test]
+    fn return_constant_00c903d0_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c9_03d0, &args![]).u32(), 0x0102_e388);
     }
 }

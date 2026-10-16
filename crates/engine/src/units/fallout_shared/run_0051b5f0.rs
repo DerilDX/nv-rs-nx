@@ -58,11 +58,35 @@ pub fn fn_0051b990(e: &mut Engine, this: Ptr) {
     e.call(0x0040_2c40, &args![this]);
 }
 
+// Translated from 0051b930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the component at `+0x30` of the form `0051b6e0` builds
+/// (unnamed in the engine map, class unconfirmed). `ECX` is the object: runs the
+/// base constructor `00488f50`, stores the virtual table `0102be70` and returns
+/// `this`.
+pub fn fn_0051b930(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0048_8f50, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0102_be70);
+    this
+}
+
+// Translated from 0051b970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the component at `+0x48` of the form `0051b6e0` builds
+/// (unnamed in the engine map, class unconfirmed). `ECX` is the object: runs the
+/// base constructor `0051b9b0`, stores the virtual table `0102be94` and returns
+/// `this`.
+pub fn fn_0051b970(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0051_b9b0, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0102_be94);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_b990, fn_0051b990(Ptr)),
         entry!(0x0051_b6e0, fn_0051b6e0(Ptr) -> Ptr),
+        entry!(0x0051_b930, fn_0051b930(Ptr) -> Ptr),
+        entry!(0x0051_b970, fn_0051b970(Ptr) -> Ptr),
     ]
 }
 
@@ -135,5 +159,34 @@ mod thunk_tests {
         e.call_log = Some(vec![]);
         e.call(0x0051_b990, &args![0x0000_5000u32]);
         assert_eq!(calls_to(&e, 0x0040_2c40), vec![vec![0x5000]]);
+    }
+}
+
+#[cfg(test)]
+mod component_tests {
+    use crate::units::crt::ctor_test::{self, A};
+
+    #[test]
+    fn fn_0051b930_builds_the_component() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0051_b930,
+            size: 0x18,
+            globals: &[],
+            returns: &[],
+            calls: &[(0x0048_8f50, &[A::T(0)])],
+            stores: &[(0, 4, 0x0102_be70)],
+        });
+    }
+
+    #[test]
+    fn fn_0051b970_builds_the_component() {
+        ctor_test::run(&ctor_test::Case {
+            addr: 0x0051_b970,
+            size: 0x0c,
+            globals: &[],
+            returns: &[],
+            calls: &[(0x0051_b9b0, &[A::T(0)])],
+            stores: &[(0, 4, 0x0102_be94)],
+        });
     }
 }

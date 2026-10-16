@@ -40,9 +40,23 @@ pub fn bhk_ball_socket_constraint_chain_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00cc8d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkBallSocketConstraintChain::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_8640.
+pub fn bhk_ball_socket_constraint_chain_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_8640
+}
+
+// Translated from 00cc8d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkConstraintChain::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_8f84.
+pub fn bhk_constraint_chain_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_8f84
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00cc8d50, bhk_ball_socket_constraint_chain_get_r_t_t_i() -> u32),
+        entry!(0x00cc8d70, bhk_constraint_chain_get_r_t_t_i() -> u32),
         entry!(0x00cc8d80, bhk_constraint_chain_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00cc8da0, bhk_ball_socket_constraint_chain_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
@@ -96,5 +110,17 @@ mod tests {
         assert_eq!(e.call(0x00cc8da0, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x10]]);
         assert_eq!(calls_to(&e, 0x00cc_8ce0), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn bhk_ball_socket_constraint_chain_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_8d50, &args![]).u32(), 0x0126_8640);
+    }
+
+    #[test]
+    fn bhk_constraint_chain_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_8d70, &args![]).u32(), 0x0126_8f84);
     }
 }

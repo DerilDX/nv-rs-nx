@@ -20,9 +20,18 @@ pub fn bs_multi_bound_room_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00c3a610 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 01202828 without reading the receiver. The map names this body `BSMultiBoundRoom::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c3a610(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_2828
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00c3_a140, bs_multi_bound_room_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x00c3_a610, fn_00c3a610(Ptr) -> u32),
+        entry!(0x00c3_a140, bs_multi_bound_room_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -55,5 +64,17 @@ mod tests {
     #[test]
     fn bs_multi_bound_room_scalar_deleting_destructor_frees_only_with_flag_bit_zero() {
         check_deleting_destructor(0x00c3_a140, 0x00c3_9770, 0xec);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c3a610_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c3_a610, &args![0x1000u32]).u32(), 0x0120_2828);
+        assert_eq!(e.call(0x00c3_a610, &args![0u32]).u32(), 0x0120_2828);
     }
 }

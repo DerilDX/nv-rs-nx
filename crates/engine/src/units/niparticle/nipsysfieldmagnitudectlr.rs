@@ -30,12 +30,21 @@ pub fn ni_p_sys_field_magnitude_ctlr_get_viewer_strings(e: &mut Engine, this: Pt
     });
 }
 
+// Translated from 00c2b140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysFieldMagnitudeCtlr::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_2718.
+pub fn ni_p_sys_field_magnitude_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_2718
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00c2b1b0,
-        ni_p_sys_field_magnitude_ctlr_get_viewer_strings(Ptr, Ptr)
-    )]
+    vec![
+        entry!(0x00c2b140, ni_p_sys_field_magnitude_ctlr_get_r_t_t_i() -> u32),
+        entry!(
+            0x00c2b1b0,
+            ni_p_sys_field_magnitude_ctlr_get_viewer_strings(Ptr, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -94,5 +103,11 @@ mod tests {
             assert_eq!(&set.1[..2], [strings, size]);
             assert_eq!(stored.get(), 0x7777_0001);
         }
+    }
+
+    #[test]
+    fn ni_p_sys_field_magnitude_ctlr_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_b140, &args![]).u32(), 0x0120_2718);
     }
 }

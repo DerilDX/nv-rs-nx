@@ -22,9 +22,53 @@ pub fn deleting_destructor_00dfd080(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00dfc630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x0102_e368.
+pub fn return_constant_00dfc630(_e: &mut Engine) -> u32 {
+    0x0102_e368
+}
+
+// Translated from 00dfc6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010d_0a64.
+pub fn return_constant_00dfc6d0(_e: &mut Engine) -> u32 {
+    0x010d_0a64
+}
+
+// Translated from 00dfc740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010d_0aac.
+pub fn return_constant_00dfc740(_e: &mut Engine) -> u32 {
+    0x010d_0aac
+}
+
+// Translated from 00dfc910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010e_11ec.
+pub fn return_constant_00dfc910(_e: &mut Engine) -> u32 {
+    0x010e_11ec
+}
+
+// Translated from 00dfc9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010d_0af4.
+pub fn return_constant_00dfc9a0(_e: &mut Engine) -> u32 {
+    0x010d_0af4
+}
+
+// Translated from 00dfca30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010c_b71c.
+pub fn return_constant_00dfca30(_e: &mut Engine) -> u32 {
+    0x010c_b71c
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00df_d080, deleting_destructor_00dfd080(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00dfc630, return_constant_00dfc630() -> u32),
+        entry!(0x00dfc6d0, return_constant_00dfc6d0() -> u32),
+        entry!(0x00dfc740, return_constant_00dfc740() -> u32),
+        entry!(0x00dfc910, return_constant_00dfc910() -> u32),
+        entry!(0x00dfc9a0, return_constant_00dfc9a0() -> u32),
+        entry!(0x00dfca30, return_constant_00dfca30() -> u32),
+        entry!(0x00df_d080, deleting_destructor_00dfd080(Ptr, u8) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +132,41 @@ mod tests {
     #[test]
     fn deleting_destructor_00dfd080_frees_only_when_bit_zero_is_set() {
         check(0x00df_d080, 0x00df_cfd0);
+    }
+
+    #[test]
+    fn return_constant_00dfc630_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00df_c630, &args![]).u32(), 0x0102_e368);
+    }
+
+    #[test]
+    fn return_constant_00dfc6d0_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00df_c6d0, &args![]).u32(), 0x010d_0a64);
+    }
+
+    #[test]
+    fn return_constant_00dfc740_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00df_c740, &args![]).u32(), 0x010d_0aac);
+    }
+
+    #[test]
+    fn return_constant_00dfc910_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00df_c910, &args![]).u32(), 0x010e_11ec);
+    }
+
+    #[test]
+    fn return_constant_00dfc9a0_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00df_c9a0, &args![]).u32(), 0x010d_0af4);
+    }
+
+    #[test]
+    fn return_constant_00dfca30_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00df_ca30, &args![]).u32(), 0x010c_b71c);
     }
 }

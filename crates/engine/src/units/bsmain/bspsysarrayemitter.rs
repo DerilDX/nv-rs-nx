@@ -59,9 +59,23 @@ pub fn bs_psys_array_emitter_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> 
     e.call(IS_EQUAL_TARGET_00C31B80, &args![this, other]).bool()
 }
 
+// Translated from 00c632e0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 012043b8 without reading the receiver. The map gives this body no name; it takes only `this` (plain `RET`).
+pub fn fn_00c632e0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_43b8
+}
+
+// Translated from 00c63320 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 012043b0 without reading the receiver. The map names this body `BSPSysArrayEmitter::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c63320(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_43b0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c6_32e0, fn_00c632e0(Ptr) -> u32),
+        entry!(0x00c6_3320, fn_00c63320(Ptr) -> u32),
         entry!(0x00c6_1f10, bs_psys_array_emitter_link_object(Ptr, Ptr)),
         entry!(0x00c6_1f60, bs_psys_array_emitter_register_streamables(Ptr, Ptr) -> bool),
         entry!(0x00c6_1f80, bs_psys_array_emitter_save_binary(Ptr, Ptr)),
@@ -145,5 +159,24 @@ mod tests {
             assert_eq!(hits[0].1, vec![0x1000u32, argument]);
             assert_eq!(result.bool(), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c632e0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c6_32e0, &args![0x1000u32]).u32(), 0x0120_43b8);
+        assert_eq!(e.call(0x00c6_32e0, &args![0u32]).u32(), 0x0120_43b8);
+    }
+
+    #[test]
+    fn fn_00c63320_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c6_3320, &args![0x1000u32]).u32(), 0x0120_43b0);
+        assert_eq!(e.call(0x00c6_3320, &args![0u32]).u32(), 0x0120_43b0);
     }
 }

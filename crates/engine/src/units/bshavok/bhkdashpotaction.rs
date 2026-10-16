@@ -18,9 +18,18 @@ pub fn bhk_dashpot_action_scalar_deleting_destructor(e: &mut Engine, this: Ptr, 
     this
 }
 
+// Translated from 00cc3a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkDashpotAction::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_85c8.
+pub fn bhk_dashpot_action_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_85c8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00cc3a30, bhk_dashpot_action_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x00cc3a20, bhk_dashpot_action_get_r_t_t_i() -> u32),
+        entry!(0x00cc3a30, bhk_dashpot_action_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -48,5 +57,11 @@ mod tests {
         assert_eq!(e.call(0x00cc3a30, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x10]]);
         assert_eq!(calls_to(&e, 0x00cc_39b0), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn bhk_dashpot_action_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_3a20, &args![]).u32(), 0x0126_85c8);
     }
 }

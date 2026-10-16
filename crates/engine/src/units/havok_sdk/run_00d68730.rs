@@ -22,9 +22,19 @@ pub fn deleting_destructor_00d68740(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00d68730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0x28` (`SUB ECX,0x28`) and jumps to `00d68740`, which (`RET 4`) has the shape of a scalar deleting destructor: it reads bit 0 of the one stack word. The caller gets its `EAX`; the class is unconfirmed.
+pub fn fn_00d68730(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00d6_8740, &args![this.addr().wrapping_sub(0x28), flags])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d6_8740, deleting_destructor_00d68740(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00d6_8740, deleting_destructor_00d68740(Ptr, u8) -> Ptr),
+        entry!(0x00d6_8730, fn_00d68730(Ptr, u32) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +98,34 @@ mod tests {
     #[test]
     fn deleting_destructor_00d68740_frees_only_when_bit_zero_is_set() {
         check(0x00d6_8740, 0x00d6_8350);
+    }
+}
+
+#[cfg(test)]
+mod a07_thunk_tests {
+    use crate::prelude::*;
+
+    /// Calls `thunk` with `this = 0x2000` and one flags word, with a double
+    /// over `target` that returns `0xdeadbeef`; checks that the double ran
+    /// once, with `this` moved back by `back` and the flags passed on, and
+    /// returns the thunk's `EAX`.
+    fn check(thunk: u32, target: u32, back: u32) -> u32 {
+        let mut e = Engine::new();
+        e.register(target, |_, _| Ret {
+            eax: 0xdead_beef,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let result = e.call(thunk, &[0x2000u32, 0x1]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == target).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![0x2000 - back, 0x1]);
+        result.u32()
+    }
+
+    #[test]
+    fn thunk_00d68730() {
+        assert_eq!(check(0x00d6_8730, 0x00d6_8740, 0x28), 0xdead_beef);
     }
 }

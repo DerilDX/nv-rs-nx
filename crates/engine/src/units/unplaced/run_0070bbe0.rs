@@ -349,9 +349,11 @@ pub fn fn_0070c3b0(e: &mut Engine, this: Ptr<PlayerCharacter>) -> f32 {
 }
 
 // Translated from 0070c3d0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `PlayerCharacter::bTelekinesisSelected` (Xbox PDB field).
+/// `PlayerCharacter::bTelekinesisSelected` (Xbox PDB field, `+0x75e`): returns
+/// the byte as stored (`MOV AL,[EAX+0x75e]`), not normalised to 0/1 (#198).
 pub fn fn_0070c3d0(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u8 {
-    e.get(this, PlayerCharacter::bTelekinesisSelected) as u8
+    e.mem
+        .u8(this.addr() + PlayerCharacter::bTelekinesisSelected.off)
 }
 
 // Translated from 0070c3f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -488,6 +490,9 @@ mod tests {
         assert_eq!(e.mem.u32(out + 12), 0xdead);
         e.set(player, PlayerCharacter::bTelekinesisSelected, false);
         assert_eq!(e.call(0x0070_c3d0, &args![player]).u8(), 0);
+        // Any other byte comes back as stored (#198).
+        e.mem.set_u8(player.addr() + 0x75e, 0x02);
+        assert_eq!(e.call(0x0070_c3d0, &args![player]).u8(), 0x02);
     }
 
     #[test]

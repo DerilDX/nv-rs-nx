@@ -17,9 +17,18 @@ pub fn ni_p_sys_planar_collider_register_streamables(
     e.call(JUMP_TARGET_00C28D00, &args![this, stream]).bool()
 }
 
+// Translated from 00c299d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysPlanarCollider::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_26c8.
+pub fn ni_p_sys_planar_collider_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_26c8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00c2_8d00, ni_p_sys_planar_collider_register_streamables(Ptr, Ptr) -> bool)]
+    vec![
+        entry!(0x00c299d0, ni_p_sys_planar_collider_get_r_t_t_i() -> u32),
+        entry!(0x00c2_8d00, ni_p_sys_planar_collider_register_streamables(Ptr, Ptr) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -43,5 +52,11 @@ mod tests {
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
         e.register(TARGET, |_, _| Ret::default());
         assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
+
+    #[test]
+    fn ni_p_sys_planar_collider_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_99d0, &args![]).u32(), 0x0120_26c8);
     }
 }

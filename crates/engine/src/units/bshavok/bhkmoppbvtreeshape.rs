@@ -38,9 +38,16 @@ fn fn_00cc9d70_entry(e: &mut Engine, words: &[u32]) -> Ret {
     fn_00cc9d70(e, Ptr::new(words[0]), &words[1..])
 }
 
+// Translated from 00cc9db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkMoppBvTreeShape::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_8658.
+pub fn bhk_mopp_bv_tree_shape_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_8658
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00cc9db0, bhk_mopp_bv_tree_shape_get_r_t_t_i() -> u32),
         (0x00cc9d70, fn_00cc9d70_entry as AbiFn),
         entry!(0x00cc_9d80, deleting_destructor_00cc9d80(Ptr, u8) -> Ptr),
     ]
@@ -122,5 +129,11 @@ mod tests {
         let this = e.mem.alloc(0x40);
         e.mem.set_u32(this + 0x34, child);
         assert_eq!(e.call(0x00cc_9d70, &args![this]).u32(), child + 1);
+    }
+
+    #[test]
+    fn bhk_mopp_bv_tree_shape_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_9db0, &args![]).u32(), 0x0126_8658);
     }
 }

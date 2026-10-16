@@ -349,9 +349,16 @@ pub fn hk_packed_ni_tri_strips_shape_get_aabb_impl(
     });
 }
 
+// Translated from 00ca34b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkPackedNiTriStripsData::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_82bc.
+pub fn hk_packed_ni_tri_strips_data_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_82bc
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ca34b0, hk_packed_ni_tri_strips_data_get_r_t_t_i() -> u32),
         entry!(0x00ca_40f0, deleting_destructor_00ca40f0(Ptr, u8) -> Ptr),
         entry!(0x00ca3980, hk_packed_ni_tri_strips_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00ca3550, hk_packed_ni_tri_strips_shape_get_type(Ptr) -> u32),
@@ -781,5 +788,11 @@ mod tests {
         assert_eq!(got[4].to_bits(), 0xff7f_ffee);
         assert_eq!(got[7], 0.75);
         assert!(calls_to(&e, 0x00c7_f640).is_empty());
+    }
+
+    #[test]
+    fn hk_packed_ni_tri_strips_data_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00ca_34b0, &args![]).u32(), 0x0126_82bc);
     }
 }

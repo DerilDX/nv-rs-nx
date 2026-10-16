@@ -44,9 +44,16 @@ pub fn ni_p_sys_reset_on_loop_ctlr_is_equal(e: &mut Engine, this: Ptr, other: Pt
     e.call(JUMP_TARGET_00C283F0, &args![this, other]).bool()
 }
 
+// Translated from 00c28400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysResetOnLoopCtlr::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_26a8.
+pub fn ni_p_sys_reset_on_loop_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_26a8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c28400, ni_p_sys_reset_on_loop_ctlr_get_r_t_t_i() -> u32),
         entry!(0x00a2_f8b0, ni_p_sys_reset_on_loop_ctlr_register_streamables(Ptr, Ptr) -> bool),
         entry!(
             0x00c2_7120,
@@ -128,5 +135,11 @@ mod tests {
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
         e.register(TARGET, |_, _| Ret::default());
         assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
+
+    #[test]
+    fn ni_p_sys_reset_on_loop_ctlr_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_8400, &args![]).u32(), 0x0120_26a8);
     }
 }

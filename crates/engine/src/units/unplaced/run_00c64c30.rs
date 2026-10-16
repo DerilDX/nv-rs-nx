@@ -26,9 +26,16 @@ pub fn fn_00c65160(e: &mut Engine, this: Ptr, stream: Ptr) {
     e.call(LINK_OBJECT_TARGET_00A7B3B0, &args![this, stream]);
 }
 
+// Translated from 00c657e0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 012043f0 without reading the receiver. The map gives this body no name; it takes only `this` (plain `RET`).
+pub fn fn_00c657e0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_43f0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c6_57e0, fn_00c657e0(Ptr) -> u32),
         entry!(0x00c6_57f0, fn_00c657f0(Ptr, Ptr, Ptr)),
         entry!(0x00c6_5160, fn_00c65160(Ptr, Ptr)),
     ]
@@ -65,5 +72,17 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c657e0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c6_57e0, &args![0x1000u32]).u32(), 0x0120_43f0);
+        assert_eq!(e.call(0x00c6_57e0, &args![0u32]).u32(), 0x0120_43f0);
     }
 }

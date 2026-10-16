@@ -57,9 +57,16 @@ pub fn ni_p_sys_air_field_air_friction_ctlr_save_binary(e: &mut Engine, this: Pt
     e.call(JUMP_TARGET_00C2B8A0, &args![this, stream]);
 }
 
+// Translated from 00c307c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysAirFieldAirFrictionCtlr::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_27b8.
+pub fn ni_p_sys_air_field_air_friction_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_27b8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c307c0, ni_p_sys_air_field_air_friction_ctlr_get_r_t_t_i() -> u32),
         entry!(
             0x00c2_9e80,
             ni_p_sys_air_field_air_friction_ctlr_load_binary(Ptr, Ptr)
@@ -159,5 +166,11 @@ mod tests {
         let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+    }
+
+    #[test]
+    fn ni_p_sys_air_field_air_friction_ctlr_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c3_07c0, &args![]).u32(), 0x0120_27b8);
     }
 }

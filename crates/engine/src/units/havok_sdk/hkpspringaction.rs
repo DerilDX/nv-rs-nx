@@ -22,9 +22,18 @@ pub fn deleting_destructor_00d4de00(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00cf4ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpBinaryAction::getClassType` (Xbox PDB): takes no arguments and returns the constant 0x0126_9168.
+pub fn hkp_binary_action_get_class_type(_e: &mut Engine) -> u32 {
+    0x0126_9168
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d4_de00, deleting_destructor_00d4de00(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00cf4ef0, hkp_binary_action_get_class_type() -> u32),
+        entry!(0x00d4_de00, deleting_destructor_00d4de00(Ptr, u8) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +97,11 @@ mod tests {
     #[test]
     fn deleting_destructor_00d4de00_frees_only_when_bit_zero_is_set() {
         check(0x00d4_de00, 0x00cf_4de0);
+    }
+
+    #[test]
+    fn hkp_binary_action_get_class_type_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cf_4ef0, &args![]).u32(), 0x0126_9168);
     }
 }

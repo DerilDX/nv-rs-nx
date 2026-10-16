@@ -32,9 +32,23 @@ pub fn bhk_hinge_constraint_scalar_deleting_destructor(
     this
 }
 
+// Translated from 009ba4d0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 0126818c without reading the receiver. The map names this body `bhkConstraint::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_009ba4d0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0126_818c
+}
+
+// Translated from 009ba510 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 01268438 without reading the receiver. The map names this body `bhkHingeConstraint::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_009ba510(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0126_8438
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x009b_a4d0, fn_009ba4d0(Ptr) -> u32),
+        entry!(0x009b_a510, fn_009ba510(Ptr) -> u32),
         entry!(0x009b_a4e0, bhk_constraint_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x009b_a520, bhk_hinge_constraint_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
@@ -75,5 +89,24 @@ mod tests {
     #[test]
     fn bhk_hinge_constraint_scalar_deleting_destructor_frees_only_with_flag_bit_zero() {
         check_deleting_destructor(0x009b_a520, 0x00cb_d970, 0x10);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_009ba4d0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x009b_a4d0, &args![0x1000u32]).u32(), 0x0126_818c);
+        assert_eq!(e.call(0x009b_a4d0, &args![0u32]).u32(), 0x0126_818c);
+    }
+
+    #[test]
+    fn fn_009ba510_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x009b_a510, &args![0x1000u32]).u32(), 0x0126_8438);
+        assert_eq!(e.call(0x009b_a510, &args![0u32]).u32(), 0x0126_8438);
     }
 }

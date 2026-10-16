@@ -34,9 +34,18 @@ pub fn fn_00c7ffd0(e: &mut Engine, object: Ptr) -> u32 {
     0
 }
 
+// Translated from 00c7fa60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkStiffSpringConstraint::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_85f8.
+pub fn bhk_stiff_spring_constraint_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_85f8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00c7ffd0, fn_00c7ffd0(Ptr) -> u32)]
+    vec![
+        entry!(0x00c7fa60, bhk_stiff_spring_constraint_get_r_t_t_i() -> u32),
+        entry!(0x00c7ffd0, fn_00c7ffd0(Ptr) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -86,5 +95,11 @@ mod tests {
         assert_eq!(e.call(0x00c7_ffd0, &args![outer]).u32(), 0);
         e.set_global(0x0090_4000, 0x10u32);
         assert_eq!(e.call(0x00c7_ffd0, &args![outer]).u32(), 0);
+    }
+
+    #[test]
+    fn bhk_stiff_spring_constraint_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c7_fa60, &args![]).u32(), 0x0126_85f8);
     }
 }

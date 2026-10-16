@@ -39,9 +39,27 @@ pub fn tesammo_tesammo(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 005029f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack word): the last step of the
+/// form constructor `tesammo_tesammo` (`005026b0`). `ECX` is the object. It clears
+/// the 8 bytes at `+0xa8` and the 0x14 bytes at `+0xb0` through `00403d30` (a
+/// `cdecl` wrapper that forwards its destination, value and count to `_memset`),
+/// then runs `004037f0` on the strings at `+0xc4` and `+0xcc` with two zero words
+/// each. Returns nothing.
+pub fn fn_005029f0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0040_3d30, &args![base + 0xa8, 0u32, 8u32]);
+    e.call(0x0040_3d30, &args![base + 0xb0, 0u32, 0x14u32]);
+    e.call(0x0040_37f0, &args![base + 0xc4, 0u32, 0u32]);
+    e.call(0x0040_37f0, &args![base + 0xcc, 0u32, 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0050_26b0, tesammo_tesammo(Ptr) -> Ptr)]
+    vec![
+        entry!(0x0050_26b0, tesammo_tesammo(Ptr) -> Ptr),
+        entry!(0x0050_29f0, fn_005029f0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -85,5 +103,30 @@ mod tests {
                 (0x9c, 4, 0x0102_5f84),
             ],
         });
+    }
+}
+
+#[cfg(test)]
+mod movement_path_tests {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_005029f0_clears_the_blocks_and_the_strings() {
+        let mut e = Engine::new();
+        for address in [0x0040_3d30, 0x0040_37f0] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0050_29f0, &args![0x4000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (0x0040_3d30, vec![0x40a8, 0, 8]),
+                (0x0040_3d30, vec![0x40b0, 0, 0x14]),
+                (0x0040_37f0, vec![0x40c4, 0, 0]),
+                (0x0040_37f0, vec![0x40cc, 0, 0]),
+            ]
+        );
     }
 }

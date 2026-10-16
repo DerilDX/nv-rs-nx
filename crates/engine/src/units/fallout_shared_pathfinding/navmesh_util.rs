@@ -2778,11 +2778,13 @@ pub fn fn_0069a700(_e: &mut Engine, out: Ptr, record: Ptr) {
 }
 
 // Translated from 0069ae60 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Compares two unsigned 16-bit keys, returning 1, -1, or 0 by ordering.
+/// Compares the unsigned 16-bit keys at `first` and `second`: 1 when the first
+/// is greater (`CMP`/`JLE` at 0069ae7e), -1 when the second is greater
+/// (0069ae97), 0 when they are equal (#197).
 pub fn fn_0069ae60(e: &mut Engine, first: Ptr, second: Ptr) -> u32 {
     match e.mem.u16(first.addr()).cmp(&e.mem.u16(second.addr())) {
-        std::cmp::Ordering::Less => 1,
-        std::cmp::Ordering::Greater => u32::MAX,
+        std::cmp::Ordering::Greater => 1,
+        std::cmp::Ordering::Less => u32::MAX,
         std::cmp::Ordering::Equal => 0,
     }
 }
@@ -5260,7 +5262,9 @@ mod tests {
         let mut e = Engine::new();
         let a = e.new_object::<NavMesh>().cast::<()>();
         let b = e.new_object::<NavMesh>().cast::<()>();
-        for (first, second, expected) in [(1, 2, 1), (2, 1, u32::MAX), (4, 4, 0)] {
+        for (first, second, expected) in
+            [(1, 2, u32::MAX), (2, 1, 1), (4, 4, 0), (0xffff, 0x0100, 1)]
+        {
             e.mem.set_u16(a.addr(), first);
             e.mem.set_u16(b.addr(), second);
             assert_eq!(fn_0069ae60(&mut e, a, b), expected);

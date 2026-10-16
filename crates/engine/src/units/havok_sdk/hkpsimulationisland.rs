@@ -306,9 +306,16 @@ pub fn deleting_destructor_00d078e0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00d078d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSimulationIsland::getClassType` (Xbox PDB): takes no arguments and returns the constant 0x0126_87cc.
+pub fn hkp_simulation_island_get_class_type(_e: &mut Engine) -> u32 {
+    0x0126_87cc
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d078d0, hkp_simulation_island_get_class_type() -> u32),
         entry!(0x00d0_7120, fn_00d07120(Ptr)),
         entry!(0x00d0_7130, fn_00d07130(Ptr<HkpSimulationIsland>, Ptr)),
         entry!(
@@ -652,5 +659,11 @@ mod tests {
         assert_eq!(e.mem.u8(this.addr() + 0x24), 0xcd);
         assert_eq!(word(&e, 0x54), 0xcdcd_cdcd);
         assert_eq!(word(&e, 0x68), 0xcdcd_cdcd);
+    }
+
+    #[test]
+    fn hkp_simulation_island_get_class_type_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00d0_78d0, &args![]).u32(), 0x0126_87cc);
     }
 }

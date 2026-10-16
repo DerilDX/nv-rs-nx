@@ -64,9 +64,37 @@ pub fn bs_face_gen_base_morph_extra_data_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00661d30 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011d5b94 without reading the receiver. The map gives this body no name; it takes only `this` (plain `RET`).
+pub fn fn_00661d30(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011d_5b94
+}
+
+// Translated from 00661d90 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011d5bb8 without reading the receiver. The map names this body `BSFaceGenMorphDataHead::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00661d90(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011d_5bb8
+}
+
+// Translated from 00662390 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011d5ba8 without reading the receiver. The map names this body `BSFaceGenMorphDataHair::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00662390(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011d_5ba8
+}
+
+// Translated from 006626e0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011d5ba0 without reading the receiver. The map names this body `BSFaceGenBaseMorphExtraData::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_006626e0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011d_5ba0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0066_1d30, fn_00661d30(Ptr) -> u32),
+        entry!(0x0066_1d90, fn_00661d90(Ptr) -> u32),
+        entry!(0x0066_2390, fn_00662390(Ptr) -> u32),
+        entry!(0x0066_26e0, fn_006626e0(Ptr) -> u32),
         entry!(0x0066_1d60, fn_00661d60(Ptr, u32) -> Ptr),
         entry!(0x0066_1db0, bs_face_gen_morph_data_head_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0066_23a0, bs_face_gen_morph_data_hair_scalar_deleting_destructor(Ptr, u32) -> Ptr),
@@ -120,5 +148,38 @@ mod tests {
     fn bs_face_gen_base_morph_extra_data_scalar_deleting_destructor_frees_only_with_flag_bit_zero()
     {
         check_deleting_destructor(0x0066_26f0, 0x0066_2720, 0x18);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00661d30_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0066_1d30, &args![0x1000u32]).u32(), 0x011d_5b94);
+        assert_eq!(e.call(0x0066_1d30, &args![0u32]).u32(), 0x011d_5b94);
+    }
+
+    #[test]
+    fn fn_00661d90_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0066_1d90, &args![0x1000u32]).u32(), 0x011d_5bb8);
+        assert_eq!(e.call(0x0066_1d90, &args![0u32]).u32(), 0x011d_5bb8);
+    }
+
+    #[test]
+    fn fn_00662390_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0066_2390, &args![0x1000u32]).u32(), 0x011d_5ba8);
+        assert_eq!(e.call(0x0066_2390, &args![0u32]).u32(), 0x011d_5ba8);
+    }
+
+    #[test]
+    fn fn_006626e0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0066_26e0, &args![0x1000u32]).u32(), 0x011d_5ba0);
+        assert_eq!(e.call(0x0066_26e0, &args![0u32]).u32(), 0x011d_5ba0);
     }
 }

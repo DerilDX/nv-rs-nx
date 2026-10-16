@@ -33,6 +33,10 @@
 #![allow(clippy::needless_range_loop)]
 // x87 code multiplies by a -1.0 constant, which keeps a NaN's sign; negation flips it.
 #![allow(clippy::neg_multiply)]
+// Branch structure follows the exe's compare-and-jump order.
+#![allow(clippy::collapsible_match)]
+// Test doubles record calls in shared logs.
+#![cfg_attr(test, allow(clippy::type_complexity))]
 
 pub mod abi;
 mod engine;

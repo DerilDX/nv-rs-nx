@@ -48,9 +48,30 @@ pub fn bs_dismember_skin_instance_scalar_deleting_destructor(
     this
 }
 
+// Translated from 006838a0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011d6b04 without reading the receiver. The map names this body `BSTempEffectGeometryDecal::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_006838a0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011d_6b04
+}
+
+// Translated from 00688590 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011f5b2c without reading the receiver. The map names this body `NiSkinInstance::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00688590(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011f_5b2c
+}
+
+// Translated from 006885d0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011f49d8 without reading the receiver. The map names this body `BSDismemberSkinInstance::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_006885d0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011f_49d8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0068_38a0, fn_006838a0(Ptr) -> u32),
+        entry!(0x0068_8590, fn_00688590(Ptr) -> u32),
+        entry!(0x0068_85d0, fn_006885d0(Ptr) -> u32),
         entry!(0x0068_38d0, bs_temp_effect_geometry_decal_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0068_85a0, ni_skin_instance_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0068_85e0, bs_dismember_skin_instance_scalar_deleting_destructor(Ptr, u32) -> Ptr),
@@ -97,5 +118,31 @@ mod tests {
     #[test]
     fn bs_dismember_skin_instance_scalar_deleting_destructor_frees_only_with_flag_bit_zero() {
         check_deleting_destructor(0x0068_85e0, 0x0068_8610, 0x40);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_006838a0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0068_38a0, &args![0x1000u32]).u32(), 0x011d_6b04);
+        assert_eq!(e.call(0x0068_38a0, &args![0u32]).u32(), 0x011d_6b04);
+    }
+
+    #[test]
+    fn fn_00688590_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0068_8590, &args![0x1000u32]).u32(), 0x011f_5b2c);
+        assert_eq!(e.call(0x0068_8590, &args![0u32]).u32(), 0x011f_5b2c);
+    }
+
+    #[test]
+    fn fn_006885d0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0068_85d0, &args![0x1000u32]).u32(), 0x011f_49d8);
+        assert_eq!(e.call(0x0068_85d0, &args![0u32]).u32(), 0x011f_49d8);
     }
 }

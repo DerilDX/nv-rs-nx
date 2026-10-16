@@ -17,9 +17,18 @@ pub fn fn_00683480(e: &mut Engine, this: Ptr, value: u32) -> bool {
     e.call(MATCH_TARGET_006834A0, &args![this, value]).bool()
 }
 
+// Translated from 00682ac0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011d6a90 without reading the receiver. The map names this body `BSTempEffectDebris::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00682ac0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011d_6a90
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0068_3480, fn_00683480(Ptr, u32) -> bool)]
+    vec![
+        entry!(0x0068_2ac0, fn_00682ac0(Ptr) -> u32),
+        entry!(0x0068_3480, fn_00683480(Ptr, u32) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -45,5 +54,17 @@ mod tests {
             assert_eq!(hits[0].1, vec![0x1000u32, argument]);
             assert_eq!(result.bool(), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00682ac0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0068_2ac0, &args![0x1000u32]).u32(), 0x011d_6a90);
+        assert_eq!(e.call(0x0068_2ac0, &args![0u32]).u32(), 0x011d_6a90);
     }
 }

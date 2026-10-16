@@ -33,9 +33,16 @@ pub fn fn_00c46810(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
         .bool()
 }
 
+// Translated from 00c46960 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 01202e60 without reading the receiver. The map names this body `BSWindModifier::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c46960(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_2e60
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c4_6960, fn_00c46960(Ptr) -> u32),
         entry!(0x00c4_67f0, fn_00c467f0(Ptr, Ptr)),
         entry!(0x00c4_6810, fn_00c46810(Ptr, Ptr) -> bool),
     ]
@@ -79,5 +86,17 @@ mod tests {
             assert_eq!(hits[0].1, vec![0x1000u32, argument]);
             assert_eq!(result.bool(), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c46960_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c4_6960, &args![0x1000u32]).u32(), 0x0120_2e60);
+        assert_eq!(e.call(0x00c4_6960, &args![0u32]).u32(), 0x0120_2e60);
     }
 }

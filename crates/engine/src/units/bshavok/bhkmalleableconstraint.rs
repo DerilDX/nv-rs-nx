@@ -40,9 +40,16 @@ pub fn bhk_malleable_constraint_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00ca9910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkMalleableConstraint::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_8310.
+pub fn bhk_malleable_constraint_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_8310
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ca9910, bhk_malleable_constraint_get_r_t_t_i() -> u32),
         entry!(0x00ca_9b10, deleting_destructor_00ca9b10(Ptr, u8) -> Ptr),
         entry!(0x00ca9920, bhk_malleable_constraint_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
@@ -132,5 +139,11 @@ mod tests {
         assert_eq!(e.call(0x00ca9920, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x10]]);
         assert_eq!(calls_to(&e, 0x00ca_9860), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn bhk_malleable_constraint_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00ca_9910, &args![]).u32(), 0x0126_8310);
     }
 }

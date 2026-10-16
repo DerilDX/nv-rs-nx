@@ -32,9 +32,23 @@ pub fn bhk_spring_action_scalar_deleting_destructor(e: &mut Engine, this: Ptr, f
     this
 }
 
+// Translated from 00c8a790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkBinaryAction::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_8198.
+pub fn bhk_binary_action_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_8198
+}
+
+// Translated from 00cc2b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkSpringAction::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_85b0.
+pub fn bhk_spring_action_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_85b0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c8a790, bhk_binary_action_get_r_t_t_i() -> u32),
+        entry!(0x00cc2b30, bhk_spring_action_get_r_t_t_i() -> u32),
         entry!(0x00c8a7e0, bhk_binary_action_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00cc2b40, bhk_spring_action_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
@@ -88,5 +102,17 @@ mod tests {
         assert_eq!(e.call(0x00cc2b40, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x10]]);
         assert_eq!(calls_to(&e, 0x00cc_2ac0), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn bhk_binary_action_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c8_a790, &args![]).u32(), 0x0126_8198);
+    }
+
+    #[test]
+    fn bhk_spring_action_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_2b30, &args![]).u32(), 0x0126_85b0);
     }
 }

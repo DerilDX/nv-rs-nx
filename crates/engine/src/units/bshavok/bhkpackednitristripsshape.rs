@@ -22,9 +22,16 @@ pub fn bhk_packed_ni_tri_strips_shape_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00ca5300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkPackedNiTriStripsShape::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_82dc.
+pub fn bhk_packed_ni_tri_strips_shape_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_82dc
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ca5300, bhk_packed_ni_tri_strips_shape_get_r_t_t_i() -> u32),
         entry!(0x00ca5340, bhk_packed_ni_tri_strips_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
 }
@@ -54,5 +61,11 @@ mod tests {
         assert_eq!(e.call(0x00ca5340, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x14]]);
         assert_eq!(calls_to(&e, 0x00ca_5290), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn bhk_packed_ni_tri_strips_shape_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00ca_5300, &args![]).u32(), 0x0126_82dc);
     }
 }

@@ -30,12 +30,21 @@ pub fn ni_p_sys_field_attenuation_ctlr_get_viewer_strings(e: &mut Engine, this: 
     });
 }
 
+// Translated from 00c2b230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysFieldAttenuationCtlr::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_2720.
+pub fn ni_p_sys_field_attenuation_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_2720
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00c2b2e0,
-        ni_p_sys_field_attenuation_ctlr_get_viewer_strings(Ptr, Ptr)
-    )]
+    vec![
+        entry!(0x00c2b230, ni_p_sys_field_attenuation_ctlr_get_r_t_t_i() -> u32),
+        entry!(
+            0x00c2b2e0,
+            ni_p_sys_field_attenuation_ctlr_get_viewer_strings(Ptr, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -94,5 +103,11 @@ mod tests {
             assert_eq!(&set.1[..2], [strings, size]);
             assert_eq!(stored.get(), 0x7777_0001);
         }
+    }
+
+    #[test]
+    fn ni_p_sys_field_attenuation_ctlr_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_b230, &args![]).u32(), 0x0120_2720);
     }
 }

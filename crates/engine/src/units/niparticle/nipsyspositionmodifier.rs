@@ -31,9 +31,16 @@ pub fn ni_p_sys_position_modifier_is_equal(e: &mut Engine, this: Ptr, other: Ptr
     e.call(JUMP_TARGET_00C28B80, &args![this, other]).bool()
 }
 
+// Translated from 00c28b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysPositionModifier::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_26b8.
+pub fn ni_p_sys_position_modifier_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_26b8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c28b90, ni_p_sys_position_modifier_get_r_t_t_i() -> u32),
         entry!(
             0x00c2_8b50,
             ni_p_sys_position_modifier_load_binary(Ptr, Ptr)
@@ -95,5 +102,11 @@ mod tests {
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
         e.register(TARGET, |_, _| Ret::default());
         assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
+
+    #[test]
+    fn ni_p_sys_position_modifier_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_8b90, &args![]).u32(), 0x0120_26b8);
     }
 }

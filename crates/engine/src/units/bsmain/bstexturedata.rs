@@ -16,9 +16,18 @@ pub fn bs_texture_data_scalar_deleting_destructor(e: &mut Engine, this: Ptr, fla
     this
 }
 
+// Translated from 00c5f560 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 01204378 without reading the receiver. The map names this body `BSTextureData::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c5f560(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_4378
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00c5_f360, bs_texture_data_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x00c5_f560, fn_00c5f560(Ptr) -> u32),
+        entry!(0x00c5_f360, bs_texture_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -51,5 +60,17 @@ mod tests {
     #[test]
     fn bs_texture_data_scalar_deleting_destructor_frees_only_with_flag_bit_zero() {
         check_deleting_destructor(0x00c5_f360, 0x00c5_ed60, 0x1c);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c5f560_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c5_f560, &args![0x1000u32]).u32(), 0x0120_4378);
+        assert_eq!(e.call(0x00c5_f560, &args![0u32]).u32(), 0x0120_4378);
     }
 }

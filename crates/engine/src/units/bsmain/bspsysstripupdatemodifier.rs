@@ -33,9 +33,16 @@ pub fn fn_00c5ffb0(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
         .bool()
 }
 
+// Translated from 00c600f0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 01204388 without reading the receiver. The map names this body `BSPSysStripUpdateModifier::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c600f0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_4388
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c6_00f0, fn_00c600f0(Ptr) -> u32),
         entry!(0x00c5_ff90, fn_00c5ff90(Ptr, Ptr)),
         entry!(0x00c5_ffb0, fn_00c5ffb0(Ptr, Ptr) -> bool),
     ]
@@ -79,5 +86,17 @@ mod tests {
             assert_eq!(hits[0].1, vec![0x1000u32, argument]);
             assert_eq!(result.bool(), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c600f0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c6_00f0, &args![0x1000u32]).u32(), 0x0120_4388);
+        assert_eq!(e.call(0x00c6_00f0, &args![0u32]).u32(), 0x0120_4388);
     }
 }

@@ -36,9 +36,23 @@ pub fn weapon_object_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags
     this
 }
 
+// Translated from 00c88370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `WeaponObject::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_817c.
+pub fn weapon_object_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_817c
+}
+
+// Translated from 00c88400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkLimitedHingeConstraint::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_831c.
+pub fn bhk_limited_hinge_constraint_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_831c
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c88370, weapon_object_get_r_t_t_i() -> u32),
+        entry!(0x00c88400, bhk_limited_hinge_constraint_get_r_t_t_i() -> u32),
         entry!(0x00c88410, bhk_limited_hinge_constraint_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00c88a20, weapon_object_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
@@ -92,5 +106,17 @@ mod tests {
         assert_eq!(e.call(0x00c88a20, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x2c]]);
         assert_eq!(calls_to(&e, 0x00c8_8930), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn weapon_object_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c8_8370, &args![]).u32(), 0x0126_817c);
+    }
+
+    #[test]
+    fn bhk_limited_hinge_constraint_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c8_8400, &args![]).u32(), 0x0126_831c);
     }
 }

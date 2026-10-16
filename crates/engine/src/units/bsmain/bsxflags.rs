@@ -55,9 +55,16 @@ pub fn bsx_flags_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     e.call(SAVE_BINARY_TARGET_00A9A4E0, &args![this, stream]);
 }
 
+// Translated from 00c43650 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 01202de0 without reading the receiver. The map names this body `BSXFlags::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c43650(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_2de0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c4_3650, fn_00c43650(Ptr) -> u32),
         entry!(0x00a99c60, ni_integer_extra_data_get_rtti() -> Ptr),
         entry!(0x00c4_30d0, bsx_flags_load_binary(Ptr, Ptr)),
         entry!(0x00c4_30f0, fn_00c430f0(Ptr, Ptr)),
@@ -121,5 +128,17 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c43650_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c4_3650, &args![0x1000u32]).u32(), 0x0120_2de0);
+        assert_eq!(e.call(0x00c4_3650, &args![0u32]).u32(), 0x0120_2de0);
     }
 }

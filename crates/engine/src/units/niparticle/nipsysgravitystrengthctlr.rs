@@ -30,12 +30,21 @@ pub fn ni_p_sys_gravity_strength_ctlr_get_viewer_strings(e: &mut Engine, this: P
     });
 }
 
+// Translated from 00c2a8a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysGravityStrengthCtlr::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_2700.
+pub fn ni_p_sys_gravity_strength_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_2700
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00c2a960,
-        ni_p_sys_gravity_strength_ctlr_get_viewer_strings(Ptr, Ptr)
-    )]
+    vec![
+        entry!(0x00c2a8a0, ni_p_sys_gravity_strength_ctlr_get_r_t_t_i() -> u32),
+        entry!(
+            0x00c2a960,
+            ni_p_sys_gravity_strength_ctlr_get_viewer_strings(Ptr, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -94,5 +103,11 @@ mod tests {
             assert_eq!(&set.1[..2], [strings, size]);
             assert_eq!(stored.get(), 0x7777_0001);
         }
+    }
+
+    #[test]
+    fn ni_p_sys_gravity_strength_ctlr_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_a8a0, &args![]).u32(), 0x0120_2700);
     }
 }

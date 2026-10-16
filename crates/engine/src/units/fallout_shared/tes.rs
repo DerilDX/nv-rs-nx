@@ -2288,9 +2288,10 @@ pub fn tes_clean_up_unused_textures(e: &mut Engine, this: Ptr<TES>, force: u8) {
 }
 
 // Translated from 004524f0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `TES::bAllowUnusedPurge` (Xbox PDB `+0xB5`).
+/// `TES::bAllowUnusedPurge` (Xbox PDB `+0xB5`): returns the byte as stored
+/// (`MOV AL,[EAX+0xb5]`), not normalised to 0/1 (#198).
 pub fn fn_004524f0(e: &mut Engine, this: Ptr<TES>) -> u8 {
-    e.get(this, TES::bAllowUnusedPurge) as u8
+    e.mem.u8(this.addr() + TES::bAllowUnusedPurge.off)
 }
 
 // Translated from 00452510 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -8654,6 +8655,9 @@ mod tests {
         assert_eq!(e.call(0x0045_24f0, &args![tes]).u8(), 0);
         e.set(tes, TES::bAllowUnusedPurge, true);
         assert_eq!(e.call(0x0045_24f0, &args![tes]).u8(), 1);
+        // Any other byte comes back as stored (#198).
+        e.mem.set_u8(tes.addr() + 0xb5, 0xec);
+        assert_eq!(e.call(0x0045_24f0, &args![tes]).u8(), 0xec);
     }
 
     #[test]

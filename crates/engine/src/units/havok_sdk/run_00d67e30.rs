@@ -29,11 +29,43 @@ pub fn fn_00d681e0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// Translated from 00d681f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0x8` (`SUB ECX,0x8`) and jumps to `00d68230`, which (`RET 4`) has the shape of a scalar deleting destructor: it reads bit 0 of the one stack word. The caller gets its `EAX`; the class is unconfirmed.
+pub fn fn_00d681f0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00d6_8230, &args![this.addr().wrapping_sub(0x8), flags])
+        .u32()
+}
+
+// Translated from 00d68200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0x28` (`SUB ECX,0x28`) and jumps to `00d68230`, which (`RET 4`) has the shape of a scalar deleting destructor: it reads bit 0 of the one stack word. The caller gets its `EAX`; the class is unconfirmed.
+pub fn fn_00d68200(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00d6_8230, &args![this.addr().wrapping_sub(0x28), flags])
+        .u32()
+}
+
+// Translated from 00d68210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0x2c` (`SUB ECX,0x2c`) and jumps to `00d68230`, which (`RET 4`) has the shape of a scalar deleting destructor: it reads bit 0 of the one stack word. The caller gets its `EAX`; the class is unconfirmed.
+pub fn fn_00d68210(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00d6_8230, &args![this.addr().wrapping_sub(0x2c), flags])
+        .u32()
+}
+
+// Translated from 00d68220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thunk: moves `this` back by `0x30` (`SUB ECX,0x30`) and jumps to `00d68230`, which (`RET 4`) has the shape of a scalar deleting destructor: it reads bit 0 of the one stack word. The caller gets its `EAX`; the class is unconfirmed.
+pub fn fn_00d68220(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
+    e.call(0x00d6_8230, &args![this.addr().wrapping_sub(0x30), flags])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d6_8230, deleting_destructor_00d68230(Ptr, u8) -> Ptr),
         entry!(0x00d6_81e0, fn_00d681e0(Ptr, u32) -> u32),
+        entry!(0x00d6_81f0, fn_00d681f0(Ptr, u32) -> u32),
+        entry!(0x00d6_8200, fn_00d68200(Ptr, u32) -> u32),
+        entry!(0x00d6_8210, fn_00d68210(Ptr, u32) -> u32),
+        entry!(0x00d6_8220, fn_00d68220(Ptr, u32) -> u32),
     ]
 }
 
@@ -133,5 +165,49 @@ mod le81_thunk_tests {
             check(0x00d6_81e0, 0x00d6_8230, 0x20, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+}
+
+#[cfg(test)]
+mod a07_thunk_tests {
+    use crate::prelude::*;
+
+    /// Calls `thunk` with `this = 0x2000` and one flags word, with a double
+    /// over `target` that returns `0xdeadbeef`; checks that the double ran
+    /// once, with `this` moved back by `back` and the flags passed on, and
+    /// returns the thunk's `EAX`.
+    fn check(thunk: u32, target: u32, back: u32) -> u32 {
+        let mut e = Engine::new();
+        e.register(target, |_, _| Ret {
+            eax: 0xdead_beef,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let result = e.call(thunk, &[0x2000u32, 0x1]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == target).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![0x2000 - back, 0x1]);
+        result.u32()
+    }
+
+    #[test]
+    fn thunk_00d681f0() {
+        assert_eq!(check(0x00d6_81f0, 0x00d6_8230, 0x8), 0xdead_beef);
+    }
+
+    #[test]
+    fn thunk_00d68200() {
+        assert_eq!(check(0x00d6_8200, 0x00d6_8230, 0x28), 0xdead_beef);
+    }
+
+    #[test]
+    fn thunk_00d68210() {
+        assert_eq!(check(0x00d6_8210, 0x00d6_8230, 0x2c), 0xdead_beef);
+    }
+
+    #[test]
+    fn thunk_00d68220() {
+        assert_eq!(check(0x00d6_8220, 0x00d6_8230, 0x30), 0xdead_beef);
     }
 }

@@ -22,9 +22,18 @@ pub fn bhk_convex_transform_shape_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00cce970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkConvexTransformShape::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_86b0.
+pub fn bhk_convex_transform_shape_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_86b0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00cce9e0, bhk_convex_transform_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x00cce970, bhk_convex_transform_shape_get_r_t_t_i() -> u32),
+        entry!(0x00cce9e0, bhk_convex_transform_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -52,5 +61,11 @@ mod tests {
         assert_eq!(e.call(0x00cce9e0, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x14]]);
         assert_eq!(calls_to(&e, 0x00cc_e900), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn bhk_convex_transform_shape_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_e970, &args![]).u32(), 0x0126_86b0);
     }
 }

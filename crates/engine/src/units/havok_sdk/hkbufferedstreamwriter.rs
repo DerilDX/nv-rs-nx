@@ -22,9 +22,56 @@ pub fn deleting_destructor_00d27570(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+/// `memset` of the CRT behind the jump at `00cb1280` (cdecl `(destination, value, bytes)`).
+const MEM_SET: u32 = 0x00cb_1280;
+
+// Translated from 00d274c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkBufferedStreamWriter::hkBufferedStreamWriter_ov2` (Xbox PDB name from the exe's symbol
+/// table; the vtable `010ce448` it stores has the RTTI name `hkBufferedStreamWriter`).
+/// `this` is ECX; `buffer` and `size` describe the byte buffer; `clear` is the low byte of
+/// the third stack word (the upper bytes are not read). Sets the 16-bit word at +6 to 1, the
+/// vtable, the buffer at +0xc, zeros at +8 and +0x10 and the byte at +0x18, and the limit at
+/// +0x14 to `size - 1` when `clear` is non-zero (the buffer is zeroed with `memset`) or `size`
+/// when it is zero. Returns `this`.
+pub fn hk_buffered_stream_writer_hk_buffered_stream_writer_ov2(
+    e: &mut Engine,
+    this: Ptr,
+    buffer: u32,
+    size: u32,
+    clear: u8,
+) -> Ptr {
+    let t = this.addr();
+    e.mem.set_u16(t + 6, 1);
+    e.mem.set_u32(t, 0x010c_e448);
+    e.mem.set_u32(t + 8, 0);
+    e.mem.set_u32(t + 0xc, buffer);
+    e.mem.set_u32(t + 0x10, 0);
+    let limit = if clear != 0 {
+        size.wrapping_sub(1)
+    } else {
+        size
+    };
+    e.mem.set_u32(t + 0x14, limit);
+    e.mem.set_u8(t + 0x18, 0);
+    if clear != 0 {
+        e.call(MEM_SET, &args![buffer, 0u32, size]);
+    }
+    this
+}
+
+// Translated from 00d27560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkBufferedStreamWriter::getClassType` (Xbox PDB): takes no arguments and returns the constant 0x0126_89e4.
+pub fn hk_buffered_stream_writer_get_class_type(_e: &mut Engine) -> u32 {
+    0x0126_89e4
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00d2_7570, deleting_destructor_00d27570(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00d2_7570, deleting_destructor_00d27570(Ptr, u8) -> Ptr),
+        entry!(0x00d2_74c0, hk_buffered_stream_writer_hk_buffered_stream_writer_ov2(Ptr, u32, u32, u8) -> Ptr),
+        entry!(0x00d27560, hk_buffered_stream_writer_get_class_type() -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +135,56 @@ mod tests {
     #[test]
     fn deleting_destructor_00d27570_frees_only_when_bit_zero_is_set() {
         check(0x00d2_7570, 0x00d2_7520);
+    }
+
+    #[test]
+    fn hk_buffered_stream_writer_get_class_type_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00d2_7560, &args![]).u32(), 0x0126_89e4);
+    }
+}
+
+#[cfg(test)]
+mod movement_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// An engine with the exe's data range and the import page mapped, as the tests run without the exe.
+    fn test_engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.map(0x00fd_f000, 0x1000);
+        e
+    }
+
+    #[test]
+    fn construct_sets_the_fields_and_clears_the_buffer_when_asked() {
+        let mut e = test_engine();
+        let log: Rc<RefCell<Vec<Vec<u32>>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&log);
+        e.register_double(MEM_SET, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u8(this + 0x18, 9);
+        let got = e.call(0x00d2_74c0, &args![this, 0x4000u32, 0x100u32, 1u32]);
+        assert_eq!(got.u32(), this);
+        assert_eq!(e.mem.u16(this + 6), 1);
+        assert_eq!(e.mem.u32(this), 0x010c_e448);
+        assert_eq!(e.mem.u32(this + 0xc), 0x4000);
+        assert_eq!(e.mem.u32(this + 0x14), 0xff);
+        assert_eq!(e.mem.u8(this + 0x18), 0);
+        assert_eq!(*log.borrow(), vec![vec![0x4000, 0, 0x100]]);
+        // Without the flag the limit is the whole size and nothing is cleared; only the low
+        // byte of the word counts.
+        log.borrow_mut().clear();
+        e.call(
+            0x00d2_74c0,
+            &args![this, 0x4000u32, 0x100u32, 0x1234_5600u32],
+        );
+        assert_eq!(e.mem.u32(this + 0x14), 0x100);
+        assert!(log.borrow().is_empty());
     }
 }

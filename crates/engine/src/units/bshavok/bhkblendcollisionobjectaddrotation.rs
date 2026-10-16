@@ -13,12 +13,21 @@ pub fn bhk_blend_collision_object_add_rotation_load_binary(e: &mut Engine, this:
     e.call(JUMP_TARGET_00C8FF80, &args![this, stream]);
 }
 
+// Translated from 00c8ff70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkBlendCollisionObjectAddRotation::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_81cc.
+pub fn bhk_blend_collision_object_add_rotation_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_81cc
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00c8_ff80,
-        bhk_blend_collision_object_add_rotation_load_binary(Ptr, Ptr)
-    )]
+    vec![
+        entry!(0x00c8ff70, bhk_blend_collision_object_add_rotation_get_r_t_t_i() -> u32),
+        entry!(
+            0x00c8_ff80,
+            bhk_blend_collision_object_add_rotation_load_binary(Ptr, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -37,5 +46,11 @@ mod tests {
         let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+    }
+
+    #[test]
+    fn bhk_blend_collision_object_add_rotation_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c8_ff70, &args![]).u32(), 0x0126_81cc);
     }
 }

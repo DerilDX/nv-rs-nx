@@ -18,9 +18,18 @@ pub fn fn_00c54e70(e: &mut Engine, this: Ptr, stream: Ptr) {
     e.call(LINK_OBJECT_TARGET_00A7B3B0, &args![this, stream]);
 }
 
+// Translated from 00c55320 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 012031e8 without reading the receiver. The map names this body `BSBound::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c55320(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_31e8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00c5_4e70, fn_00c54e70(Ptr, Ptr))]
+    vec![
+        entry!(0x00c5_5320, fn_00c55320(Ptr) -> u32),
+        entry!(0x00c5_4e70, fn_00c54e70(Ptr, Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -40,5 +49,17 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c55320_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c5_5320, &args![0x1000u32]).u32(), 0x0120_31e8);
+        assert_eq!(e.call(0x00c5_5320, &args![0u32]).u32(), 0x0120_31e8);
     }
 }

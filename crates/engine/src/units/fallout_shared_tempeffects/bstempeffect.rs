@@ -16,9 +16,18 @@ pub fn bs_temp_effect_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flag
     this
 }
 
+// Translated from 00682800 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011d6a44 without reading the receiver. The map names this body `BSTempEffect::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00682800(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011d_6a44
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0068_2830, bs_temp_effect_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x0068_2800, fn_00682800(Ptr) -> u32),
+        entry!(0x0068_2830, bs_temp_effect_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -51,5 +60,17 @@ mod tests {
     #[test]
     fn bs_temp_effect_scalar_deleting_destructor_frees_only_with_flag_bit_zero() {
         check_deleting_destructor(0x0068_2830, 0x0068_2860, 0x18);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00682800_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0068_2800, &args![0x1000u32]).u32(), 0x011d_6a44);
+        assert_eq!(e.call(0x0068_2800, &args![0u32]).u32(), 0x011d_6a44);
     }
 }

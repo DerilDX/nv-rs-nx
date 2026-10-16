@@ -39,12 +39,18 @@ pub fn ni_t_set_realloc(e: &mut Engine, this: Ptr<NiTPrimitiveSet>, new_capacity
     e.set(this, NiTPrimitiveSet::m_uiAlloced, new_capacity);
 }
 
+// Translated from 00c53e00 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 012031b8 without reading the receiver. The map names this body `NiBSBoneLODController::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c53e00(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_31b8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00a3_11e0,
-        ni_t_set_realloc(Ptr<NiTPrimitiveSet>, u32)
-    )]
+    vec![
+        entry!(0x00c5_3e00, fn_00c53e00(Ptr) -> u32),
+        entry!(0x00a3_11e0, ni_t_set_realloc(Ptr<NiTPrimitiveSet>, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -105,5 +111,17 @@ mod tests {
         assert_eq!(frees[0].1, args![base]);
         assert_eq!(e.get(set, NiTPrimitiveSet::m_pBase), 0);
         assert_eq!(e.get(set, NiTPrimitiveSet::m_uiAlloced), 0);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c53e00_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c5_3e00, &args![0x1000u32]).u32(), 0x0120_31b8);
+        assert_eq!(e.call(0x00c5_3e00, &args![0u32]).u32(), 0x0120_31b8);
     }
 }

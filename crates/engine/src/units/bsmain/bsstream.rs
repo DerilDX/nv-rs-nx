@@ -148,9 +148,23 @@ pub fn ni_t_large_array_set_at(e: &mut Engine, this: Ptr<NiTLargeArray>, index: 
     }
 }
 
+// Translated from 00c3b9e0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 012043dc without reading the receiver. The map names this body `BSReference::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c3b9e0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_43dc
+}
+
+// Translated from 00c3ba70 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 012043e4 without reading the receiver. The map names this body `BSNodeReferences::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_00c3ba70(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x0120_43e4
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c3_b9e0, fn_00c3b9e0(Ptr) -> u32),
+        entry!(0x00c3_ba70, fn_00c3ba70(Ptr) -> u32),
         entry!(
             0x00a6_4fe0,
             ni_t_large_array_set_size(Ptr<NiTLargeArray>, u32)
@@ -380,5 +394,24 @@ mod tests {
         fx.e.call(0x00cc_1a10, &args![fx.array, 0u32, value]);
         assert_eq!(fx.references(a), 1);
         assert_eq!(fx.state(), (4, 1, 1));
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00c3b9e0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c3_b9e0, &args![0x1000u32]).u32(), 0x0120_43dc);
+        assert_eq!(e.call(0x00c3_b9e0, &args![0u32]).u32(), 0x0120_43dc);
+    }
+
+    #[test]
+    fn fn_00c3ba70_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c3_ba70, &args![0x1000u32]).u32(), 0x0120_43e4);
+        assert_eq!(e.call(0x00c3_ba70, &args![0u32]).u32(), 0x0120_43e4);
     }
 }

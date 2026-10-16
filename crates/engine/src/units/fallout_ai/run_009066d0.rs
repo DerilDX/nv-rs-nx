@@ -43,9 +43,34 @@ pub fn fn_00906dc0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00906f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: constructor of a pair of floats (`ECX` = the
+/// pair, both set to 0.0 with `FLDZ`/`FSTP`). Returns `this`.
+pub fn fn_00906f60(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_f32(this.addr(), 0.0);
+    e.mem.set_f32(this.addr() + 4, 0.0);
+    this
+}
+
+// Translated from 00906f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 0xc`; `value`, `mask`, `shift`
+/// are bytes): replaces the bits of the byte at `+0x30` selected by `mask`
+/// with `value << (shift & 31)` (the shifted value is not masked: bits of it
+/// outside `mask` are set in the byte, as the code ORs it in; only the low byte
+/// is stored).
+pub fn fn_00906f80(e: &mut Engine, this: Ptr, value: u8, mask: u8, shift: u8) {
+    let old = u32::from(e.mem.u8(this.addr() + 0x30));
+    let new = (old & !u32::from(mask)) | (u32::from(value) << (u32::from(shift) & 0x1f));
+    e.mem.set_u8(this.addr() + 0x30, new as u8);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0090_6dc0, fn_00906dc0(Ptr) -> Ptr)]
+    vec![
+        entry!(0x0090_6dc0, fn_00906dc0(Ptr) -> Ptr),
+        entry!(0x0090_6f60, fn_00906f60(Ptr) -> Ptr),
+        entry!(0x0090_6f80, fn_00906f80(Ptr, u8, u8, u8)),
+    ]
 }
 
 #[cfg(test)]
@@ -94,5 +119,41 @@ mod movement_path_tests {
                 (0xb0, 1, 0),
             ],
         });
+    }
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_00906f60_zeroes_both_floats_and_returns_this() {
+        let mut e = Engine::new();
+        let pair = e.mem.alloc(8);
+        e.mem.set_u32(pair, 0xdead_beef);
+        e.mem.set_u32(pair + 4, 0xdead_beef);
+        assert_eq!(e.call(0x0090_6f60, &args![pair]).u32(), pair);
+        assert_eq!(e.mem.u32(pair), 0);
+        assert_eq!(e.mem.u32(pair + 4), 0);
+    }
+
+    #[test]
+    fn fn_00906f80_replaces_the_masked_bits() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u8(object + 0x30, 0b1111_0000);
+        // value 0b11 shifted by 1, mask 0b0000_0110.
+        e.call(0x0090_6f80, &args![object, 3u32, 6u32, 1u32]);
+        assert_eq!(e.mem.u8(object + 0x30), 0b1111_0110);
+        // The constructor's call: value 0, mask 0xff, shift 0 clears the byte.
+        e.call(0x0090_6f80, &args![object, 0u32, 0xffu32, 0u32]);
+        assert_eq!(e.mem.u8(object + 0x30), 0);
+        // The shift count is taken modulo 32 and bits shifted past the mask are
+        // still ORed in; bits shifted out of the low byte are dropped.
+        e.mem.set_u8(object + 0x30, 0);
+        e.call(0x0090_6f80, &args![object, 1u32, 0u32, 33u32]);
+        assert_eq!(e.mem.u8(object + 0x30), 2);
+        e.call(0x0090_6f80, &args![object, 1u32, 0u32, 8u32]);
+        assert_eq!(e.mem.u8(object + 0x30), 2);
     }
 }

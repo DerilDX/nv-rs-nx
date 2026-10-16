@@ -22,9 +22,25 @@ pub fn bhk_height_field_shape_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00ccb130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkPlaneShape::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_8670.
+pub fn bhk_plane_shape_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_8670
+}
+
+// Translated from 00ccb150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkHeightFieldShape::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_8f90.
+pub fn bhk_height_field_shape_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_8f90
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00ccb160, bhk_height_field_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x00ccb130, bhk_plane_shape_get_r_t_t_i() -> u32),
+        entry!(0x00ccb150, bhk_height_field_shape_get_r_t_t_i() -> u32),
+        entry!(0x00ccb160, bhk_height_field_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -52,5 +68,17 @@ mod tests {
         assert_eq!(e.call(0x00ccb160, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x14]]);
         assert_eq!(calls_to(&e, 0x00d5_4e60), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn bhk_plane_shape_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_b130, &args![]).u32(), 0x0126_8670);
+    }
+
+    #[test]
+    fn bhk_height_field_shape_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_b150, &args![]).u32(), 0x0126_8f90);
     }
 }

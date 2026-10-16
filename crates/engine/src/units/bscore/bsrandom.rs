@@ -6,11 +6,14 @@ use crate::prelude::*;
 
 /// `GetTickCount` (the import slot at `00fdf060`, called through it).
 const GET_TICK_COUNT: u32 = 0x00fd_f060;
-/// The seeding routine (`00aa51a0`, `thiscall`, one `uint`; not in this
-/// translation): fills the state from a seed.
+/// The seeding routine (`00aa51a0`, `thiscall`, one `uint`; translated below):
+/// fills the state from a seed.
 const SEED: u32 = 0x00aa_51a0;
 /// The Mersenne twister `mag01` table (two words: 0 and `0x9908b0df`).
 const MAG01: u32 = 0x011a_c3b0;
+
+/// The factor `00aa51a0` multiplies each state word by (`IMUL ECX,ECX,0x10dcd`).
+const SEED_MULTIPLIER: u32 = 0x0001_0dcd;
 
 /// Number of state words.
 const STATE_SIZE: u32 = 0x270;
@@ -59,6 +62,25 @@ pub fn bs_random_bs_random(e: &mut Engine, this: Ptr<BSRandom>) -> Ptr<BSRandom>
     this
 }
 
+// Translated from 00aa51a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`, one `uint`): seeds the state.
+/// `mt[0]` is the seed; each following word, up to the index `0x270`, is the
+/// previous word times `0x10dcd` (69069, 32-bit wrapping). Leaves `mti` at `0x270`
+/// (a full state, regenerated on the next draw). Returns nothing.
+pub fn fn_00aa51a0(e: &mut Engine, this: Ptr<BSRandom>, seed: u32) {
+    e.mem.set_u32(state_word(this, 0), seed);
+    e.set(this, BSRandom::mti, 1);
+    while e.get(this, BSRandom::mti) < STATE_SIZE {
+        let index = e.get(this, BSRandom::mti);
+        let previous = e.mem.u32(state_word(this, index - 1));
+        e.mem.set_u32(
+            state_word(this, index),
+            previous.wrapping_mul(SEED_MULTIPLIER),
+        );
+        e.set(this, BSRandom::mti, index + 1);
+    }
+}
+
 // Translated from 00aa5230 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSRandom::UnsignedInt` (Xbox PDB): the next state word (untempered),
 /// reduced to `maximum` (0 answers 0). Once all 624 words are used (index
@@ -99,6 +121,7 @@ pub fn bs_random_unsigned_int(e: &mut Engine, this: Ptr<BSRandom>, maximum: u32)
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00aa51a0, fn_00aa51a0(Ptr<BSRandom>, u32)),
         entry!(
             0x00aa5140,
             bs_random_bs_random(Ptr<BSRandom>) -> Ptr<BSRandom>
@@ -162,6 +185,27 @@ mod tests {
         assert_eq!(e.mem.u32(object + 4), 0);
         assert_eq!(e.mem.u32(object + 0x9c8), 0x271);
         assert_eq!(e.mem.u32(object + 8), 0xcdcd_cdcd);
+    }
+
+    #[test]
+    fn seeding_chains_each_word_from_the_previous_one() {
+        let mut e = engine();
+        let object = e.new_object::<BSRandom>();
+        e.set(object, BSRandom::mti, 0x271);
+        e.call(0x00aa51a0, &args![object, 0x1234_5678u32]);
+        let mut word = 0x1234_5678u32;
+        assert_eq!(e.mem.u32(state_word(object, 0)), word);
+        for k in 1..STATE_SIZE {
+            word = word.wrapping_mul(69069);
+            assert_eq!(e.mem.u32(state_word(object, k)), word, "word {k}");
+        }
+        assert_eq!(e.mem.u32(object.addr() + 0x9c8), 0x270);
+        // The first product wraps in 32 bits.
+        e.call(0x00aa51a0, &args![object, 0xffff_ffffu32]);
+        assert_eq!(
+            e.mem.u32(state_word(object, 1)),
+            0xffff_ffffu32.wrapping_mul(69069)
+        );
     }
 
     #[test]

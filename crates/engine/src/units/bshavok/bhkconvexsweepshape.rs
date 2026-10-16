@@ -22,9 +22,18 @@ pub fn bhk_convex_sweep_shape_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00ccf550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkConvexSweepShape::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_86b8.
+pub fn bhk_convex_sweep_shape_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_86b8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00ccf5b0, bhk_convex_sweep_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x00ccf550, bhk_convex_sweep_shape_get_r_t_t_i() -> u32),
+        entry!(0x00ccf5b0, bhk_convex_sweep_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -52,5 +61,11 @@ mod tests {
         assert_eq!(e.call(0x00ccf5b0, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x14]]);
         assert_eq!(calls_to(&e, 0x00cc_f4f0), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn bhk_convex_sweep_shape_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_f550, &args![]).u32(), 0x0126_86b8);
     }
 }

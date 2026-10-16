@@ -117,9 +117,16 @@ pub fn hk_matrix3_mul(e: &mut Engine, this: Ptr, other: Ptr) {
     });
 }
 
+// Translated from 00cd4b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkMatrix3::getIdentity` (Xbox PDB): takes no arguments and returns the constant 0x0126_8370.
+pub fn hk_matrix3_get_identity(_e: &mut Engine) -> u32 {
+    0x0126_8370
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00cd4b50, hk_matrix3_get_identity() -> u32),
         entry!(0x00cd_4ba0, hk_matrix3_set_transpose(Ptr, Ptr)),
         entry!(
             0x00cd_4e00,
@@ -237,5 +244,11 @@ mod tests {
             elements(&e, this),
             [[1.0, -3.0, 2.0], [4.0, -6.0, 5.0], [7.0, -9.0, 8.0]]
         );
+    }
+
+    #[test]
+    fn hk_matrix3_get_identity_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cd_4b50, &args![]).u32(), 0x0126_8370);
     }
 }

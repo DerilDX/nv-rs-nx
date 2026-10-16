@@ -16,9 +16,18 @@ pub fn magic_hit_effect_scalar_deleting_destructor(e: &mut Engine, this: Ptr, fl
     this
 }
 
+// Translated from 0081b6b0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011dc6b4 without reading the receiver. The map names this body `MagicHitEffect::GetRTTI`; it takes only `this` (plain `RET`).
+pub fn fn_0081b6b0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011d_c6b4
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0081_b6d0, magic_hit_effect_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x0081_b6b0, fn_0081b6b0(Ptr) -> u32),
+        entry!(0x0081_b6d0, magic_hit_effect_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -51,5 +60,17 @@ mod tests {
     #[test]
     fn magic_hit_effect_scalar_deleting_destructor_frees_only_with_flag_bit_zero() {
         check_deleting_destructor(0x0081_b6d0, 0x0081_b7b0, 0x28);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0081b6b0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0081_b6b0, &args![0x1000u32]).u32(), 0x011d_c6b4);
+        assert_eq!(e.call(0x0081_b6b0, &args![0u32]).u32(), 0x011d_c6b4);
     }
 }

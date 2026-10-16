@@ -18,9 +18,18 @@ pub fn bhk_cylinder_shape_scalar_deleting_destructor(e: &mut Engine, this: Ptr, 
     this
 }
 
+// Translated from 00ccd0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkCylinderShape::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_8694.
+pub fn bhk_cylinder_shape_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_8694
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00ccd150, bhk_cylinder_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x00ccd0f0, bhk_cylinder_shape_get_r_t_t_i() -> u32),
+        entry!(0x00ccd150, bhk_cylinder_shape_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -48,5 +57,11 @@ mod tests {
         assert_eq!(e.call(0x00ccd150, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x14]]);
         assert_eq!(calls_to(&e, 0x00cc_d080), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn bhk_cylinder_shape_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_d0f0, &args![]).u32(), 0x0126_8694);
     }
 }

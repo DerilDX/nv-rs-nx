@@ -4,7 +4,24 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+// Translated from 00cf43f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkVelocityConstraintMotor::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0126_8738.
+pub fn bhk_velocity_constraint_motor_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0126_8738
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x00cf43f0, bhk_velocity_constraint_motor_get_r_t_t_i() -> u32)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bhk_velocity_constraint_motor_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cf_43f0, &args![]).u32(), 0x0126_8738);
+    }
 }

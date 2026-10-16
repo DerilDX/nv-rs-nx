@@ -37,9 +37,16 @@ pub fn deleting_destructor_00cfdb10(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00cfdad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSimpleConstraintContactMgr::getClassType` (Xbox PDB): takes no arguments and returns the constant 0x0126_8798.
+pub fn hkp_simple_constraint_contact_mgr_get_class_type(_e: &mut Engine) -> u32 {
+    0x0126_8798
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00cfdad0, hkp_simple_constraint_contact_mgr_get_class_type() -> u32),
         entry!(0x00cf_dae0, deleting_destructor_00cfdae0(Ptr, u8) -> Ptr),
         entry!(0x00cf_db10, deleting_destructor_00cfdb10(Ptr, u8) -> Ptr),
     ]
@@ -111,5 +118,11 @@ mod tests {
     #[test]
     fn deleting_destructor_00cfdb10_frees_only_when_bit_zero_is_set() {
         check(0x00cf_db10, 0x00cf_d720);
+    }
+
+    #[test]
+    fn hkp_simple_constraint_contact_mgr_get_class_type_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cf_dad0, &args![]).u32(), 0x0126_8798);
     }
 }

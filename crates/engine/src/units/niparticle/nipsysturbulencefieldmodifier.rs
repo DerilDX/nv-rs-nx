@@ -22,9 +22,16 @@ pub fn ni_p_sys_turbulence_field_modifier_scalar_deleting_destructor(
     this
 }
 
+// Translated from 00c273c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysTurbulenceFieldModifier::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_2698.
+pub fn ni_p_sys_turbulence_field_modifier_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_2698
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c273c0, ni_p_sys_turbulence_field_modifier_get_r_t_t_i() -> u32),
         entry!(0x00c26920, ni_p_sys_turbulence_field_modifier_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
 }
@@ -54,5 +61,11 @@ mod tests {
         assert_eq!(e.call(0x00c26920, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x3c]]);
         assert_eq!(calls_to(&e, 0x00c3_1750), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn ni_p_sys_turbulence_field_modifier_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_73c0, &args![]).u32(), 0x0120_2698);
     }
 }

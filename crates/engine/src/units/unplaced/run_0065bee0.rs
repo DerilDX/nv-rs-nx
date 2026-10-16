@@ -16,9 +16,18 @@ pub fn fn_0065bef0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 0065bee0 (PC disassembly, FalloutNV.exe 1.4.0.525).
+/// Answers the constant address 011d5b58 without reading the receiver. The map gives this body no name; it takes only `this` (plain `RET`).
+pub fn fn_0065bee0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011d_5b58
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0065_bef0, fn_0065bef0(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x0065_bee0, fn_0065bee0(Ptr) -> u32),
+        entry!(0x0065_bef0, fn_0065bef0(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -51,5 +60,17 @@ mod tests {
     #[test]
     fn fn_0065bef0_frees_only_with_flag_bit_zero() {
         check_deleting_destructor(0x0065_bef0, 0x0065_bf20, 0x10);
+    }
+}
+
+#[cfg(test)]
+mod constant_getter_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0065bee0_answers_its_constant_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0065_bee0, &args![0x1000u32]).u32(), 0x011d_5b58);
+        assert_eq!(e.call(0x0065_bee0, &args![0u32]).u32(), 0x011d_5b58);
     }
 }

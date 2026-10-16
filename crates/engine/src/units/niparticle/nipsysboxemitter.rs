@@ -31,9 +31,16 @@ pub fn ni_p_sys_box_emitter_link_object(e: &mut Engine, this: Ptr, stream: Ptr) 
     e.call(JUMP_TARGET_00C20160, &args![this, stream]);
 }
 
+// Translated from 00c201c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysBoxEmitter::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_2518.
+pub fn ni_p_sys_box_emitter_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_2518
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c201c0, ni_p_sys_box_emitter_get_r_t_t_i() -> u32),
         entry!(0x00c1_fdd0, ni_p_sys_box_emitter_register_streamables(Ptr, Ptr) -> bool),
         entry!(0x00c2_0150, ni_p_sys_box_emitter_process_clone(Ptr, Ptr)),
         entry!(0x00c2_0160, ni_p_sys_box_emitter_link_object(Ptr, Ptr)),
@@ -89,5 +96,11 @@ mod tests {
         let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+    }
+
+    #[test]
+    fn ni_p_sys_box_emitter_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_01c0, &args![]).u32(), 0x0120_2518);
     }
 }

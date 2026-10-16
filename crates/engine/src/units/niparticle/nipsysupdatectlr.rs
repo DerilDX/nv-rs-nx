@@ -19,9 +19,18 @@ pub fn fn_00c27140(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 00c27130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysUpdateCtlr::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_2690.
+pub fn ni_p_sys_update_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_2690
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00c27140, fn_00c27140(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x00c27130, ni_p_sys_update_ctlr_get_r_t_t_i() -> u32),
+        entry!(0x00c27140, fn_00c27140(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -49,5 +58,11 @@ mod tests {
         assert_eq!(e.call(0x00c27140, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x34]]);
         assert_eq!(calls_to(&e, 0x00a6_d290), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn ni_p_sys_update_ctlr_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_7130, &args![]).u32(), 0x0120_2690);
     }
 }

@@ -12,6 +12,8 @@ const BASE_DESTRUCTOR: u32 = 0x00aa_1d30;
 /// `00aa1070` and `00aa10f0`: the `cdecl` allocate (size) and free (block).
 pub(crate) const ALLOCATE: u32 = 0x00aa_1070;
 const FREE: u32 = 0x00aa_10f0;
+/// `_memcpy` (`00ec44d0`, `cdecl`: destination, source, count).
+const MEMCPY: u32 = 0x00ec_44d0;
 /// The virtual table the memory stream constructors store (`010a256c`; its
 /// scalar deleting destructor is the first slot).
 pub(crate) const MEM_STREAM_VTABLE: u32 = 0x010a_256c;
@@ -91,6 +93,34 @@ pub fn fn_00aa2d60(e: &mut Engine, this: Ptr<NiMemStream>) -> u32 {
     e.get(this, NiMemStream::m_pBuffer)
 }
 
+// Translated from 00aa2e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The read function the constructors store in `m_pfnRead` (called through the
+/// pointer, `cdecl`, five stack words: the stream, the destination, the byte
+/// count, and two words this body never reads (the component sizes array and
+/// the number of components that `NiStreamLoadBinary` passes)). Copies
+/// `min(count, m_uiEnd - m_uiPos)` bytes (unsigned) from `m_pBuffer + m_uiPos`
+/// to the destination through `memcpy` (`00ec44d0`), advances `m_uiPos` by that
+/// number and answers it.
+pub fn ni_mem_stream_read(
+    e: &mut Engine,
+    this: Ptr<NiMemStream>,
+    destination: u32,
+    count: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+) -> u32 {
+    let position = e.get(this, NiMemStream::m_uiPos);
+    let available = e.get(this, NiMemStream::m_uiEnd).wrapping_sub(position);
+    let count = count.min(available);
+    let buffer = e.get(this, NiMemStream::m_pBuffer);
+    e.call(
+        MEMCPY,
+        &args![destination, buffer.wrapping_add(position), count],
+    );
+    e.set(this, NiMemStream::m_uiPos, position.wrapping_add(count));
+    count
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -100,6 +130,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00aa_2d30, ni_mem_stream_destructor(Ptr<NiMemStream>)),
         entry!(0x00aa_2d60, fn_00aa2d60(Ptr<NiMemStream>) -> u32),
+        entry!(
+            0x00aa_2e60,
+            ni_mem_stream_read(Ptr<NiMemStream>, u32, u32, u32, u32) -> u32
+        ),
     ]
 }
 
@@ -173,5 +207,43 @@ mod tests {
         e.mem.set_u32(stream.addr() + 0x10, 0x7000);
         assert_eq!(e.call(0x00aa_2d60, &args![stream]).u32(), 0x7000);
         assert_eq!(e.mem.u8(stream.addr() + 0x21), 1);
+    }
+
+    fn read_stream(e: &mut Engine, position: u32, end: u32) -> Ptr<NiMemStream> {
+        e.register(MEMCPY, |_, _| Ret::default());
+        let stream = e.new_object::<NiMemStream>();
+        e.set(stream, NiMemStream::m_pBuffer, 0x7000);
+        e.set(stream, NiMemStream::m_uiPos, position);
+        e.set(stream, NiMemStream::m_uiEnd, end);
+        stream
+    }
+
+    #[test]
+    fn reading_copies_the_requested_bytes_and_advances() {
+        let mut e = Engine::new();
+        let stream = read_stream(&mut e, 4, 0x20);
+        e.call_log = Some(vec![]);
+        let words = args![stream, 0x9000u32, 0x10u32, 0xaaaau32, 1u32];
+        assert_eq!(e.call(MEM_STREAM_READ, &words).u32(), 0x10);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, MEMCPY), vec![vec![0x9000, 0x7004, 0x10]]);
+        assert_eq!(e.get(stream, NiMemStream::m_uiPos), 0x14);
+    }
+
+    #[test]
+    fn reading_stops_at_the_end() {
+        let mut e = Engine::new();
+        let stream = read_stream(&mut e, 0x18, 0x20);
+        e.call_log = Some(vec![]);
+        let words = args![stream, 0x9000u32, 0x10u32, 0u32, 1u32];
+        assert_eq!(e.call(MEM_STREAM_READ, &words).u32(), 8);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, MEMCPY), vec![vec![0x9000, 0x7018, 8]]);
+        assert_eq!(e.get(stream, NiMemStream::m_uiPos), 0x20);
+        // At the end nothing is left to read.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(MEM_STREAM_READ, &words).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, MEMCPY), vec![vec![0x9000, 0x7020, 0]]);
     }
 }

@@ -22,9 +22,19 @@ pub fn deleting_destructor_00dc0f80(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00dc0eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `(anonymous namespace) hkNativeResource::getName` (Xbox PDB): takes no arguments and returns the constant 0x010d_6ab4.
+/// The constant is the address of a NUL-terminated string in the exe.
+pub fn hk_native_resource_get_name(_e: &mut Engine) -> u32 {
+    0x010d_6ab4
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00dc_0f80, deleting_destructor_00dc0f80(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00dc0eb0, hk_native_resource_get_name() -> u32),
+        entry!(0x00dc_0f80, deleting_destructor_00dc0f80(Ptr, u8) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +98,11 @@ mod tests {
     #[test]
     fn deleting_destructor_00dc0f80_frees_only_when_bit_zero_is_set() {
         check(0x00dc_0f80, 0x00dc_0f20);
+    }
+
+    #[test]
+    fn hk_native_resource_get_name_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00dc_0eb0, &args![]).u32(), 0x010d_6ab4);
     }
 }

@@ -22,9 +22,16 @@ pub fn ni_p_sys_data_link_object(e: &mut Engine, this: Ptr, stream: Ptr) {
     e.call(JUMP_TARGET_00A7B7D0, &args![this, stream]);
 }
 
+// Translated from 00c24e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysData::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_2558.
+pub fn ni_p_sys_data_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_2558
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c24e90, ni_p_sys_data_get_r_t_t_i() -> u32),
         entry!(0x00a7_5f00, ni_p_sys_data_register_streamables(Ptr, Ptr) -> bool),
         entry!(0x00a7_b7d0, ni_p_sys_data_link_object(Ptr, Ptr)),
     ]
@@ -65,5 +72,11 @@ mod tests {
         let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+    }
+
+    #[test]
+    fn ni_p_sys_data_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_4e90, &args![]).u32(), 0x0120_2558);
     }
 }

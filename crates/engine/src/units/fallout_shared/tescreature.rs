@@ -4,6 +4,41 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// The float `fFootWeight` starts from (`01017718`, read with `FLD dword`).
+const FOOT_WEIGHT_DEFAULT: u32 = 0x0101_7718;
+
+layout! {
+    /// `TESCreature` (Xbox PDB), 0x160 bytes on the PC (the PDB's 0x170 minus the
+    /// 0x10 the PC `TESForm` loses). Only the fields used so far; names and
+    /// types are the PDB's.
+    pub struct TESCreature: 0x160 {
+        /// `pSoundCreature` (Xbox PDB; shares its offset with `pCreatureSounds`).
+        0x128 pSoundCreature: u32,
+        /// `cHandReach` (Xbox PDB).
+        0x130 cHandReach: u8,
+        /// `fTurnSpeed` (Xbox PDB).
+        0x134 fTurnSpeed: f32,
+        /// `fBaseScale` (Xbox PDB).
+        0x13c fBaseScale: f32,
+        /// `pCombatStyle` (Xbox PDB).
+        0x140 pCombatStyle: u32,
+        /// `pBodyPartData` (Xbox PDB).
+        0x144 pBodyPartData: u32,
+        /// `eBloodImpactMaterial` (Xbox PDB).
+        0x148 eBloodImpactMaterial: u32,
+        /// `pImpactDataSet` (Xbox PDB).
+        0x14c pImpactDataSet: u32,
+        /// `bEmbeddedWeaponChecked` (Xbox PDB).
+        0x150 bEmbeddedWeaponChecked: bool,
+        /// `eSoundLevel` (Xbox PDB).
+        0x154 eSoundLevel: u32,
+        /// `pWeaponList` (Xbox PDB).
+        0x158 pWeaponList: u32,
+        /// `cCanUseHandToHand` (Xbox PDB).
+        0x15c cCanUseHandToHand: u8,
+    }
+}
+
 // Translated from 005f7230 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 005f7230 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
 /// `TESCreature::TESCreature` (Xbox PDB): the form constructor
@@ -133,6 +168,44 @@ pub fn fn_005f7b50(e: &mut Engine, this: Ptr, clear: u8, notify: u8) {
     );
 }
 
+// Translated from 005f7a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack word): the step of the
+/// `TESCreature` constructor (`005f7230`) that gives the creature fields their
+/// start values. `ECX` is the object. Field names are the Xbox PDB's, at the PC
+/// offset (the PDB offset minus 0x10, which every field set here agrees with):
+/// the four bytes at `+0x12c` (`Data`, `CREATURE_DATA`: 0, 0x32, 0x32, 0x32),
+/// `cHandReach` 0x20, `fTurnSpeed` 0.0, `fFootWeight` the float at `01017718`
+/// (copied through the x87 stack, so a signalling NaN would be quieted),
+/// `fBaseScale` 1.0, `eBloodImpactMaterial` 6, `eSoundLevel` 1,
+/// `cCanUseHandToHand` 0xff, the other pointers and flags 0. Then it sets bit
+/// `0x40` of the actor base data at `+0x30` (`TESActorBaseData::SetFlagBit`,
+/// `0047dd50`, with 0x40, 1, 0), runs `005f7b50` on it with 0 and 0, and runs
+/// `006ecd40` on the component at `+0xb0` with 0x32.
+pub fn fn_005f7a40(e: &mut Engine, this: Ptr<TESCreature>) {
+    let base = this.addr();
+    e.mem.set_u8(base + 0x12c, 0);
+    e.mem.set_u8(base + 0x12d, 0x32);
+    e.mem.set_u8(base + 0x12e, 0x32);
+    e.mem.set_u8(base + 0x12f, 0x32);
+    e.set(this, TESCreature::cHandReach, 0x20);
+    e.set(this, TESCreature::pImpactDataSet, 0);
+    e.set(this, TESCreature::pWeaponList, 0);
+    e.set(this, TESCreature::fTurnSpeed, 0.0);
+    let foot_weight = x87_quiet_bits(e.global::<u32>(FOOT_WEIGHT_DEFAULT));
+    e.mem.set_u32(base + 0x138, foot_weight);
+    e.set(this, TESCreature::fBaseScale, 1.0);
+    e.set(this, TESCreature::pSoundCreature, 0);
+    e.set(this, TESCreature::pCombatStyle, 0);
+    e.set(this, TESCreature::pBodyPartData, 0);
+    e.set(this, TESCreature::bEmbeddedWeaponChecked, false);
+    e.set(this, TESCreature::eSoundLevel, 1);
+    e.set(this, TESCreature::eBloodImpactMaterial, 6);
+    e.set(this, TESCreature::cCanUseHandToHand, 0xff);
+    e.call(0x0047_dd50, &args![base + 0x30, 0x40u32, 1u32, 0u32]);
+    fn_005f7b50(e, Ptr::new(base + 0x30), 0, 0);
+    e.call(0x006e_cd40, &args![base + 0xb0, 0x32u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -141,6 +214,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005f_75e0, tesactorbase_tesactorbase(Ptr) -> Ptr),
         entry!(0x005f_78e0, fn_005f78e0(Ptr) -> Ptr),
         entry!(0x005f_7b50, fn_005f7b50(Ptr, u8, u8)),
+        entry!(0x005f_7a40, fn_005f7a40(Ptr<TESCreature>)),
     ]
 }
 
@@ -324,5 +398,60 @@ mod movement_path_tests {
                 "clear {clear:#x}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod start_value_tests {
+    use super::*;
+
+    fn run(float_bits: u32) -> (Engine, u32, Vec<(u32, Vec<u32>)>) {
+        let mut e = Engine::new();
+        e.map(0x0101_7000, 0x1000);
+        e.set_global(FOOT_WEIGHT_DEFAULT, float_bits);
+        for address in [0x0047_dd50, 0x006e_cd40] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let creature = e.mem.alloc(0x160);
+        e.mem.write(creature, &[0xcd; 0x160]);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_7a40, &args![creature]);
+        let log = e.call_log.take().unwrap();
+        (e, creature, log.into_iter().skip(1).collect())
+    }
+
+    #[test]
+    fn fn_005f7a40_sets_the_start_values_and_calls_the_components() {
+        let (e, c, log) = run(0x4040_0000);
+        let bytes = |offset: u32| e.mem.u8(c + offset);
+        let word = |offset: u32| e.mem.u32(c + offset);
+        assert_eq!(
+            [bytes(0x12c), bytes(0x12d), bytes(0x12e), bytes(0x12f)],
+            [0, 0x32, 0x32, 0x32]
+        );
+        assert_eq!(bytes(0x130), 0x20);
+        assert_eq!(bytes(0x150), 0);
+        assert_eq!(bytes(0x15c), 0xff);
+        assert_eq!(word(0x134), 0);
+        assert_eq!(word(0x138), 0x4040_0000);
+        assert_eq!(word(0x13c), 0x3f80_0000);
+        for offset in [0x128, 0x140, 0x144, 0x14c, 0x158] {
+            assert_eq!(word(offset), 0, "{offset:#x}");
+        }
+        assert_eq!(word(0x148), 6);
+        assert_eq!(word(0x154), 1);
+        // Bytes the function never names keep their value.
+        assert_eq!(bytes(0x131), 0xcd);
+        assert_eq!(bytes(0x15d), 0xcd);
+        assert_eq!(log[0], (0x0047_dd50, vec![c + 0x30, 0x40, 1, 0]));
+        assert_eq!(log[1], (0x0047_dd50, vec![c + 0x30, 0x200, 1, 0]));
+        assert_eq!(log[2], (0x006e_cd40, vec![c + 0xb0, 0x32]));
+        assert_eq!(log.len(), 3);
+    }
+
+    #[test]
+    fn fn_005f7a40_quiets_a_signalling_nan_foot_weight() {
+        let (e, c, _) = run(0x7f80_0001);
+        assert_eq!(e.mem.u32(c + 0x138), 0x7fc0_0001);
     }
 }

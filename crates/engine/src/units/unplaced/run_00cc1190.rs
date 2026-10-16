@@ -19,9 +19,18 @@ pub fn fn_00cc1710(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 00cc1280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x0126_8590.
+pub fn return_constant_00cc1280(_e: &mut Engine) -> u32 {
+    0x0126_8590
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00cc1710, fn_00cc1710(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x00cc1280, return_constant_00cc1280() -> u32),
+        entry!(0x00cc1710, fn_00cc1710(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -49,5 +58,11 @@ mod tests {
         assert_eq!(e.call(0x00cc1710, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x18]]);
         assert_eq!(calls_to(&e, 0x00cc_1520), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn return_constant_00cc1280_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cc_1280, &args![]).u32(), 0x0126_8590);
     }
 }

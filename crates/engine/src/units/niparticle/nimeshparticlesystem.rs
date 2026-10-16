@@ -13,12 +13,21 @@ pub fn ni_mesh_particle_system_set_model_data(e: &mut Engine, this: Ptr, arg: Pt
     e.call(JUMP_TARGET_00C21900, &args![this, arg]);
 }
 
+// Translated from 00c21e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMeshParticleSystem::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_2538.
+pub fn ni_mesh_particle_system_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_2538
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00c2_1900,
-        ni_mesh_particle_system_set_model_data(Ptr, Ptr)
-    )]
+    vec![
+        entry!(0x00c21e10, ni_mesh_particle_system_get_r_t_t_i() -> u32),
+        entry!(
+            0x00c2_1900,
+            ni_mesh_particle_system_set_model_data(Ptr, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -37,5 +46,11 @@ mod tests {
         let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+    }
+
+    #[test]
+    fn ni_mesh_particle_system_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c2_1e10, &args![]).u32(), 0x0120_2538);
     }
 }

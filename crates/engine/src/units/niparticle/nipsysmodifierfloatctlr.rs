@@ -30,12 +30,21 @@ pub fn ni_p_sys_modifier_float_ctlr_get_viewer_strings(e: &mut Engine, this: Ptr
     });
 }
 
+// Translated from 00c32e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysModifierFloatCtlr::GetRTTI` (Xbox PDB): takes no arguments and returns the constant 0x0120_27f8.
+pub fn ni_p_sys_modifier_float_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
+    0x0120_27f8
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00c32f60,
-        ni_p_sys_modifier_float_ctlr_get_viewer_strings(Ptr, Ptr)
-    )]
+    vec![
+        entry!(0x00c32e00, ni_p_sys_modifier_float_ctlr_get_r_t_t_i() -> u32),
+        entry!(
+            0x00c32f60,
+            ni_p_sys_modifier_float_ctlr_get_viewer_strings(Ptr, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -94,5 +103,11 @@ mod tests {
             assert_eq!(&set.1[..2], [strings, size]);
             assert_eq!(stored.get(), 0x7777_0001);
         }
+    }
+
+    #[test]
+    fn ni_p_sys_modifier_float_ctlr_get_r_t_t_i_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c3_2e00, &args![]).u32(), 0x0120_27f8);
     }
 }

@@ -64,9 +64,17 @@ pub fn fn_00cd28f0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// Translated from 00cd2890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: takes no arguments and returns the constant 0x010c_b2c0.
+/// The constant is the address of a NUL-terminated string in the exe.
+pub fn return_constant_00cd2890(_e: &mut Engine) -> u32 {
+    0x010c_b2c0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00cd2890, return_constant_00cd2890() -> u32),
         entry!(0x00cd_2900, deleting_destructor_00cd2900(Ptr, u8) -> Ptr),
         entry!(0x00cd_28a0, fn_00cd28a0(Ptr, u32) -> u32),
         entry!(0x00cd_28b0, fn_00cd28b0(Ptr, u32) -> u32),
@@ -213,5 +221,11 @@ mod le81_thunk_tests {
             check(0x00cd_28f0, 0x00cd_2900, 0x68, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+
+    #[test]
+    fn return_constant_00cd2890_returns_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cd_2890, &args![]).u32(), 0x010c_b2c0);
     }
 }
