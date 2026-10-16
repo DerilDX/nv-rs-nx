@@ -424,6 +424,8 @@ address	cc	params	ret	unit	callees	consts
 00ca34b0	cdecl		u32	crates/engine/src/units/bshavok/hkpackednitristripsshape.rs		
 00ca5300	cdecl		u32	crates/engine/src/units/bshavok/bhkpackednitristripsshape.rs		
 00ca6600	cdecl		u32	crates/engine/src/units/bshavok/bhknitristripsshape.rs		
+00ca98e0	cdecl		f32	crates/engine/src/units/bshavok/bhkmalleableconstraint.rs		f7f7fffee
+00ca98f0	cdecl		u8	crates/engine/src/units/bshavok/bhkmalleableconstraint.rs		i-1
 00ca9910	cdecl		u32	crates/engine/src/units/bshavok/bhkmalleableconstraint.rs		
 00cb1810	cdecl	i32	u32	crates/engine/src/units/havok_sdk/hkmap.rs		i8,i4
 00cb3060	cdecl		u32	crates/engine/src/units/bshavok/bhkrigidbodyt.rs		
@@ -440,34 +442,44 @@ address	cc	params	ret	unit	callees	consts
 00cc1e30	cdecl		u32	crates/engine/src/units/bshavok/bhkextradata.rs		
 00cc2b30	cdecl		u32	crates/engine/src/units/bshavok/bhkspringaction.rs		
 00cc32e0	cdecl		u32	crates/engine/src/units/bshavok/bhkmotoraction.rs		
+00cc32f0	cdecl		u32	crates/engine/src/units/bshavok/bhkangulardashpotaction.rs		i48
 00cc3a20	cdecl		u32	crates/engine/src/units/bshavok/bhkdashpotaction.rs		
 00cc41f0	cdecl		u32	crates/engine/src/units/bshavok/bhkangulardashpotaction.rs		
 00cc4860	cdecl		u32	crates/engine/src/units/bshavok/bhkbreakableconstraint.rs		
 00cc5100	cdecl		u32	crates/engine/src/units/bshavok/bhkwheelconstraint.rs		
 00cc5ed0	cdecl		u32	crates/engine/src/units/bshavok/bhkragdolllimitsconstraint.rs		
 00cc74c0	cdecl		u32	crates/engine/src/units/bshavok/bhkprismaticconstraint.rs		
+00cc74d0	cdecl		u32	crates/engine/src/units/bshavok/bhkconvexsweepshape.rs		i20
 00cc7d70	cdecl		u32	crates/engine/src/units/bshavok/bhkfixedconstraint.rs		
+00cc7d80	cdecl		u32	crates/engine/src/units/bshavok/bhkconvexlistshape.rs		i28
 00cc7d90	cdecl		u32	crates/engine/src/units/bshavok/bhkfixedconstraint.rs		
 00cc84f0	cdecl		u32	crates/engine/src/units/bshavok/bhkhingelimitsconstraint.rs		
 00cc8d50	cdecl		u32	crates/engine/src/units/bshavok/bhkballsocketconstraintchain.rs		
+00cc8d60	cdecl		u32	crates/engine/src/units/bshavok/bhkballsocketconstraintchain.rs		i44
 00cc8d70	cdecl		u32	crates/engine/src/units/bshavok/bhkballsocketconstraintchain.rs		
 00cc9db0	cdecl		u32	crates/engine/src/units/bshavok/bhkmoppbvtreeshape.rs		
+00cc9dc0	cdecl		u32	crates/engine/src/units/bshavok/bhkmoppbvtreeshape.rs		i16
 00cca940	cdecl		u32	crates/engine/src/units/bshavok/bhktriangleshape.rs		
 00ccb130	cdecl		u32	crates/engine/src/units/bshavok/bhkplaneshape.rs		
+00ccb140	cdecl		u32	crates/engine/src/units/bshavok/bhkcylindershape.rs		i64
 00ccb150	cdecl		u32	crates/engine/src/units/bshavok/bhkplaneshape.rs		
 00ccb990	cdecl		u32	crates/engine/src/units/bshavok/bhkextendedmeshshape.rs		
 00ccbb30	cdecl		u32	crates/engine/src/units/bshavok/bhkextendedmeshshape.rs		
+00ccbb40	cdecl		u32	crates/engine/src/units/bshavok/bhkconvexverticesshape.rs		i32
 00ccd0f0	cdecl		u32	crates/engine/src/units/bshavok/bhkcylindershape.rs		
 00ccdc30	cdecl		u32	crates/engine/src/units/bshavok/bhkconvexverticesshape.rs		
 00cce970	cdecl		u32	crates/engine/src/units/bshavok/bhkconvextransformshape.rs		
+00cce980	cdecl		u32	crates/engine/src/units/bshavok/bhkconvextransformshape.rs		i80
 00ccf550	cdecl		u32	crates/engine/src/units/bshavok/bhkconvexsweepshape.rs		
 00ccf7b0	cdecl		u32	crates/engine/src/units/bshavok/bhkconvexlistshape.rs		
 00cd2890	cdecl		u32	crates/engine/src/units/havok_sdk/run_00cd2890.rs		
+00cd3c80	cdecl		u32	crates/engine/src/units/bshavok/bhkcharacterstateprojectile.rs		i6
 00cd4b50	cdecl		u32	crates/engine/src/units/havok_sdk/hkmatrix3.rs		
 00cd7f20	cdecl		u32	crates/engine/src/units/bshavok/bhkcharcontrollershape.rs		
 00cf41b0	cdecl		u32	crates/engine/src/units/bshavok/bhkpositionconstraintmotor.rs		
 00cf43f0	cdecl		u32	crates/engine/src/units/bshavok/bhkvelocityconstraintmotor.rs		
 00cf45f0	cdecl		u32	crates/engine/src/units/bshavok/bhkspringdamperconstraintmotor.rs		
+00cf4790	cdecl	u32	u32	crates/engine/src/units/bshavok/bhkconstraintmanager.rs		i13
 00cf4ef0	cdecl		u32	crates/engine/src/units/havok_sdk/hkpspringaction.rs		
 00cf69b0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00cf69b0.rs		
 00cfdad0	cdecl		u32	crates/engine/src/units/havok_sdk/hkpsimpleconstraintcontactmgr.rs		
