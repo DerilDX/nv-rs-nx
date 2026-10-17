@@ -22,9 +22,44 @@ pub fn deleting_destructor_00dfc330(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00dfc2c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpTyremarksWheel` scalar deleting destructor (the class name is the decompiler's label;
+/// `this` in `ECX`, `flags` pushed and popped by the callee): stores the vtable `010e00cc`,
+/// empties the array at `+0x10` (size at `+0x14` set to 0; when the capacity word at `+0x18` is
+/// not negative the data pointer is freed through the router's allocator, slot `0x10`, with
+/// `(capacity & 0x3fffffff) * 32` bytes), clears the data pointer, sets the capacity word to
+/// `0x80000000`, stores the base vtable `0102e388` and, when bit 0 of `flags` is set, returns the
+/// block to the allocator (slot `8`) with the 16-bit size kept at `this + 4`. Returns `this`.
+pub fn hkp_tyremarks_wheel_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    let object = this.addr();
+    e.mem.set_u32(object, 0x010e_00cc);
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    e.mem.set_u32(object + 0x14, 0);
+    let capacity = e.mem.u32(object + 0x18);
+    if (capacity as i32) >= 0 {
+        let data = e.mem.u32(object + 0x10);
+        let bytes = (capacity & 0x3fff_ffff) << 5;
+        e.vcall(allocator, 0x10, &args![data, bytes]);
+    }
+    e.mem.set_u32(object + 0x10, 0);
+    e.mem.set_u32(object + 0x18, 0x8000_0000);
+    e.mem.set_u32(object, 0x0102_e388);
+    if flags & 1 != 0 {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x10);
+        let size = u32::from(e.mem.u16(object + 4));
+        e.vcall(allocator, 8, &args![this, size]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00df_c330, deleting_destructor_00dfc330(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00df_c2c0, hkp_tyremarks_wheel_scalar_deleting_destructor(Ptr, u8) -> Ptr),
+        entry!(0x00df_c330, deleting_destructor_00dfc330(Ptr, u8) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +123,81 @@ mod tests {
     #[test]
     fn deleting_destructor_00dfc330_frees_only_when_bit_zero_is_set() {
         check(0x00df_c330, 0x00e3_a360);
+    }
+
+    const FREE_ARRAY_DOUBLE: u32 = 0x0900_0012;
+
+    /// A router whose allocator frees blocks (slot `8`) and arrays (slot `0x10`) through doubles
+    /// that log `(slot, arguments)`.
+    fn wheel_allocator(e: &mut Engine) -> Rc<RefCell<Vec<Vec<u32>>>> {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 8, FREE_SLOT_DOUBLE);
+        e.mem.set_u32(vtable + 0x10, FREE_ARRAY_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let block_log = Rc::clone(&log);
+        e.register_double(FREE_SLOT_DOUBLE, move |_, a| {
+            block_log.borrow_mut().push(vec![8, a[1], a[2]]);
+            Ret::default()
+        });
+        let array_log = Rc::clone(&log);
+        e.register_double(FREE_ARRAY_DOUBLE, move |_, a| {
+            array_log.borrow_mut().push(vec![0x10, a[1], a[2]]);
+            Ret::default()
+        });
+        log
+    }
+
+    /// A wheel with data at `0x5000`, size 7 and the given capacity word and flags.
+    fn run_wheel(capacity: u32, flags: u32) -> (Vec<Vec<u32>>, Engine, u32, u32) {
+        let mut e = engine();
+        let log = wheel_allocator(&mut e);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u16(this + 4, 0x1234);
+        e.mem.set_u32(this + 0x10, 0x5000);
+        e.mem.set_u32(this + 0x14, 7);
+        e.mem.set_u32(this + 0x18, capacity);
+        let got = e.call(0x00df_c2c0, &args![this, flags]).u32();
+        let calls = log.borrow().clone();
+        (calls, e, this, got)
+    }
+
+    #[test]
+    fn the_wheel_destructor_frees_the_array_by_its_masked_capacity() {
+        let (calls, e, this, got) = run_wheel(0x4000_0003, 0xffff_fffe);
+        assert_eq!(got, this);
+        assert_eq!(calls, vec![vec![0x10, 0x5000, 0x60]]);
+        assert_eq!(e.mem.u32(this), 0x0102_e388);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        assert_eq!(e.mem.u32(this + 0x18), 0x8000_0000);
+    }
+
+    #[test]
+    fn the_wheel_destructor_frees_an_array_of_capacity_zero() {
+        let (calls, _, _, _) = run_wheel(0, 0);
+        assert_eq!(calls, vec![vec![0x10, 0x5000, 0]]);
+    }
+
+    #[test]
+    fn the_wheel_destructor_leaves_a_borrowed_array_alone() {
+        let (calls, e, this, _) = run_wheel(0x8000_0005, 0);
+        assert!(calls.is_empty());
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        assert_eq!(e.mem.u32(this + 0x18), 0x8000_0000);
+    }
+
+    #[test]
+    fn the_wheel_destructor_frees_the_block_when_bit_zero_is_set() {
+        let (calls, _, this, got) = run_wheel(2, 1);
+        assert_eq!(got, this);
+        assert_eq!(calls, vec![vec![0x10, 0x5000, 0x40], vec![8, this, 0x1234]]);
     }
 }

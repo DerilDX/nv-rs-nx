@@ -312,6 +312,258 @@ pub fn hkp_simulation_island_get_class_type(_e: &mut Engine) -> u32 {
     0x0126_87cc
 }
 
+/// `hkpWorldOperationUtil::addConstraintToCriticalLockedIsland` (`00cb3c80`) and
+/// `removeConstraintFromCriticalLockedIsland` (`00cb3da0`).
+const ADD_CONSTRAINT_TO_CRITICAL_LOCKED_ISLAND: u32 = 0x00cb_3c80;
+const REMOVE_CONSTRAINT_FROM_CRITICAL_LOCKED_ISLAND: u32 = 0x00cb_3da0;
+/// The constructor of the local entity-pointer array (`00d27f70`, no unit; `this` is the
+/// array object, then the stack-allocator state and the count) and the island function
+/// `00d074c0` that takes it.
+const LOCAL_ARRAY_CONSTRUCT: u32 = 0x00d2_7f70;
+const ISLAND_WITH_ENTITY_ARRAY: u32 = 0x00d0_74c0;
+/// `hkStatisticsCollector::getAllocatedSize` (`00d06f80`).
+const GET_ALLOCATED_SIZE: u32 = 0x00d0_6f80;
+/// `hkpAgentMachineUtil::calcNnStatisticsContactMgrsOnly` (`00d97360`) and `calcNnStatistics`
+/// (`00d97130`).
+const CALC_NN_STATISTICS_CONTACT_MGRS_ONLY: u32 = 0x00d9_7360;
+const CALC_NN_STATISTICS: u32 = 0x00d9_7130;
+
+// Translated from 00d070c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSimulationIsland::addConstraintToCriticalLockedIsland` (Xbox PDB). Register value first:
+/// ECX (`this`) is never read; the constraint instance is the stack word. Calls
+/// `hkpWorldOperationUtil::addConstraintToCriticalLockedIsland(world, constraint)` with the
+/// world at +8 of the object at `constraint + 0x14`.
+pub fn hkp_simulation_island_add_constraint_to_critical_locked_island(
+    e: &mut Engine,
+    _this: Ptr,
+    constraint: Ptr,
+) {
+    let owner = e.mem.u32(constraint.addr() + 0x14);
+    let world = e.mem.u32(owner + 8);
+    e.call(
+        ADD_CONSTRAINT_TO_CRITICAL_LOCKED_ISLAND,
+        &args![world, constraint],
+    );
+}
+
+// Translated from 00d070e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSimulationIsland::removeConstraintFromCriticalLockedIsland` (Xbox PDB). Register value
+/// first: ECX (`this`) is never read; the constraint instance is the stack word. Calls
+/// `hkpWorldOperationUtil::removeConstraintFromCriticalLockedIsland(world, constraint)` with
+/// the world at +8 of the object at `constraint + 0x14`.
+pub fn hkp_simulation_island_remove_constraint_from_critical_locked_island(
+    e: &mut Engine,
+    _this: Ptr,
+    constraint: Ptr,
+) {
+    let owner = e.mem.u32(constraint.addr() + 0x14);
+    let world = e.mem.u32(owner + 8);
+    e.call(
+        REMOVE_CONSTRAINT_FROM_CRITICAL_LOCKED_ISLAND,
+        &args![world, constraint],
+    );
+}
+
+// Translated from 00d07100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSimulationIsland::addCallbackRequest` (Xbox PDB). Register value first: ECX (`this`) is
+/// never read; the first stack word is the constraint instance, whose internal record
+/// (pointer at +0x30) gets `request` OR-ed into its byte at +0x12.
+pub fn hkp_simulation_island_add_callback_request(
+    e: &mut Engine,
+    _this: Ptr,
+    constraint: Ptr,
+    request: u8,
+) {
+    let internal = e.mem.u32(constraint.addr() + 0x30);
+    let old = e.mem.u8(internal + 0x12);
+    e.mem.set_u8(internal + 0x12, old | request);
+}
+
+// Translated from 00d07210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSimulationIsland::calcContentStatistics` (Xbox PDB), `(collector, _unused_2)`. Adds the
+/// chunk `"EntityPtrs"` (when the entity array's capacity word is not negative or the
+/// collector's byte at +0x10 is set), then for each entity opens `"Entity"` and `"Constraints"`,
+/// adds `"ConMstPtr"` (entity + 0xac, 0x30 bytes per `u16` count at +0xb0, capacity from the
+/// `u16` at +0xb2; skipped when its bit 15 is set and the collector's byte is clear) and
+/// reports each constraint's instance (`"ConInstance"`) and data (`"ConData"`) when their
+/// `u16` at +4 has bits 0 to 14 set, then closes; then `"ActionPtrs"` and each
+/// action (`"Actions"`), the agent track's statistics (`00d97360`), `"CollAgents"` with
+/// `00d97130(track, world[0x78], collector)`. The collector's slots: `0xc` object, `0x14`
+/// chunk, `0x18` begin, `0x1c` end.
+pub fn hkp_simulation_island_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr<HkpSimulationIsland>,
+    collector: Ptr,
+    _unused_2: u32,
+) {
+    let island = this.addr();
+    let target = collector.addr();
+    let capacity = e.mem.u32(island + 0x50);
+    if (capacity as i32) >= 0 || e.mem.u8(target + 0x10) != 0 {
+        let pointers = e.mem.u32(island + 0x48);
+        let size = e
+            .call(
+                GET_ALLOCATED_SIZE,
+                &args![pointers, (capacity & 0x3fff_ffff).wrapping_mul(4)],
+            )
+            .u32();
+        let pointers = e.mem.u32(island + 0x48);
+        let count = e.mem.u32(island + 0x4c).wrapping_mul(4);
+        e.vcall(
+            target,
+            0x14,
+            &args![3u32, 0x010c_cf18u32, pointers, count, size],
+        );
+    }
+    let mut index: i32 = 0;
+    if e.mem.i32(island + 0x4c) > 0 {
+        loop {
+            let entities = e.mem.u32(island + 0x48);
+            let entity = e
+                .mem
+                .u32(entities.wrapping_add((index as u32).wrapping_mul(4)));
+            e.vcall(target, 0xc, &args![0x010c_cf10u32, entity, 0u32]);
+            e.vcall(target, 0x18, &args![0x010c_b200u32]);
+            let flags = u32::from(e.mem.u16(entity + 0xb2));
+            if flags & 0x8000 == 0 || e.mem.u8(target + 0x10) != 0 {
+                let master_count = u32::from(e.mem.u16(entity + 0xb0)).wrapping_mul(0x30);
+                let masters = e.mem.u32(entity + 0xac);
+                let master_capacity = (flags & 0x3fff).wrapping_mul(0x30);
+                e.vcall(
+                    target,
+                    0x14,
+                    &args![3u32, 0x010c_cf04u32, masters, master_count, master_capacity],
+                );
+            }
+            if e.mem.u16(entity + 0xb0) != 0 {
+                let mut constraint_index: i32 = 0;
+                let mut offset: u32 = 0;
+                loop {
+                    let masters = e.mem.u32(entity + 0xac);
+                    let instance = e.mem.u32(masters.wrapping_add(offset));
+                    if e.mem.u16(instance + 4) & 0x7fff != 0 {
+                        e.vcall(target, 0xc, &args![0x010c_cef8u32, instance, 0u32]);
+                    }
+                    let masters = e.mem.u32(entity + 0xac);
+                    let instance = e.mem.u32(masters.wrapping_add(offset));
+                    let data = e.mem.u32(instance + 0xc);
+                    if e.mem.u16(data + 4) & 0x7fff != 0 {
+                        e.vcall(target, 0xc, &args![0x010c_cef0u32, data, 0u32]);
+                    }
+                    let total = i32::from(e.mem.u16(entity + 0xb0));
+                    constraint_index += 1;
+                    offset = offset.wrapping_add(0x30);
+                    if constraint_index >= total {
+                        break;
+                    }
+                }
+            }
+            e.vcall(target, 0x1c, &args![]);
+            index += 1;
+            if index >= e.mem.i32(island + 0x4c) {
+                break;
+            }
+        }
+    }
+    let capacity = e.mem.u32(island + 0x40);
+    if (capacity as i32) >= 0 || e.mem.u8(target + 0x10) != 0 {
+        let actions = e.mem.u32(island + 0x38);
+        let size = e
+            .call(
+                GET_ALLOCATED_SIZE,
+                &args![actions, (capacity & 0x3fff_ffff).wrapping_mul(4)],
+            )
+            .u32();
+        let actions = e.mem.u32(island + 0x38);
+        let count = e.mem.u32(island + 0x3c).wrapping_mul(4);
+        e.vcall(
+            target,
+            0x14,
+            &args![3u32, 0x010c_cee4u32, actions, count, size],
+        );
+    }
+    let mut index: i32 = 0;
+    if e.mem.i32(island + 0x3c) > 0 {
+        loop {
+            let actions = e.mem.u32(island + 0x38);
+            let action = e
+                .mem
+                .u32(actions.wrapping_add((index as u32).wrapping_mul(4)));
+            e.vcall(target, 0xc, &args![0x010c_41dcu32, action, 0u32]);
+            index += 1;
+            if index >= e.mem.i32(island + 0x3c) {
+                break;
+            }
+        }
+    }
+    let track = island + 0x58;
+    e.call(
+        CALC_NN_STATISTICS_CONTACT_MGRS_ONLY,
+        &args![track, collector],
+    );
+    e.vcall(target, 0x18, &args![0x010c_ced8u32]);
+    let world = e.mem.u32(island + 0x18);
+    let dispatcher = e.mem.u32(world + 0x78);
+    e.call(CALC_NN_STATISTICS, &args![track, dispatcher, collector]);
+    e.vcall(target, 0x1c, &args![]);
+}
+
+// Translated from 00d07720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the island (`hkpSimulationIsland::~hkpSimulationIsland` by its vtable,
+/// `0x010c_cf28`; the map has no name): sets that vtable, then frees the three `hkArray`s
+/// of 4-byte elements (sectors at +0x5c, entities at +0x48, actions at +0x38) in that order
+/// through the allocator (slot `0x10`) when the capacity word is not negative, with size
+/// `(capacity & 0x3fffffff) * 4`, clears each array's size and data and sets its capacity
+/// word to `0x80000000`, and ends with the vtable `0x0102_e388`.
+pub fn fn_00d07720(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, ISLAND_VTABLE);
+    for (data, size, capacity) in [(0x5c, 0x60, 0x64), (0x48, 0x4c, 0x50), (0x38, 0x3c, 0x40)] {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x10);
+        let capacity_word = e.mem.u32(base + capacity);
+        e.mem.set_u32(base + size, 0);
+        if (capacity_word as i32) >= 0 {
+            let block = e.mem.u32(base + data);
+            e.vcall(
+                allocator,
+                0x10,
+                &args![block, (capacity_word & 0x3fff_ffff).wrapping_mul(4)],
+            );
+        }
+        e.mem.set_u32(base + data, 0);
+        e.mem.set_u32(base + capacity, 0x8000_0000);
+    }
+    e.mem.set_u32(base, 0x0102_e388);
+}
+
+// Translated from 00d077d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// An island function (no map name) that builds a temporary array of `-1` words, one per
+/// entity (`m_entitiesSize`), on the memory router's stack allocator and passes it to
+/// `00d074c0`. The router's first word (the allocator's top) is advanced by `count * 4 + 0x7f`
+/// rounded down to a multiple of `0x80`; `00d27f70` constructs the array object (8 bytes:
+/// the state pointer and the count; it writes `0xffffffff` through the state's word);
+/// the allocator's top is restored afterwards. Returns the answer of `00d074c0` (`AL`).
+pub fn fn_00d077d0(e: &mut Engine, this: Ptr<HkpSimulationIsland>) -> bool {
+    let island = this.addr();
+    let count = e.mem.u32(island + 0x4c);
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let top = e.mem.u32(router);
+    let advanced = (count.wrapping_mul(4).wrapping_add(0x7f) & 0xffff_ff80).wrapping_add(top);
+    e.mem.set_u32(router, advanced);
+    let count = e.mem.u32(island + 0x4c);
+    let answer = e.with_stack(0x10, |e, frame| {
+        let state = frame.addr();
+        let array = frame.addr() + 8;
+        e.mem.set_u32(state, top);
+        e.call(LOCAL_ARRAY_CONSTRUCT, &args![array, state, count]);
+        e.call(ISLAND_WITH_ENTITY_ARRAY, &args![this, array]).u8()
+    });
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    e.mem.set_u32(router, top);
+    answer != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -338,6 +590,24 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 Ptr,
             ) -> Ptr<HkpSimulationIsland>
         ),
+        entry!(
+            0x00d0_70c0,
+            hkp_simulation_island_add_constraint_to_critical_locked_island(Ptr, Ptr)
+        ),
+        entry!(
+            0x00d0_70e0,
+            hkp_simulation_island_remove_constraint_from_critical_locked_island(Ptr, Ptr)
+        ),
+        entry!(
+            0x00d0_7100,
+            hkp_simulation_island_add_callback_request(Ptr, Ptr, u8)
+        ),
+        entry!(
+            0x00d0_7210,
+            hkp_simulation_island_calc_content_statistics(Ptr<HkpSimulationIsland>, Ptr, u32)
+        ),
+        entry!(0x00d0_7720, fn_00d07720(Ptr)),
+        entry!(0x00d0_77d0, fn_00d077d0(Ptr<HkpSimulationIsland>) -> bool),
         entry!(0x00d0_78e0, deleting_destructor_00d078e0(Ptr, u8) -> Ptr),
     ]
 }
@@ -665,5 +935,241 @@ mod tests {
     fn hkp_simulation_island_get_class_type_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00d0_78d0, &args![]).u32(), 0x0126_87cc);
+    }
+
+    type EventLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    fn new_log() -> EventLog {
+        Rc::new(RefCell::new(Vec::new()))
+    }
+
+    /// A double at `address` that logs `[address, arguments...]`.
+    fn log_calls(e: &mut Engine, address: u32, log: &EventLog) {
+        let log = Rc::clone(log);
+        e.register_double(address, move |_, a| {
+            let mut entry = vec![address];
+            entry.extend_from_slice(a);
+            log.borrow_mut().push(entry);
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn critical_locked_island_calls_go_to_the_constraints_world() {
+        let mut e = Engine::new();
+        let log = new_log();
+        log_calls(&mut e, ADD_CONSTRAINT_TO_CRITICAL_LOCKED_ISLAND, &log);
+        log_calls(&mut e, REMOVE_CONSTRAINT_FROM_CRITICAL_LOCKED_ISLAND, &log);
+        let constraint = e.mem.alloc(0x40);
+        let owner = e.mem.alloc(0x10);
+        e.mem.set_u32(constraint + 0x14, owner);
+        e.mem.set_u32(owner + 8, 0x7700);
+        e.call(0x00d0_70c0, &args![0x1234u32, constraint]);
+        e.call(0x00d0_70e0, &args![0x1234u32, constraint]);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                vec![ADD_CONSTRAINT_TO_CRITICAL_LOCKED_ISLAND, 0x7700, constraint],
+                vec![
+                    REMOVE_CONSTRAINT_FROM_CRITICAL_LOCKED_ISLAND,
+                    0x7700,
+                    constraint
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn callback_requests_are_or_ed_into_the_internal_record() {
+        let mut e = Engine::new();
+        let constraint = e.mem.alloc(0x40);
+        let internal = e.mem.alloc(0x20);
+        e.mem.set_u32(constraint + 0x30, internal);
+        e.mem.set_u8(internal + 0x12, 0x05);
+        e.call(0x00d0_7100, &args![0x1234u32, constraint, 0x1au32]);
+        assert_eq!(e.mem.u8(internal + 0x12), 0x1f);
+        // Only the low byte of the stack word is the request.
+        e.call(0x00d0_7100, &args![0x1234u32, constraint, 0xff00_0020u32]);
+        assert_eq!(e.mem.u8(internal + 0x12), 0x3f);
+    }
+
+    const COLLECTOR_VTABLE: u32 = 0x0900_3000;
+
+    /// A collector whose slots `0xc`, `0x14`, `0x18` and `0x1c` log `[slot, arguments...]`.
+    fn collector(e: &mut Engine, log: &EventLog) -> u32 {
+        let mut slots = vec![0u32; 8];
+        for slot in [0xc, 0x14, 0x18, 0x1c] {
+            slots[slot / 4] = 0x0900_0000 + slot as u32;
+            let slot_log = Rc::clone(log);
+            e.register_double(0x0900_0000 + slot as u32, move |_, a| {
+                let mut entry = vec![slot as u32];
+                entry.extend_from_slice(a);
+                slot_log.borrow_mut().push(entry);
+                Ret::default()
+            });
+        }
+        e.put_vtable(COLLECTOR_VTABLE, &slots);
+        let collector = e.mem.alloc(0x40);
+        e.mem.set_u32(collector, COLLECTOR_VTABLE);
+        collector
+    }
+
+    #[test]
+    fn the_island_statistics_walk_entities_constraints_and_actions() {
+        let mut e = Engine::new();
+        let log = new_log();
+        let collector = collector(&mut e, &log);
+        log_calls(&mut e, CALC_NN_STATISTICS_CONTACT_MGRS_ONLY, &log);
+        log_calls(&mut e, CALC_NN_STATISTICS, &log);
+        e.register_double(GET_ALLOCATED_SIZE, |_, a| Ret {
+            eax: 0x1000 + a[1],
+            ..Ret::default()
+        });
+        let island = e.mem.alloc(0x80);
+        let world = e.mem.alloc(0x100);
+        e.mem.set_u32(world + 0x78, 0x7800);
+        e.mem.set_u32(island + 0x18, world);
+        // Two entities; the first has two constraints, the second none.
+        let entities = e.mem.alloc(0x10);
+        let entity_0 = e.mem.alloc(0x100);
+        let entity_1 = e.mem.alloc(0x100);
+        e.mem.set_u32(entities, entity_0);
+        e.mem.set_u32(entities + 4, entity_1);
+        e.mem.set_u32(island + 0x48, entities);
+        e.mem.set_u32(island + 0x4c, 2);
+        e.mem.set_u32(island + 0x50, 0x4000_0002);
+        let masters = e.mem.alloc(0x60);
+        e.mem.set_u32(entity_0 + 0xac, masters);
+        e.mem.set_u16(entity_0 + 0xb0, 2);
+        e.mem.set_u16(entity_0 + 0xb2, 3);
+        e.mem.set_u16(entity_1 + 0xb2, 0x8001);
+        let instances = [e.mem.alloc(0x20), e.mem.alloc(0x20)];
+        let data = [e.mem.alloc(0x20), e.mem.alloc(0x20)];
+        for index in 0..2 {
+            e.mem
+                .set_u32(masters + 0x30 * index, instances[index as usize]);
+            e.mem
+                .set_u32(instances[index as usize] + 0xc, data[index as usize]);
+        }
+        e.mem.set_u16(instances[0] + 4, 0x0001);
+        e.mem.set_u16(instances[1] + 4, 0x8000);
+        e.mem.set_u16(data[1] + 4, 0x0002);
+        // One action; the action array has a negative capacity word.
+        let actions = e.mem.alloc(0x10);
+        e.mem.set_u32(actions, 0x7900);
+        e.mem.set_u32(island + 0x38, actions);
+        e.mem.set_u32(island + 0x3c, 1);
+        e.mem.set_u32(island + 0x40, 0x8000_0001);
+        e.call(0x00d0_7210, &args![island, collector, 0u32]);
+        let track = island + 0x58;
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                vec![0x14, collector, 3, 0x010c_cf18, entities, 8, 0x1008],
+                vec![0xc, collector, 0x010c_cf10, entity_0, 0],
+                vec![0x18, collector, 0x010c_b200],
+                vec![0x14, collector, 3, 0x010c_cf04, masters, 0x60, 0x90],
+                vec![0xc, collector, 0x010c_cef8, instances[0], 0],
+                vec![0xc, collector, 0x010c_cef0, data[1], 0],
+                vec![0x1c, collector],
+                vec![0xc, collector, 0x010c_cf10, entity_1, 0],
+                vec![0x18, collector, 0x010c_b200],
+                vec![0x1c, collector],
+                vec![0xc, collector, 0x010c_41dc, 0x7900, 0],
+                vec![CALC_NN_STATISTICS_CONTACT_MGRS_ONLY, track, collector],
+                vec![0x18, collector, 0x010c_ced8],
+                vec![CALC_NN_STATISTICS, track, 0x7800, collector],
+                vec![0x1c, collector],
+            ]
+        );
+        // A set collector flag adds the skipped chunks.
+        log.borrow_mut().clear();
+        e.mem.set_u8(collector + 0x10, 1);
+        e.call(0x00d0_7210, &args![island, collector, 0u32]);
+        let log = log.borrow();
+        assert!(log.contains(&vec![0x14, collector, 3, 0x010c_cee4, actions, 4, 0x1004]));
+        assert!(log.contains(&vec![0x14, collector, 3, 0x010c_cf04, 0, 0, 0x30]));
+    }
+
+    const ISLAND_FREE_DOUBLE: u32 = 0x0900_0041;
+
+    #[test]
+    fn the_island_destructor_frees_its_three_arrays_in_order() {
+        let mut e = Engine::new();
+        let log = new_log();
+        let mut slots = vec![0u32; 8];
+        slots[4] = ISLAND_FREE_DOUBLE;
+        e.put_vtable(0x0900_0300, &slots);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, 0x0900_0300);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let free_log = Rc::clone(&log);
+        e.register_double(ISLAND_FREE_DOUBLE, move |_, a| {
+            free_log.borrow_mut().push(vec![a[1], a[2]]);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x80);
+        for (data, size, capacity, data_value, capacity_value) in [
+            (0x5c, 0x60, 0x64, 0x5000, 0x4000_0003),
+            (0x48, 0x4c, 0x50, 0x6000, 0x8000_0001),
+            (0x38, 0x3c, 0x40, 0x7000, 5),
+        ] {
+            e.mem.set_u32(this + data, data_value);
+            e.mem.set_u32(this + size, 9);
+            e.mem.set_u32(this + capacity, capacity_value);
+        }
+        e.call(0x00d0_7720, &args![this]);
+        assert_eq!(*log.borrow(), vec![vec![0x5000, 12], vec![0x7000, 20]]);
+        for (data, size, capacity) in [(0x5c, 0x60, 0x64), (0x48, 0x4c, 0x50), (0x38, 0x3c, 0x40)] {
+            assert_eq!(e.mem.u32(this + data), 0);
+            assert_eq!(e.mem.u32(this + size), 0);
+            assert_eq!(e.mem.u32(this + capacity), 0x8000_0000);
+        }
+        assert_eq!(e.mem.u32(this), 0x0102_e388);
+    }
+
+    #[test]
+    fn a_temporary_entity_array_is_made_on_the_stack_allocator() {
+        let mut e = Engine::new();
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router, 0x0a00_0000);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let log = new_log();
+        let construct_log = Rc::clone(&log);
+        e.register_double(LOCAL_ARRAY_CONSTRUCT, move |e, a| {
+            construct_log
+                .borrow_mut()
+                .push(vec![a[0], e.mem.u32(a[1]), a[2], e.mem.u32(router)]);
+            Ret::default()
+        });
+        let island_log = Rc::clone(&log);
+        e.register_double(ISLAND_WITH_ENTITY_ARRAY, move |e, a| {
+            island_log
+                .borrow_mut()
+                .push(vec![a[0], a[1], e.mem.u32(router)]);
+            Ret {
+                eax: 0x1234_5601,
+                ..Ret::default()
+            }
+        });
+        let island = e.mem.alloc(0x80);
+        e.mem.set_u32(island + 0x4c, 3);
+        let answer = e.call(0x00d0_77d0, &args![island]).u32();
+        assert_eq!(answer, 1);
+        let log = log.borrow();
+        // 3 * 4 + 0x7f rounded down to 0x80.
+        assert_eq!(log[0][1..], [0x0a00_0000, 3, 0x0a00_0080]);
+        assert_eq!(log[1][0], island);
+        assert_eq!(log[1][1], log[0][0]);
+        assert_eq!(log[1][2], 0x0a00_0080);
+        assert_eq!(e.mem.u32(router), 0x0a00_0000);
     }
 }

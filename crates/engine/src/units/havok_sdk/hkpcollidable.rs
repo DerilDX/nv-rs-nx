@@ -54,6 +54,21 @@ pub fn hkp_collidable_bounding_volume_data_allocate(e: &mut Engine, this: Ptr, c
     }
 }
 
+// Translated from 00d01a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpCollidable::BoundingVolumeData::BoundingVolumeData` (Xbox PDB; `this` is ECX): clears
+/// the two half-words at +0x20 and +0x22 and the two pointers at +0x24 and +0x28, sets the
+/// word at +0 to 1 and clears the word at +0x10. Returns `this` (the exe leaves it in `EAX`).
+pub fn hkp_collidable_bounding_volume_data_constructor(e: &mut Engine, this: Ptr) -> Ptr {
+    let address = this.addr();
+    e.mem.set_u16(address + 0x20, 0);
+    e.mem.set_u16(address + 0x22, 0);
+    e.mem.set_u32(address + 0x24, 0);
+    e.mem.set_u32(address + 0x28, 0);
+    e.mem.set_u32(address, 1);
+    e.mem.set_u32(address + 0x10, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -64,6 +79,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00d0_1ae0,
             hkp_collidable_bounding_volume_data_allocate(Ptr, u32)
+        ),
+        entry!(
+            0x00d0_1a60,
+            hkp_collidable_bounding_volume_data_constructor(Ptr) -> Ptr
         ),
     ]
 }
@@ -162,5 +181,31 @@ mod movement_tests {
         assert_eq!(e.mem.u32(this + 0x28), 0);
         assert_eq!(e.mem.u16(this + 0x20), 0);
         assert_eq!(e.mem.u16(this + 0x22), 0);
+    }
+}
+
+#[cfg(test)]
+mod havok_constructor_tests {
+    use super::*;
+
+    #[test]
+    fn the_constructor_clears_the_counts_and_pointers_and_returns_this() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        for offset in (0..0x30).step_by(4) {
+            e.mem.set_u32(this + offset, 0xdead_beef);
+        }
+        let got = e.call(0x00d0_1a60, &args![this]).u32();
+        assert_eq!(got, this);
+        assert_eq!(e.mem.u32(this), 1);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        assert_eq!(e.mem.u16(this + 0x20), 0);
+        assert_eq!(e.mem.u16(this + 0x22), 0);
+        assert_eq!(e.mem.u32(this + 0x24), 0);
+        assert_eq!(e.mem.u32(this + 0x28), 0);
+        // The other words are left alone.
+        assert_eq!(e.mem.u32(this + 4), 0xdead_beef);
+        assert_eq!(e.mem.u32(this + 0x14), 0xdead_beef);
+        assert_eq!(e.mem.u32(this + 0x2c), 0xdead_beef);
     }
 }

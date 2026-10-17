@@ -108,12 +108,77 @@ pub fn hkp_world_linear_caster_linear_cast(
     });
 }
 
+// Translated from 00cfae50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorldLinearCaster::addBroadPhaseHandle` (map name). Thiscall, two stack words
+/// (`RET 8`): the broad phase `handle` (the second is not read). The collidable is
+/// `handle + (signed byte at handle + 5)`. When its shape (first word) is set and it is not the
+/// caster's own collidable (`this + 0x14`), asks the collision filter (`this + 8`, virtual
+/// function `4`, with a four byte result slot that starts as `handle`, the caster's collidable
+/// and this collidable) and, when the byte it points to is set, calls the dispatch function
+/// found in the table at `this + 0x20`: at `0x9AC + 0x14 * entry`, `entry` being the byte at
+/// `((word at this + 0x18) + 0xD) * 0x20 + (word at shape + 0xC)` of that table. It gets the
+/// caster's collidable, this collidable, `this + 0x20` and the words at `this + 0xC` and
+/// `this + 0x10`. Returns the float at `[this + 0xC] + 4` (x87, a signalling NaN comes out
+/// quiet).
+pub fn hkp_world_linear_caster_add_broad_phase_handle(
+    e: &mut Engine,
+    this: Ptr,
+    handle: u32,
+    _unused_3: u32,
+) -> f32 {
+    let t = this.addr();
+    let collidable = handle.wrapping_add(e.mem.i8(handle + 5) as i32 as u32);
+    let shape = e.mem.u32(collidable);
+    if shape != 0 && e.mem.u32(t + 0x14) != collidable {
+        let filter = e.mem.u32(t + 8);
+        let caster_collidable = e.mem.u32(t + 0x14);
+        let accepted = e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), handle);
+            let result = e
+                .vcall(
+                    filter,
+                    4,
+                    &args![slot.addr(), caster_collidable, collidable],
+                )
+                .u32();
+            e.mem.u8(result) != 0
+        });
+        if accepted {
+            let table = e.mem.u32(t + 0x20);
+            let index = e
+                .mem
+                .u32(t + 0x18)
+                .wrapping_add(0xd)
+                .wrapping_shl(5)
+                .wrapping_add(e.mem.u32(shape + 0xc));
+            let entry = e.mem.u8(index.wrapping_add(table)) as u32;
+            let dispatch = e.mem.u32(
+                table
+                    .wrapping_add(entry.wrapping_mul(0x14))
+                    .wrapping_add(0x9ac),
+            );
+            let first = e.mem.u32(t + 0x14);
+            let third = e.mem.u32(t + 0xc);
+            let fourth = e.mem.u32(t + 0x10);
+            e.call(dispatch, &args![first, collidable, t + 0x20, third, fourth]);
+        }
+    }
+    let output = e.mem.u32(t + 0xc);
+    x87_quiet(e.mem.f32(output + 4))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00cfaed0,
-        hkp_world_linear_caster_linear_cast(Ptr, Ptr, Ptr, Ptr, u32, Ptr, u32, u32, u32, u32)
-    )]
+    vec![
+        entry!(
+            0x00cfae50,
+            hkp_world_linear_caster_add_broad_phase_handle(Ptr, u32, u32) -> f32
+        ),
+        entry!(
+            0x00cfaed0,
+            hkp_world_linear_caster_linear_cast(Ptr, Ptr, Ptr, Ptr, u32, Ptr, u32, u32, u32, u32)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -223,5 +288,97 @@ mod tests {
         assert_eq!(lanes(4), [6.0, 5.0, 4.0, 2.0]);
         assert_eq!(lanes(8), [1.0, 0.0, -1.0, -2.0]);
         assert_eq!(words[0xc], 44);
+    }
+
+    const FILTER_SLOT: u32 = 0x0a00_0004;
+    const DISPATCH: u32 = 0x0a00_1000;
+
+    /// A caster (returned first) whose collision filter answers `accepts`, a handle whose
+    /// collidable (returned second, `0x10` bytes above the handle's start, the offset stored
+    /// as a signed byte at `+5`) has a shape with `+0xC` word 3 and a dispatch table that
+    /// sends the pair to `DISPATCH`. Returns (caster, handle, collidable, output block).
+    fn caster(e: &mut Engine, accepts: bool) -> (u32, u32, u32, u32) {
+        let this = e.mem.alloc(0x40);
+        let handle = e.mem.alloc(0x40);
+        let collidable = handle + 0x10;
+        e.mem.set_i8(handle + 5, 0x10);
+        let shape = e.mem.alloc(0x20);
+        e.mem.set_u32(shape + 0xc, 3);
+        e.mem.set_u32(collidable, shape);
+        let filter = e.mem.alloc(0x10);
+        let filter_table = e.mem.alloc(0x10);
+        e.mem.set_u32(filter, filter_table);
+        e.mem.set_u32(filter_table + 4, FILTER_SLOT);
+        let answer = e.mem.alloc(4);
+        e.mem.set_u8(answer, accepts as u8);
+        e.register_double(FILTER_SLOT, move |e, a| {
+            assert_eq!(e.mem.u32(a[1]), a[3] - 0x10);
+            Ret {
+                eax: answer,
+                ..Ret::default()
+            }
+        });
+        let output = e.mem.alloc(0x10);
+        e.mem.set_f32(output + 4, 1.5);
+        let table = e.mem.alloc(0xa00);
+        e.mem.set_u8(table + 15 * 32 + 3, 2);
+        e.mem.set_u32(table + 2 * 0x14 + 0x9ac, DISPATCH);
+        e.mem.set_u32(this + 8, filter);
+        e.mem.set_u32(this + 0xc, output);
+        e.mem.set_u32(this + 0x10, 0x4242);
+        e.mem.set_u32(this + 0x14, 0x7777);
+        e.mem.set_u32(this + 0x18, 2);
+        e.mem.set_u32(this + 0x20, table);
+        (this, handle, collidable, output)
+    }
+
+    #[test]
+    fn add_broad_phase_handle_dispatches_an_accepted_pair() {
+        let mut e = Engine::new();
+        let (this, handle, collidable, output) = caster(&mut e, true);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        e.register_double(DISPATCH, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let result = e.call(0x00cf_ae50, &args![this, handle, 0u32]).f32();
+        assert_eq!(result, 1.5);
+        assert_eq!(
+            *seen.borrow(),
+            vec![vec![0x7777, collidable, this + 0x20, output, 0x4242]]
+        );
+    }
+
+    #[test]
+    fn add_broad_phase_handle_skips_a_rejected_pair() {
+        let mut e = Engine::new();
+        let (this, handle, _, _) = caster(&mut e, false);
+        e.register(DISPATCH, |_, _| panic!("rejected"));
+        assert_eq!(e.call(0x00cf_ae50, &args![this, handle, 0u32]).f32(), 1.5);
+    }
+
+    #[test]
+    fn add_broad_phase_handle_ignores_its_own_collidable_and_shapeless_ones() {
+        let mut e = Engine::new();
+        let (this, handle, collidable, _) = caster(&mut e, true);
+        e.register(DISPATCH, |_, _| panic!("not asked"));
+        e.register(FILTER_SLOT, |_, _| panic!("not asked"));
+        e.mem.set_u32(this + 0x14, collidable);
+        assert_eq!(e.call(0x00cf_ae50, &args![this, handle, 0u32]).f32(), 1.5);
+        e.mem.set_u32(this + 0x14, 0x7777);
+        e.mem.set_u32(collidable, 0);
+        assert_eq!(e.call(0x00cf_ae50, &args![this, handle, 0u32]).f32(), 1.5);
+    }
+
+    #[test]
+    fn add_broad_phase_handle_returns_a_quiet_nan_for_a_signalling_one() {
+        let mut e = Engine::new();
+        let (this, handle, collidable, output) = caster(&mut e, true);
+        e.mem.set_u32(collidable, 0);
+        e.mem.set_u32(output + 4, 0x7f80_0001);
+        let result =
+            hkp_world_linear_caster_add_broad_phase_handle(&mut e, Ptr::new(this), handle, 0);
+        assert_eq!(result.to_bits(), 0x7fc0_0001);
     }
 }

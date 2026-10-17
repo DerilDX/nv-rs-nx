@@ -213,6 +213,143 @@ pub fn cast_ray_with_collector_impl(
     profile_record(e, LABEL_END);
 }
 
+/// The memory router (`00c85750`, no arguments): its field `+0x10` is the heap allocator.
+const MEMORY_ROUTER: u32 = 0x00c8_5750;
+/// `hkReferencedObject::calcContentStatistics` (Xbox PDB, `00c90360`: `this`, then the
+/// collector and the class record).
+const REFERENCED_CALC_CONTENT_STATISTICS: u32 = 0x00c9_0360;
+/// The word `calcContentStatistics` hands to it (`01268910`, zero in the file).
+const CLASS_RECORD: u32 = 0x0126_8910;
+/// The reference count calls on the child shape: `00c90510` adds one (`this` = the child),
+/// `00c905b0` removes one (the map gives neither a name).
+const ADD_REFERENCE: u32 = 0x00c9_0510;
+const REMOVE_REFERENCE: u32 = 0x00c9_05b0;
+/// `hkQuaternion::set` (Xbox PDB, `00cb26e0`): `this` is the quaternion, then the rotation.
+const QUATERNION_SET: u32 = 0x00cb_26e0;
+/// The string `"ChildShape"` that `calcContentStatistics` hands to the statistics collector.
+const CHILD_SHAPE_NAME: u32 = 0x010c_c40c;
+/// The vtables the constructor and destructor write: the shape's (`010cc41c`), the container's
+/// (`010c6fd0`, and `010c6fb0` once the child is released) and the base class's (`0102e388`).
+const SHAPE_VTABLE: u32 = 0x010c_c41c;
+const CONTAINER_VTABLE: u32 = 0x010c_6fd0;
+const CONTAINER_BASE_VTABLE: u32 = 0x010c_6fb0;
+const SHAPE_BASE_VTABLE: u32 = 0x0102_e388;
+
+// Translated from 00cf58c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpTransformShape::calcContentStatistics` (Xbox PDB): asks the statistics `collector`
+/// (slot `0xC`) to account the child shape (`+0x14`) under the name `"ChildShape"`
+/// (`010cc40c`) with a last argument of 0, then runs `hkReferencedObject::calcContentStatistics`
+/// (`00c90360`) with the collector and the class record `01268910`. The function ends
+/// `RET 8`: the second stack word is not read.
+pub fn calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr<HkpTransformShape>,
+    collector: Ptr,
+    _unused_1: u32,
+) {
+    let child = e.get(this, HkpTransformShape::m_childShape);
+    e.vcall(
+        collector.addr(),
+        0xc,
+        &args![CHILD_SHAPE_NAME, child.addr(), 0u32],
+    );
+    e.call(
+        REFERENCED_CALC_CONTENT_STATISTICS,
+        &args![this, collector, CLASS_RECORD],
+    );
+}
+
+// Translated from 00cf5900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpTransformShape::calcSizeForSpu` (Xbox PDB): asks the child (slot `0x18`) for its size
+/// with `param` and the room left after the shape's own 0x70 bytes (`limit - 0x70`). A
+/// negative answer or one above the room (signed compares) gives -1. When the child lives
+/// inside the shape (`+0x14` = `this + 0x70`) the shape records 0 at `+0x18` and the size is
+/// the child's plus 0x70; otherwise it records the child's size and the size is 0x70.
+pub fn calc_size_for_spu(
+    e: &mut Engine,
+    this: Ptr<HkpTransformShape>,
+    param: u32,
+    limit: i32,
+) -> i32 {
+    let child = e.get(this, HkpTransformShape::m_childShape);
+    let room = limit.wrapping_sub(0x70);
+    let size = e.vcall(child.addr(), 0x18, &args![param, room]).i32();
+    if !(0..=room).contains(&size) {
+        return -1;
+    }
+    if e.mem.u32(this.addr() + 0x14) == this.addr().wrapping_add(0x70) {
+        e.mem.set_u32(this.addr() + 0x18, 0);
+        return size.wrapping_add(0x70);
+    }
+    e.mem.set_i32(this.addr() + 0x18, size);
+    0x70
+}
+
+// Translated from 00cf5950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the 64-byte `hkTransform` at `transform` to the shape's `m_transform` (`+0x30`, four
+/// 16-byte vector copies, each read before it is written) and sets the shape's quaternion
+/// (`+0x20`, `hkQuaternion::set`, `00cb26e0`) from the copy. The map gives it no name; that it
+/// is `setTransform` is unconfirmed.
+pub fn fn_00cf5950(e: &mut Engine, this: Ptr<HkpTransformShape>, transform: Ptr) {
+    for offset in [0u32, 0x10, 0x20, 0x30] {
+        let vector = e.mem.bytes(transform.addr() + offset, 0x10);
+        e.mem.write(this.addr() + TRANSFORM + offset, &vector);
+    }
+    e.call(
+        QUATERNION_SET,
+        &args![this.addr() + 0x20, this.addr() + TRANSFORM],
+    );
+}
+
+// Translated from 00cf5990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpTransformShape::hkpTransformShape` (Xbox PDB): fills the header (reference count
+/// `+6` = 1, user data `+8` = 0, type `+0xC` = 0xF, vtables `010cc41c` at `+0` and `010c6fd0`
+/// at `+0x10`), keeps `child` at `+0x14` and adds a reference to it (`00c90510`, called even
+/// when `child` is null), then sets the transform (`00cf5950`). Returns `this`.
+pub fn hkp_transform_shape_hkp_transform_shape(
+    e: &mut Engine,
+    this: Ptr<HkpTransformShape>,
+    child: Ptr,
+    transform: Ptr,
+) -> Ptr<HkpTransformShape> {
+    e.mem.set_u16(this.addr() + 6, 1);
+    e.mem.set_u32(this.addr() + 8, 0);
+    e.mem.set_u32(this.addr() + 0xc, 0xf);
+    e.mem.set_u32(this.addr(), SHAPE_VTABLE);
+    e.mem.set_u32(this.addr() + 0x10, CONTAINER_VTABLE);
+    e.mem.set_u32(this.addr() + 0x14, child.addr());
+    e.call(ADD_REFERENCE, &args![child]);
+    fn_00cf5950(e, this, transform);
+    this
+}
+
+// Translated from 00cf5e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpTransformShape::~hkpTransformShape` as its scalar deleting destructor (Xbox PDB): puts
+/// the container vtable back, removes a reference from the child when there is one
+/// (`00c905b0`), sets the base vtables (`010c6fb0` at `+0x10`, `0102e388` at `+0`) and, when
+/// bit 0 of `flags` is set, returns the block to the memory router's allocator (slot 8) with
+/// the 16-bit size kept at `+4`. Returns `this`.
+pub fn hkp_transform_shape_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<HkpTransformShape>,
+    flags: u8,
+) -> Ptr<HkpTransformShape> {
+    let child = e.mem.u32(this.addr() + 0x14);
+    e.mem.set_u32(this.addr() + 0x10, CONTAINER_VTABLE);
+    if child != 0 {
+        e.call(REMOVE_REFERENCE, &args![child]);
+    }
+    e.mem.set_u32(this.addr() + 0x10, CONTAINER_BASE_VTABLE);
+    e.mem.set_u32(this.addr(), SHAPE_BASE_VTABLE);
+    if flags & 1 != 0 {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x10);
+        let size = u32::from(e.mem.u16(this.addr() + 4));
+        e.vcall(allocator, 8, &args![this, size]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -232,6 +369,30 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00cf_5cc0,
             cast_ray_with_collector_impl(Ptr<HkpTransformShape>, Ptr, Ptr, u32)
+        ),
+        entry!(
+            0x00cf_58c0,
+            calc_content_statistics(Ptr<HkpTransformShape>, Ptr, u32)
+        ),
+        entry!(
+            0x00cf_5900,
+            calc_size_for_spu(Ptr<HkpTransformShape>, u32, i32) -> i32
+        ),
+        entry!(0x00cf_5950, fn_00cf5950(Ptr<HkpTransformShape>, Ptr)),
+        entry!(
+            0x00cf_5990,
+            hkp_transform_shape_hkp_transform_shape(
+                Ptr<HkpTransformShape>,
+                Ptr,
+                Ptr,
+            ) -> Ptr<HkpTransformShape>
+        ),
+        entry!(
+            0x00cf_5e50,
+            hkp_transform_shape_scalar_deleting_destructor(
+                Ptr<HkpTransformShape>,
+                u8,
+            ) -> Ptr<HkpTransformShape>
         ),
     ]
 }
@@ -451,5 +612,169 @@ mod tests {
         assert_eq!(&ray[0..4], &[1.0, -1.0, 1.0, 0.0]);
         assert_eq!(&ray[4..8], &[0.0, -2.0, -2.0, 0.0]);
         assert_eq!(*record, vec![child, 0, composed[0][0], body]);
+    }
+
+    /// A double at `address` that logs the argument words of every call and answers `eax`.
+    fn log_calls(e: &mut Engine, address: u32, eax: u32) -> Rc<RefCell<Vec<Vec<u32>>>> {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&log);
+        e.register_double(address, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret {
+                eax,
+                ..Ret::default()
+            }
+        });
+        log
+    }
+
+    #[test]
+    fn calc_content_statistics_names_the_child_and_runs_the_base() {
+        let mut e = engine();
+        let collector_slot = 0x0900_0300;
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0xc, collector_slot);
+        let collector = e.mem.alloc(0x10);
+        e.mem.set_u32(collector, vtable);
+        let named = log_calls(&mut e, collector_slot, 0);
+        let base = log_calls(&mut e, REFERENCED_CALC_CONTENT_STATISTICS, 0);
+        let shape = e.mem.alloc(0x70);
+        e.mem.set_u32(shape + 0x14, 0x7777);
+        e.call(0x00cf_58c0, &args![shape, collector, 0x1234u32]);
+        assert_eq!(
+            *named.borrow(),
+            vec![vec![collector, 0x010c_c40c, 0x7777, 0]]
+        );
+        assert_eq!(*base.borrow(), vec![vec![shape, collector, 0x0126_8910]]);
+    }
+
+    /// Runs `calcSizeForSpu` on a shape whose child answers `size`; `inline` puts the child
+    /// at `shape + 0x70`. Returns the result, the word at `+0x18` and the child's arguments.
+    fn calc_size(size: i32, inline: bool, limit: i32) -> (i32, u32, Vec<Vec<u32>>) {
+        let mut e = engine();
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0x18, CHILD_DOUBLE);
+        let shape = e.mem.alloc(0x100);
+        let child = if inline { shape + 0x70 } else { shape + 0xb0 };
+        e.mem.set_u32(child, vtable);
+        e.mem.set_u32(shape + 0x14, child);
+        e.mem.set_u32(shape + 0x18, 0x5a5a);
+        let asked = log_calls(&mut e, CHILD_DOUBLE, size as u32);
+        let result = e.call(0x00cf_5900, &args![shape, 0x99u32, limit]).i32();
+        let recorded = e.mem.u32(shape + 0x18);
+        let asked = asked.borrow().clone();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0][..1], [child]);
+        (result, recorded, asked)
+    }
+
+    #[test]
+    fn calc_size_for_spu_passes_the_room_after_the_shape() {
+        let (_, _, asked) = calc_size(0x20, false, 0x200);
+        assert_eq!(asked[0][1..], [0x99, 0x190]);
+    }
+
+    #[test]
+    fn calc_size_for_spu_refuses_negative_and_too_big_sizes() {
+        let (result, recorded, _) = calc_size(-1, false, 0x200);
+        assert_eq!((result, recorded), (-1, 0x5a5a));
+        assert_eq!(calc_size(0x191, false, 0x200).0, -1);
+        // The room itself still fits; the shape's fields stay as they were on a refusal.
+        assert_eq!(calc_size(0x190, false, 0x200).0, 0x70);
+        assert_eq!(calc_size(0x191, false, 0x200).1, 0x5a5a);
+        // A limit below 0x70 leaves a negative room that nothing fits in.
+        assert_eq!(calc_size(0, false, 0x10).0, -1);
+    }
+
+    #[test]
+    fn calc_size_for_spu_records_the_child_size_unless_it_is_inline() {
+        let (result, recorded, _) = calc_size(0x20, false, 0x200);
+        assert_eq!((result, recorded), (0x70, 0x20));
+        let (result, recorded, _) = calc_size(0x20, true, 0x200);
+        assert_eq!((result, recorded), (0x90, 0));
+    }
+
+    #[test]
+    fn set_transform_copies_the_matrix_and_sets_the_quaternion() {
+        let mut e = engine();
+        let quaternion = log_calls(&mut e, QUATERNION_SET, 0);
+        let source = e.mem.alloc(0x40);
+        for offset in 0..0x40 {
+            e.mem.set_u8(source + offset, offset as u8 + 1);
+        }
+        let shape = e.mem.alloc(0x70);
+        e.call(0x00cf_5950, &args![shape, source]);
+        for offset in 0..0x40 {
+            assert_eq!(e.mem.u8(shape + 0x30 + offset), offset as u8 + 1);
+        }
+        assert_eq!(*quaternion.borrow(), vec![vec![shape + 0x20, shape + 0x30]]);
+    }
+
+    #[test]
+    fn construction_fills_the_header_and_references_the_child() {
+        let mut e = engine();
+        let added = log_calls(&mut e, ADD_REFERENCE, 0);
+        log_calls(&mut e, QUATERNION_SET, 0);
+        let source = e.mem.alloc(0x40);
+        e.mem.set_u32(source + 0x3c, 0xfeed);
+        let shape = e.mem.alloc(0x70);
+        e.mem.set_u16(shape + 4, 0x70);
+        let result = e.call(0x00cf_5990, &args![shape, 0x4242u32, source]).u32();
+        assert_eq!(result, shape);
+        assert_eq!(e.mem.u16(shape + 4), 0x70);
+        assert_eq!(e.mem.u16(shape + 6), 1);
+        assert_eq!(e.mem.u32(shape + 8), 0);
+        assert_eq!(e.mem.u32(shape + 0xc), 0xf);
+        assert_eq!(e.mem.u32(shape), 0x010c_c41c);
+        assert_eq!(e.mem.u32(shape + 0x10), 0x010c_6fd0);
+        assert_eq!(e.mem.u32(shape + 0x14), 0x4242);
+        assert_eq!(e.mem.u32(shape + 0x6c), 0xfeed);
+        // The reference is added even to a null child.
+        assert_eq!(*added.borrow(), vec![vec![0x4242]]);
+        e.call(0x00cf_5990, &args![shape, 0u32, source]);
+        assert_eq!(added.borrow()[1], vec![0]);
+    }
+
+    #[test]
+    fn destruction_releases_the_child_and_frees_on_bit_zero() {
+        for (child, flags, freed) in [
+            (0x4242u32, 0xffff_fffeu32, false),
+            (0, 1, true),
+            (0x4242, 0x101, true),
+        ] {
+            let mut e = engine();
+            let removed = log_calls(&mut e, REMOVE_REFERENCE, 0);
+            let free_slot = 0x0900_0308;
+            let vtable = e.mem.alloc(0x20);
+            e.mem.set_u32(vtable + 8, free_slot);
+            let allocator = e.mem.alloc(0x10);
+            e.mem.set_u32(allocator, vtable);
+            let router = e.mem.alloc(0x20);
+            e.mem.set_u32(router + 0x10, allocator);
+            e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+                eax: router,
+                ..Ret::default()
+            });
+            let freed_log = log_calls(&mut e, free_slot, 0);
+            let shape = e.mem.alloc(0x70);
+            e.mem.set_u16(shape + 4, 0x70);
+            e.mem.set_u32(shape + 0x14, child);
+            let result = e.call(0x00cf_5e50, &args![shape, flags]).u32();
+            assert_eq!(result, shape);
+            assert_eq!(e.mem.u32(shape), 0x0102_e388);
+            assert_eq!(e.mem.u32(shape + 0x10), 0x010c_6fb0);
+            let expected: Vec<Vec<u32>> = if child == 0 {
+                vec![]
+            } else {
+                vec![vec![child]]
+            };
+            assert_eq!(*removed.borrow(), expected);
+            let expected: Vec<Vec<u32>> = if freed {
+                vec![vec![allocator, shape, 0x70]]
+            } else {
+                vec![]
+            };
+            assert_eq!(*freed_log.borrow(), expected);
+        }
     }
 }

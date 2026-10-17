@@ -13,6 +13,8 @@ use crate::prelude::*;
 const WARP_TIME_IN_AGENT: u32 = 0x00cf_dc90;
 /// `hkpWorldAgentUtil::removeAgent` (Xbox PDB, `00cc10b0`, cdecl `(agent)`).
 const REMOVE_AGENT: u32 = 0x00cc_10b0;
+/// `hkAgentNnMachine_InvalidateTimInAgent` (Xbox PDB, `00cfdbe0`, cdecl `(agent, tim)`).
+const INVALIDATE_TIM_IN_AGENT: u32 = 0x00cf_dbe0;
 
 // Translated from 00cc0e20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpWorldAgentUtil::getIslandFromAgentEntry` (Xbox PDB, cdecl): of the two blocks `first`
@@ -98,6 +100,26 @@ pub fn hkp_world_agent_util_remove_agent_and_its_toi_events(e: &mut Engine, agen
     e.call(REMOVE_AGENT, &args![agent]);
 }
 
+// Translated from 00cc0ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorldAgentUtil::invalidateTim` (Xbox PDB, cdecl): for every 8-byte element of the array
+/// at `container + 0x60` (count at `+0x64`, read again after each call) calls
+/// `hkAgentNnMachine_InvalidateTimInAgent(first word of the element, tim)`.
+pub fn hkp_world_agent_util_invalidate_tim(e: &mut Engine, container: Ptr, tim: u32) {
+    let c = container.addr();
+    let mut index = 0u32;
+    if e.mem.i32(c + 0x64) > 0 {
+        loop {
+            let elements = e.mem.u32(c + 0x60);
+            let agent = e.mem.u32(elements.wrapping_add(index.wrapping_mul(8)));
+            e.call(INVALIDATE_TIM_IN_AGENT, &args![agent, tim]);
+            index = index.wrapping_add(1);
+            if (index as i32) >= e.mem.i32(c + 0x64) {
+                break;
+            }
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -105,6 +127,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00cc_0e20,
             hkp_world_agent_util_get_island_from_agent_entry(u32, Ptr, Ptr) -> Ptr
         ),
+        entry!(0x00cc_0ea0, hkp_world_agent_util_invalidate_tim(Ptr, u32)),
         entry!(
             0x00cc_0ed0,
             hkp_world_agent_util_warp_time(Ptr, f32, f32, u32)
@@ -244,5 +267,40 @@ mod tests {
             order,
             vec![(SLOT, vec![object, agent]), (REMOVE_AGENT, vec![agent])]
         );
+    }
+
+    #[test]
+    fn invalidate_tim_visits_every_element_and_rereads_the_count() {
+        let mut e = Engine::new();
+        let container = e.mem.alloc(0x80);
+        let elements = e.mem.alloc(0x20);
+        for (i, agent) in [0x11u32, 0x22, 0x33].iter().enumerate() {
+            e.mem.set_u32(elements + 8 * i as u32, *agent);
+            e.mem.set_u32(elements + 8 * i as u32 + 4, 0xdead);
+        }
+        e.mem.set_u32(container + 0x60, elements);
+        e.mem.set_u32(container + 0x64, 3);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        e.register_double(INVALIDATE_TIM_IN_AGENT, move |e, a| {
+            sink.borrow_mut().push(a.to_vec());
+            if a[0] == 0x22 {
+                e.mem.set_u32(container + 0x64, 2);
+            }
+            Ret::default()
+        });
+        e.call(0x00cc_0ea0, &args![container, 0x99u32]);
+        assert_eq!(*seen.borrow(), vec![vec![0x11, 0x99], vec![0x22, 0x99]]);
+    }
+
+    #[test]
+    fn invalidate_tim_with_no_elements_calls_nothing() {
+        let mut e = Engine::new();
+        let container = e.mem.alloc(0x80);
+        e.mem.set_u32(container + 0x64, 0);
+        e.register(INVALIDATE_TIM_IN_AGENT, |_, _| panic!("no elements"));
+        e.call(0x00cc_0ea0, &args![container, 1u32]);
+        e.mem.set_u32(container + 0x64, 0xffff_ffff);
+        e.call(0x00cc_0ea0, &args![container, 1u32]);
     }
 }

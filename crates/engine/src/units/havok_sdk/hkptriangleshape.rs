@@ -88,6 +88,27 @@ const WELD_FACTOR_TABLE: u32 = 0x011b_3b38;
 /// The welding table: one row of six `float`s (24 bytes) per feature.
 const WELDING_ROWS: u32 = 0x0126_9210;
 
+/// `hkReferencedObject::calcContentStatistics` (`this`, collector, class record).
+const REFERENCED_OBJECT_CALC_CONTENT_STATISTICS: u32 = 0x00c9_0360;
+/// The class record (`01268940`) that `calcContentStatistics` hands to the base report.
+const TRIANGLE_CLASS_RECORD: u32 = 0x0126_8940;
+
+// Translated from 00d1fee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpTriangleShape::calcContentStatistics` (Xbox PDB): tail-calls
+/// `hkReferencedObject::calcContentStatistics` with the collector and the class record
+/// `01268940` in place of the second argument, which it never reads.
+pub fn hkp_triangle_shape_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr<HkpTriangleShape>,
+    collector: u32,
+    _unused: u32,
+) {
+    e.call(
+        REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
+        &args![this, collector, TRIANGLE_CLASS_RECORD],
+    );
+}
+
 // Translated from 00d1ff10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpTriangleShape::getNumCollisionSpheresImpl` (Xbox PDB): three
 /// spheres, six when `m_isExtruded` is set (`(m_isExtruded + 1) * 3`).
@@ -764,6 +785,10 @@ pub fn hkp_triangle_shape_weld_contact_point_impl(
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(
+            0x00d1fee0,
+            hkp_triangle_shape_calc_content_statistics(Ptr<HkpTriangleShape>, u32, u32)
+        ),
+        entry!(
             0x00d1ff10,
             hkp_triangle_shape_get_num_collision_spheres_impl(Ptr<HkpTriangleShape>) -> u32
         ),
@@ -1370,5 +1395,19 @@ mod tests {
         assert_near(w.separating, [0.0, -0.5 / root, 2.0 / root, 0.5], 1e-4);
         assert_eq!(w.rotations.len(), 1);
         assert_ne!(w.rotations[0][0], w.rotations[0][2]);
+    }
+
+    #[test]
+    fn calc_content_statistics_passes_the_triangle_class_record() {
+        let mut e = engine();
+        let this = triangle(&mut e, false);
+        e.register(REFERENCED_OBJECT_CALC_CONTENT_STATISTICS, |_, _| {
+            Ret::default()
+        });
+        e.call(0x00d1_fee0, &args![this, 0x1111u32, 0x2222u32]);
+        assert_eq!(
+            calls_to(&e, REFERENCED_OBJECT_CALC_CONTENT_STATISTICS),
+            vec![vec![this.addr(), 0x1111, 0x0126_8940]]
+        );
     }
 }

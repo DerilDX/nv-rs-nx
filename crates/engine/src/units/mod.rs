@@ -6,7 +6,10 @@ pub mod bscore;
 pub mod bshavok;
 pub mod bsmain;
 pub mod bsmenu;
+pub mod bsshader;
+pub mod bssystem;
 pub mod crt;
+pub mod d3dx9;
 pub mod facegen;
 pub mod fallout_ai;
 pub mod fallout_audio;
@@ -33,6 +36,7 @@ pub mod nimain;
 pub mod niparticle;
 pub mod nisystem;
 pub mod platform;
+pub mod speedtree;
 pub mod unplaced;
 
 /// Every registered function of every unit.
@@ -44,6 +48,9 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     bshavok::funcs(out);
     bsmain::funcs(out);
     bsmenu::funcs(out);
+    bsshader::funcs(out);
+    bssystem::funcs(out);
+    d3dx9::funcs(out);
     facegen::funcs(out);
     fallout_ai::funcs(out);
     fallout_audio::funcs(out);
@@ -69,5 +76,6 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     nimain::funcs(out);
     niparticle::funcs(out);
     nisystem::funcs(out);
+    speedtree::funcs(out);
     unplaced::funcs(out);
 }

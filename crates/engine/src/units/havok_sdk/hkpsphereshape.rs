@@ -218,6 +218,49 @@ pub(crate) fn profile_record(e: &mut Engine, label: u32) {
     }
 }
 
+/// `hkReferencedObject::calcContentStatistics` (`00c90360`, `this` in `ECX`, collector, class)
+/// and the `hkClass` of the sphere shape that `hkpSphereShape::calcContentStatistics` passes
+/// to it.
+const REFERENCED_OBJECT_CALC_CONTENT_STATISTICS: u32 = 0x00c9_0360;
+const SPHERE_SHAPE_CLASS: u32 = 0x0126_8940;
+/// The vtable of `hkpSphereShape`.
+const SPHERE_SHAPE_VTABLE: u32 = 0x010c_b5ac;
+
+// Translated from 00cd8040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSphereShape::calcContentStatistics` (Xbox PDB): `this` in `ECX`, the collector and one
+/// more word on the stack; jumps to `hkReferencedObject::calcContentStatistics` with the
+/// second word replaced by the class at `01268940`.
+pub fn hkp_sphere_shape_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr<HkpSphereShape>,
+    collector: u32,
+    _unused_1: u32,
+) {
+    e.call(
+        REFERENCED_OBJECT_CALC_CONTENT_STATISTICS,
+        &args![this, collector, SPHERE_SHAPE_CLASS],
+    );
+}
+
+// Translated from 00cd8160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSphereShape::hkpSphereShape` (Xbox PDB), `this` in `ECX`, the radius on the stack:
+/// stores the radius at +0x10 (through the x87 stack: a signalling NaN comes out quiet), `1`
+/// in the 16-bit field at +6, `0` at +8, `1` at +0xc and the vtable `010cb5ac`. Returns
+/// `this`.
+pub fn hkp_sphere_shape_construct(
+    e: &mut Engine,
+    this: Ptr<HkpSphereShape>,
+    radius: f32,
+) -> Ptr<HkpSphereShape> {
+    let base = this.addr();
+    e.mem.set_u32(base + 0x10, x87_quiet_bits(radius.to_bits()));
+    e.mem.set_u16(base + 6, 1);
+    e.mem.set_u32(base + 8, 0);
+    e.mem.set_u32(base + 0xc, 1);
+    e.mem.set_u32(base, SPHERE_SHAPE_VTABLE);
+    this
+}
+
 // Translated from 00cd8050 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpSphereShape::getNumCollisionSpheresImpl` (Xbox PDB): 1.
 pub fn hkp_sphere_shape_get_num_collision_spheres_impl(
@@ -562,6 +605,14 @@ pub fn hkp_sphere_shape_cast_ray_bundle_impl(
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00cd8040,
+            hkp_sphere_shape_calc_content_statistics(Ptr<HkpSphereShape>, u32, u32)
+        ),
+        entry!(
+            0x00cd8160,
+            hkp_sphere_shape_construct(Ptr<HkpSphereShape>, f32) -> Ptr<HkpSphereShape>
+        ),
         entry!(
             0x00cd8050,
             hkp_sphere_shape_get_num_collision_spheres_impl(Ptr<HkpSphereShape>) -> u32
@@ -971,5 +1022,40 @@ mod tests {
         assert_eq!(e.mem.f32(outputs + 0xf0 + 0x10), 1.0);
         assert_eq!(e.mem.u32(stream + 0x20), PROFILE_BEGIN_CAST_RAY_BUNDLE);
         assert_eq!(e.mem.u32(stream + 0x2c), PROFILE_END);
+    }
+
+    #[test]
+    fn calc_content_statistics_passes_the_sphere_class() {
+        let mut e = engine();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let double_log = std::rc::Rc::clone(&log);
+        e.register_double(REFERENCED_OBJECT_CALC_CONTENT_STATISTICS, move |_, a| {
+            double_log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.call(0x00cd8040, &args![0x1000u32, 0x2000u32, 0x3000u32]);
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![0x1000, 0x2000, SPHERE_SHAPE_CLASS]]
+        );
+    }
+
+    #[test]
+    fn the_constructor_sets_the_radius_and_the_vtable() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 8, 0x1234);
+        let got = e
+            .call(0x00cd8160, &args![this, f32::from_bits(0x7f80_0001)])
+            .u32();
+        assert_eq!(got, this);
+        // The radius went through the x87 stack: the signalling NaN is quiet now.
+        assert_eq!(e.mem.u32(this + 0x10), 0x7fc0_0001);
+        assert_eq!(e.mem.u16(this + 6), 1);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 1);
+        assert_eq!(e.mem.u32(this), SPHERE_SHAPE_VTABLE);
+        e.call(0x00cd8160, &args![this, 2.5f32]);
+        assert_eq!(e.mem.f32(this + 0x10), 2.5);
     }
 }

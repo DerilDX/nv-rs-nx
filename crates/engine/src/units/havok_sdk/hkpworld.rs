@@ -3137,6 +3137,1548 @@ pub fn fn_00c98340(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// ---------------------------------------------------------------------------------------
+// The second batch of `hkpWorld` functions (`00c92a30` to `00c983b0`): constants.
+// ---------------------------------------------------------------------------------------
+
+/// `hkpWorld` functions the translations of this batch call by address (so that tests can
+/// replace them): `addEntity` (`00c914d0`, `(world, entity, flag)`), `removeEntity`
+/// (`00c91620`, `(world, result byte, entity)`), `removePhantom` (`00c92c70`), `removeAll`
+/// (`00c93580`), `addEntityBatch` (`00c94bd0`, `(world, entities, count, mode)`), `addPhantom`
+/// (`00c936a0`), `addPhantomBatch` (`00c954e0`, `(world, phantoms, count)`), `addAction`
+/// (`00c97370`), `addConstraint` (`00c97d30`) and `updateCollisionFilterOnWorld` (`00c96ff0`,
+/// `(world, first, second)`).
+const ADD_ENTITY: u32 = 0x00c9_14d0;
+const REMOVE_ENTITY: u32 = 0x00c9_1620;
+const REMOVE_PHANTOM: u32 = 0x00c9_2c70;
+const REMOVE_ALL: u32 = 0x00c9_3580;
+const ADD_ENTITY_BATCH: u32 = 0x00c9_4bd0;
+const ADD_PHANTOM: u32 = 0x00c9_36a0;
+const ADD_PHANTOM_BATCH: u32 = 0x00c9_54e0;
+const ADD_ACTION: u32 = 0x00c9_7370;
+const ADD_CONSTRAINT: u32 = 0x00c9_7d30;
+const UPDATE_COLLISION_FILTER_ON_WORLD: u32 = 0x00c9_6ff0;
+/// The destructor `hkpWorld::~hkpWorld` (`00c93e50`), called by the deleting destructor.
+const WORLD_DESTRUCTOR: u32 = 0x00c9_3e50;
+/// Takes an island off the world's dirty list (`00cb3fd0`, `(world, island)`).
+const REMOVE_ISLAND_FROM_DIRTY_LIST: u32 = 0x00cb_3fd0;
+/// The world listener broadcasts "remove all" (`00d00f30`) and "deleted" (`00d00e80`), `(world)`.
+const FIRE_WORLD_REMOVE_ALL: u32 = 0x00d0_0f30;
+const FIRE_WORLD_DELETED: u32 = 0x00d0_0e80;
+/// `hkpSimulation::stepBeginSt` (`00d022b0`, `(simulation, queue, time)`).
+const STEP_BEGIN_ST: u32 = 0x00d0_22b0;
+/// Processes all the jobs of a job queue (`00d051b0`, `ECX` the queue).
+const PROCESS_ALL_JOBS: u32 = 0x00d0_51b0;
+/// Statistics collector helpers: the allocated size of a block (`00d06f80`, `(pointer,
+/// requested size)`) and `addNormalChunk` (`00d06fb0`, `(collector, name, pointer, size, 0)`).
+const GET_ALLOCATED_SIZE: u32 = 0x00d0_6f80;
+const ADD_NORMAL_CHUNK: u32 = 0x00d0_6fb0;
+/// Recalculates the bounding volumes of entities (`00d1a330`, `(collision input, bodies,
+/// count)`).
+const ENTITY_BATCH_RECALC_AABB: u32 = 0x00d1_a330;
+/// The tree queries of `getClosestPoints`: the AABB tree's (`00d1d4a0`) and the kd tree's
+/// (`00d1b850`), each `(tree, bounds, pointer array)`.
+const AABB_TREE_QUERY: u32 = 0x00d1_d4a0;
+const KD_TREE_QUERY: u32 = 0x00d1_b850;
+/// The default collision filter's constructor (`00cbfba0`) and the five vtables of the 0x30-byte
+/// object `setCollisionFilter` makes (`.rdata`): at +0, +8, +0xC, +0x10 and +0x14.
+const COLLISION_FILTER_CONSTRUCT: u32 = 0x00cb_fba0;
+const NULL_FILTER_VTABLE_0: u32 = 0x010c_646c;
+const NULL_FILTER_VTABLE_8: u32 = 0x010c_6460;
+const NULL_FILTER_VTABLE_C: u32 = 0x010c_644c;
+const NULL_FILTER_VTABLE_10: u32 = 0x010c_6440;
+const NULL_FILTER_VTABLE_14: u32 = 0x010c_6434;
+/// `hkpConstraintInstance`'s constructor (`00cf3ea0`, `(block, entity a, entity b, data,
+/// priority)`).
+const CONSTRAINT_INSTANCE_CONSTRUCT: u32 = 0x00cf_3ea0;
+/// `DeleteCriticalSection` (the import's thunk slot, `00fdf058`).
+const DELETE_CRITICAL_SECTION: u32 = 0x00fd_f058;
+/// Destructors the world's destructor calls: the dispatch record's (`00cf7060`) and the
+/// operation queue's (`00cf75f0`), `ECX` the object.
+const DISPATCH_RECORD_DESTRUCT: u32 = 0x00cf_7060;
+const OPERATION_QUEUE_DESTRUCT: u32 = 0x00cf_75f0;
+/// The base destructor of the ray caster (`00cfa860`, `ECX` the object) and the exe's `free`
+/// of an object (`00401030`, cdecl).
+const RAY_CASTER_BASE_DESTRUCT: u32 = 0x00cf_a860;
+const FREE_OBJECT: u32 = 0x0040_1030;
+/// Vtables (`.rdata`): the world's (`010c6714`), the `hkReferencedObject` base (`0102e388`),
+/// the ray caster base (`010c3bb8`) and the collision filter base (`010c63bc`).
+const WORLD_VTABLE: u32 = 0x010c_6714;
+const REFERENCED_OBJECT_VTABLE: u32 = 0x0102_e388;
+const RAY_CASTER_BASE_VTABLE: u32 = 0x010c_3bb8;
+const FILTER_BASE_VTABLE: u32 = 0x010c_63bc;
+/// `0.0` as a `double` (`.rdata`), what `getPenetrations` clamps the tolerance with.
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+
+/// Profile labels (`.rdata`) of `shiftBroadPhase`, `getPenetrations` and `getClosestPoints`
+/// (a label is the address of its text).
+const PROFILE_SHIFT_BROAD_PHASE: u32 = 0x010c_68c8;
+const PROFILE_GET_PENETRATIONS: u32 = 0x010c_68ec;
+const PROFILE_GET_PENETRATIONS_NARROW: u32 = 0x010c_68dc;
+const PROFILE_CLOSEST_TREES: u32 = 0x010c_699c;
+const PROFILE_CLOSEST_TREES_BROAD_PHASE: u32 = 0x010c_698c;
+const PROFILE_CLOSEST_AABB_TREE_NARROW: u32 = 0x010c_697c;
+const PROFILE_CLOSEST_KD_TREE_BROAD_PHASE: u32 = 0x010c_6970;
+const PROFILE_CLOSEST_KD_TREE_NARROW: u32 = 0x010c_6964;
+const PROFILE_CLOSEST_BROAD_PHASE: u32 = 0x010c_6938;
+const PROFILE_CLOSEST_BROAD_PHASE_SECOND: u32 = 0x010c_692c;
+const PROFILE_CLOSEST_NARROW: u32 = 0x010c_6920;
+
+/// The names `calcContentStatistics` reports to the collector (the addresses of the exe's
+/// strings).
+const STATISTICS_ACTIVE_ISLANDS: u32 = 0x010c_6700;
+const STATISTICS_ACTIVE: u32 = 0x0109_c938;
+const STATISTICS_INACTIVE_ISLANDS: u32 = 0x010c_66f0;
+const STATISTICS_INACTIVE: u32 = 0x010c_66e4;
+const STATISTICS_FIXED: u32 = 0x010c_6084;
+const STATISTICS_PHANTOM_POINTERS: u32 = 0x010c_66d8;
+const STATISTICS_PHANTOMS: u32 = 0x010c_41a4;
+const STATISTICS_MODIFY_CONSTRAINT_SECTION: u32 = 0x010c_66b8;
+const STATISTICS_ISLAND_DIRTY_LIST_SECTION: u32 = 0x010c_6698;
+const STATISTICS_PROPERTY_MASTER_LOCK: u32 = 0x010c_6684;
+const STATISTICS_JOB_DATA: u32 = 0x010c_6664;
+const STATISTICS_PENDING_QUEUES: u32 = 0x010c_664c;
+const STATISTICS_PENDING_QUEUES_ARRAY: u32 = 0x010c_6630;
+const STATISTICS_INTERNAL: u32 = 0x010c_6624;
+const STATISTICS_SIMULATION: u32 = 0x010c_6618;
+const STATISTICS_DIRTY_ISLAND_POINTERS: u32 = 0x010c_660c;
+const STATISTICS_MAINTENANCE_MANAGER: u32 = 0x010c_6600;
+const STATISTICS_OPERATION_QUEUE: u32 = 0x010c_65f8;
+const STATISTICS_ISLAND_MERGES: u32 = 0x010c_65e8;
+const STATISTICS_BODY_OPERATIONS: u32 = 0x010c_65d8;
+const STATISTICS_BROAD_PHASE_BORDER: u32 = 0x010c_65c4;
+const STATISTICS_COLLIDE: u32 = 0x010c_65bc;
+const STATISTICS_BROAD_PHASE: u32 = 0x010c_65b0;
+const STATISTICS_BROAD_PHASE_DISPATCH: u32 = 0x010c_65a4;
+const STATISTICS_COLLISION_INPUT: u32 = 0x010c_6598;
+const STATISTICS_AGENT_CONFIG: u32 = 0x010c_6580;
+const STATISTICS_FILTER: u32 = 0x010c_6578;
+const STATISTICS_CONVEX_LIST_FILTER: u32 = 0x010c_6564;
+const STATISTICS_DISPATCHER: u32 = 0x010c_6558;
+const STATISTICS_LISTENERS: u32 = 0x010c_654c;
+const STATISTICS_ENTITY_LISTENERS: u32 = 0x010c_6540;
+const STATISTICS_PHANTOM_LISTENERS: u32 = 0x010c_6534;
+const STATISTICS_CONSTRAINT_LISTENERS: u32 = 0x010c_6524;
+const STATISTICS_DELETION_LISTENERS: u32 = 0x010c_6514;
+const STATISTICS_ISLAND_ACTIVATION_LISTENERS: u32 = 0x010c_6504;
+const STATISTICS_POST_SIMULATION_LISTENERS: u32 = 0x010c_64f4;
+const STATISTICS_POST_INTEGRATE_LISTENERS: u32 = 0x010c_64e4;
+const STATISTICS_POST_COLLIDE_LISTENERS: u32 = 0x010c_64d4;
+const STATISTICS_COLLISION_LISTENERS: u32 = 0x010c_64c8;
+
+use crate::units::havok_sdk::hkpconvexradiusbuilder::addps;
+use crate::units::havok_sdk::hkpsphereshape::{load_vec, store_vec};
+
+// Translated from 00c92a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. Two stack words (`RET 8`): `object` and `argument`. While critical operations
+/// are locked the request is queued (operation 0x24: object at +4, argument at +8); otherwise
+/// the object's virtual function at vtable offset 0xC runs with `argument`. Returns `object`.
+pub fn fn_00c92a30(e: &mut Engine, this: Ptr<HkpWorld>, object: u32, argument: u32) -> u32 {
+    if operations_locked(e, this) {
+        queue_operation(e, this, 0x24, |e, operation| {
+            e.mem.set_u32(operation + 4, object);
+            e.mem.set_u32(operation + 8, argument);
+        });
+        return object;
+    }
+    e.vcall(object, 0xc, &args![argument]);
+    object
+}
+
+// Translated from 00c92a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. Two stack words (`RET 8`): `first` and `second`. Reads the simulation's float at
+/// +0x18 twice through the x87 stack and builds a four-float record on its stack: the two
+/// copies, their difference and the reciprocal of the difference (0 when the difference
+/// compares equal to zero). Calls the simulation's virtual function at vtable offset 0x1C
+/// with `first`, `second`, the world, the record and 1.
+pub fn fn_00c92a80(e: &mut Engine, this: Ptr<HkpWorld>, first: u32, second: u32) {
+    let simulation = e.get(this, HkpWorld::m_simulation).addr();
+    let lower = x87_quiet(e.mem.f32(simulation + 0x18));
+    let upper = x87_quiet(e.mem.f32(simulation + 0x18));
+    let span = (f64::from(upper) - f64::from(lower)) as f32;
+    let inverse = if span == 0.0 {
+        0.0
+    } else {
+        (1.0 / f64::from(span)) as f32
+    };
+    let simulation = e.get(this, HkpWorld::m_simulation).addr();
+    e.with_stack(0x10, |e, record| {
+        e.mem.set_f32(record.addr(), lower);
+        e.mem.set_f32(record.addr() + 4, upper);
+        e.mem.set_f32(record.addr() + 8, span);
+        e.mem.set_f32(record.addr() + 0xc, inverse);
+        e.vcall(simulation, 0x1c, &args![first, second, this, record, 1u32]);
+    });
+}
+
+// Translated from 00c92b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. Fastcall, no stack word. Calls `00c92a80` with the words at +0x48 and +0x4C of
+/// every active island (`+0x28`, size `+0x2C`), then of every inactive one (`+0x34`, size
+/// `+0x38`); the sizes are read again after each call.
+pub fn fn_00c92b00(e: &mut Engine, this: Ptr<HkpWorld>) {
+    let mut index = 0i32;
+    while index < e.get(this, HkpWorld::m_activeSimulationIslandsSize) {
+        let data = e.get(this, HkpWorld::m_activeSimulationIslands).addr();
+        let island = array_entry(e, data, index);
+        let (first, second) = (e.mem.u32(island + 0x48), e.mem.u32(island + 0x4c));
+        fn_00c92a80(e, this, first, second);
+        index = index.wrapping_add(1);
+    }
+    index = 0;
+    while index < e.get(this, HkpWorld::m_inactiveSimulationIslandsSize) {
+        let data = e.get(this, HkpWorld::m_inactiveSimulationIslands).addr();
+        let island = array_entry(e, data, index);
+        let (first, second) = (e.mem.u32(island + 0x48), e.mem.u32(island + 0x4c));
+        fn_00c92a80(e, this, first, second);
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00c92b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::getMemUsageForIntegration` (Xbox PDB). One stack word (`RET 4`): `usage`, three
+/// words that are cleared and then filled: the largest single island's estimate (`[0]`), the
+/// sum over the active islands (`[1]`) and the island with the largest estimate (`[2]`, the
+/// first found from the last island down). An island's estimate is
+/// `((((2 * (word[+0x1C] / 80) + 8) * 3 + word[+0x14]) * 4 + 0x17) & !0xF)
+/// + ((2 * (word[+0x1C] / 80) + 0x12 + word[+0x4C] * 8) << 4) + word[+0xC]`.
+pub fn hkp_world_get_mem_usage_for_integration(e: &mut Engine, this: Ptr<HkpWorld>, usage: u32) {
+    e.mem.set_u32(usage, 0);
+    e.mem.set_u32(usage + 4, 0);
+    e.mem.set_u32(usage + 8, 0);
+    let mut index = e
+        .get(this, HkpWorld::m_activeSimulationIslandsSize)
+        .wrapping_sub(1);
+    while index >= 0 {
+        let data = e.get(this, HkpWorld::m_activeSimulationIslands).addr();
+        let island = array_entry(e, data, index);
+        let rows = (e.mem.i32(island + 0x1c) / 80).wrapping_mul(2);
+        let base = rows.wrapping_add(8);
+        let words = base.wrapping_mul(3).wrapping_add(e.mem.i32(island + 0x14));
+        let header = words.wrapping_mul(4).wrapping_add(0x17) & !0xf;
+        let body = base
+            .wrapping_add(e.mem.i32(island + 0x4c).wrapping_mul(8))
+            .wrapping_add(10)
+            .wrapping_shl(4);
+        let estimate = header
+            .wrapping_add(body)
+            .wrapping_add(e.mem.i32(island + 0xc));
+        let total = e.mem.i32(usage + 4).wrapping_add(estimate);
+        e.mem.set_i32(usage + 4, total);
+        if estimate > e.mem.i32(usage) {
+            e.mem.set_i32(usage, estimate);
+            e.mem.set_u32(usage + 8, island);
+        }
+        index = index.wrapping_sub(1);
+    }
+}
+
+// Translated from 00c92bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. Two stack words (`RET 8`): `action` and `entity`. Appends the action to the
+/// entity's action list (+0x208, grown through `00d06cb0` when the 16-bit size equals the
+/// capacity). If the action's island (+0xC) has the 16-bit word 0xFFFF at +0x20 and the
+/// entity's byte at +0xE8 is not 5, the action leaves that island (`00d07130`) and joins the
+/// entity's island (+0xCC, `00d07470`). Otherwise, when the two islands differ and the byte is
+/// not 5, `00cb5570` merges them (the world, the entity and the first entity of the action's
+/// island).
+pub fn fn_00c92bd0(e: &mut Engine, this: Ptr<HkpWorld>, action: u32, entity: u32) {
+    let list = entity + 0x208;
+    if e.mem.u16(list + 4) == e.mem.u16(list + 6) & 0x3fff {
+        e.call(ACTION_LIST_GROW, &args![list, 4u32]);
+    }
+    let size = e.mem.u16(list + 4);
+    let data = e.mem.u32(list);
+    e.mem
+        .set_u32(data.wrapping_add(u32::from(size) * 4), action);
+    e.mem.set_u16(list + 4, size.wrapping_add(1));
+    let island = e.mem.u32(action + 0xc);
+    if e.mem.u16(island + 0x20) == 0xffff && e.mem.u8(entity + 0xe8) != 5 {
+        e.call(ISLAND_REMOVE_ACTION, &args![island, action]);
+        let entity_island = e.mem.u32(entity + 0xcc);
+        e.call(ISLAND_ADD_ACTION, &args![entity_island, action]);
+        return;
+    }
+    if e.mem.u32(entity + 0xcc) != island && e.mem.u8(entity + 0xe8) != 5 {
+        let first = e.mem.u32(e.mem.u32(island + 0x48));
+        e.call(MERGE_ISLANDS, &args![this, entity, first]);
+    }
+}
+
+// Translated from 00c92d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::initMtStep` (Xbox PDB). Two stack words (`RET 8`): `queue` and `time` (a float,
+/// passed through the x87 stack). When the world has a memory watch dog (+0x50) it counts the
+/// lock up (`00c91180`), runs `watchHeapMemory` (`00d01d20`) and counts it down (`00c91190`).
+/// Then it tail-calls the simulation's (+8) `stepBeginSt` (`00d022b0`) and returns its `EAX`.
+pub fn hkp_world_init_mt_step(e: &mut Engine, this: Ptr<HkpWorld>, queue: u32, time: f32) -> u32 {
+    if !e.get(this, HkpWorld::m_memoryWatchDog).is_null() {
+        fn_00c91180(e, this);
+        e.call(WATCH_HEAP_MEMORY, &args![this]);
+        fn_00c91190(e, this);
+    }
+    let time = x87_quiet(time);
+    let simulation = e.get(this, HkpWorld::m_simulation);
+    e.call(STEP_BEGIN_ST, &args![simulation, queue, time.to_bits()])
+        .u32()
+}
+
+/// Reports one `hkArray` (data +0, size +4, capacity word +8) of `element_size`-byte elements to
+/// the statistics collector the way every array of `calcContentStatistics` is: when the
+/// capacity word's top bit is clear or the collector's byte at +0x10 is set, the collector's
+/// virtual function at 0x14 gets `(3, name, data, size * element_size, allocated)`, where
+/// `allocated` is `getAllocatedSize(data, (capacity & 0x3FFFFFFF) * element_size)`.
+fn report_array(e: &mut Engine, collector: u32, array: u32, name: u32, element_size: u32) {
+    let capacity = e.mem.u32(array + 8);
+    if (capacity as i32) >= 0 || e.mem.u8(collector + 0x10) != 0 {
+        let data = e.mem.u32(array);
+        let bytes = (capacity & 0x3fff_ffff).wrapping_mul(element_size);
+        let allocated = e.call(GET_ALLOCATED_SIZE, &args![data, bytes]).u32();
+        let data = e.mem.u32(array);
+        let used = e.mem.u32(array + 4).wrapping_mul(element_size);
+        e.vcall(collector, 0x14, &args![3u32, name, data, used, allocated]);
+    }
+}
+
+/// `collector.addNormalChunk(name, pointer, size, 0)` (`00d06fb0`).
+fn add_normal_chunk(e: &mut Engine, collector: u32, name: u32, pointer: u32, size: u32) {
+    e.call(
+        ADD_NORMAL_CHUNK,
+        &args![collector, name, pointer, size, 0u32],
+    );
+}
+
+/// `collector.addChildObject(name, object, 0)` (virtual function at 0xC).
+fn add_child_object(e: &mut Engine, collector: u32, name: u32, object: u32) {
+    e.vcall(collector, 0xc, &args![name, object, 0u32]);
+}
+
+// Translated from 00c92db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::calcContentStatistics` (Xbox PDB). Two stack words (`RET 8`): the statistics
+/// `collector` and one that is not read. Stores the collision input (+0x78) at collector +8
+/// for the duration, reports to the collector (the names are the exe's strings): the active
+/// islands array (+0x28) and each active island (last to first), the inactive ones (+0x34),
+/// the fixed island, the phantoms array (+0x110) and each phantom, the critical sections
+/// (+0xB8 when present, +0xC0, +0xC4 when present), the job data (+0x74), the chain of pending
+/// operation queues (+0xA0), then inside "Internal" the simulation (+8), the dirty islands
+/// array (+0x40), the maintenance manager (+0x4C) and the operation queue (+0x88) with its
+/// two arrays, the broad phase border (+0x1BC), inside "Collide" the broad phase (+0x58), the
+/// dispatch records (+0x64, +0x6C, +0x68, +0x70), the collision input and its agent config,
+/// the filters (+0x7C, +0x84) and the dispatcher (+0x80), and inside "Listeners" the
+/// listener arrays at +0x128, +0x134, +0x140, +0x14C, +0x158, +0x164, +0x170, +0x17C, +0x188
+/// and +0x1A0. The collector's virtual functions: 0xC child object, 0x14 array, 0x18 begin
+/// section, 0x1C end section. Finally clears collector +8.
+pub fn hkp_world_calc_content_statistics(
+    e: &mut Engine,
+    this: Ptr<HkpWorld>,
+    collector: u32,
+    _unused_3: u32,
+) {
+    let t = this.addr();
+    let collision_input = e.get(this, HkpWorld::m_collisionInput);
+    e.mem.set_u32(collector + 8, collision_input.addr());
+    report_array(e, collector, t + 0x28, STATISTICS_ACTIVE_ISLANDS, 4);
+    let mut index = e.mem.i32(t + 0x2c).wrapping_sub(1);
+    while index >= 0 {
+        let island = array_entry(e, e.mem.u32(t + 0x28), index);
+        add_child_object(e, collector, STATISTICS_ACTIVE, island);
+        index = index.wrapping_sub(1);
+    }
+    report_array(e, collector, t + 0x34, STATISTICS_INACTIVE_ISLANDS, 4);
+    index = e.mem.i32(t + 0x38).wrapping_sub(1);
+    while index >= 0 {
+        let island = array_entry(e, e.mem.u32(t + 0x34), index);
+        add_child_object(e, collector, STATISTICS_INACTIVE, island);
+        index = index.wrapping_sub(1);
+    }
+    let fixed_island = e.mem.u32(t + 0x20);
+    add_child_object(e, collector, STATISTICS_FIXED, fixed_island);
+    report_array(e, collector, t + 0x110, STATISTICS_PHANTOM_POINTERS, 4);
+    index = 0;
+    while e.mem.i32(t + 0x114) > index {
+        let phantom = array_entry(e, e.mem.u32(t + 0x110), index);
+        add_child_object(e, collector, STATISTICS_PHANTOMS, phantom);
+        index = index.wrapping_add(1);
+    }
+    let section = e.mem.u32(t + 0xb8);
+    if section != 0 {
+        add_normal_chunk(
+            e,
+            collector,
+            STATISTICS_MODIFY_CONSTRAINT_SECTION,
+            section,
+            0x18,
+        );
+    }
+    let section = e.mem.u32(t + 0xc0);
+    add_normal_chunk(
+        e,
+        collector,
+        STATISTICS_ISLAND_DIRTY_LIST_SECTION,
+        section,
+        0x18,
+    );
+    let lock = e.mem.u32(t + 0xc4);
+    if lock != 0 {
+        add_normal_chunk(e, collector, STATISTICS_PROPERTY_MASTER_LOCK, lock, 0x18);
+    }
+    let job_data = e.mem.u32(t + 0x74);
+    add_normal_chunk(e, collector, STATISTICS_JOB_DATA, job_data, 0x120);
+    let mut queue = e.mem.u32(t + 0xa0);
+    while queue != 0 {
+        let first = e.mem.u32(t + 0xa0);
+        add_normal_chunk(e, collector, STATISTICS_PENDING_QUEUES, first, 0x10);
+        let array = e.mem.u32(e.mem.u32(t + 0xa0));
+        if array != 0 {
+            report_array(e, collector, array, STATISTICS_PENDING_QUEUES_ARRAY, 0x14);
+        }
+        queue = e.mem.u32(queue + 8);
+    }
+    e.vcall(collector, 0x18, &args![STATISTICS_INTERNAL]);
+    let simulation = e.mem.u32(t + 8);
+    add_child_object(e, collector, STATISTICS_SIMULATION, simulation);
+    report_array(e, collector, t + 0x40, STATISTICS_DIRTY_ISLAND_POINTERS, 4);
+    let manager = e.mem.u32(t + 0x4c);
+    add_child_object(e, collector, STATISTICS_MAINTENANCE_MANAGER, manager);
+    let operations = e.mem.u32(t + 0x88);
+    add_normal_chunk(e, collector, STATISTICS_OPERATION_QUEUE, operations, 0x28);
+    e.vcall(collector, 0x18, &args![STATISTICS_OPERATION_QUEUE]);
+    let operations = e.mem.u32(t + 0x88);
+    report_array(
+        e,
+        collector,
+        operations + 0x10,
+        STATISTICS_ISLAND_MERGES,
+        0x14,
+    );
+    let operations = e.mem.u32(t + 0x88);
+    report_array(
+        e,
+        collector,
+        operations + 0x1c,
+        STATISTICS_BODY_OPERATIONS,
+        0x10,
+    );
+    e.vcall(collector, 0x1c, &args![]);
+    let border = e.mem.u32(t + 0x1bc);
+    add_child_object(e, collector, STATISTICS_BROAD_PHASE_BORDER, border);
+    e.vcall(collector, 0x18, &args![STATISTICS_COLLIDE]);
+    let broad_phase = e.mem.u32(t + 0x58);
+    add_child_object(e, collector, STATISTICS_BROAD_PHASE, broad_phase);
+    for (offset, size) in [(0x64, 0x10c), (0x6c, 0x10), (0x68, 0xc), (0x70, 0xc)] {
+        let record = e.mem.u32(t + offset);
+        add_normal_chunk(e, collector, STATISTICS_BROAD_PHASE_DISPATCH, record, size);
+    }
+    let collision_input = e.mem.u32(t + 0x78);
+    add_normal_chunk(
+        e,
+        collector,
+        STATISTICS_COLLISION_INPUT,
+        collision_input,
+        0x80,
+    );
+    let collision_input = e.mem.u32(t + 0x78);
+    if collision_input != 0 {
+        let config = e.mem.u32(collision_input + 0x70);
+        add_normal_chunk(e, collector, STATISTICS_AGENT_CONFIG, config, 0x10);
+    }
+    let filter = e.mem.u32(t + 0x7c);
+    add_child_object(e, collector, STATISTICS_FILTER, filter);
+    let filter = e.mem.u32(t + 0x84);
+    add_child_object(e, collector, STATISTICS_CONVEX_LIST_FILTER, filter);
+    let dispatcher = e.mem.u32(t + 0x80);
+    add_child_object(e, collector, STATISTICS_DISPATCHER, dispatcher);
+    e.vcall(collector, 0x1c, &args![]);
+    e.vcall(collector, 0x1c, &args![]);
+    e.vcall(collector, 0x18, &args![STATISTICS_LISTENERS]);
+    for (array, name) in [
+        (0x128, STATISTICS_ENTITY_LISTENERS),
+        (0x134, STATISTICS_PHANTOM_LISTENERS),
+        (0x140, STATISTICS_CONSTRAINT_LISTENERS),
+        (0x14c, STATISTICS_DELETION_LISTENERS),
+        (0x158, STATISTICS_ISLAND_ACTIVATION_LISTENERS),
+        (0x164, STATISTICS_POST_SIMULATION_LISTENERS),
+        (0x170, STATISTICS_POST_INTEGRATE_LISTENERS),
+        (0x17c, STATISTICS_POST_COLLIDE_LISTENERS),
+        (0x188, STATISTICS_POST_INTEGRATE_LISTENERS),
+        (0x1a0, STATISTICS_COLLISION_LISTENERS),
+    ] {
+        report_array(e, collector, t + array, name, 4);
+    }
+    e.vcall(collector, 0x1c, &args![]);
+    e.mem.set_u32(collector + 8, 0);
+}
+
+// Translated from 00c93570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::getMemoryWatchDog` (Xbox PDB): `m_memoryWatchDog` (+0x50).
+pub fn hkp_world_get_memory_watch_dog(e: &mut Engine, this: Ptr<HkpWorld>) -> Ptr {
+    e.get(this, HkpWorld::m_memoryWatchDog)
+}
+
+// Translated from 00c93580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::removeAll` (Xbox PDB). Fastcall, no stack word. Removes every phantom (`00c92c70`
+/// on the first, until `m_phantoms` is empty), then the entities of the active islands (while
+/// the first island has any), of the inactive islands and of the fixed island, each through
+/// `removeEntity` (`00c91620`, first with the fixed body: a reference is added, the body
+/// removed, and later added back with `addEntity` (`00c914d0`, second argument 1) and the
+/// reference dropped again). Unless `+0xC8` is set the last active island leaves the dirty
+/// list (`00cb3fd0`) and is deleted through its vtable slot 0, and the active island count
+/// drops by one. Ends with the world's "remove all" callback (`00d00f30`).
+pub fn hkp_world_remove_all(e: &mut Engine, this: Ptr<HkpWorld>) {
+    let t = this.addr();
+    e.with_stack(4, |e, scratch| {
+        let result: Ptr = scratch.byte_add(3);
+        while e.mem.i32(t + 0x114) > 0 {
+            let phantom = e.mem.u32(e.mem.u32(t + 0x110));
+            e.call(REMOVE_PHANTOM, &args![this, phantom]);
+        }
+        while e.mem.i32(t + 0x2c) > 0 {
+            let island = e.mem.u32(e.mem.u32(t + 0x28));
+            if e.mem.i32(island + 0x4c) == 0 {
+                break;
+            }
+            let entity = e.mem.u32(e.mem.u32(island + 0x48));
+            e.call(REMOVE_ENTITY, &args![this, result, entity]);
+        }
+        while e.mem.i32(t + 0x38) > 0 {
+            let island = e.mem.u32(e.mem.u32(t + 0x34));
+            let entity = e.mem.u32(e.mem.u32(island + 0x48));
+            e.call(REMOVE_ENTITY, &args![this, result, entity]);
+        }
+        let fixed_body = e.mem.u32(t + 0x24);
+        e.call(ADD_REFERENCE, &args![fixed_body]);
+        let fixed_body = e.mem.u32(t + 0x24);
+        e.call(REMOVE_ENTITY, &args![this, result, fixed_body]);
+        let mut fixed_island = e.mem.u32(t + 0x20);
+        while e.mem.i32(fixed_island + 0x4c) > 0 {
+            let entity = e.mem.u32(e.mem.u32(fixed_island + 0x48));
+            e.call(REMOVE_ENTITY, &args![this, result, entity]);
+            fixed_island = e.mem.u32(t + 0x20);
+        }
+        let fixed_body = e.mem.u32(t + 0x24);
+        e.call(ADD_ENTITY, &args![this, fixed_body, 1u32]);
+        let fixed_body = e.mem.u32(t + 0x24);
+        e.call(REMOVE_REFERENCE, &args![fixed_body]);
+    });
+    if !e.get(this, HkpWorld::m_addsToNewIsland) {
+        let last = array_entry(e, e.mem.u32(t + 0x28), e.mem.i32(t + 0x2c).wrapping_sub(1));
+        e.call(REMOVE_ISLAND_FROM_DIRTY_LIST, &args![this, last]);
+        let last = array_entry(e, e.mem.u32(t + 0x28), e.mem.i32(t + 0x2c).wrapping_sub(1));
+        if last != 0 {
+            e.vcall(last, 0, &args![1u32]);
+        }
+        let count = e.mem.i32(t + 0x2c).wrapping_sub(1);
+        e.mem.set_i32(t + 0x2c, count);
+    }
+    e.call(FIRE_WORLD_REMOVE_ALL, &args![this]);
+}
+
+// Translated from 00c937a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. One stack word (`RET 4`): `value`. Appends it to the pointer array at +0x11C
+/// (data, size +0x120, capacity word +0x124; grown through `00c90940` when full).
+pub fn fn_00c937a0(e: &mut Engine, this: Ptr<HkpWorld>, value: u32) {
+    array_push_word(e, this.addr() + 0x11c, value);
+}
+
+// Translated from 00c937e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (the "ConstrLisPtr" array of the statistics). One stack word: `listener`. Appends
+/// it to the pointer array at +0x140.
+pub fn fn_00c937e0(e: &mut Engine, this: Ptr<HkpWorld>, listener: u32) {
+    array_push_word(e, this.addr() + 0x140, listener);
+}
+
+// Translated from 00c93820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (the "EntLisPtr" array of the statistics). One stack word: `listener`. Appends it
+/// to the pointer array at +0x128.
+pub fn fn_00c93820(e: &mut Engine, this: Ptr<HkpWorld>, listener: u32) {
+    array_push_word(e, this.addr() + 0x128, listener);
+}
+
+// Translated from 00c93860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (the "PhantLisPtr" array of the statistics). One stack word: `listener`. Appends
+/// it to the pointer array at +0x134.
+pub fn fn_00c93860(e: &mut Engine, this: Ptr<HkpWorld>, listener: u32) {
+    array_push_word(e, this.addr() + 0x134, listener);
+}
+
+// Translated from 00c938a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (the "IslActLisPtr" array of the statistics). One stack word: `listener`. Appends
+/// it to the pointer array at +0x158.
+pub fn fn_00c938a0(e: &mut Engine, this: Ptr<HkpWorld>, listener: u32) {
+    array_push_word(e, this.addr() + 0x158, listener);
+}
+
+// Translated from 00c93920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::addWorldPostSimulationListener` (Xbox PDB). One stack word: `listener`.
+/// Appends it to the pointer array at +0x164.
+pub fn hkp_world_add_world_post_simulation_listener(
+    e: &mut Engine,
+    this: Ptr<HkpWorld>,
+    listener: u32,
+) {
+    array_push_word(e, this.addr() + 0x164, listener);
+}
+
+// Translated from 00c93a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (the "CollLisPtr" array of the statistics). One stack word: `listener`. Appends it
+/// to the pointer array at +0x1A0.
+pub fn fn_00c93a20(e: &mut Engine, this: Ptr<HkpWorld>, listener: u32) {
+    array_push_word(e, this.addr() + 0x1a0, listener);
+}
+
+// Translated from 00c93a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (the "WldDelLisPtr" array of the statistics). One stack word: `listener`. Appends
+/// it to the pointer array at +0x14C.
+pub fn fn_00c93a60(e: &mut Engine, this: Ptr<HkpWorld>, listener: u32) {
+    array_push_word(e, this.addr() + 0x14c, listener);
+}
+
+// Translated from 00c93ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::stepMultithreaded` (Xbox PDB). Three stack words (`RET 0xC`): `queue`,
+/// `listener` and `time` (a float, passed through the x87 stack). Runs `initMtStep`
+/// (`00c92d70`); a non-zero result is returned at once. Otherwise calls the listener's virtual
+/// function at 0xC with the queue and 0xB, processes all the jobs of the queue (`00d051b0`,
+/// `ECX` the queue), calls the listener's virtual function at 0x10 and returns `finishMtStep`
+/// (`00c91c00`) of the queue and the listener.
+pub fn hkp_world_step_multithreaded(
+    e: &mut Engine,
+    this: Ptr<HkpWorld>,
+    queue: u32,
+    listener: u32,
+    time: f32,
+) -> u32 {
+    let started = hkp_world_init_mt_step(e, this, queue, x87_quiet(time));
+    if started != 0 {
+        return started;
+    }
+    e.vcall(listener, 0xc, &args![queue, 0xbu32]);
+    e.call(PROCESS_ALL_JOBS, &args![queue]);
+    e.vcall(listener, 0x10, &args![]);
+    hkp_world_finish_mt_step(e, this, queue, listener)
+}
+
+// Translated from 00c93b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. One stack word (`RET 4`): `systems`, an `hkArray` of pointers. Builds a physics
+/// system (0x44 bytes through the memory router, word +4 = 0x44, constructed by `00d065e0`)
+/// and fills it with the fixed and inactive bodies (`00c926a0`). If there were any, the byte
+/// at +0x40 is cleared, the system is appended to `systems` and a second system is built the
+/// same way (also when the first allocation came back null); the system is appended to
+/// `systems` and gets the active islands' bodies (`00c92760`), the phantoms (`00c92950`), the
+/// constraints (`00c92860`) and the actions (`00c928c0`) of the world.
+pub fn fn_00c93b30(e: &mut Engine, this: Ptr<HkpWorld>, systems: u32) {
+    let mut system = new_physics_system(e);
+    let had_bodies = e.with_stack(4, |e, flag| {
+        let flag = fn_00c926a0(e, flag, this, Ptr::new(system));
+        e.mem.u8(flag.addr()) != 0
+    });
+    if had_bodies {
+        e.mem.set_u8(system + 0x40, 0);
+        array_push_word(e, systems, system);
+        system = new_physics_system(e);
+    } else if system == 0 {
+        system = new_physics_system(e);
+    }
+    array_push_word(e, systems, system);
+    e.with_stack(4, |e, flag| {
+        fn_00c92760(e, flag, this, Ptr::new(system));
+    });
+    fn_00c92950(e, this, Ptr::new(system));
+    fn_00c92860(e, this, Ptr::new(system));
+    fn_00c928c0(e, this, Ptr::new(system));
+}
+
+/// Allocates and constructs one physics system: 0x44 bytes from the memory router with the
+/// 16-bit word +4 set to 0x44, then `00d065e0` on the block.
+fn new_physics_system(e: &mut Engine) -> u32 {
+    let block = router_alloc(e, 0x44);
+    e.mem.set_u16(block + 4, 0x44);
+    e.call(PHYSICS_SYSTEM_CONSTRUCT, &args![block]).u32()
+}
+
+// Translated from 00c93d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (the "finish loading" constructor of `hkpWorld`; one stack word, `RET 4`, is not
+/// read). Stores the vtable `010c6714`, the 16-bit word +6 = 1, empty `hkArray`s (data 0, size
+/// 0, capacity word 0x80000000) at +0x28, +0x34 and +0x40, zeroes +0x50, stores +0xA8 =
+/// 0xFFFFFFF1 and the 16-bit word +0xAC = 0x8000, and makes the same empty arrays at +0x11C,
+/// +0x128, +0x134, +0x140, +0x14C, +0x158, +0x164, +0x170, +0x17C, +0x188, +0x194, +0x1A0 and
+/// +0x1AC. Returns `this`.
+pub fn fn_00c93d10(e: &mut Engine, this: Ptr<HkpWorld>, _unused_2: u32) -> Ptr {
+    let t = this.addr();
+    e.mem.set_u32(t, WORLD_VTABLE);
+    e.mem.set_u16(t + 6, 1);
+    for array in [0x28, 0x34, 0x40] {
+        e.mem.set_u32(t + array, 0);
+        e.mem.set_u32(t + array + 4, 0);
+        e.mem.set_u32(t + array + 8, 0x8000_0000);
+    }
+    e.mem.set_u32(t + 0x50, 0);
+    e.mem.set_u32(t + 0xa8, 0xffff_fff1);
+    e.mem.set_u16(t + 0xac, 0x8000);
+    for array in [
+        0x11c, 0x128, 0x134, 0x140, 0x14c, 0x158, 0x164, 0x170, 0x17c, 0x188, 0x194, 0x1a0, 0x1ac,
+    ] {
+        e.mem.set_u32(t + array, 0);
+        e.mem.set_u32(t + array + 4, 0);
+        e.mem.set_u32(t + array + 8, 0x8000_0000);
+    }
+    Ptr::new(t)
+}
+
+/// Empties the `hkArray` of 4-byte elements at `array` and gives its storage back: the size
+/// is cleared, the storage freed through the router allocator (slot 0x10) unless the capacity
+/// word's top bit is set, the data pointer is cleared and the capacity word set to
+/// 0x80000000.
+fn reset_array(e: &mut Engine, array: u32) {
+    array_release(e, array, 4, 0x10);
+    e.mem.set_u32(array, 0);
+    e.mem.set_u32(array + 8, 0x8000_0000);
+}
+
+/// Removes a reference from the object in the word at `slot` (the call is made even when the
+/// word is null).
+fn drop_reference_at(e: &mut Engine, slot: u32) {
+    let object = e.mem.u32(slot);
+    e.call(REMOVE_REFERENCE, &args![object]);
+}
+
+/// Deletes the object in the word at `slot` through its vtable slot 0 (argument 1) when it is
+/// not null.
+fn delete_object_at(e: &mut Engine, slot: u32) {
+    let object = e.mem.u32(slot);
+    if object != 0 {
+        e.vcall(object, 0, &args![1u32]);
+    }
+}
+
+// Translated from 00c93e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::~hkpWorld` (Xbox PDB). Fastcall, no stack word. Stores the vtable `010c6714`;
+/// frees the job data block (+0x74: its buffer +0xF4 of 0x200 bytes, then the 0x120-byte
+/// block); drops the reference at +0x4C; deletes the critical sections at +0xB8, +0xC4 and
+/// +0xC0 (`DeleteCriticalSection` and a 0x18-byte free each); drops the reference at +0x50
+/// (when set) and runs `removeAll`; removes the fixed body (+0x24) and takes the fixed island
+/// (+0x20) off the dirty list, deletes it and fires the world "deleted" callback (`00d00e80`);
+/// drops the references at +0x58 and +0x80, destroys the 0x10C-byte dispatch record (+0x64,
+/// `00cf7060`), drops +0x1BC (when set), deletes the objects at +0x68, +0x6C and +0x70, drops
+/// +0x7C and +0x84, frees the collision input's agent config (+0x70 of it, 0x10 bytes) and the
+/// collision input (its +0x64 buffer of 0x200 bytes, then 0x80 bytes), drops +8, destroys the
+/// operation queue (+0x88, `00cf75f0`, 0x28 bytes), drops +0x5C when set, frees +0x1B8 (0x204
+/// bytes), empties the pointer arrays at +0x1AC down to +0x110 (step 0xC), drops +0x50 again
+/// and empties the arrays at +0x40, +0x34 and +0x28. Ends with the vtable `0102e388`.
+pub fn hkp_world_destructor(e: &mut Engine, this: Ptr<HkpWorld>) {
+    let t = this.addr();
+    let job_data = e.mem.u32(t + 0x74);
+    e.mem.set_u32(t, WORLD_VTABLE);
+    if job_data != 0 {
+        let buffer = e.mem.u32(job_data + 0xf4);
+        if buffer != 0 {
+            router_free(e, buffer, 0x200);
+        }
+        router_free(e, job_data, 0x120);
+    }
+    drop_reference_at(e, t + 0x4c);
+    e.mem.set_u32(t + 0x4c, 0);
+    for section_slot in [t + 0xb8, t + 0xc4, t + 0xc0] {
+        let section = e.mem.u32(section_slot);
+        if section != 0 {
+            e.call(DELETE_CRITICAL_SECTION, &args![section]);
+            router_free(e, section, 0x18);
+            e.mem.set_u32(section_slot, 0);
+        }
+    }
+    if e.mem.u32(t + 0x50) != 0 {
+        drop_reference_at(e, t + 0x50);
+    }
+    e.mem.set_u32(t + 0x50, 0);
+    e.call(REMOVE_ALL, &args![this]);
+    e.with_stack(4, |e, scratch| {
+        let fixed_body = e.mem.u32(t + 0x24);
+        e.call(REMOVE_ENTITY, &args![this, scratch.byte_add(3), fixed_body]);
+    });
+    e.mem.set_u32(t + 0x24, 0);
+    let fixed_island = e.mem.u32(t + 0x20);
+    e.call(REMOVE_ISLAND_FROM_DIRTY_LIST, &args![this, fixed_island]);
+    delete_object_at(e, t + 0x20);
+    e.mem.set_u32(t + 0x20, 0);
+    e.call(FIRE_WORLD_DELETED, &args![this]);
+    drop_reference_at(e, t + 0x58);
+    let held = e.mem.u32(t + 0x80);
+    e.mem.set_u32(t + 0x58, 0);
+    e.call(REMOVE_REFERENCE, &args![held]);
+    let dispatch = e.mem.u32(t + 0x64);
+    e.mem.set_u32(t + 0x80, 0);
+    if dispatch != 0 {
+        e.call(DISPATCH_RECORD_DESTRUCT, &args![dispatch]);
+        router_free(e, dispatch, 0x10c);
+    }
+    if e.mem.u32(t + 0x1bc) != 0 {
+        drop_reference_at(e, t + 0x1bc);
+    }
+    delete_object_at(e, t + 0x68);
+    delete_object_at(e, t + 0x6c);
+    delete_object_at(e, t + 0x70);
+    drop_reference_at(e, t + 0x7c);
+    drop_reference_at(e, t + 0x84);
+    let collision_input = e.mem.u32(t + 0x78);
+    let agent_config = e.mem.u32(collision_input + 0x70);
+    if agent_config != 0 {
+        router_free(e, agent_config, 0x10);
+    }
+    let collision_input = e.mem.u32(t + 0x78);
+    if collision_input != 0 {
+        let buffer = e.mem.u32(collision_input + 0x64);
+        if buffer != 0 {
+            router_free(e, buffer, 0x200);
+        }
+        router_free(e, collision_input, 0x80);
+    }
+    drop_reference_at(e, t + 8);
+    let operations = e.mem.u32(t + 0x88);
+    if operations != 0 {
+        e.call(OPERATION_QUEUE_DESTRUCT, &args![operations]);
+        router_free(e, operations, 0x28);
+    }
+    if e.mem.u32(t + 0x5c) != 0 {
+        drop_reference_at(e, t + 0x5c);
+    }
+    let buffer = e.mem.u32(t + 0x1b8);
+    if buffer != 0 {
+        router_free(e, buffer, 0x204);
+    }
+    for array in [
+        0x1ac, 0x1a0, 0x194, 0x188, 0x17c, 0x170, 0x164, 0x158, 0x14c, 0x140, 0x134, 0x128, 0x11c,
+        0x110,
+    ] {
+        reset_array(e, t + array);
+    }
+    if e.mem.u32(t + 0x50) != 0 {
+        drop_reference_at(e, t + 0x50);
+    }
+    e.mem.set_u32(t + 0x50, 0);
+    for array in [0x40, 0x34, 0x28] {
+        reset_array(e, t + array);
+    }
+    e.mem.set_u32(t, REFERENCED_OBJECT_VTABLE);
+}
+
+// Translated from 00c96a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::shiftBroadPhase` (Xbox PDB). Three stack words (`RET 0xC`): `region`, `offset`
+/// (a pointer to a vector) and `skip_update` (a flag). Writes a profiling record, asks the
+/// broad phase (virtual function 0x54) to shift by `offset`, collecting new pairs in a local
+/// array, and tells it (0x58) the collision input's two vectors (+0x20, +0x30). The vector is
+/// added to the world's vectors at +0x310 and +0x320 and to the broad phase border's six
+/// objects (by the kind their virtual function 0x14 reports: kind 0 gets +0xB0 and +0xC0, kinds
+/// 1 and 2 get +0xE0). With the lock count up, the new pairs become agents (`00cf7080`). Unless
+/// `skip_update` is non-zero, the bodies of the fixed island and every active and inactive
+/// island that have a shape are gathered (the buffer comes from the allocator's virtual
+/// function 0xC) and their bounding volumes recalculated (`00d1a330`). The critical section
+/// then ends, the closing record is written and the pair array freed.
+pub fn hkp_world_shift_broad_phase(
+    e: &mut Engine,
+    this: Ptr<HkpWorld>,
+    region: u32,
+    offset: u32,
+    skip_update: u32,
+) {
+    let t = this.addr();
+    profile_record(e, PROFILE_SHIFT_BROAD_PHASE);
+    e.with_stack(0x40, |e, frame| {
+        let f = frame.addr();
+        let new_pairs = f + 0x28;
+        e.mem.set_u32(new_pairs, 0);
+        e.mem.set_u32(new_pairs + 4, 0);
+        e.mem.set_u32(new_pairs + 8, 0x8000_0000);
+        let broad_phase = e.get(this, HkpWorld::m_broadPhase).addr();
+        e.vcall(broad_phase, 0x54, &args![region, offset, new_pairs]);
+        let input = e.get(this, HkpWorld::m_collisionInput).addr();
+        let broad_phase = e.get(this, HkpWorld::m_broadPhase).addr();
+        e.vcall(broad_phase, 0x58, &args![input + 0x20, input + 0x30]);
+        for field in [t + 0x310, t + 0x320] {
+            let moved = addps(load_vec(e, field), load_vec(e, offset));
+            store_vec(e, field, moved);
+        }
+        let base = filter_base(e, t);
+        begin_critical_section(e, this);
+        let data = e.mem.u32(new_pairs);
+        let size = e.mem.u32(new_pairs + 4);
+        let dispatcher = e.get(this, HkpWorld::m_broadPhaseDispatcher);
+        e.call(ADD_PAIRS, &args![dispatcher, data, size, base]);
+        let border = e.get(this, HkpWorld::m_broadPhaseBorder).addr();
+        if border != 0 {
+            for slot in 0..6 {
+                let object = e.mem.u32(border + 0x18 + 4 * slot);
+                let kind = e.vcall(object, 0x14, &args![]).u32();
+                if kind == 0 {
+                    let first = addps(load_vec(e, object + 0xb0), load_vec(e, offset));
+                    store_vec(e, object + 0xb0, first);
+                    let second = addps(load_vec(e, offset), load_vec(e, object + 0xc0));
+                    store_vec(e, object + 0xc0, second);
+                } else if kind.wrapping_sub(1) <= 1 {
+                    let moved = addps(load_vec(e, object + 0xe0), load_vec(e, offset));
+                    store_vec(e, object + 0xe0, moved);
+                }
+            }
+        }
+        if skip_update == 0 {
+            recalculate_bounding_volumes(e, this, f);
+        }
+        end_critical_section(e, this);
+        profile_record(e, PROFILE_END);
+        array_release(e, new_pairs, 8, 0x10);
+    });
+}
+
+/// The part of `shiftBroadPhase` that runs unless it is told to skip: gathers the shaped
+/// bodies of the fixed island and of every active and inactive island and recalculates their
+/// bounding volumes (`00d1a330` on the collision input). `frame` is the caller's frame: +0xC
+/// is the size word for the allocator's virtual function 0xC and +0x1C an `hkArray` of the
+/// gathered bodies.
+fn recalculate_bounding_volumes(e: &mut Engine, this: Ptr<HkpWorld>, frame: u32) {
+    let t = this.addr();
+    let fixed = e.get(this, HkpWorld::m_fixedIsland).addr();
+    let total = e
+        .mem
+        .i32(t + 0x38)
+        .wrapping_add(e.mem.i32(t + 0x2c))
+        .wrapping_add(1);
+    let bodies = frame + 0x1c;
+    e.mem.set_u32(bodies, 0);
+    e.mem.set_u32(bodies + 4, 0);
+    e.mem.set_u32(bodies + 8, 0x8000_0000);
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let (buffer, count, capacity) = if total == 0 {
+        (0u32, total, 0x8000_0000u32)
+    } else {
+        let size_word = frame + 0xc;
+        e.mem.set_u32(size_word, (total as u32).wrapping_mul(4));
+        let buffer = e.vcall(allocator, 0xc, &args![size_word]).u32();
+        let granted = e.mem.i32(size_word);
+        let count = granted.wrapping_add((granted >> 31) & 3) >> 2;
+        let capacity = if count == 0 {
+            0x8000_0000
+        } else {
+            count as u32
+        };
+        (buffer, count, capacity)
+    };
+    let has_fixed = u32::from(fixed != 0);
+    if has_fixed != 0 {
+        e.mem.set_u32(buffer, fixed);
+    }
+    let mut cursor = buffer.wrapping_add(has_fixed * 4);
+    let source = e.mem.u32(t + 0x28);
+    for index in 0..e.mem.i32(t + 0x2c).max(0) as u32 {
+        let island = e.mem.u32(source + 4 * index);
+        e.mem.set_u32(cursor, island);
+        cursor = cursor.wrapping_add(4);
+    }
+    let active = e.mem.u32(t + 0x2c);
+    cursor = buffer.wrapping_add(active.wrapping_add(has_fixed).wrapping_mul(4));
+    let source = e.mem.u32(t + 0x34);
+    for index in 0..e.mem.i32(t + 0x38).max(0) as u32 {
+        let island = e.mem.u32(source + 4 * index);
+        e.mem.set_u32(cursor, island);
+        cursor = cursor.wrapping_add(4);
+    }
+    let mut island_index = 0i32;
+    while island_index < count {
+        let island = array_entry(e, buffer, island_index);
+        let mut body_index = 0i32;
+        while body_index < e.mem.i32(island + 0x4c) {
+            let entity = array_entry(e, e.mem.u32(island + 0x48), body_index);
+            if e.mem.u32(entity + 0x10) != 0 {
+                array_push_word(e, bodies, entity);
+            }
+            body_index += 1;
+        }
+        island_index += 1;
+    }
+    let input = e.get(this, HkpWorld::m_collisionInput);
+    let data = e.mem.u32(bodies);
+    let size = e.mem.u32(bodies + 4);
+    e.call(ENTITY_BATCH_RECALC_AABB, &args![input, data, size]);
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    if (capacity as i32) >= 0 {
+        let bytes = (capacity & 0x3fff_ffff).wrapping_mul(4);
+        e.vcall(allocator, 0x10, &args![buffer, bytes]);
+    }
+    array_release(e, bodies, 4, 0x10);
+}
+
+/// Hands one candidate of the narrow phase loops to the collision dispatcher's function table
+/// (`query` points to the dispatcher; the table of 0x14-byte entries starts at `table_offset`
+/// inside it and is indexed by the byte at `(first_type + 0xD) * 0x20 + second shape's type`
+/// in the dispatcher). Skips the candidate when it is the collidable itself, when the world's
+/// collision filter (+0x7C, virtual function 4 of the object 8 bytes in) refuses the pair or
+/// when it has no shape. Returns whether the function was called, with `first`, `second`,
+/// `query` and `collector`.
+fn dispatch_pair(
+    e: &mut Engine,
+    world: u32,
+    pair: (u32, u32),
+    first_type: u32,
+    query: u32,
+    table: (u32, u32),
+) -> bool {
+    let (first, second) = pair;
+    if first == second {
+        return false;
+    }
+    let filter = e.mem.u32(world + 0x7c);
+    if !filter_accepts(e, filter, first, second) {
+        return false;
+    }
+    let shape = e.mem.u32(second);
+    if shape == 0 {
+        return false;
+    }
+    let (table_offset, collector) = table;
+    let base = e.mem.u32(query);
+    let index = first_type
+        .wrapping_add(0xd)
+        .wrapping_shl(5)
+        .wrapping_add(e.mem.u32(shape + 0xc));
+    let entry = u32::from(e.mem.u8(base.wrapping_add(index)));
+    let function = e.mem.u32(
+        base.wrapping_add(entry.wrapping_mul(0x14))
+            .wrapping_add(table_offset),
+    );
+    e.call(function, &args![first, second, query, collector]);
+    true
+}
+
+/// The shape query tolerance `getPenetrations` and `getClosestPoints` pass: the `float` at
+/// +8 of `query` minus half (the `double` at `01011588`) the float at +8 of the world's
+/// collision input, rounded to a `float`.
+fn query_tolerance(e: &Engine, world: u32, query: u32) -> f32 {
+    let wanted = f64::from(x87_quiet(e.mem.f32(query + 8)));
+    let input = e.mem.u32(world + 0x78);
+    let margin = f64::from(x87_quiet(e.mem.f32(input + 8)));
+    (wanted - margin * e.mem.f64(HALF)) as f32
+}
+
+// Translated from 00c96df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::getPenetrations` (Xbox PDB). Three stack words (`RET 0xC`): `collidable`,
+/// `query` (the dispatcher whose first word points to the table; its float at +8 is the
+/// distance) and `collector` (a byte at +4 stops the search). Writes a profiling record pair,
+/// asks the collidable's shape (virtual function 0x1C, with the collidable's transform, the
+/// tolerance clamped at the `double` at `01012060` from below and a local box) for its
+/// bounds, asks the broad phase (0x44) for the overlapping pairs (a local array of 0x80 pairs),
+/// then walks the second members (the handle plus the signed byte at +5): for each one other
+/// than the collidable that the world's collision filter accepts and that has a shape the
+/// dispatcher's function at `table + 0x9A4` runs. The loop ends early once the collector's
+/// byte at +4 is set. Writes the closing records and frees the pair array.
+pub fn hkp_world_get_penetrations(
+    e: &mut Engine,
+    this: Ptr<HkpWorld>,
+    collidable: u32,
+    query: u32,
+    collector: u32,
+) {
+    let t = this.addr();
+    profile_record_pair(e, PROFILE_GET_PENETRATIONS, PROFILE_BROADPHASE_SECOND);
+    let distance = query_tolerance(e, t, query);
+    let tolerance = if f64::from(distance) < e.mem.f64(ZERO_DOUBLE) {
+        0.0
+    } else {
+        distance
+    };
+    e.with_stack(0x440, |e, frame| {
+        let f = frame.addr();
+        let (bounds, pairs) = (f + 0x14, f + 0x34);
+        let shape = e.mem.u32(collidable);
+        let transform = e.mem.u32(collidable + 8);
+        e.vcall(
+            shape,
+            0x1c,
+            &args![transform, x87_quiet(tolerance).to_bits(), bounds],
+        );
+        e.mem.set_u32(pairs, f + 0x40);
+        e.mem.set_u32(pairs + 4, 0);
+        e.mem.set_u32(pairs + 8, 0x8000_0080);
+        let broad_phase = e.get(this, HkpWorld::m_broadPhase).addr();
+        e.vcall(broad_phase, 0x44, &args![bounds, pairs]);
+        let first_type = e.mem.u32(e.mem.u32(collidable) + 0xc);
+        profile_record(e, PROFILE_GET_PENETRATIONS_NARROW);
+        let mut index = e.mem.i32(pairs + 4).wrapping_sub(1);
+        let mut cursor = e.mem.u32(pairs).wrapping_add(4);
+        while index >= 0 {
+            let handle = e.mem.u32(cursor);
+            let other = offset_by_byte(e, handle, handle + 5);
+            if dispatch_pair(
+                e,
+                t,
+                (collidable, other),
+                first_type,
+                query,
+                (0x9a4, collector),
+            ) && e.mem.u8(collector + 4) != 0
+            {
+                break;
+            }
+            cursor = cursor.wrapping_add(8);
+            index = index.wrapping_sub(1);
+        }
+        profile_record(e, PROFILE_SECTION_END);
+        array_release(e, pairs, 8, 0x10);
+    });
+}
+
+// Translated from 00c976a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. Two stack words (`RET 8`, `ECX` not read): `action` and `entity`. Takes the
+/// action out of the entity's action list (+0x208, 16-bit size +0x20C: the last entry moves
+/// into its place; an action that is not in the list is index -1), sets bit 0 and clears bit
+/// 1 of the byte at +0x25 of the entity's island (+0xCC), asks the action for its entities
+/// (virtual function 0x10, into a local array) and picks the first entity other than this one
+/// whose island (+0xCC) has its word at +0x20 not equal to 0xFFFF (the island of the last
+/// one examined when there is none, 0 without any other). When that island differs from the
+/// action's (+0xC) the action leaves its island (`00d07130`) and joins the picked one
+/// (`00d07470`).
+pub fn fn_00c976a0(e: &mut Engine, action: u32, entity: u32) {
+    let count = e.mem.u16(entity + 0x20c);
+    let data = e.mem.u32(entity + 0x208);
+    let slot = (0..u32::from(count))
+        .find(|&candidate| e.mem.u32(data + 4 * candidate) == action)
+        .map_or(-1, |candidate| candidate as i32);
+    let remaining = count.wrapping_add(0xffff);
+    e.mem.set_u16(entity + 0x20c, remaining);
+    let data = e.mem.u32(entity + 0x208);
+    let last = e.mem.u32(data.wrapping_add(u32::from(remaining) * 4));
+    e.mem
+        .set_u32(data.wrapping_add((slot as u32).wrapping_mul(4)), last);
+    let island = e.mem.u32(entity + 0xcc);
+    let flags = e.mem.u8(island + 0x25);
+    e.mem.set_u8(island + 0x25, (flags & 0xfd) | 1);
+    e.with_stack(0x20, |e, frame| {
+        let entities = frame.addr();
+        e.mem.set_u32(entities, entities + 0xc);
+        e.mem.set_u32(entities + 4, 0);
+        e.mem.set_u32(entities + 8, 0x8000_0004);
+        e.vcall(action, 0x10, &args![entities]);
+        let size = e.mem.i32(entities + 4);
+        let mut picked = 0u32;
+        let mut index = 0i32;
+        while index < size {
+            let other = array_entry(e, e.mem.u32(entities), index);
+            if other != entity {
+                picked = e.mem.u32(other + 0xcc);
+                if e.mem.u16(picked + 0x20) != 0xffff {
+                    break;
+                }
+            }
+            index += 1;
+        }
+        let action_island = e.mem.u32(action + 0xc);
+        if picked != action_island {
+            e.call(ISLAND_REMOVE_ACTION, &args![action_island, action]);
+            e.call(ISLAND_ADD_ACTION, &args![picked, action]);
+        }
+        array_release(e, entities, 4, 0x10);
+    });
+}
+
+// Translated from 00c977c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::setCollisionFilter` (Xbox PDB). Four stack words (`RET 0x10`): `filter`,
+/// `update` (a byte) and the two words `first` and `second`. Without a filter a 0x30-byte
+/// default one is allocated through the memory router (word +4 = 0x30), constructed
+/// (`00cbfba0`), given its five vtables (`010c646c` at +0, `010c6460` at +8, `010c644c` at
+/// +0xC, `010c6440` at +0x10, `010c6434` at +0x14) and the word +0x20 = 1; a given filter gets
+/// a reference. The reference on the old filter (+0x7C) is dropped, the new one is stored there
+/// and in the collision input (+0x78, word +0xC), and when `update` is non-zero the filter is
+/// applied to the world (`updateCollisionFilterOnWorld`, `00c96ff0`, with `first` and
+/// `second`).
+pub fn hkp_world_set_collision_filter(
+    e: &mut Engine,
+    this: Ptr<HkpWorld>,
+    filter: u32,
+    update: u8,
+    first: u32,
+    second: u32,
+) {
+    let filter = if filter == 0 {
+        let block = router_alloc(e, 0x30);
+        e.mem.set_u16(block + 4, 0x30);
+        e.call(COLLISION_FILTER_CONSTRUCT, &args![block]);
+        e.mem.set_u32(block, NULL_FILTER_VTABLE_0);
+        e.mem.set_u32(block + 8, NULL_FILTER_VTABLE_8);
+        e.mem.set_u32(block + 0xc, NULL_FILTER_VTABLE_C);
+        e.mem.set_u32(block + 0x10, NULL_FILTER_VTABLE_10);
+        e.mem.set_u32(block + 0x14, NULL_FILTER_VTABLE_14);
+        e.mem.set_u32(block + 0x20, 1);
+        block
+    } else {
+        e.call(ADD_REFERENCE, &args![filter]);
+        filter
+    };
+    let old = e.get(this, HkpWorld::m_collisionFilter);
+    e.call(REMOVE_REFERENCE, &args![old]);
+    let input = e.get(this, HkpWorld::m_collisionInput);
+    e.set(this, HkpWorld::m_collisionFilter, Ptr::new(filter));
+    e.mem.set_u32(input.addr() + 0xc, filter);
+    if update != 0 {
+        e.call(
+            UPDATE_COLLISION_FILTER_ON_WORLD,
+            &args![this, first, second],
+        );
+    }
+}
+
+/// The candidate loop of the tree paths of `getClosestPoints`: every collidable pointer of
+/// the array at `array` (data +0, size +4) goes through [`dispatch_pair`] with the function
+/// table at +0x9A8.
+fn closest_points_over_array(
+    e: &mut Engine,
+    world: u32,
+    array: u32,
+    first: (u32, u32),
+    query: (u32, u32),
+) {
+    let (collidable, first_type) = first;
+    let (query, collector) = query;
+    let mut index = 0i32;
+    while index < e.mem.i32(array + 4) {
+        let other = array_entry(e, e.mem.u32(array), index);
+        dispatch_pair(
+            e,
+            world,
+            (collidable, other),
+            first_type,
+            query,
+            (0x9a8, collector),
+        );
+        index += 1;
+    }
+}
+
+// Translated from 00c97850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::getClosestPoints` (Xbox PDB). Three stack words (`RET 0xC`): `collidable`,
+/// `query` (the dispatcher whose first word points to the table; its float at +8 is the
+/// distance) and `collector`. Asks the collidable's shape (virtual function 0x1C, with its
+/// transform, the tolerance and a local box) for its bounds. Without a kd-tree manager
+/// (+0x5C) in use (its virtual function 0x10 non-zero) the broad phase (0x44) lists the
+/// overlapping pairs and the second members (the handle plus the signed byte at +5) go
+/// through the dispatcher's table at +0x9A8, each between profiling records. With one, its
+/// AABB tree (+0xC, `00d1d4a0`) and kd tree (+0x10, `00d1b850`), when present, list
+/// collidable pointers directly; the kd tree's array is freed through the router's second
+/// allocator (+0xC). Ends with the closing record.
+pub fn hkp_world_get_closest_points(
+    e: &mut Engine,
+    this: Ptr<HkpWorld>,
+    collidable: u32,
+    query: u32,
+    collector: u32,
+) {
+    let t = this.addr();
+    let tolerance = query_tolerance(e, t, query);
+    e.with_stack(0x464, |e, frame| {
+        let f = frame.addr();
+        let bounds = f + 0x24;
+        let shape = e.mem.u32(collidable);
+        let transform = e.mem.u32(collidable + 8);
+        e.vcall(
+            shape,
+            0x1c,
+            &args![transform, x87_quiet(tolerance).to_bits(), bounds],
+        );
+        if kd_tree_in_use(e, this) {
+            profile_record_pair(e, PROFILE_CLOSEST_TREES, PROFILE_CLOSEST_TREES_BROAD_PHASE);
+            let manager = e.get(this, HkpWorld::m_kdTreeManager).addr();
+            let aabb_tree = e.mem.u32(manager + 0xc);
+            let kd_tree = e.mem.u32(manager + 0x10);
+            if aabb_tree != 0 {
+                let array = f + 0x54;
+                e.mem.set_u32(array, f + 0x60);
+                e.mem.set_u32(array + 4, 0);
+                e.mem.set_u32(array + 8, 0x8000_0080);
+                e.call(AABB_TREE_QUERY, &args![aabb_tree, bounds, array]);
+                profile_record(e, PROFILE_CLOSEST_AABB_TREE_NARROW);
+                let first_type = e.mem.u32(e.mem.u32(collidable) + 0xc);
+                closest_points_over_array(
+                    e,
+                    t,
+                    array,
+                    (collidable, first_type),
+                    (query, collector),
+                );
+                array_release(e, array, 4, 0x10);
+            }
+            if kd_tree != 0 {
+                profile_record(e, PROFILE_CLOSEST_KD_TREE_BROAD_PHASE);
+                let array = f + 0x14;
+                e.mem.set_u32(array, 0);
+                e.mem.set_u32(array + 4, 0);
+                e.mem.set_u32(array + 8, 0x8000_0000);
+                e.call(KD_TREE_QUERY, &args![kd_tree, bounds, array]);
+                profile_record(e, PROFILE_CLOSEST_KD_TREE_NARROW);
+                let first_type = e.mem.u32(e.mem.u32(collidable) + 0xc);
+                closest_points_over_array(
+                    e,
+                    t,
+                    array,
+                    (collidable, first_type),
+                    (query, collector),
+                );
+                array_release(e, array, 4, 0xc);
+            }
+            profile_record(e, PROFILE_SECTION_END);
+        } else {
+            profile_record_pair(
+                e,
+                PROFILE_CLOSEST_BROAD_PHASE,
+                PROFILE_CLOSEST_BROAD_PHASE_SECOND,
+            );
+            let pairs = f + 0x54;
+            e.mem.set_u32(pairs, f + 0x60);
+            e.mem.set_u32(pairs + 4, 0);
+            e.mem.set_u32(pairs + 8, 0x8000_0080);
+            let broad_phase = e.get(this, HkpWorld::m_broadPhase).addr();
+            e.vcall(broad_phase, 0x44, &args![bounds, pairs]);
+            let first_type = e.mem.u32(e.mem.u32(collidable) + 0xc);
+            profile_record(e, PROFILE_CLOSEST_NARROW);
+            let mut index = e.mem.i32(pairs + 4).wrapping_sub(1);
+            let mut cursor = e.mem.u32(pairs).wrapping_add(4);
+            while index >= 0 {
+                let handle = e.mem.u32(cursor);
+                let other = offset_by_byte(e, handle, handle + 5);
+                dispatch_pair(
+                    e,
+                    t,
+                    (collidable, other),
+                    first_type,
+                    query,
+                    (0x9a8, collector),
+                );
+                cursor = cursor.wrapping_add(8);
+                index = index.wrapping_sub(1);
+            }
+            profile_record(e, PROFILE_SECTION_END);
+            array_release(e, pairs, 8, 0x10);
+        }
+    });
+}
+
+// Translated from 00c97e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::createAndAddConstraintInstance` (Xbox PDB). Three stack words (`RET 0xC`):
+/// `entity_a`, `entity_b` and `data`. Allocates 0x38 bytes through the memory router (word
+/// +4 = 0x38), constructs an `hkpConstraintInstance` (`00cf3ea0`: the three words and 1),
+/// copies the word at +8 of `data` to +0x2C of the instance, adds it with `addConstraint`
+/// (`00c97d30`) and returns it.
+pub fn hkp_world_create_and_add_constraint_instance(
+    e: &mut Engine,
+    this: Ptr<HkpWorld>,
+    entity_a: u32,
+    entity_b: u32,
+    data: u32,
+) -> Ptr {
+    let block = router_alloc(e, 0x38);
+    e.mem.set_u16(block + 4, 0x38);
+    let instance = e
+        .call(
+            CONSTRAINT_INSTANCE_CONSTRUCT,
+            &args![block, entity_a, entity_b, data, 1u32],
+        )
+        .u32();
+    let word = e.mem.u32(data + 8);
+    e.mem.set_u32(instance + 0x2c, word);
+    e.call(ADD_CONSTRAINT, &args![this, instance]);
+    Ptr::new(instance)
+}
+
+// Translated from 00c97f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::addPhysicsSystem` (Xbox PDB). One stack word (`RET 4`): `system`. Adds the
+/// entities (array +8, size +0xC) with `addEntityBatch` (`00c94bd0`, flag = the byte at +0x40
+/// non-zero) when none is null, else one by one with `addEntity` (`00c914d0`) skipping the
+/// null ones; the phantoms (array +0x2C, size +0x30) likewise (`00c954e0` /
+/// `addPhantom` `00c936a0`); every non-null action (array +0x20, size +0x24) with `addAction`
+/// (`00c97370`) and every non-null constraint (array +0x14, size +0x18) with a non-zero word
+/// at +0x14 or +0x18 with `addConstraint` (`00c97d30`).
+pub fn hkp_world_add_physics_system(e: &mut Engine, this: Ptr<HkpWorld>, system: u32) {
+    let count = e.mem.i32(system + 0xc);
+    if count > 0 {
+        let data = e.mem.u32(system + 8);
+        let first_null = (0..count).find(|&index| e.mem.u32(data + 4 * index as u32) == 0);
+        if first_null.map_or(true, |index| index == -1) {
+            let data = e.mem.u32(system + 8);
+            let mode = i32::from(e.mem.u8(system + 0x40) != 0);
+            e.call(ADD_ENTITY_BATCH, &args![this, data, count, mode]);
+        } else {
+            let mut index = 0i32;
+            while index < e.mem.i32(system + 0xc) {
+                let entity = array_entry(e, e.mem.u32(system + 8), index);
+                if entity != 0 {
+                    let mode = u32::from(e.mem.u8(system + 0x40) != 0);
+                    e.call(ADD_ENTITY, &args![this, entity, mode]);
+                }
+                index += 1;
+            }
+        }
+    }
+    let count = e.mem.i32(system + 0x30);
+    if count > 0 {
+        let data = e.mem.u32(system + 0x2c);
+        let first_null = (0..count).find(|&index| e.mem.u32(data + 4 * index as u32) == 0);
+        if first_null.map_or(true, |index| index == -1) {
+            let data = e.mem.u32(system + 0x2c);
+            e.call(ADD_PHANTOM_BATCH, &args![this, data, count]);
+        } else {
+            let mut index = 0i32;
+            while index < e.mem.i32(system + 0x30) {
+                let phantom = array_entry(e, e.mem.u32(system + 0x2c), index);
+                if phantom != 0 {
+                    e.call(ADD_PHANTOM, &args![this, phantom]);
+                }
+                index += 1;
+            }
+        }
+    }
+    let mut index = 0i32;
+    while index < e.mem.i32(system + 0x24) {
+        let action = array_entry(e, e.mem.u32(system + 0x20), index);
+        if action != 0 {
+            e.call(ADD_ACTION, &args![this, action]);
+        }
+        index += 1;
+    }
+    index = 0;
+    while index < e.mem.i32(system + 0x18) {
+        let constraint = array_entry(e, e.mem.u32(system + 0x14), index);
+        if constraint != 0
+            && (e.mem.u32(constraint + 0x14) != 0 || e.mem.u32(constraint + 0x18) != 0)
+        {
+            e.call(ADD_CONSTRAINT, &args![this, constraint]);
+        }
+        index += 1;
+    }
+}
+
+/// Frees an object of the size in its 16-bit word at +4 through the memory router when bit 0
+/// of the deleting destructor's flags is set (the tail every `_scalar_deleting_destructor_`
+/// here shares).
+fn free_if_flagged(e: &mut Engine, object: Ptr, flags: u32) {
+    if flags & 1 != 0 {
+        let size = u32::from(e.mem.u16(object.addr() + 4));
+        router_free(e, object.addr(), size);
+    }
+}
+
+// Translated from 00c98260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpNullContactMgrFactory::_scalar_deleting_destructor_` (Xbox PDB). One stack word
+/// (`RET 4`): `flags`. Stores the base vtable `0102e388` at +0 and +8; when bit 0 of `flags`
+/// is set the object is freed through the router (its size is the 16-bit word at +4).
+/// Returns `this`.
+pub fn hkp_null_contact_mgr_factory_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.mem.set_u32(this.addr() + 8, REFERENCED_OBJECT_VTABLE);
+    e.mem.set_u32(this.addr(), REFERENCED_OBJECT_VTABLE);
+    free_if_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00c982a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. Five further stack words after `out` (`RET 0x18`; `ECX` is not read): stores the
+/// byte 1 at `out` (the null collision filter accepts every pair).
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00c982a0(
+    e: &mut Engine,
+    _this: Ptr,
+    out: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+    _unused_7: u32,
+) {
+    e.mem.set_u8(out, 1);
+}
+
+// Translated from 00c982b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. Seven further stack words after `out` (`RET 0x20`; `ECX` is not read): stores the
+/// byte 1 at `out`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00c982b0(
+    e: &mut Engine,
+    _this: Ptr,
+    out: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+    _unused_7: u32,
+    _unused_8: u32,
+    _unused_9: u32,
+) {
+    e.mem.set_u8(out, 1);
+}
+
+// Translated from 00c982c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. Four further stack words after `out` (`RET 0x14`; `ECX` is not read): stores the
+/// byte 1 at `out`.
+pub fn fn_00c982c0(
+    e: &mut Engine,
+    _this: Ptr,
+    out: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) {
+    e.mem.set_u8(out, 1);
+}
+
+// Translated from 00c982d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. Two further stack words after `out` (`RET 0xC`; `ECX` is not read): stores the
+/// byte 1 at `out`.
+pub fn fn_00c982d0(e: &mut Engine, _this: Ptr, out: u32, _unused_3: u32, _unused_4: u32) {
+    e.mem.set_u8(out, 1);
+}
+
+// Translated from 00c982e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (the destructor body `00cfa860` plus the deleting tail). One stack word (`RET 4`):
+/// `flags`. Runs `00cfa860` on the object; when bit 0 of `flags` is set it is freed through the
+/// router (size: the 16-bit word at +4). Returns `this`.
+pub fn fn_00c982e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(RAY_CASTER_BASE_DESTRUCT, &args![this]);
+    free_if_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00c98350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSimpleWorldRayCaster::_scalar_deleting_destructor_` (Xbox PDB). One stack word (`RET
+/// 4`): `flags`. Stores the vtable `010c3bb8`; when bit 0 of `flags` is set it frees the object
+/// with `00401030` (cdecl). Returns `this`.
+pub fn hkp_simple_world_ray_caster_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.mem.set_u32(this.addr(), RAY_CASTER_BASE_VTABLE);
+    if flags & 1 != 0 {
+        e.call(FREE_OBJECT, &args![this]);
+    }
+    this
+}
+
+// Translated from 00c98370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed. One stack word (`RET 4`): `flags`. Stores the vtable `010c63bc` at +8 and the base
+/// vtable `0102e388` at +0; when bit 0 of `flags` is set the object is freed through the router
+/// (size: the 16-bit word at +4). Returns `this`.
+pub fn fn_00c98370(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.mem.set_u32(this.addr() + 8, FILTER_BASE_VTABLE);
+    e.mem.set_u32(this.addr(), REFERENCED_OBJECT_VTABLE);
+    free_if_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00c983b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::_scalar_deleting_destructor_` (Xbox PDB). One stack word (`RET 4`): `flags`.
+/// Runs the destructor (`00c93e50`); when bit 0 of `flags` is set the world is freed through
+/// the router (size: the 16-bit word at +4). Returns `this`.
+pub fn hkp_world_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(WORLD_DESTRUCTOR, &args![this]);
+    free_if_flagged(e, this, flags);
+    this
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3289,6 +4831,91 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c9_8320, fn_00c98320(Ptr, u32) -> u32),
         entry!(0x00c9_8330, fn_00c98330(Ptr, u32) -> u32),
         entry!(0x00c9_8340, fn_00c98340(Ptr, u32) -> u32),
+        entry!(0x00c9_2a30, fn_00c92a30(Ptr<HkpWorld>, u32, u32) -> u32),
+        entry!(0x00c9_2a80, fn_00c92a80(Ptr<HkpWorld>, u32, u32)),
+        entry!(0x00c9_2b00, fn_00c92b00(Ptr<HkpWorld>)),
+        entry!(
+            0x00c9_2b50,
+            hkp_world_get_mem_usage_for_integration(Ptr<HkpWorld>, u32)
+        ),
+        entry!(0x00c9_2bd0, fn_00c92bd0(Ptr<HkpWorld>, u32, u32)),
+        entry!(
+            0x00c9_2d70,
+            hkp_world_init_mt_step(Ptr<HkpWorld>, u32, f32) -> u32
+        ),
+        entry!(
+            0x00c9_2db0,
+            hkp_world_calc_content_statistics(Ptr<HkpWorld>, u32, u32)
+        ),
+        entry!(
+            0x00c9_3570,
+            hkp_world_get_memory_watch_dog(Ptr<HkpWorld>) -> Ptr
+        ),
+        entry!(0x00c9_3580, hkp_world_remove_all(Ptr<HkpWorld>)),
+        entry!(0x00c9_37a0, fn_00c937a0(Ptr<HkpWorld>, u32)),
+        entry!(0x00c9_37e0, fn_00c937e0(Ptr<HkpWorld>, u32)),
+        entry!(0x00c9_3820, fn_00c93820(Ptr<HkpWorld>, u32)),
+        entry!(0x00c9_3860, fn_00c93860(Ptr<HkpWorld>, u32)),
+        entry!(0x00c9_38a0, fn_00c938a0(Ptr<HkpWorld>, u32)),
+        entry!(
+            0x00c9_3920,
+            hkp_world_add_world_post_simulation_listener(Ptr<HkpWorld>, u32)
+        ),
+        entry!(0x00c9_3a20, fn_00c93a20(Ptr<HkpWorld>, u32)),
+        entry!(0x00c9_3a60, fn_00c93a60(Ptr<HkpWorld>, u32)),
+        entry!(
+            0x00c9_3ae0,
+            hkp_world_step_multithreaded(Ptr<HkpWorld>, u32, u32, f32) -> u32
+        ),
+        entry!(0x00c9_3b30, fn_00c93b30(Ptr<HkpWorld>, u32)),
+        entry!(0x00c9_3d10, fn_00c93d10(Ptr<HkpWorld>, u32) -> Ptr),
+        entry!(0x00c9_3e50, hkp_world_destructor(Ptr<HkpWorld>)),
+        entry!(
+            0x00c9_6a20,
+            hkp_world_shift_broad_phase(Ptr<HkpWorld>, u32, u32, u32)
+        ),
+        entry!(
+            0x00c9_6df0,
+            hkp_world_get_penetrations(Ptr<HkpWorld>, u32, u32, u32)
+        ),
+        entry!(0x00c9_76a0, fn_00c976a0(u32, u32)),
+        entry!(
+            0x00c9_77c0,
+            hkp_world_set_collision_filter(Ptr<HkpWorld>, u32, u8, u32, u32)
+        ),
+        entry!(
+            0x00c9_7850,
+            hkp_world_get_closest_points(Ptr<HkpWorld>, u32, u32, u32)
+        ),
+        entry!(
+            0x00c9_7e30,
+            hkp_world_create_and_add_constraint_instance(Ptr<HkpWorld>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x00c9_7f80,
+            hkp_world_add_physics_system(Ptr<HkpWorld>, u32)
+        ),
+        entry!(
+            0x00c9_8260,
+            hkp_null_contact_mgr_factory_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00c9_82a0, fn_00c982a0(Ptr, u32, u32, u32, u32, u32, u32)),
+        entry!(
+            0x00c9_82b0,
+            fn_00c982b0(Ptr, u32, u32, u32, u32, u32, u32, u32, u32)
+        ),
+        entry!(0x00c9_82c0, fn_00c982c0(Ptr, u32, u32, u32, u32, u32)),
+        entry!(0x00c9_82d0, fn_00c982d0(Ptr, u32, u32, u32)),
+        entry!(0x00c9_82e0, fn_00c982e0(Ptr, u32) -> Ptr),
+        entry!(
+            0x00c9_8350,
+            hkp_simple_world_ray_caster_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00c9_8370, fn_00c98370(Ptr, u32) -> Ptr),
+        entry!(
+            0x00c9_83b0,
+            hkp_world_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -6895,6 +8522,2023 @@ mod tests {
             queued.borrow().clone(),
             vec![(0x5000, op_bytes(9, 0x1234, 0, 0))]
         );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The third batch of `hkpWorld` functions (`00c92a30` to `00c983b0`).
+    // -----------------------------------------------------------------------------------
+
+    /// More doubles: the allocator's free by size (slot 8) and allocation that reads its size
+    /// from a word (slot 0xC), and four hooks for the vtable slots of the objects below.
+    const FAKE_6: u32 = 0x0900_0006;
+    const FAKE_7: u32 = 0x0900_0007;
+    const HOOK_A: u32 = 0x0900_0101;
+    const HOOK_B: u32 = 0x0900_0102;
+    const HOOK_C: u32 = 0x0900_0103;
+    const HOOK_D: u32 = 0x0900_0104;
+    const HOOK_E: u32 = 0x0900_0105;
+    const HOOK_F: u32 = 0x0900_0106;
+
+    /// `rig()` with the allocator's slot 8 (free by size, logged as `(allocator, block, size)`
+    /// in the returned records) and slot 0xC (allocates the size in the word it is given), and
+    /// with the call log on.
+    fn batch_rig() -> (Rig, Records) {
+        let mut rig = rig();
+        let freed = recording(&mut rig.e, FAKE_6);
+        rig.e.register(FAKE_7, |e, words| Ret {
+            eax: e.mem.alloc(e.mem.u32(words[1]).max(8)),
+            ..Ret::default()
+        });
+        let allocator = rig.e.mem.u32(rig.router + 0x10);
+        let table = rig.e.mem.u32(allocator);
+        rig.e.mem.set_u32(table + 8, FAKE_6);
+        rig.e.mem.set_u32(table + 0xc, FAKE_7);
+        rig.e.call_log = Some(vec![]);
+        (rig, freed)
+    }
+
+    /// Fills the `hkArray` at `array` (data, size, capacity word).
+    fn set_array(e: &mut Engine, array: u32, data: u32, size: u32, capacity: u32) {
+        e.mem.set_u32(array, data);
+        e.mem.set_u32(array + 4, size);
+        e.mem.set_u32(array + 8, capacity);
+    }
+
+    /// Gives the world's seventeen pointer arrays the "no storage" capacity word, so that the
+    /// destructor frees none of them unless the test fills it in.
+    fn mark_arrays_unallocated(e: &mut Engine, world: u32) {
+        for array in [
+            0x28, 0x34, 0x40, 0x110, 0x11c, 0x128, 0x134, 0x140, 0x14c, 0x158, 0x164, 0x170, 0x17c,
+            0x188, 0x194, 0x1a0, 0x1ac,
+        ] {
+            e.mem.set_u32(world + array + 8, 0x8000_0000);
+        }
+    }
+
+    /// A simulation (installed in the world) whose float at +0x18 is `time` and whose virtual
+    /// function 0x1C (`HOOK_A`) records its argument words followed by the four words of the
+    /// record it is given.
+    fn recording_simulation(rig: &mut Rig, time: f32) -> (u32, Records) {
+        let records: Records = Rc::new(RefCell::new(vec![]));
+        let sink = records.clone();
+        rig.e.register_double(HOOK_A, move |e, words| {
+            let mut entry = words.to_vec();
+            for lane in 0..4 {
+                entry.push(e.mem.u32(words[4] + 4 * lane));
+            }
+            sink.borrow_mut().push(entry);
+            Ret::default()
+        });
+        let simulation = object_with_vtable(&mut rig.e, 0x40, &[(0x1c, HOOK_A)]);
+        rig.e.mem.set_f32(simulation + 0x18, time);
+        rig.e
+            .set(rig.world, HkpWorld::m_simulation, Ptr::new(simulation));
+        (simulation, records)
+    }
+
+    #[test]
+    fn fn_00c92a30_runs_the_virtual_call_or_queues_it() {
+        let (mut rig, _) = batch_rig();
+        let calls = recording(&mut rig.e, HOOK_A);
+        let object = object_with_vtable(&mut rig.e, 0x20, &[(0xc, HOOK_A)]);
+        let returned = rig
+            .e
+            .call(0x00c9_2a30, &args![rig.world, object, 0x55u32])
+            .u32();
+        assert_eq!(returned, object);
+        assert_eq!(calls.borrow().clone(), vec![vec![object, 0x55]]);
+        let queued = operation_recorder(&mut rig.e);
+        rig.e
+            .set(rig.world, HkpWorld::m_pendingOperations, Ptr::new(0x5000));
+        lock(&mut rig, 1);
+        let returned = rig
+            .e
+            .call(0x00c9_2a30, &args![rig.world, object, 0x66u32])
+            .u32();
+        assert_eq!(returned, object);
+        assert_eq!(calls.borrow().len(), 1);
+        assert_eq!(
+            queued.borrow().clone(),
+            vec![(0x5000, op_bytes(0x24, object, 0x66, 0))]
+        );
+    }
+
+    #[test]
+    fn fn_00c92a80_builds_the_span_record() {
+        let (mut rig, _) = batch_rig();
+        let (simulation, records) = recording_simulation(&mut rig, 2.0);
+        rig.e.call(0x00c9_2a80, &args![rig.world, 7u32, 8u32]);
+        let entry = records.borrow()[0].clone();
+        assert_eq!(entry[0..4], [simulation, 7, 8, rig.world.addr()]);
+        assert_eq!(entry[5], 1);
+        let two = 2.0f32.to_bits();
+        assert_eq!(entry[6..], [two, two, 0, 0]);
+    }
+
+    #[test]
+    fn fn_00c92a80_divides_when_the_span_is_not_equal_to_zero() {
+        let (mut rig, _) = batch_rig();
+        // Infinity minus infinity is not a number, which does not compare equal to zero.
+        let (_, records) = recording_simulation(&mut rig, f32::INFINITY);
+        rig.e.call(0x00c9_2a80, &args![rig.world, 1u32, 2u32]);
+        let entry = records.borrow()[0].clone();
+        assert_eq!(entry[6], f32::INFINITY.to_bits());
+        assert_eq!(entry[7], f32::INFINITY.to_bits());
+        assert!(f32::from_bits(entry[8]).is_nan());
+        assert!(f32::from_bits(entry[9]).is_nan());
+        // A signalling NaN is quieted by the load.
+        let (_, records) = recording_simulation(&mut rig, f32::from_bits(0x7f80_0001));
+        rig.e.call(0x00c9_2a80, &args![rig.world, 1u32, 2u32]);
+        let entry = records.borrow()[0].clone();
+        assert_eq!(entry[6], 0x7fc0_0001);
+        assert_eq!(entry[7], 0x7fc0_0001);
+    }
+
+    #[test]
+    fn fn_00c92b00_runs_the_span_for_every_island() {
+        let (mut rig, _) = batch_rig();
+        let (simulation, records) = recording_simulation(&mut rig, 1.0);
+        let t = rig.world.addr();
+        let mut islands = vec![];
+        for index in 0..3u32 {
+            let island = rig.e.mem.alloc(0x80);
+            rig.e.mem.set_u32(island + 0x48, 0x100 + index);
+            rig.e.mem.set_u32(island + 0x4c, 0x200 + index);
+            islands.push(island);
+        }
+        let active = array_of(&mut rig.e, &islands[0..2]);
+        let inactive = array_of(&mut rig.e, &islands[2..3]);
+        set_array(&mut rig.e, t + 0x28, active, 2, 2);
+        set_array(&mut rig.e, t + 0x34, inactive, 1, 1);
+        rig.e.call(0x00c9_2b00, &args![rig.world]);
+        let seen: Vec<Vec<u32>> = records
+            .borrow()
+            .iter()
+            .map(|entry| entry[0..3].to_vec())
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                vec![simulation, 0x100, 0x200],
+                vec![simulation, 0x101, 0x201],
+                vec![simulation, 0x102, 0x202],
+            ]
+        );
+    }
+
+    /// An island with the words `get_mem_usage_for_integration` reads.
+    fn usage_island(e: &mut Engine, rows: i32, words: i32, bodies: i32, base: i32) -> u32 {
+        let island = e.mem.alloc(0x80);
+        e.mem.set_i32(island + 0x1c, rows);
+        e.mem.set_i32(island + 0x14, words);
+        e.mem.set_i32(island + 0x4c, bodies);
+        e.mem.set_i32(island + 0xc, base);
+        island
+    }
+
+    #[test]
+    fn get_mem_usage_for_integration_sums_and_finds_the_largest_island() {
+        let mut e = Engine::new();
+        let world = world(&mut e);
+        // 160 / 80 = 2 -> 4 rows, base 12; 12 * 3 + 4 = 40 words -> (160 + 23) & !15 = 176;
+        // (12 + 8 + 10) << 4 = 480; plus 100: 756.
+        let large = usage_island(&mut e, 160, 4, 1, 100);
+        // 80 / 80 = 1 -> 2 rows, base 10; 30 words -> (120 + 23) & !15 = 128; (10 + 10) << 4 =
+        // 320: 448.
+        let small = usage_island(&mut e, 80, 0, 0, 0);
+        let active = array_of(&mut e, &[large, small]);
+        e.set(world, HkpWorld::m_activeSimulationIslands, Ptr::new(active));
+        e.set(world, HkpWorld::m_activeSimulationIslandsSize, 2);
+        let usage = e.mem.alloc(0xc);
+        for word in 0..3 {
+            e.mem.set_u32(usage + 4 * word, 0xdead_beef);
+        }
+        e.call(0x00c9_2b50, &args![world, usage]);
+        assert_eq!(e.mem.u32(usage), 756);
+        assert_eq!(e.mem.u32(usage + 4), 1204);
+        assert_eq!(e.mem.u32(usage + 8), large);
+        // Equal estimates keep the island found first, which is the last of the array.
+        let twin = usage_island(&mut e, 160, 4, 1, 100);
+        let active = array_of(&mut e, &[large, twin]);
+        e.set(world, HkpWorld::m_activeSimulationIslands, Ptr::new(active));
+        e.call(0x00c9_2b50, &args![world, usage]);
+        assert_eq!(e.mem.u32(usage + 8), twin);
+        // Without islands the block is cleared.
+        e.set(world, HkpWorld::m_activeSimulationIslandsSize, 0);
+        e.call(0x00c9_2b50, &args![world, usage]);
+        assert_eq!(e.mem.bytes(usage, 12), vec![0; 12]);
+    }
+
+    /// An action, an entity with an action list of one entry (size 1, capacity `capacity`) and
+    /// the islands of both. Returns (action, entity, action island, entity island).
+    fn action_fixture(rig: &mut Rig, capacity: u16) -> (u32, u32, u32, u32) {
+        silent(
+            &mut rig.e,
+            &[ISLAND_REMOVE_ACTION, ISLAND_ADD_ACTION, MERGE_ISLANDS],
+        );
+        rig.e.register(ACTION_LIST_GROW, |e, words| {
+            let list = words[0];
+            let old = e.mem.u32(list);
+            let grown = e.mem.alloc(0x40);
+            let first = e.mem.u32(old);
+            e.mem.set_u32(grown, first);
+            e.mem.set_u32(list, grown);
+            e.mem.set_u16(list + 6, 8);
+            Ret::default()
+        });
+        let entity = rig.e.mem.alloc(0x300);
+        let list = array_of(&mut rig.e, &[0x1111]);
+        rig.e.mem.set_u32(entity + 0x208, list);
+        rig.e.mem.set_u16(entity + 0x20c, 1);
+        rig.e.mem.set_u16(entity + 0x20e, capacity);
+        rig.e.mem.set_u8(entity + 0xe8, 1);
+        let entity_island = rig.e.mem.alloc(0x80);
+        rig.e.mem.set_u32(entity + 0xcc, entity_island);
+        let action_island = rig.e.mem.alloc(0x80);
+        let members = array_of(&mut rig.e, &[0x777]);
+        rig.e.mem.set_u32(action_island + 0x48, members);
+        let action = rig.e.mem.alloc(0x20);
+        rig.e.mem.set_u32(action + 0xc, action_island);
+        (action, entity, action_island, entity_island)
+    }
+
+    #[test]
+    fn fn_00c92bd0_moves_an_action_off_the_unassigned_island() {
+        let (mut rig, _) = batch_rig();
+        let (action, entity, action_island, entity_island) = action_fixture(&mut rig, 4);
+        rig.e.mem.set_u16(action_island + 0x20, 0xffff);
+        rig.e.call(0x00c9_2bd0, &args![rig.world, action, entity]);
+        let list = rig.e.mem.u32(entity + 0x208);
+        assert_eq!(rig.e.mem.u32(list + 4), action);
+        assert_eq!(rig.e.mem.u16(entity + 0x20c), 2);
+        assert_eq!(
+            calls_to(&rig.e, ISLAND_REMOVE_ACTION),
+            vec![vec![action_island, action]]
+        );
+        assert_eq!(
+            calls_to(&rig.e, ISLAND_ADD_ACTION),
+            vec![vec![entity_island, action]]
+        );
+        assert!(calls_to(&rig.e, MERGE_ISLANDS).is_empty());
+        assert!(calls_to(&rig.e, ACTION_LIST_GROW).is_empty());
+    }
+
+    #[test]
+    fn fn_00c92bd0_grows_a_full_list_and_merges_different_islands() {
+        let (mut rig, _) = batch_rig();
+        let (action, entity, _, _) = action_fixture(&mut rig, 1);
+        rig.e.call(0x00c9_2bd0, &args![rig.world, action, entity]);
+        assert_eq!(
+            calls_to(&rig.e, ACTION_LIST_GROW),
+            vec![vec![entity + 0x208, 4]]
+        );
+        let list = rig.e.mem.u32(entity + 0x208);
+        assert_eq!(rig.e.mem.u32(list), 0x1111);
+        assert_eq!(rig.e.mem.u32(list + 4), action);
+        assert_eq!(
+            calls_to(&rig.e, MERGE_ISLANDS),
+            vec![vec![rig.world.addr(), entity, 0x777]]
+        );
+        assert!(calls_to(&rig.e, ISLAND_REMOVE_ACTION).is_empty());
+    }
+
+    #[test]
+    fn fn_00c92bd0_leaves_the_islands_alone_when_they_match_or_the_byte_is_5() {
+        let (mut rig, _) = batch_rig();
+        let (action, entity, action_island, _) = action_fixture(&mut rig, 4);
+        rig.e.mem.set_u32(entity + 0xcc, action_island);
+        rig.e.call(0x00c9_2bd0, &args![rig.world, action, entity]);
+        assert!(calls_to(&rig.e, MERGE_ISLANDS).is_empty());
+        let (action, entity, action_island, _) = action_fixture(&mut rig, 4);
+        rig.e.mem.set_u8(entity + 0xe8, 5);
+        rig.e.mem.set_u16(action_island + 0x20, 0xffff);
+        rig.e.call(0x00c9_2bd0, &args![rig.world, action, entity]);
+        assert!(calls_to(&rig.e, MERGE_ISLANDS).is_empty());
+        assert!(calls_to(&rig.e, ISLAND_REMOVE_ACTION).is_empty());
+        assert_eq!(rig.e.mem.u16(entity + 0x20c), 2);
+    }
+
+    #[test]
+    fn init_mt_step_runs_the_watch_dog_inside_the_lock_and_returns_the_step() {
+        let (mut rig, _) = batch_rig();
+        silent(&mut rig.e, &[LOCK_ENTER, LOCK_LEAVE, WATCH_HEAP_MEMORY]);
+        returning(&mut rig.e, STEP_BEGIN_ST, 0x1234);
+        let simulation = rig.e.mem.alloc(0x40);
+        rig.e
+            .set(rig.world, HkpWorld::m_simulation, Ptr::new(simulation));
+        rig.e
+            .set(rig.world, HkpWorld::m_memoryWatchDog, Ptr::new(0x6000));
+        let result = rig
+            .e
+            .call(0x00c9_2d70, &args![rig.world, 0x77u32, 1.5f32])
+            .u32();
+        assert_eq!(result, 0x1234);
+        assert_eq!(
+            order_of(
+                &rig.e,
+                &[LOCK_ENTER, WATCH_HEAP_MEMORY, LOCK_LEAVE, STEP_BEGIN_ST]
+            ),
+            vec![LOCK_ENTER, WATCH_HEAP_MEMORY, LOCK_LEAVE, STEP_BEGIN_ST]
+        );
+        assert_eq!(
+            calls_to(&rig.e, STEP_BEGIN_ST),
+            vec![vec![simulation, 0x77, 1.5f32.to_bits()]]
+        );
+        assert_eq!(rig.e.get(rig.world, HkpWorld::m_isLocked), 0);
+    }
+
+    #[test]
+    fn init_mt_step_without_a_watch_dog_only_steps_and_quiets_the_time() {
+        let (mut rig, _) = batch_rig();
+        returning(&mut rig.e, STEP_BEGIN_ST, 0);
+        let simulation = rig.e.mem.alloc(0x40);
+        rig.e
+            .set(rig.world, HkpWorld::m_simulation, Ptr::new(simulation));
+        let signalling = f32::from_bits(0x7f80_0001);
+        let result = rig
+            .e
+            .call(0x00c9_2d70, &args![rig.world, 0x77u32, signalling])
+            .u32();
+        assert_eq!(result, 0);
+        assert_eq!(
+            calls_to(&rig.e, STEP_BEGIN_ST),
+            vec![vec![simulation, 0x77, 0x7fc0_0001]]
+        );
+        assert!(calls_to(&rig.e, WATCH_HEAP_MEMORY).is_empty());
+    }
+
+    /// What a statistics collector was told: the virtual function (or `ADD_NORMAL_CHUNK`) and
+    /// its words after the collector.
+    type Reports = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// A collector (returned, with the report log) whose virtual functions 0xC, 0x14, 0x18 and
+    /// 0x1C log; `ADD_NORMAL_CHUNK` logs too and the allocated size of every block is 0x99.
+    fn statistics_collector(e: &mut Engine) -> (u32, Reports) {
+        let reports: Reports = Rc::new(RefCell::new(vec![]));
+        for (slot, hook) in [
+            (0xc, HOOK_A),
+            (0x14, HOOK_B),
+            (0x18, HOOK_C),
+            (0x1c, HOOK_D),
+        ] {
+            let sink = reports.clone();
+            e.register_double(hook, move |_, words| {
+                sink.borrow_mut().push((slot, words[1..].to_vec()));
+                Ret::default()
+            });
+        }
+        let sink = reports.clone();
+        e.register_double(ADD_NORMAL_CHUNK, move |_, words| {
+            sink.borrow_mut()
+                .push((ADD_NORMAL_CHUNK, words[1..].to_vec()));
+            Ret::default()
+        });
+        returning(e, GET_ALLOCATED_SIZE, 0x99);
+        let collector = object_with_vtable(
+            e,
+            0x20,
+            &[
+                (0xc, HOOK_A),
+                (0x14, HOOK_B),
+                (0x18, HOOK_C),
+                (0x1c, HOOK_D),
+            ],
+        );
+        (collector, reports)
+    }
+
+    /// The kind and the name of every report: the name is the first word of the function's
+    /// words, the second of the array report (after its `3`), and none of the section end.
+    fn report_names(reports: &Reports) -> Vec<(u32, u32)> {
+        reports
+            .borrow()
+            .iter()
+            .map(|(kind, words)| match *kind {
+                0x14 => (*kind, words[1]),
+                0x1c => (*kind, 0),
+                _ => (*kind, words[0]),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn calc_content_statistics_reports_every_part_of_an_empty_world() {
+        let (mut rig, _) = batch_rig();
+        let input = rig.e.mem.alloc(0x100);
+        let operations = rig.e.mem.alloc(0x40);
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(input));
+        rig.e.set(
+            rig.world,
+            HkpWorld::m_pendingOperations,
+            Ptr::new(operations),
+        );
+        let (collector, reports) = statistics_collector(&mut rig.e);
+        rig.e.mem.set_u32(collector + 8, 0xdead);
+        rig.e.call(0x00c9_2db0, &args![rig.world, collector, 0u32]);
+        let chunk = ADD_NORMAL_CHUNK;
+        let expected = vec![
+            (0x14, STATISTICS_ACTIVE_ISLANDS),
+            (0x14, STATISTICS_INACTIVE_ISLANDS),
+            (0xc, STATISTICS_FIXED),
+            (0x14, STATISTICS_PHANTOM_POINTERS),
+            (chunk, STATISTICS_ISLAND_DIRTY_LIST_SECTION),
+            (chunk, STATISTICS_JOB_DATA),
+            (0x18, STATISTICS_INTERNAL),
+            (0xc, STATISTICS_SIMULATION),
+            (0x14, STATISTICS_DIRTY_ISLAND_POINTERS),
+            (0xc, STATISTICS_MAINTENANCE_MANAGER),
+            (chunk, STATISTICS_OPERATION_QUEUE),
+            (0x18, STATISTICS_OPERATION_QUEUE),
+            (0x14, STATISTICS_ISLAND_MERGES),
+            (0x14, STATISTICS_BODY_OPERATIONS),
+            (0x1c, 0),
+            (0xc, STATISTICS_BROAD_PHASE_BORDER),
+            (0x18, STATISTICS_COLLIDE),
+            (0xc, STATISTICS_BROAD_PHASE),
+            (chunk, STATISTICS_BROAD_PHASE_DISPATCH),
+            (chunk, STATISTICS_BROAD_PHASE_DISPATCH),
+            (chunk, STATISTICS_BROAD_PHASE_DISPATCH),
+            (chunk, STATISTICS_BROAD_PHASE_DISPATCH),
+            (chunk, STATISTICS_COLLISION_INPUT),
+            (chunk, STATISTICS_AGENT_CONFIG),
+            (0xc, STATISTICS_FILTER),
+            (0xc, STATISTICS_CONVEX_LIST_FILTER),
+            (0xc, STATISTICS_DISPATCHER),
+            (0x1c, 0),
+            (0x1c, 0),
+            (0x18, STATISTICS_LISTENERS),
+            (0x14, STATISTICS_ENTITY_LISTENERS),
+            (0x14, STATISTICS_PHANTOM_LISTENERS),
+            (0x14, STATISTICS_CONSTRAINT_LISTENERS),
+            (0x14, STATISTICS_DELETION_LISTENERS),
+            (0x14, STATISTICS_ISLAND_ACTIVATION_LISTENERS),
+            (0x14, STATISTICS_POST_SIMULATION_LISTENERS),
+            (0x14, STATISTICS_POST_INTEGRATE_LISTENERS),
+            (0x14, STATISTICS_POST_COLLIDE_LISTENERS),
+            (0x14, STATISTICS_POST_INTEGRATE_LISTENERS),
+            (0x14, STATISTICS_COLLISION_LISTENERS),
+            (0x1c, 0),
+        ];
+        assert_eq!(report_names(&reports), expected);
+        // The array reports carry (3, name, data, used bytes, allocated).
+        assert_eq!(
+            reports.borrow()[0].1,
+            vec![3, STATISTICS_ACTIVE_ISLANDS, 0, 0, 0x99]
+        );
+        // The collision input is the collector's current object only during the walk.
+        assert_eq!(rig.e.mem.u32(collector + 8), 0);
+    }
+
+    #[test]
+    fn calc_content_statistics_walks_the_islands_phantoms_sections_and_queues() {
+        let (mut rig, _) = batch_rig();
+        let t = rig.world.addr();
+        let input = rig.e.mem.alloc(0x100);
+        let operations = rig.e.mem.alloc(0x40);
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(input));
+        rig.e.set(
+            rig.world,
+            HkpWorld::m_pendingOperations,
+            Ptr::new(operations),
+        );
+        let active = array_of(&mut rig.e, &[0xa1, 0xa2]);
+        set_array(&mut rig.e, t + 0x28, active, 2, 2);
+        let inactive = array_of(&mut rig.e, &[0xb1]);
+        set_array(&mut rig.e, t + 0x34, inactive, 1, 0x8000_0001);
+        let phantoms = array_of(&mut rig.e, &[0xc1, 0xc2]);
+        set_array(&mut rig.e, t + 0x110, phantoms, 2, 2);
+        rig.e.mem.set_u32(t + 0xb8, 0x3000);
+        rig.e.mem.set_u32(t + 0xc4, 0x3100);
+        // Two queues, chained through the word at +8; every round reports the world's first.
+        let queue = rig.e.mem.alloc(0x20);
+        let second_queue = rig.e.mem.alloc(0x20);
+        rig.e.mem.set_u32(queue + 8, second_queue);
+        rig.e.mem.set_u32(t + 0xa0, queue);
+        let (collector, reports) = statistics_collector(&mut rig.e);
+        rig.e.mem.set_u8(collector + 0x10, 1);
+        rig.e.call(0x00c9_2db0, &args![rig.world, collector, 0u32]);
+        let reports = reports.borrow().clone();
+        // The inactive array's storage is not owned, so it is reported only because the
+        // collector's byte at +0x10 is set. Reports 1 and 2 are the active islands.
+        assert_eq!(
+            reports[3].1,
+            vec![3, STATISTICS_INACTIVE_ISLANDS, inactive, 4, 0x99]
+        );
+        let children: Vec<(u32, u32)> = reports
+            .iter()
+            .filter(|(kind, words)| {
+                *kind == 0xc
+                    && [STATISTICS_ACTIVE, STATISTICS_INACTIVE, STATISTICS_PHANTOMS]
+                        .contains(&words[0])
+            })
+            .map(|(_, words)| (words[0], words[1]))
+            .collect();
+        assert_eq!(
+            children,
+            vec![
+                (STATISTICS_ACTIVE, 0xa2),
+                (STATISTICS_ACTIVE, 0xa1),
+                (STATISTICS_INACTIVE, 0xb1),
+                (STATISTICS_PHANTOMS, 0xc1),
+                (STATISTICS_PHANTOMS, 0xc2),
+            ]
+        );
+        let chunks: Vec<Vec<u32>> = reports
+            .iter()
+            .filter(|(kind, _)| *kind == ADD_NORMAL_CHUNK)
+            .map(|(_, words)| words.clone())
+            .collect();
+        assert!(chunks.contains(&vec![STATISTICS_MODIFY_CONSTRAINT_SECTION, 0x3000, 0x18, 0]));
+        assert!(chunks.contains(&vec![STATISTICS_PROPERTY_MASTER_LOCK, 0x3100, 0x18, 0]));
+        let pending_chunks: Vec<&Vec<u32>> = chunks
+            .iter()
+            .filter(|words| words[0] == STATISTICS_PENDING_QUEUES)
+            .collect();
+        assert_eq!(pending_chunks.len(), 2);
+        assert_eq!(pending_chunks[0][1..], [queue, 0x10, 0]);
+        assert_eq!(pending_chunks[1][1..], [queue, 0x10, 0]);
+    }
+
+    #[test]
+    fn calc_content_statistics_skips_arrays_with_borrowed_storage() {
+        let (mut rig, _) = batch_rig();
+        let input = rig.e.mem.alloc(0x100);
+        let operations = rig.e.mem.alloc(0x40);
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(input));
+        rig.e.set(
+            rig.world,
+            HkpWorld::m_pendingOperations,
+            Ptr::new(operations),
+        );
+        let t = rig.world.addr();
+        set_array(&mut rig.e, t + 0x28, 0x4000, 0, 0x8000_0004);
+        let (collector, reports) = statistics_collector(&mut rig.e);
+        rig.e.call(0x00c9_2db0, &args![rig.world, collector, 0u32]);
+        let names = report_names(&reports);
+        assert_eq!(names[0], (0x14, STATISTICS_INACTIVE_ISLANDS));
+        assert!(!names.contains(&(0x14, STATISTICS_ACTIVE_ISLANDS)));
+    }
+
+    #[test]
+    fn get_memory_watch_dog_returns_the_field() {
+        let mut e = Engine::new();
+        let world = world(&mut e);
+        assert_eq!(e.call(0x00c9_3570, &args![world]).u32(), 0);
+        e.set(world, HkpWorld::m_memoryWatchDog, Ptr::new(0x6000));
+        assert_eq!(e.call(0x00c9_3570, &args![world]).u32(), 0x6000);
+    }
+
+    /// A world with one active island holding `active_entity`, one inactive island holding
+    /// `inactive_entity`, a fixed island holding the fixed body and one phantom. The doubles
+    /// for `removePhantom` / `removeEntity` empty the matching list.
+    fn removal_world(rig: &mut Rig) -> (u32, u32) {
+        silent(
+            &mut rig.e,
+            &[
+                HOOK_A,
+                ADD_REFERENCE,
+                REMOVE_REFERENCE,
+                ADD_ENTITY,
+                REMOVE_ISLAND_FROM_DIRTY_LIST,
+                FIRE_WORLD_REMOVE_ALL,
+            ],
+        );
+        let t = rig.world.addr();
+        let active_island = object_with_vtable(&mut rig.e, 0x80, &[(0, HOOK_A)]);
+        let inactive_island = rig.e.mem.alloc(0x80);
+        let fixed_island = rig.e.mem.alloc(0x80);
+        for (island, entity) in [
+            (active_island, 0xe1),
+            (inactive_island, 0xe2),
+            (fixed_island, 0xe3),
+        ] {
+            let entities = array_of(&mut rig.e, &[entity]);
+            rig.e.mem.set_u32(island + 0x48, entities);
+            rig.e.mem.set_u32(island + 0x4c, 1);
+        }
+        let active = array_of(&mut rig.e, &[active_island]);
+        set_array(&mut rig.e, t + 0x28, active, 1, 1);
+        let inactive = array_of(&mut rig.e, &[inactive_island]);
+        set_array(&mut rig.e, t + 0x34, inactive, 1, 1);
+        rig.e.mem.set_u32(t + 0x20, fixed_island);
+        rig.e.mem.set_u32(t + 0x24, 0xe3);
+        let phantoms = array_of(&mut rig.e, &[0xf1]);
+        set_array(&mut rig.e, t + 0x110, phantoms, 1, 1);
+        rig.e.register_double(REMOVE_PHANTOM, move |e, words| {
+            assert_eq!(words[1], 0xf1);
+            e.mem.set_u32(words[0] + 0x114, 0);
+            Ret::default()
+        });
+        rig.e.register_double(REMOVE_ENTITY, move |e, words| {
+            let world = words[0];
+            match words[2] {
+                0xe1 => e.mem.set_u32(active_island + 0x4c, 0),
+                0xe2 => e.mem.set_u32(world + 0x38, 0),
+                _ => e.mem.set_u32(fixed_island + 0x4c, 0),
+            }
+            Ret::default()
+        });
+        (active_island, fixed_island)
+    }
+
+    #[test]
+    fn remove_all_empties_the_world_and_deletes_the_last_active_island() {
+        let (mut rig, _) = batch_rig();
+        let (active_island, _) = removal_world(&mut rig);
+        let t = rig.world.addr();
+        let deleted = recording(&mut rig.e, HOOK_A);
+        rig.e.call(0x00c9_3580, &args![rig.world]);
+        let removed = calls_to(&rig.e, REMOVE_ENTITY);
+        let entities: Vec<u32> = removed.iter().map(|words| words[2]).collect();
+        assert_eq!(entities, vec![0xe1, 0xe2, 0xe3]);
+        assert_eq!(
+            order_of(
+                &rig.e,
+                &[
+                    REMOVE_PHANTOM,
+                    REMOVE_ENTITY,
+                    ADD_REFERENCE,
+                    ADD_ENTITY,
+                    REMOVE_REFERENCE,
+                    REMOVE_ISLAND_FROM_DIRTY_LIST,
+                    FIRE_WORLD_REMOVE_ALL
+                ]
+            ),
+            vec![
+                REMOVE_PHANTOM,
+                REMOVE_ENTITY,
+                REMOVE_ENTITY,
+                ADD_REFERENCE,
+                REMOVE_ENTITY,
+                ADD_ENTITY,
+                REMOVE_REFERENCE,
+                REMOVE_ISLAND_FROM_DIRTY_LIST,
+                FIRE_WORLD_REMOVE_ALL
+            ]
+        );
+        assert_eq!(calls_to(&rig.e, ADD_REFERENCE), vec![vec![0xe3]]);
+        assert_eq!(calls_to(&rig.e, ADD_ENTITY), vec![vec![t, 0xe3, 1]]);
+        assert_eq!(calls_to(&rig.e, REMOVE_REFERENCE), vec![vec![0xe3]]);
+        assert_eq!(
+            calls_to(&rig.e, REMOVE_ISLAND_FROM_DIRTY_LIST),
+            vec![vec![t, active_island]]
+        );
+        assert_eq!(deleted.borrow().clone(), vec![vec![active_island, 1]]);
+        assert_eq!(rig.e.mem.i32(t + 0x2c), 0);
+        assert_eq!(calls_to(&rig.e, FIRE_WORLD_REMOVE_ALL), vec![vec![t]]);
+    }
+
+    #[test]
+    fn remove_all_keeps_the_island_list_when_the_world_adds_to_a_new_island() {
+        let (mut rig, _) = batch_rig();
+        removal_world(&mut rig);
+        rig.e.set(rig.world, HkpWorld::m_addsToNewIsland, true);
+        rig.e.call(0x00c9_3580, &args![rig.world]);
+        assert!(calls_to(&rig.e, REMOVE_ISLAND_FROM_DIRTY_LIST).is_empty());
+        assert_eq!(rig.e.mem.i32(rig.world.addr() + 0x2c), 1);
+        assert_eq!(calls_to(&rig.e, FIRE_WORLD_REMOVE_ALL).len(), 1);
+    }
+
+    #[test]
+    fn remove_all_stops_at_an_empty_first_island() {
+        let (mut rig, _) = batch_rig();
+        let (active_island, _) = removal_world(&mut rig);
+        rig.e.mem.set_u32(active_island + 0x4c, 0);
+        rig.e.call(0x00c9_3580, &args![rig.world]);
+        let entities: Vec<u32> = calls_to(&rig.e, REMOVE_ENTITY)
+            .iter()
+            .map(|words| words[2])
+            .collect();
+        assert_eq!(entities, vec![0xe2, 0xe3]);
+    }
+
+    /// Calls the listener-adding function at `address` twice and checks the pointer array at
+    /// `offset` of the world.
+    fn check_pointer_array(address: u32, offset: u32) {
+        let (mut rig, _) = batch_rig();
+        rig.e.call(address, &args![rig.world, 0x1111u32]);
+        rig.e.call(address, &args![rig.world, 0x2222u32]);
+        let array = rig.world.addr() + offset;
+        assert_eq!(rig.e.mem.u32(array + 4), 2);
+        let data = rig.e.mem.u32(array);
+        assert_eq!(rig.e.mem.u32(data), 0x1111);
+        assert_eq!(rig.e.mem.u32(data + 4), 0x2222);
+    }
+
+    #[test]
+    fn fn_00c937a0_appends_to_the_array_at_11c() {
+        check_pointer_array(0x00c9_37a0, 0x11c);
+    }
+
+    #[test]
+    fn fn_00c937e0_appends_to_the_array_at_140() {
+        check_pointer_array(0x00c9_37e0, 0x140);
+    }
+
+    #[test]
+    fn fn_00c93820_appends_to_the_array_at_128() {
+        check_pointer_array(0x00c9_3820, 0x128);
+    }
+
+    #[test]
+    fn fn_00c93860_appends_to_the_array_at_134() {
+        check_pointer_array(0x00c9_3860, 0x134);
+    }
+
+    #[test]
+    fn fn_00c938a0_appends_to_the_array_at_158() {
+        check_pointer_array(0x00c9_38a0, 0x158);
+    }
+
+    #[test]
+    fn add_world_post_simulation_listener_appends_to_the_array_at_164() {
+        check_pointer_array(0x00c9_3920, 0x164);
+    }
+
+    #[test]
+    fn fn_00c93a20_appends_to_the_array_at_1a0() {
+        check_pointer_array(0x00c9_3a20, 0x1a0);
+    }
+
+    #[test]
+    fn fn_00c93a60_appends_to_the_array_at_14c() {
+        check_pointer_array(0x00c9_3a60, 0x14c);
+    }
+
+    #[test]
+    fn step_multithreaded_returns_a_failed_begin_at_once() {
+        let (mut rig, _) = batch_rig();
+        silent(&mut rig.e, &[LOCK_ENTER, LOCK_LEAVE]);
+        returning(&mut rig.e, STEP_BEGIN_ST, 5);
+        let simulation = rig.e.mem.alloc(0x40);
+        rig.e
+            .set(rig.world, HkpWorld::m_simulation, Ptr::new(simulation));
+        let calls = recording(&mut rig.e, HOOK_A);
+        let listener = object_with_vtable(&mut rig.e, 0x20, &[(0xc, HOOK_A), (0x10, HOOK_A)]);
+        let result = rig
+            .e
+            .call(0x00c9_3ae0, &args![rig.world, 0x77u32, listener, 2.0f32])
+            .u32();
+        assert_eq!(result, 5);
+        assert!(calls.borrow().is_empty());
+        assert_eq!(
+            calls_to(&rig.e, STEP_BEGIN_ST),
+            vec![vec![simulation, 0x77, 2.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn step_multithreaded_runs_the_jobs_between_the_listener_calls() {
+        let (mut rig, _) = batch_rig();
+        silent(&mut rig.e, &[LOCK_ENTER, LOCK_LEAVE, PROCESS_ALL_JOBS]);
+        returning(&mut rig.e, STEP_BEGIN_ST, 0);
+        returning(&mut rig.e, SIMULATION_FINISH_MT_STEP, 9);
+        let simulation = rig.e.mem.alloc(0x40);
+        rig.e
+            .set(rig.world, HkpWorld::m_simulation, Ptr::new(simulation));
+        silent(&mut rig.e, &[HOOK_A, HOOK_B]);
+        let listener = object_with_vtable(&mut rig.e, 0x20, &[(0xc, HOOK_A), (0x10, HOOK_B)]);
+        let result = rig
+            .e
+            .call(0x00c9_3ae0, &args![rig.world, 0x77u32, listener, 2.0f32])
+            .u32();
+        assert_eq!(result, 9);
+        assert_eq!(
+            order_of(
+                &rig.e,
+                &[
+                    STEP_BEGIN_ST,
+                    HOOK_A,
+                    PROCESS_ALL_JOBS,
+                    HOOK_B,
+                    SIMULATION_FINISH_MT_STEP
+                ]
+            ),
+            vec![
+                STEP_BEGIN_ST,
+                HOOK_A,
+                PROCESS_ALL_JOBS,
+                HOOK_B,
+                SIMULATION_FINISH_MT_STEP
+            ]
+        );
+        assert_eq!(calls_to(&rig.e, HOOK_A), vec![vec![listener, 0x77, 0xb]]);
+        assert_eq!(calls_to(&rig.e, PROCESS_ALL_JOBS), vec![vec![0x77]]);
+        assert_eq!(calls_to(&rig.e, HOOK_B), vec![vec![listener]]);
+        assert_eq!(
+            calls_to(&rig.e, SIMULATION_FINISH_MT_STEP),
+            vec![vec![simulation, 0x77, listener]]
+        );
+    }
+
+    /// The physics system constructor hands back the block it is given.
+    fn system_constructor(rig: &mut Rig) {
+        rig.e.register(PHYSICS_SYSTEM_CONSTRUCT, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        silent(
+            &mut rig.e,
+            &[
+                PHYSICS_SYSTEM_ADD_RIGID_BODY,
+                PHYSICS_SYSTEM_ADD_CONSTRAINT,
+                PHYSICS_SYSTEM_ADD_ACTION,
+                PHYSICS_SYSTEM_ADD_PHANTOM,
+            ],
+        );
+    }
+
+    #[test]
+    fn fn_00c93b30_builds_one_system_for_a_world_without_fixed_or_inactive_bodies() {
+        let (mut rig, _) = batch_rig();
+        system_constructor(&mut rig);
+        let systems = rig.e.mem.alloc(0x10);
+        set_array(&mut rig.e, systems, 0, 0, 0x8000_0000);
+        rig.e.call(0x00c9_3b30, &args![rig.world, systems]);
+        assert_eq!(rig.e.mem.u32(systems + 4), 1);
+        let data = rig.e.mem.u32(systems);
+        let system = rig.e.mem.u32(data);
+        assert_eq!(rig.e.mem.u16(system + 4), 0x44);
+        assert_eq!(
+            calls_to(&rig.e, PHYSICS_SYSTEM_CONSTRUCT),
+            vec![vec![system]]
+        );
+    }
+
+    #[test]
+    fn fn_00c93b30_builds_a_second_system_when_the_first_got_bodies() {
+        let (mut rig, _) = batch_rig();
+        system_constructor(&mut rig);
+        let fixed_island = rig.e.mem.alloc(0x80);
+        let body = rig.e.mem.alloc(0x40);
+        rig.e.mem.set_u32(body + 0x10, 1);
+        let bodies = array_of(&mut rig.e, &[body]);
+        rig.e.mem.set_u32(fixed_island + 0x48, bodies);
+        rig.e.mem.set_u32(fixed_island + 0x4c, 1);
+        rig.e
+            .set(rig.world, HkpWorld::m_fixedIsland, Ptr::new(fixed_island));
+        let systems = rig.e.mem.alloc(0x10);
+        set_array(&mut rig.e, systems, 0, 0, 0x8000_0000);
+        rig.e.call(0x00c9_3b30, &args![rig.world, systems]);
+        assert_eq!(rig.e.mem.u32(systems + 4), 2);
+        let data = rig.e.mem.u32(systems);
+        let first = rig.e.mem.u32(data);
+        let second = rig.e.mem.u32(data + 4);
+        assert_ne!(first, second);
+        assert_eq!(rig.e.mem.u8(first + 0x40), 0);
+        assert_eq!(
+            calls_to(&rig.e, PHYSICS_SYSTEM_ADD_RIGID_BODY),
+            vec![vec![first, body]]
+        );
+        assert_eq!(calls_to(&rig.e, PHYSICS_SYSTEM_CONSTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn fn_00c93b30_builds_again_when_the_first_allocation_is_null() {
+        let (mut rig, _) = batch_rig();
+        system_constructor(&mut rig);
+        let mut first = true;
+        rig.e
+            .register_double(PHYSICS_SYSTEM_CONSTRUCT, move |_, words| {
+                let result = if first { 0 } else { words[0] };
+                first = false;
+                Ret {
+                    eax: result,
+                    ..Ret::default()
+                }
+            });
+        let systems = rig.e.mem.alloc(0x10);
+        set_array(&mut rig.e, systems, 0, 0, 0x8000_0000);
+        rig.e.call(0x00c9_3b30, &args![rig.world, systems]);
+        // The first system is null and the world had no bodies for it: only the second one is
+        // built and stored.
+        assert_eq!(rig.e.mem.u32(systems + 4), 1);
+        let data = rig.e.mem.u32(systems);
+        assert_ne!(rig.e.mem.u32(data), 0);
+        assert_eq!(calls_to(&rig.e, PHYSICS_SYSTEM_CONSTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn fn_00c93d10_builds_the_empty_world_tables() {
+        let mut e = Engine::new();
+        let world = world(&mut e);
+        let t = world.addr();
+        let arrays = [
+            0x28u32, 0x34, 0x40, 0x11c, 0x128, 0x134, 0x140, 0x14c, 0x158, 0x164, 0x170, 0x17c,
+            0x188, 0x194, 0x1a0, 0x1ac,
+        ];
+        for &array in &arrays {
+            for word in 0..3 {
+                e.mem.set_u32(t + array + 4 * word, 0xcccc_cccc);
+            }
+        }
+        e.mem.set_u32(t + 0x50, 0xcccc_cccc);
+        let returned = e.call(0x00c9_3d10, &args![world, 0u32]).u32();
+        assert_eq!(returned, t);
+        assert_eq!(e.mem.u32(t), 0x010c_6714);
+        assert_eq!(e.mem.u16(t + 6), 1);
+        assert_eq!(e.mem.u32(t + 0x50), 0);
+        assert_eq!(e.mem.u32(t + 0xa8), 0xffff_fff1);
+        assert_eq!(e.mem.u16(t + 0xac), 0x8000);
+        for &array in &arrays {
+            assert_eq!(e.mem.u32(t + array), 0);
+            assert_eq!(e.mem.u32(t + array + 4), 0);
+            assert_eq!(e.mem.u32(t + array + 8), 0x8000_0000);
+        }
+    }
+
+    /// Everything the world is torn down with; the references and objects are made-up words.
+    fn full_world(rig: &mut Rig) -> [u32; 4] {
+        let t = rig.world.addr();
+        silent(
+            &mut rig.e,
+            &[
+                REMOVE_REFERENCE,
+                DELETE_CRITICAL_SECTION,
+                REMOVE_ALL,
+                REMOVE_ENTITY,
+                REMOVE_ISLAND_FROM_DIRTY_LIST,
+                FIRE_WORLD_DELETED,
+                DISPATCH_RECORD_DESTRUCT,
+                OPERATION_QUEUE_DESTRUCT,
+            ],
+        );
+        let job_data = rig.e.mem.alloc(0x120);
+        let job_buffer = rig.e.mem.alloc(0x200);
+        rig.e.mem.set_u32(job_data + 0xf4, job_buffer);
+        rig.e.mem.set_u32(t + 0x74, job_data);
+        for (offset, value) in [
+            (0x4c, 0x101),
+            (0x50, 0x102),
+            (0x58, 0x103),
+            (0x80, 0x104),
+            (0x1bc, 0x105),
+            (0x7c, 0x106),
+            (0x84, 0x107),
+            (8, 0x108),
+            (0x5c, 0x109),
+            (0xb8, 0x201),
+            (0xc4, 0x202),
+            (0xc0, 0x203),
+            (0x24, 0x301),
+            (0x64, 0x401),
+            (0x88, 0x402),
+            (0x1b8, 0x403),
+        ] {
+            rig.e.mem.set_u32(t + offset, value);
+        }
+        let fixed_island = object_with_vtable(&mut rig.e, 0x40, &[(0, HOOK_A)]);
+        rig.e.mem.set_u32(t + 0x20, fixed_island);
+        let mut objects = [0u32; 3];
+        for (slot, offset) in objects.iter_mut().zip([0x68, 0x6c, 0x70]) {
+            *slot = object_with_vtable(&mut rig.e, 0x40, &[(0, HOOK_A)]);
+            rig.e.mem.set_u32(t + offset, *slot);
+        }
+        let input = rig.e.mem.alloc(0x80);
+        rig.e.mem.set_u32(input + 0x70, 0x501);
+        rig.e.mem.set_u32(input + 0x64, 0x502);
+        rig.e.mem.set_u32(t + 0x78, input);
+        mark_arrays_unallocated(&mut rig.e, t);
+        set_array(&mut rig.e, t + 0x1ac, 0x601, 2, 3);
+        set_array(&mut rig.e, t + 0x28, 0x602, 1, 2);
+        [fixed_island, objects[0], objects[1], objects[2]]
+    }
+
+    #[test]
+    fn world_destructor_tears_down_every_part_in_order() {
+        let (mut rig, freed) = batch_rig();
+        let t = rig.world.addr();
+        let [fixed_island, first, second, third] = full_world(&mut rig);
+        let deleted = recording(&mut rig.e, HOOK_A);
+        rig.e.call(0x00c9_3e50, &args![rig.world]);
+        assert_eq!(
+            calls_to(&rig.e, REMOVE_REFERENCE),
+            (0x101..=0x109)
+                .map(|object| vec![object])
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            calls_to(&rig.e, DELETE_CRITICAL_SECTION),
+            vec![vec![0x201], vec![0x202], vec![0x203]]
+        );
+        assert_eq!(
+            order_of(
+                &rig.e,
+                &[
+                    DELETE_CRITICAL_SECTION,
+                    REMOVE_ALL,
+                    REMOVE_ENTITY,
+                    REMOVE_ISLAND_FROM_DIRTY_LIST,
+                    FIRE_WORLD_DELETED,
+                    DISPATCH_RECORD_DESTRUCT,
+                    OPERATION_QUEUE_DESTRUCT
+                ]
+            ),
+            vec![
+                DELETE_CRITICAL_SECTION,
+                DELETE_CRITICAL_SECTION,
+                DELETE_CRITICAL_SECTION,
+                REMOVE_ALL,
+                REMOVE_ENTITY,
+                REMOVE_ISLAND_FROM_DIRTY_LIST,
+                FIRE_WORLD_DELETED,
+                DISPATCH_RECORD_DESTRUCT,
+                OPERATION_QUEUE_DESTRUCT
+            ]
+        );
+        assert_eq!(calls_to(&rig.e, REMOVE_ALL), vec![vec![t]]);
+        assert_eq!(calls_to(&rig.e, REMOVE_ENTITY)[0][0], t);
+        assert_eq!(calls_to(&rig.e, REMOVE_ENTITY)[0][2], 0x301);
+        assert_eq!(
+            calls_to(&rig.e, REMOVE_ISLAND_FROM_DIRTY_LIST),
+            vec![vec![t, fixed_island]]
+        );
+        assert_eq!(calls_to(&rig.e, FIRE_WORLD_DELETED), vec![vec![t]]);
+        assert_eq!(
+            calls_to(&rig.e, DISPATCH_RECORD_DESTRUCT),
+            vec![vec![0x401]]
+        );
+        assert_eq!(
+            calls_to(&rig.e, OPERATION_QUEUE_DESTRUCT),
+            vec![vec![0x402]]
+        );
+        assert_eq!(
+            deleted.borrow().clone(),
+            vec![
+                vec![fixed_island, 1],
+                vec![first, 1],
+                vec![second, 1],
+                vec![third, 1]
+            ]
+        );
+        let blocks: Vec<(u32, u32)> = freed
+            .borrow()
+            .iter()
+            .map(|words| (words[1], words[2]))
+            .collect();
+        let job_data = blocks[1].0;
+        assert_eq!(
+            blocks,
+            vec![
+                (blocks[0].0, 0x200),
+                (job_data, 0x120),
+                (0x201, 0x18),
+                (0x202, 0x18),
+                (0x203, 0x18),
+                (0x401, 0x10c),
+                (0x501, 0x10),
+                (0x502, 0x200),
+                (blocks[8].0, 0x80),
+                (0x402, 0x28),
+                (0x403, 0x204),
+            ]
+        );
+        let allocator = rig.e.mem.u32(rig.router + 0x10);
+        assert_eq!(
+            rig.freed_first.borrow().clone(),
+            vec![vec![allocator, 0x601, 12], vec![allocator, 0x602, 8]]
+        );
+        assert_eq!(rig.e.mem.u32(t), REFERENCED_OBJECT_VTABLE);
+        for offset in [0x4c, 0x50, 0xb8, 0xc4, 0xc0, 0x24, 0x20, 0x58, 0x80] {
+            assert_eq!(rig.e.mem.u32(t + offset), 0, "offset {offset:#x}");
+        }
+        for offset in [0x1ac, 0x28, 0x40, 0x110] {
+            assert_eq!(rig.e.mem.u32(t + offset), 0);
+            assert_eq!(rig.e.mem.u32(t + offset + 4), 0);
+            assert_eq!(rig.e.mem.u32(t + offset + 8), 0x8000_0000);
+        }
+    }
+
+    #[test]
+    fn world_destructor_skips_what_a_bare_world_does_not_have() {
+        let (mut rig, freed) = batch_rig();
+        let t = rig.world.addr();
+        silent(
+            &mut rig.e,
+            &[
+                REMOVE_REFERENCE,
+                REMOVE_ALL,
+                REMOVE_ENTITY,
+                REMOVE_ISLAND_FROM_DIRTY_LIST,
+                FIRE_WORLD_DELETED,
+            ],
+        );
+        mark_arrays_unallocated(&mut rig.e, t);
+        let input = rig.e.mem.alloc(0x80);
+        rig.e.mem.set_u32(t + 0x78, input);
+        rig.e.call(0x00c9_3e50, &args![rig.world]);
+        assert_eq!(calls_to(&rig.e, REMOVE_REFERENCE), vec![vec![0]; 6]);
+        assert_eq!(
+            calls_to(&rig.e, REMOVE_ISLAND_FROM_DIRTY_LIST),
+            vec![vec![t, 0]]
+        );
+        let blocks: Vec<(u32, u32)> = freed
+            .borrow()
+            .iter()
+            .map(|words| (words[1], words[2]))
+            .collect();
+        assert_eq!(blocks, vec![(input, 0x80)]);
+        assert!(rig.freed_first.borrow().is_empty());
+        assert_eq!(rig.e.mem.u32(t), REFERENCED_OBJECT_VTABLE);
+    }
+    /// A broad phase object (installed in the world) whose virtual function 0x44 (`HOOK_A`)
+    /// writes the handles in `handles` into the pair array it is given, and whose functions
+    /// 0x54 and 0x58 (`HOOK_E`, `HOOK_F`) do nothing.
+    fn install_broad_phase(rig: &mut Rig, handles: Vec<u32>) -> u32 {
+        rig.e.register_double(HOOK_A, move |e, words| {
+            let pairs = words[2];
+            let data = e.mem.u32(pairs);
+            for (index, handle) in handles.iter().enumerate() {
+                e.mem.set_u32(data + 8 * index as u32 + 4, *handle);
+            }
+            e.mem.set_u32(pairs + 4, handles.len() as u32);
+            Ret::default()
+        });
+        silent(&mut rig.e, &[HOOK_E, HOOK_F]);
+        let broad_phase = object_with_vtable(
+            &mut rig.e,
+            0x20,
+            &[(0x44, HOOK_A), (0x54, HOOK_E), (0x58, HOOK_F)],
+        );
+        rig.e
+            .set(rig.world, HkpWorld::m_broadPhase, Ptr::new(broad_phase));
+        broad_phase
+    }
+
+    #[test]
+    fn shift_broad_phase_moves_the_border_and_world_vectors() {
+        let (mut rig, _) = batch_rig();
+        let t = rig.world.addr();
+        let broad_phase = install_broad_phase(&mut rig, vec![]);
+        let input = rig.e.mem.alloc(0x100);
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(input));
+        let offset = rig.e.mem.alloc(0x10);
+        for lane in 0..4 {
+            rig.e.mem.set_f32(offset + 4 * lane, 1.0 + lane as f32);
+        }
+        for (vector, base) in [(t + 0x310, 10.0f32), (t + 0x320, 20.0)] {
+            for lane in 0..4 {
+                rig.e.mem.set_f32(vector + 4 * lane, base + lane as f32);
+            }
+        }
+        // Six border objects whose kind (virtual function 0x14) is 0, 1, 2, 3, 0 and 5.
+        let border = rig.e.mem.alloc(0x60);
+        let mut kinds = vec![0u32, 1, 2, 3, 0, 5].into_iter();
+        rig.e.register_double(HOOK_D, move |_, _| Ret {
+            eax: kinds.next().unwrap(),
+            ..Ret::default()
+        });
+        let mut objects = vec![];
+        for slot in 0..6 {
+            let object = object_with_vtable(&mut rig.e, 0x100, &[(0x14, HOOK_D)]);
+            for vector in [0xb0, 0xc0, 0xe0] {
+                for lane in 0..4 {
+                    rig.e.mem.set_f32(object + vector + 4 * lane, 100.0);
+                }
+            }
+            rig.e.mem.set_u32(border + 0x18 + 4 * slot, object);
+            objects.push(object);
+        }
+        rig.e
+            .set(rig.world, HkpWorld::m_broadPhaseBorder, Ptr::new(border));
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionFilter, Ptr::new(0x7100));
+        rig.e.set(
+            rig.world,
+            HkpWorld::m_broadPhaseDispatcher,
+            Ptr::new(0x7200),
+        );
+        let seen_lock = Rc::new(RefCell::new(vec![]));
+        let sink = seen_lock.clone();
+        rig.e.register_double(ADD_PAIRS, move |e, words| {
+            sink.borrow_mut()
+                .push((words.to_vec(), e.mem.i32(t + 0x94)));
+            Ret::default()
+        });
+        rig.e.mem.set_u32(t + 0x94, 0);
+        rig.e
+            .call(0x00c9_6a20, &args![rig.world, 0x1234u32, offset, 1u32]);
+        let lanes = |e: &Engine, address: u32| -> Vec<f32> {
+            (0..4).map(|lane| e.mem.f32(address + 4 * lane)).collect()
+        };
+        assert_eq!(lanes(&rig.e, t + 0x310), vec![11.0, 13.0, 15.0, 17.0]);
+        assert_eq!(lanes(&rig.e, t + 0x320), vec![21.0, 23.0, 25.0, 27.0]);
+        let moved = vec![101.0, 102.0, 103.0, 104.0];
+        let still = vec![100.0; 4];
+        for (index, object) in objects.iter().enumerate() {
+            let (first, second, third) = match index {
+                0 | 4 => (&moved, &moved, &still),
+                1 | 2 => (&still, &still, &moved),
+                _ => (&still, &still, &still),
+            };
+            assert_eq!(&lanes(&rig.e, object + 0xb0), first);
+            assert_eq!(&lanes(&rig.e, object + 0xc0), second);
+            assert_eq!(&lanes(&rig.e, object + 0xe0), third);
+        }
+        assert_eq!(
+            seen_lock.borrow().clone(),
+            vec![(vec![0x7200, 0, 0, 0x7108], 1)]
+        );
+        assert_eq!(
+            rig.e
+                .get(rig.world, HkpWorld::m_criticalOperationsLockCount),
+            0
+        );
+        let region = calls_to(&rig.e, HOOK_E);
+        assert_eq!(region.len(), 1);
+        assert_eq!(region[0][..3], [broad_phase, 0x1234, offset]);
+        assert_eq!(
+            calls_to(&rig.e, HOOK_F),
+            vec![vec![broad_phase, input + 0x20, input + 0x30]]
+        );
+        assert_eq!(
+            record_labels(&rig, &[]),
+            vec![PROFILE_SHIFT_BROAD_PHASE, PROFILE_END]
+        );
+    }
+    /// An island whose entities are blocks with the given shapes (the word at +0x10).
+    fn island_with_bodies(e: &mut Engine, shapes: &[u32]) -> (u32, Vec<u32>) {
+        let island = e.mem.alloc(0x80);
+        let entities: Vec<u32> = shapes
+            .iter()
+            .map(|shape| {
+                let entity = e.mem.alloc(0x40);
+                e.mem.set_u32(entity + 0x10, *shape);
+                entity
+            })
+            .collect();
+        let data = array_of(e, &entities);
+        e.mem.set_u32(island + 0x48, data);
+        e.mem.set_u32(island + 0x4c, entities.len() as u32);
+        (island, entities)
+    }
+
+    #[test]
+    fn shift_broad_phase_recalculates_the_bounding_volumes_of_shaped_bodies() {
+        let (mut rig, _) = batch_rig();
+        let t = rig.world.addr();
+        install_broad_phase(&mut rig, vec![]);
+        let input = rig.e.mem.alloc(0x100);
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(input));
+        let offset = rig.e.mem.alloc(0x10);
+        let (fixed, fixed_bodies) = island_with_bodies(&mut rig.e, &[0, 0x71]);
+        let (active, active_bodies) = island_with_bodies(&mut rig.e, &[0x72]);
+        let (inactive, inactive_bodies) = island_with_bodies(&mut rig.e, &[0x73, 0]);
+        rig.e.mem.set_u32(t + 0x20, fixed);
+        let active_array = array_of(&mut rig.e, &[active]);
+        set_array(&mut rig.e, t + 0x28, active_array, 1, 1);
+        let inactive_array = array_of(&mut rig.e, &[inactive]);
+        set_array(&mut rig.e, t + 0x34, inactive_array, 1, 1);
+        let recalculated: Records = Rc::new(RefCell::new(vec![]));
+        let sink = recalculated.clone();
+        rig.e
+            .register_double(ENTITY_BATCH_RECALC_AABB, move |e, words| {
+                let mut seen = vec![words[0], words[2]];
+                for index in 0..words[2] {
+                    seen.push(e.mem.u32(words[1] + 4 * index));
+                }
+                sink.borrow_mut().push(seen);
+                Ret::default()
+            });
+        rig.e
+            .call(0x00c9_6a20, &args![rig.world, 0u32, offset, 0u32]);
+        assert_eq!(
+            recalculated.borrow().clone(),
+            vec![vec![
+                input,
+                3,
+                fixed_bodies[1],
+                active_bodies[0],
+                inactive_bodies[0]
+            ]]
+        );
+        // The island buffer (3 islands) and the grown body array go back to the allocator.
+        let freed = rig.freed_first.borrow().clone();
+        assert_eq!(freed.len(), 2);
+        assert_eq!(freed[0][2], 12);
+        assert_eq!(freed[1][2], 16);
+        assert_eq!(
+            record_labels(&rig, &[]),
+            vec![PROFILE_SHIFT_BROAD_PHASE, PROFILE_END]
+        );
+        assert_eq!(
+            rig.e
+                .get(rig.world, HkpWorld::m_criticalOperationsLockCount),
+            0
+        );
+    }
+
+    /// What `getPenetrations` and `getClosestPoints` are given: a collidable of shape type 2,
+    /// a dispatcher table that sends a pair with a shape of type 3 to `HOOK_B` at the table
+    /// offset `table_offset`, and a collector.
+    struct Query {
+        collidable: u32,
+        self_handle: u32,
+        shape: u32,
+        transform: u32,
+        query: u32,
+        collector: u32,
+        bounds_log: Records,
+        dispatched: Records,
+    }
+
+    fn query_fixture(
+        rig: &mut Rig,
+        wanted: f32,
+        margin: f32,
+        table_offset: u32,
+        accepts: u8,
+    ) -> Query {
+        rig.e.map(0x0101_2000, 0x1000);
+        let bounds_log: Records = Rc::new(RefCell::new(vec![]));
+        let sink = bounds_log.clone();
+        rig.e.register_double(HOOK_C, move |_, words| {
+            sink.borrow_mut().push(words.to_vec());
+            Ret::default()
+        });
+        let shape = object_with_vtable(&mut rig.e, 0x20, &[(0x1c, HOOK_C)]);
+        rig.e.mem.set_u32(shape + 0xc, 2);
+        let block = rig.e.mem.alloc(0x60);
+        rig.e.mem.set_i8(block + 5, 0x10);
+        let collidable = block + 0x10;
+        rig.e.mem.set_u32(collidable, shape);
+        rig.e.mem.set_u32(collidable + 8, 0x7800);
+        let table = rig.e.mem.alloc(0x1000);
+        rig.e.mem.set_u8(table + (2 + 0xd) * 0x20 + 3, 1);
+        rig.e.mem.set_u32(table + 0x14 + table_offset, HOOK_B);
+        let query = rig.e.mem.alloc(0x20);
+        rig.e.mem.set_u32(query, table);
+        rig.e.mem.set_f32(query + 8, wanted);
+        let input = rig.e.mem.alloc(0x100);
+        rig.e.mem.set_f32(input + 8, margin);
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(input));
+        let filter = filter_answering(&mut rig.e, accepts);
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionFilter, Ptr::new(filter));
+        let collector = rig.e.mem.alloc(0x10);
+        let dispatched = recording(&mut rig.e, HOOK_B);
+        Query {
+            collidable,
+            self_handle: block,
+            shape,
+            transform: 0x7800,
+            query,
+            collector,
+            bounds_log,
+            dispatched,
+        }
+    }
+
+    /// A broad phase handle whose collidable (the handle plus the signed byte at +5, here
+    /// 0x10) has a shape of type 3; returns (handle, collidable).
+    fn shaped_handle(e: &mut Engine) -> (u32, u32) {
+        let handle = e.mem.alloc(0x40);
+        e.mem.set_i8(handle + 5, 0x10);
+        let shape = e.mem.alloc(0x20);
+        e.mem.set_u32(shape + 0xc, 3);
+        e.mem.set_u32(handle + 0x10, shape);
+        (handle, handle + 0x10)
+    }
+
+    #[test]
+    fn get_penetrations_dispatches_every_accepted_pair() {
+        let (mut rig, _) = batch_rig();
+        let q = query_fixture(&mut rig, 2.0, 1.0, 0x9a4, 1);
+        let (first_handle, first) = shaped_handle(&mut rig.e);
+        let (second_handle, second) = shaped_handle(&mut rig.e);
+        install_broad_phase(&mut rig, vec![first_handle, second_handle]);
+        rig.e.call(
+            0x00c9_6df0,
+            &args![rig.world, q.collidable, q.query, q.collector],
+        );
+        assert_eq!(
+            q.dispatched.borrow().clone(),
+            vec![
+                vec![q.collidable, first, q.query, q.collector],
+                vec![q.collidable, second, q.query, q.collector]
+            ]
+        );
+        let bounds = q.bounds_log.borrow().clone();
+        assert_eq!(bounds.len(), 1);
+        assert_eq!(bounds[0].len(), 4);
+        assert_eq!(bounds[0][..3], [q.shape, q.transform, 1.5f32.to_bits()]);
+        assert_eq!(
+            record_labels(&rig, &[PROFILE_GET_PENETRATIONS]),
+            vec![
+                PROFILE_GET_PENETRATIONS,
+                PROFILE_GET_PENETRATIONS_NARROW,
+                PROFILE_SECTION_END
+            ]
+        );
+        let freed = rig.freed_first.borrow().clone();
+        assert!(freed.is_empty());
+    }
+
+    #[test]
+    fn get_penetrations_stops_when_the_collector_says_so() {
+        let (mut rig, _) = batch_rig();
+        let q = query_fixture(&mut rig, 2.0, 1.0, 0x9a4, 1);
+        let (first_handle, first) = shaped_handle(&mut rig.e);
+        let (second_handle, _) = shaped_handle(&mut rig.e);
+        install_broad_phase(&mut rig, vec![first_handle, second_handle]);
+        let collector = q.collector;
+        rig.e.register_double(HOOK_B, move |e, _| {
+            e.mem.set_u8(collector + 4, 1);
+            Ret::default()
+        });
+        rig.e.call(
+            0x00c9_6df0,
+            &args![rig.world, q.collidable, q.query, q.collector],
+        );
+        assert_eq!(
+            calls_to(&rig.e, HOOK_B),
+            vec![vec![q.collidable, first, q.query, q.collector]]
+        );
+    }
+
+    #[test]
+    fn get_penetrations_clamps_the_tolerance_and_skips_refused_pairs() {
+        let (mut rig, _) = batch_rig();
+        // 0.25 - 0.5 * 1.0 is negative: the tolerance is 0.
+        let q = query_fixture(&mut rig, 0.25, 1.0, 0x9a4, 0);
+        let (handle, _) = shaped_handle(&mut rig.e);
+        install_broad_phase(&mut rig, vec![handle]);
+        rig.e.call(
+            0x00c9_6df0,
+            &args![rig.world, q.collidable, q.query, q.collector],
+        );
+        assert!(q.dispatched.borrow().is_empty());
+        assert_eq!(q.bounds_log.borrow()[0][2], 0);
+    }
+
+    #[test]
+    fn get_penetrations_skips_its_own_collidable_and_shapeless_ones() {
+        let (mut rig, _) = batch_rig();
+        let q = query_fixture(&mut rig, 2.0, 1.0, 0x9a4, 1);
+        // A handle whose collidable is the query's own collidable.
+        let own = q.self_handle;
+        // A handle whose collidable has no shape.
+        let (shapeless, shapeless_collidable) = shaped_handle(&mut rig.e);
+        rig.e.mem.set_u32(shapeless_collidable, 0);
+        install_broad_phase(&mut rig, vec![own, shapeless]);
+        rig.e.call(
+            0x00c9_6df0,
+            &args![rig.world, q.collidable, q.query, q.collector],
+        );
+        assert!(q.dispatched.borrow().is_empty());
+    }
+
+    #[test]
+    fn get_closest_points_dispatches_the_broad_phase_pairs_through_the_second_table() {
+        let (mut rig, _) = batch_rig();
+        let q = query_fixture(&mut rig, 2.0, 1.0, 0x9a8, 1);
+        let (first_handle, first) = shaped_handle(&mut rig.e);
+        let (second_handle, second) = shaped_handle(&mut rig.e);
+        install_broad_phase(&mut rig, vec![first_handle, second_handle]);
+        // The collector's stop byte does not end this search.
+        rig.e.mem.set_u8(q.collector + 4, 1);
+        rig.e.call(
+            0x00c9_7850,
+            &args![rig.world, q.collidable, q.query, q.collector],
+        );
+        assert_eq!(
+            q.dispatched.borrow().clone(),
+            vec![
+                vec![q.collidable, first, q.query, q.collector],
+                vec![q.collidable, second, q.query, q.collector]
+            ]
+        );
+        assert_eq!(q.bounds_log.borrow()[0][2], 1.5f32.to_bits());
+        assert_eq!(
+            record_labels(&rig, &[PROFILE_CLOSEST_BROAD_PHASE]),
+            vec![
+                PROFILE_CLOSEST_BROAD_PHASE,
+                PROFILE_CLOSEST_NARROW,
+                PROFILE_SECTION_END
+            ]
+        );
+    }
+
+    /// A tree manager (installed in the world) that reports itself in use, with the trees
+    /// `aabb_tree` and `kd_tree` (zero for none).
+    fn tree_manager(rig: &mut Rig, aabb_tree: u32, kd_tree: u32) {
+        returning(&mut rig.e, HOOK_D, 1);
+        let manager = object_with_vtable(&mut rig.e, 0x20, &[(0x10, HOOK_D)]);
+        rig.e.mem.set_u32(manager + 0xc, aabb_tree);
+        rig.e.mem.set_u32(manager + 0x10, kd_tree);
+        rig.e
+            .set(rig.world, HkpWorld::m_kdTreeManager, Ptr::new(manager));
+    }
+
+    #[test]
+    fn get_closest_points_asks_both_trees_when_the_tree_manager_is_in_use() {
+        let (mut rig, _) = batch_rig();
+        let q = query_fixture(&mut rig, 2.0, 1.0, 0x9a8, 1);
+        let (_, first) = shaped_handle(&mut rig.e);
+        let (_, second) = shaped_handle(&mut rig.e);
+        tree_manager(&mut rig, 0x7a00, 0x7b00);
+        rig.e.register_double(AABB_TREE_QUERY, move |e, words| {
+            let array = words[2];
+            let data = e.mem.u32(array);
+            e.mem.set_u32(data, first);
+            e.mem.set_u32(array + 4, 1);
+            Ret::default()
+        });
+        let buffer = rig.e.mem.alloc(0x20);
+        rig.e.register_double(KD_TREE_QUERY, move |e, words| {
+            let array = words[2];
+            e.mem.set_u32(buffer, second);
+            e.mem.set_u32(array, buffer);
+            e.mem.set_u32(array + 4, 1);
+            e.mem.set_u32(array + 8, 4);
+            Ret::default()
+        });
+        rig.e.call(
+            0x00c9_7850,
+            &args![rig.world, q.collidable, q.query, q.collector],
+        );
+        assert_eq!(
+            q.dispatched.borrow().clone(),
+            vec![
+                vec![q.collidable, first, q.query, q.collector],
+                vec![q.collidable, second, q.query, q.collector]
+            ]
+        );
+        let aabb = calls_to(&rig.e, AABB_TREE_QUERY);
+        assert_eq!(aabb.len(), 1);
+        assert_eq!(aabb[0][0], 0x7a00);
+        assert_eq!(calls_to(&rig.e, KD_TREE_QUERY)[0][0], 0x7b00);
+        // The kd tree's array is freed through the router's second allocator.
+        let second_allocator = rig.e.mem.u32(rig.router + 0xc);
+        assert_eq!(
+            rig.freed_second.borrow().clone(),
+            vec![vec![second_allocator, buffer, 16]]
+        );
+        assert!(rig.freed_first.borrow().is_empty());
+        assert_eq!(
+            record_labels(&rig, &[PROFILE_CLOSEST_TREES]),
+            vec![
+                PROFILE_CLOSEST_TREES,
+                PROFILE_CLOSEST_AABB_TREE_NARROW,
+                PROFILE_CLOSEST_KD_TREE_BROAD_PHASE,
+                PROFILE_CLOSEST_KD_TREE_NARROW,
+                PROFILE_SECTION_END
+            ]
+        );
+    }
+
+    #[test]
+    fn get_closest_points_without_trees_only_writes_the_records() {
+        let (mut rig, _) = batch_rig();
+        let q = query_fixture(&mut rig, 2.0, 1.0, 0x9a8, 1);
+        tree_manager(&mut rig, 0, 0);
+        rig.e.call(
+            0x00c9_7850,
+            &args![rig.world, q.collidable, q.query, q.collector],
+        );
+        assert!(q.dispatched.borrow().is_empty());
+        assert_eq!(
+            record_labels(&rig, &[PROFILE_CLOSEST_TREES]),
+            vec![PROFILE_CLOSEST_TREES, PROFILE_SECTION_END]
+        );
+    }
+
+    /// What `fn_00c976a0` works on.
+    struct Removal {
+        action: u32,
+        entity: u32,
+        action_island: u32,
+        entity_island: u32,
+        list: u32,
+    }
+
+    /// An entity whose action list holds `actions` (`None` stands for the action itself),
+    /// whose island has the flag byte 0xFF, and an action whose virtual function 0x10
+    /// (`HOOK_A`) lists the entities `before`, the entity itself and `after`.
+    fn removal_fixture(
+        rig: &mut Rig,
+        actions: &[Option<u32>],
+        before: Vec<u32>,
+        after: Vec<u32>,
+    ) -> Removal {
+        silent(&mut rig.e, &[ISLAND_REMOVE_ACTION, ISLAND_ADD_ACTION]);
+        let entity = rig.e.mem.alloc(0x300);
+        let action_island = rig.e.mem.alloc(0x80);
+        let mut listed = before;
+        listed.push(entity);
+        listed.extend(after);
+        rig.e.register_double(HOOK_A, move |e, words| {
+            let array = words[1];
+            let data = e.mem.u32(array);
+            for (index, member) in listed.iter().enumerate() {
+                e.mem.set_u32(data + 4 * index as u32, *member);
+            }
+            e.mem.set_u32(array + 4, listed.len() as u32);
+            Ret::default()
+        });
+        let action = object_with_vtable(&mut rig.e, 0x20, &[(0x10, HOOK_A)]);
+        rig.e.mem.set_u32(action + 0xc, action_island);
+        let words: Vec<u32> = actions.iter().map(|a| a.unwrap_or(action)).collect();
+        let list = array_of(&mut rig.e, &words);
+        rig.e.mem.set_u32(entity + 0x208, list);
+        rig.e.mem.set_u16(entity + 0x20c, words.len() as u16);
+        let entity_island = rig.e.mem.alloc(0x80);
+        rig.e.mem.set_u8(entity_island + 0x25, 0xff);
+        rig.e.mem.set_u32(entity + 0xcc, entity_island);
+        Removal {
+            action,
+            entity,
+            action_island,
+            entity_island,
+            list,
+        }
+    }
+
+    /// An entity on an island whose word at +0x20 is `marker`; returns (entity, island).
+    fn entity_on_island(e: &mut Engine, marker: u16) -> (u32, u32) {
+        let entity = e.mem.alloc(0x300);
+        let island = e.mem.alloc(0x80);
+        e.mem.set_u16(island + 0x20, marker);
+        e.mem.set_u32(entity + 0xcc, island);
+        (entity, island)
+    }
+
+    #[test]
+    fn fn_00c976a0_removes_the_action_and_moves_it_to_the_first_live_island() {
+        let (mut rig, _) = batch_rig();
+        let (unassigned, _) = entity_on_island(&mut rig.e, 0xffff);
+        let (live, live_island) = entity_on_island(&mut rig.e, 0);
+        let r = removal_fixture(
+            &mut rig,
+            &[Some(0xa1), None, Some(0xa3)],
+            vec![unassigned],
+            vec![live],
+        );
+        rig.e.call(0x00c9_76a0, &args![r.action, r.entity]);
+        assert_eq!(rig.e.mem.u16(r.entity + 0x20c), 2);
+        assert_eq!(rig.e.mem.u32(r.list), 0xa1);
+        assert_eq!(rig.e.mem.u32(r.list + 4), 0xa3);
+        assert_eq!(rig.e.mem.u8(r.entity_island + 0x25), 0xfd);
+        assert_eq!(
+            calls_to(&rig.e, ISLAND_REMOVE_ACTION),
+            vec![vec![r.action_island, r.action]]
+        );
+        assert_eq!(
+            calls_to(&rig.e, ISLAND_ADD_ACTION),
+            vec![vec![live_island, r.action]]
+        );
+    }
+
+    #[test]
+    fn fn_00c976a0_writes_before_the_list_for_an_action_that_is_not_in_it() {
+        let (mut rig, _) = batch_rig();
+        let r = removal_fixture(&mut rig, &[Some(0xa1), Some(0xa2)], vec![], vec![]);
+        rig.e.call(0x00c9_76a0, &args![r.action, r.entity]);
+        assert_eq!(rig.e.mem.u16(r.entity + 0x20c), 1);
+        // Index -1 receives the last entry.
+        assert_eq!(rig.e.mem.u32(r.list - 4), 0xa2);
+        // No other entity: the island picked is none.
+        assert_eq!(calls_to(&rig.e, ISLAND_ADD_ACTION), vec![vec![0, r.action]]);
+    }
+
+    #[test]
+    fn fn_00c976a0_keeps_the_action_when_the_picked_island_is_its_own() {
+        let (mut rig, _) = batch_rig();
+        let (other, _) = entity_on_island(&mut rig.e, 0);
+        let r = removal_fixture(&mut rig, &[None], vec![], vec![other]);
+        rig.e.mem.set_u32(other + 0xcc, r.action_island);
+        rig.e.call(0x00c9_76a0, &args![r.action, r.entity]);
+        assert_eq!(rig.e.mem.u16(r.entity + 0x20c), 0);
+        assert!(calls_to(&rig.e, ISLAND_REMOVE_ACTION).is_empty());
+        assert!(calls_to(&rig.e, ISLAND_ADD_ACTION).is_empty());
+    }
+
+    #[test]
+    fn set_collision_filter_references_a_given_filter_and_updates_the_world() {
+        let (mut rig, _) = batch_rig();
+        silent(
+            &mut rig.e,
+            &[
+                ADD_REFERENCE,
+                REMOVE_REFERENCE,
+                UPDATE_COLLISION_FILTER_ON_WORLD,
+            ],
+        );
+        let input = rig.e.mem.alloc(0x100);
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(input));
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionFilter, Ptr::new(0x6100));
+        rig.e
+            .call(0x00c9_77c0, &args![rig.world, 0x6200u32, 1u32, 5u32, 6u32]);
+        assert_eq!(
+            order_of(
+                &rig.e,
+                &[
+                    ADD_REFERENCE,
+                    REMOVE_REFERENCE,
+                    UPDATE_COLLISION_FILTER_ON_WORLD
+                ]
+            ),
+            vec![
+                ADD_REFERENCE,
+                REMOVE_REFERENCE,
+                UPDATE_COLLISION_FILTER_ON_WORLD
+            ]
+        );
+        assert_eq!(calls_to(&rig.e, ADD_REFERENCE), vec![vec![0x6200]]);
+        assert_eq!(calls_to(&rig.e, REMOVE_REFERENCE), vec![vec![0x6100]]);
+        assert_eq!(
+            calls_to(&rig.e, UPDATE_COLLISION_FILTER_ON_WORLD),
+            vec![vec![rig.world.addr(), 5, 6]]
+        );
+        assert_eq!(rig.e.mem.u32(rig.world.addr() + 0x7c), 0x6200);
+        assert_eq!(rig.e.mem.u32(input + 0xc), 0x6200);
+    }
+
+    #[test]
+    fn set_collision_filter_builds_a_default_filter_when_given_none() {
+        let (mut rig, _) = batch_rig();
+        silent(
+            &mut rig.e,
+            &[
+                ADD_REFERENCE,
+                REMOVE_REFERENCE,
+                COLLISION_FILTER_CONSTRUCT,
+                UPDATE_COLLISION_FILTER_ON_WORLD,
+            ],
+        );
+        let input = rig.e.mem.alloc(0x100);
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionInput, Ptr::new(input));
+        rig.e
+            .set(rig.world, HkpWorld::m_collisionFilter, Ptr::new(0x6100));
+        rig.e
+            .call(0x00c9_77c0, &args![rig.world, 0u32, 0u32, 5u32, 6u32]);
+        let filter = rig.e.mem.u32(rig.world.addr() + 0x7c);
+        assert_ne!(filter, 0);
+        assert_eq!(rig.e.mem.u16(filter + 4), 0x30);
+        assert_eq!(
+            calls_to(&rig.e, COLLISION_FILTER_CONSTRUCT),
+            vec![vec![filter]]
+        );
+        for (offset, table) in [
+            (0, NULL_FILTER_VTABLE_0),
+            (8, NULL_FILTER_VTABLE_8),
+            (0xc, NULL_FILTER_VTABLE_C),
+            (0x10, NULL_FILTER_VTABLE_10),
+            (0x14, NULL_FILTER_VTABLE_14),
+        ] {
+            assert_eq!(rig.e.mem.u32(filter + offset), table);
+        }
+        assert_eq!(rig.e.mem.u32(filter + 0x20), 1);
+        assert_eq!(rig.e.mem.u32(input + 0xc), filter);
+        assert!(calls_to(&rig.e, ADD_REFERENCE).is_empty());
+        assert_eq!(calls_to(&rig.e, REMOVE_REFERENCE), vec![vec![0x6100]]);
+        assert!(calls_to(&rig.e, UPDATE_COLLISION_FILTER_ON_WORLD).is_empty());
+    }
+
+    #[test]
+    fn create_and_add_constraint_instance_builds_and_adds_the_instance() {
+        let (mut rig, _) = batch_rig();
+        rig.e
+            .register(CONSTRAINT_INSTANCE_CONSTRUCT, |_, words| Ret {
+                eax: words[0],
+                ..Ret::default()
+            });
+        silent(&mut rig.e, &[ADD_CONSTRAINT]);
+        let data = rig.e.mem.alloc(0x20);
+        rig.e.mem.set_u32(data + 8, 0xabc);
+        let instance = rig
+            .e
+            .call(0x00c9_7e30, &args![rig.world, 0x11u32, 0x22u32, data])
+            .u32();
+        assert_eq!(rig.e.mem.u16(instance + 4), 0x38);
+        assert_eq!(rig.e.mem.u32(instance + 0x2c), 0xabc);
+        assert_eq!(
+            calls_to(&rig.e, CONSTRAINT_INSTANCE_CONSTRUCT),
+            vec![vec![instance, 0x11, 0x22, data, 1]]
+        );
+        assert_eq!(
+            calls_to(&rig.e, ADD_CONSTRAINT),
+            vec![vec![rig.world.addr(), instance]]
+        );
+    }
+
+    /// A physics system with the given entities, phantoms, actions and constraints (the
+    /// byte at +0x40 is `flag`).
+    fn physics_system(
+        rig: &mut Rig,
+        entities: &[u32],
+        phantoms: &[u32],
+        actions: &[u32],
+        constraints: &[u32],
+        flag: u8,
+    ) -> u32 {
+        silent(
+            &mut rig.e,
+            &[
+                ADD_ENTITY_BATCH,
+                ADD_ENTITY,
+                ADD_PHANTOM_BATCH,
+                ADD_PHANTOM,
+                ADD_ACTION,
+                ADD_CONSTRAINT,
+            ],
+        );
+        let system = rig.e.mem.alloc(0x80);
+        for (data, size, list) in [
+            (8, 0xc, entities),
+            (0x2c, 0x30, phantoms),
+            (0x20, 0x24, actions),
+            (0x14, 0x18, constraints),
+        ] {
+            let array = array_of(&mut rig.e, list);
+            rig.e.mem.set_u32(system + data, array);
+            rig.e.mem.set_u32(system + size, list.len() as u32);
+        }
+        rig.e.mem.set_u8(system + 0x40, flag);
+        system
+    }
+
+    /// A constraint whose words at +0x14 and +0x18 are `first` and `second`.
+    fn constraint_with_words(e: &mut Engine, first: u32, second: u32) -> u32 {
+        let constraint = e.mem.alloc(0x40);
+        e.mem.set_u32(constraint + 0x14, first);
+        e.mem.set_u32(constraint + 0x18, second);
+        constraint
+    }
+
+    #[test]
+    fn add_physics_system_adds_whole_arrays_in_batches() {
+        let (mut rig, _) = batch_rig();
+        let first = constraint_with_words(&mut rig.e, 1, 0);
+        let skipped = constraint_with_words(&mut rig.e, 0, 0);
+        let last = constraint_with_words(&mut rig.e, 0, 1);
+        let system = physics_system(
+            &mut rig,
+            &[0xe1, 0xe2],
+            &[0xf1],
+            &[0xa1, 0, 0xa2],
+            &[first, skipped, 0, last],
+            1,
+        );
+        let world = rig.world.addr();
+        rig.e.call(0x00c9_7f80, &args![rig.world, system]);
+        let entities = rig.e.mem.u32(system + 8);
+        let phantoms = rig.e.mem.u32(system + 0x2c);
+        assert_eq!(
+            calls_to(&rig.e, ADD_ENTITY_BATCH),
+            vec![vec![world, entities, 2, 1]]
+        );
+        assert!(calls_to(&rig.e, ADD_ENTITY).is_empty());
+        assert_eq!(
+            calls_to(&rig.e, ADD_PHANTOM_BATCH),
+            vec![vec![world, phantoms, 1]]
+        );
+        assert!(calls_to(&rig.e, ADD_PHANTOM).is_empty());
+        assert_eq!(
+            calls_to(&rig.e, ADD_ACTION),
+            vec![vec![world, 0xa1], vec![world, 0xa2]]
+        );
+        assert_eq!(
+            calls_to(&rig.e, ADD_CONSTRAINT),
+            vec![vec![world, first], vec![world, last]]
+        );
+    }
+
+    #[test]
+    fn add_physics_system_adds_one_by_one_around_null_entries() {
+        let (mut rig, _) = batch_rig();
+        let system = physics_system(&mut rig, &[0xe1, 0, 0xe2], &[0, 0xf2], &[], &[], 0);
+        let world = rig.world.addr();
+        rig.e.call(0x00c9_7f80, &args![rig.world, system]);
+        assert!(calls_to(&rig.e, ADD_ENTITY_BATCH).is_empty());
+        assert_eq!(
+            calls_to(&rig.e, ADD_ENTITY),
+            vec![vec![world, 0xe1, 0], vec![world, 0xe2, 0]]
+        );
+        assert!(calls_to(&rig.e, ADD_PHANTOM_BATCH).is_empty());
+        assert_eq!(calls_to(&rig.e, ADD_PHANTOM), vec![vec![world, 0xf2]]);
+        rig.e.mem.set_u8(system + 0x40, 1);
+        rig.e.call(0x00c9_7f80, &args![rig.world, system]);
+        assert_eq!(calls_to(&rig.e, ADD_ENTITY)[2], vec![world, 0xe1, 1]);
+    }
+
+    #[test]
+    fn add_physics_system_with_nothing_in_it_calls_nothing() {
+        let (mut rig, _) = batch_rig();
+        let system = physics_system(&mut rig, &[], &[], &[], &[], 1);
+        rig.e.call(0x00c9_7f80, &args![rig.world, system]);
+        let log = rig.e.call_log.clone().unwrap();
+        assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn null_contact_mgr_factory_deleting_destructor_resets_the_tables_and_frees() {
+        let (mut rig, freed) = batch_rig();
+        let object = rig.e.mem.alloc(0x40);
+        rig.e.mem.set_u16(object + 4, 0x40);
+        let returned = rig.e.call(0x00c9_8260, &args![object, 0u32]).u32();
+        assert_eq!(returned, object);
+        assert_eq!(rig.e.mem.u32(object), REFERENCED_OBJECT_VTABLE);
+        assert_eq!(rig.e.mem.u32(object + 8), REFERENCED_OBJECT_VTABLE);
+        assert!(freed.borrow().is_empty());
+        rig.e.call(0x00c9_8260, &args![object, 3u32]);
+        let allocator = rig.e.mem.u32(rig.router + 0x10);
+        assert_eq!(freed.borrow().clone(), vec![vec![allocator, object, 0x40]]);
+    }
+
+    /// Calls the filter function at `address` with `words` stack words after `this` and `out`
+    /// and checks that it stores the byte 1 at `out`.
+    fn check_out_byte(address: u32, words: usize) {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(4);
+        let mut arguments = vec![0u32, out];
+        arguments.extend(vec![0u32; words]);
+        e.call(address, &arguments);
+        assert_eq!(e.mem.u8(out), 1);
+    }
+
+    #[test]
+    fn fn_00c982a0_accepts_every_pair() {
+        check_out_byte(0x00c9_82a0, 5);
+    }
+
+    #[test]
+    fn fn_00c982b0_accepts_every_pair() {
+        check_out_byte(0x00c9_82b0, 7);
+    }
+
+    #[test]
+    fn fn_00c982c0_accepts_every_pair() {
+        check_out_byte(0x00c9_82c0, 4);
+    }
+
+    #[test]
+    fn fn_00c982d0_accepts_every_pair() {
+        check_out_byte(0x00c9_82d0, 2);
+    }
+
+    #[test]
+    fn fn_00c982e0_runs_the_base_destructor_and_frees_on_request() {
+        let (mut rig, freed) = batch_rig();
+        silent(&mut rig.e, &[RAY_CASTER_BASE_DESTRUCT]);
+        let object = rig.e.mem.alloc(0x40);
+        rig.e.mem.set_u16(object + 4, 0x20);
+        assert_eq!(rig.e.call(0x00c9_82e0, &args![object, 0u32]).u32(), object);
+        assert!(freed.borrow().is_empty());
+        assert_eq!(rig.e.call(0x00c9_82e0, &args![object, 1u32]).u32(), object);
+        assert_eq!(calls_to(&rig.e, RAY_CASTER_BASE_DESTRUCT).len(), 2);
+        let allocator = rig.e.mem.u32(rig.router + 0x10);
+        assert_eq!(freed.borrow().clone(), vec![vec![allocator, object, 0x20]]);
+    }
+
+    #[test]
+    fn simple_world_ray_caster_deleting_destructor_stores_the_base_table_and_frees() {
+        let (mut rig, _) = batch_rig();
+        silent(&mut rig.e, &[FREE_OBJECT]);
+        let object = rig.e.mem.alloc(0x40);
+        let returned = rig.e.call(0x00c9_8350, &args![object, 0u32]).u32();
+        assert_eq!(returned, object);
+        assert_eq!(rig.e.mem.u32(object), RAY_CASTER_BASE_VTABLE);
+        assert!(calls_to(&rig.e, FREE_OBJECT).is_empty());
+        rig.e.call(0x00c9_8350, &args![object, 1u32]);
+        assert_eq!(calls_to(&rig.e, FREE_OBJECT), vec![vec![object]]);
+    }
+
+    #[test]
+    fn fn_00c98370_resets_the_tables_and_frees_on_request() {
+        let (mut rig, freed) = batch_rig();
+        let object = rig.e.mem.alloc(0x40);
+        rig.e.mem.set_u16(object + 4, 0x30);
+        assert_eq!(rig.e.call(0x00c9_8370, &args![object, 0u32]).u32(), object);
+        assert_eq!(rig.e.mem.u32(object), REFERENCED_OBJECT_VTABLE);
+        assert_eq!(rig.e.mem.u32(object + 8), FILTER_BASE_VTABLE);
+        assert!(freed.borrow().is_empty());
+        rig.e.call(0x00c9_8370, &args![object, 1u32]);
+        let allocator = rig.e.mem.u32(rig.router + 0x10);
+        assert_eq!(freed.borrow().clone(), vec![vec![allocator, object, 0x30]]);
+    }
+
+    #[test]
+    fn world_deleting_destructor_runs_the_destructor_and_frees_on_request() {
+        let (mut rig, freed) = batch_rig();
+        silent(&mut rig.e, &[WORLD_DESTRUCTOR]);
+        let object = rig.e.mem.alloc(0x40);
+        rig.e.mem.set_u16(object + 4, 0x350);
+        assert_eq!(rig.e.call(0x00c9_83b0, &args![object, 0u32]).u32(), object);
+        assert!(freed.borrow().is_empty());
+        assert_eq!(rig.e.call(0x00c9_83b0, &args![object, 1u32]).u32(), object);
+        assert_eq!(calls_to(&rig.e, WORLD_DESTRUCTOR), vec![vec![object]; 2]);
+        let allocator = rig.e.mem.u32(rig.router + 0x10);
+        assert_eq!(freed.borrow().clone(), vec![vec![allocator, object, 0x350]]);
     }
 }
 
