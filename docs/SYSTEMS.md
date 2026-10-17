@@ -44,8 +44,8 @@ functions. Regenerate the numbers before relying on them.
 | FaceGen + fallout shared/facegen | 593 | 13 | 2 | Faces, head morphs, lip sync | A |
 | BSAudio + fallout/audio | 460 | 306 | 67 | Audio | A |
 | NiMain | 1,489 | 131 | 9 | Scene graph, cameras, properties | B |
-| BSShader | 995 | 1 | 0 | Shaders, lighting, materials | B |
-| NiXenonRenderer + d3d9/d3dx9 | 513 | 2 | 0 | Renderer back end (becomes Bevy/wgpu) | B |
+| BSShader | 1,548 | 3 | 0 | Shaders, passes, accumulators, image space (game code, ADR-0007; counts 2026-10-17) | B |
+| NiXenonRenderer + d3d9/d3dx9 | 976 | 7 | 1 | Gamebryo Direct3D 9 renderer, translated onto our own Direct3D 9 layer (ADR-0007; counts 2026-10-17) | B |
 | NiParticle | 633 | 0 | 0 | Particles, effects | B |
 | SpeedTree + fallout shared/speedtree | 496 | 22 | 4 | Trees | B |
 | BSMain | 819 | 237 | 29 | Scene helpers, culling, debris, scene graph | B |
@@ -75,11 +75,49 @@ functions. Regenerate the numbers before relying on them.
 ### Phase B: how it looks
 - **Bevy upgrade**, one version per PR, before the renderer work.
 - **Scene graph** (`NiMain`, `BSMain`): node updates, culling, LOD.
-- **Shaders and lighting** (`BSShader`): translate the game's shaders and lighting decisions; image space and HDR.
+- **Renderer** (`NiXenonRenderer`, `BSShader`): translate the Gamebryo Direct3D 9 renderer, the shader classes and passes, render targets, image space and HDR; their Direct3D 9 calls go to our own Direct3D 9 layer (ADR-0007, "Renderer units" below).
 - **Sky and weather**: sun, clouds, fog, precipitation, transitions.
 - **Terrain, trees and distant land**: SpeedTree, LOD, grass, water rendering.
 - **Effects**: particles, decals, blood, effect shaders, VATS and hit effects.
 - **Optional real-time shadows** (off by default, maintainer decision).
+
+### Renderer units (ADR-0007, 2026-10-17)
+
+The ledger used to count 2,115 functions as `platform`. Each one was read
+in the exe and sorted (the list stays in the private research tree):
+
+- **1,871 moved to `open`** (game code to translate). 1,823 are the
+  renderer: 926 in `NiXenonRenderer` (the Xbox name of the PC
+  `NiDX9Renderer`: device set-up and reset, render states, buffers,
+  textures, shader programs and their constant maps) and 897 in `BSShader`
+  (shader classes and passes, accumulators, batch rendering, image-space
+  effects). A scan of the disassembly finds COM-style calls (the interface
+  pointer pushed, as Direct3D 9 calls are made) in 206 of them; those calls
+  stay calls, to our own Direct3D 9 layer. The other 48 are game code inside
+  platform subsystems: archive and file helpers without OS calls in
+  `BSSystem` (archive name hashing, buffered reads,
+  `ArchiveManager::TrimFileName`), the `Archive` and `BSFile` destructors, a
+  `NiFile` method the map had put in the renderer, a `BSFileCache` slot the
+  map had named into `xaudio2`, the `NiTMap<const char*, char*>` template
+  code of the movie player (two of its slots named into `BSDiag`), and a
+  Havok stub named into `RemoteLog`. The ledger lists the ones whose unit
+  stays platform in `GAME_FUNCS`.
+- **244 stay `platform`**: 188 operating-system and service glue (Win32
+  file finding, the tasklet threads, the `BSFile` OS reads, the Xbox system
+  utilities, which use Steam on PC, Bink movie playback, input devices, the
+  allocator), 46 C runtime functions that Rust already stands in for, 5
+  D3DX import thunks (our Direct3D 9 layer supplies D3DX) and 5 Xbox-only
+  functions (no callers, and they byte-swap big-endian archive data).
+
+Placement: 101 functions joined an existing unit through
+`research/engine-map/unit_overrides.tsv` because they are RTTI vtable slots
+of that unit's class: 98 the map had put in a subsystem but no unit (44
+`NiDX9Renderer` slots went to `nixenonrenderer.cpp`, for example) and 3 the
+map had put in a wrong unit by name. 1,080 others were grouped into 148 new
+run units (`<subsystem>/run_<first address>`), 932 of them in the renderer.
+214 unit files were scaffolded (90 in `units/nixenonrenderer`, 110 in
+`units/bsshader`, 14 in `bssystem`, `bsmovie` and `remotelog`). No
+translation yet.
 
 ### Phase C: how it plays
 - **Actor values and combat math**: damage, hit chance, skills, SPECIAL, derived stats.
@@ -104,7 +142,7 @@ functions. Regenerate the numbers before relying on them.
 
 ### Platform (needed by all phases)
 - Windows stand-ins: memory, files (`BSFile` and `ReadF`, needed to finish the real quest loader), events, semaphores, threads (the seam), timers.
-- Direct3D 9 calls become Bevy/wgpu; DirectInput becomes Bevy input; XAudio2 and DirectSound become the audio back end.
+- Direct3D 9 calls go to our own Direct3D 9 layer on wgpu (ADR-0007), with D3DX supplied by that layer; DirectInput becomes Bevy input; XAudio2 and DirectSound become the audio back end.
 - The exe check: 1.4.0.525 now; GOG and Epic versions later (maintainer decision).
 
 ### After the port (planned, not part of 1:1)

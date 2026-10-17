@@ -2,15 +2,39 @@
 #![allow(clippy::module_inception)]
 
 pub mod archive;
+pub mod archive_xenon;
 pub mod bsfile;
 pub mod bsfilecache;
 pub mod bssearchpath;
 pub mod filefinder;
+pub mod run_00afcfe0;
+pub mod run_00afd230;
+pub mod run_00afd920;
+pub mod run_00afdc60;
+pub mod run_00aff0d0;
+pub mod run_00affd80;
+pub mod run_00afff50;
+pub mod run_00b006b0;
+pub mod run_00b00ec0;
+pub mod run_00b01510;
+pub mod run_00b027c0;
 
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(archive::funcs());
+    out.extend(archive_xenon::funcs());
     out.extend(bsfile::funcs());
     out.extend(bsfilecache::funcs());
     out.extend(bssearchpath::funcs());
     out.extend(filefinder::funcs());
+    out.extend(run_00afcfe0::funcs());
+    out.extend(run_00afd230::funcs());
+    out.extend(run_00afd920::funcs());
+    out.extend(run_00afdc60::funcs());
+    out.extend(run_00aff0d0::funcs());
+    out.extend(run_00affd80::funcs());
+    out.extend(run_00afff50::funcs());
+    out.extend(run_00b006b0::funcs());
+    out.extend(run_00b00ec0::funcs());
+    out.extend(run_00b01510::funcs());
+    out.extend(run_00b027c0::funcs());
 }

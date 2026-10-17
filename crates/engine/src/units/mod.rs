@@ -6,6 +6,7 @@ pub mod bscore;
 pub mod bshavok;
 pub mod bsmain;
 pub mod bsmenu;
+pub mod bsmovie;
 pub mod bsshader;
 pub mod bssystem;
 pub mod crt;
@@ -35,7 +36,9 @@ pub mod nicollision;
 pub mod nimain;
 pub mod niparticle;
 pub mod nisystem;
+pub mod nixenonrenderer;
 pub mod platform;
+pub mod remotelog;
 pub mod speedtree;
 pub mod unplaced;
 
@@ -48,6 +51,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     bshavok::funcs(out);
     bsmain::funcs(out);
     bsmenu::funcs(out);
+    bsmovie::funcs(out);
     bsshader::funcs(out);
     bssystem::funcs(out);
     d3dx9::funcs(out);
@@ -76,6 +80,8 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     nimain::funcs(out);
     niparticle::funcs(out);
     nisystem::funcs(out);
+    nixenonrenderer::funcs(out);
+    remotelog::funcs(out);
     speedtree::funcs(out);
     unplaced::funcs(out);
 }

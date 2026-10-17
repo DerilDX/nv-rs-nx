@@ -22,9 +22,27 @@ pub fn deleting_destructor_00e014d0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
     this
 }
 
+// Translated from 00e014c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkMemoryMeshShape::getClassType` (Xbox PDB): takes no arguments and returns the constant
+/// `0x0126_e330`, the address of the class record.
+pub fn hk_memory_mesh_shape_get_class_type(_e: &mut Engine) -> u32 {
+    0x0126_e330
+}
+
+// Translated from 00e01500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkMemoryMeshShape::getName` (Xbox PDB): the word at `+0x2c` of the shape with its low bit
+/// cleared (a flag bit; its meaning is unconfirmed).
+pub fn hk_memory_mesh_shape_get_name(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x2c) & 0xffff_fffe
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e0_14d0, deleting_destructor_00e014d0(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00e0_14c0, hk_memory_mesh_shape_get_class_type() -> u32),
+        entry!(0x00e0_14d0, deleting_destructor_00e014d0(Ptr, u8) -> Ptr),
+        entry!(0x00e0_1500, hk_memory_mesh_shape_get_name(Ptr) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +106,21 @@ mod tests {
     #[test]
     fn deleting_destructor_00e014d0_frees_only_when_bit_zero_is_set() {
         check(0x00e0_14d0, 0x00e4_a460);
+    }
+
+    #[test]
+    fn get_class_type_answers_the_class_record_address() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e0_14c0, &args![]).u32(), 0x0126_e330);
+    }
+
+    #[test]
+    fn get_name_clears_the_low_bit_of_the_word_at_0x2c() {
+        let mut e = Engine::new();
+        let shape = e.mem.alloc(0x40);
+        e.mem.set_u32(shape + 0x2c, 0x0123_4567);
+        assert_eq!(e.call(0x00e0_1500, &args![shape]).u32(), 0x0123_4566);
+        e.mem.set_u32(shape + 0x2c, 0x0123_4566);
+        assert_eq!(e.call(0x00e0_1500, &args![shape]).u32(), 0x0123_4566);
     }
 }

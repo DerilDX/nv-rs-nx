@@ -76,7 +76,7 @@ plugins, Linux and macOS, and VR.
 ## Progress
 
 <p align="center">
-  <img src="docs/media/progress.svg" alt="Engine port progress: 68.9% of the original program's functions covered" width="100%">
+  <img src="docs/media/progress.svg" alt="Engine port progress: 70.2% of the original program's functions covered" width="100%">
 </p>
 
 The original game's systems switch over one at a time, each in its own
@@ -85,11 +85,11 @@ playable build:
 | | System | Status |
 | :---: | --- | --- |
 | ✅ | **Foundations:** the map of the original program, the frame order, the engine running in play | Done (Build 42) |
-| 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: the character controller is done |
-| ⬜ | **Animation and faces** | Next |
+| 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: the character controller is done; physics about 79% translated |
+| 🔨 | **Animation and faces** | Started: about 10% translated |
 | ⬜ | **Audio:** sounds, music and the radio | About two-thirds translated |
-| ⬜ | **Graphics:** lighting, weather and effects matching the original | Planned |
-| ⬜ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting and minigames | Mostly translated, not yet switched on |
+| 🔨 | **Graphics:** lighting, weather and effects matching the original | Started: trees (SpeedTree) translated; the game's own renderer is being translated to run on our own Direct3D 9 layer ([ADR-0007](docs/adr/0007-renderer-translated-on-own-d3d9-layer.md)); about a quarter done |
+| ⬜ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting and minigames | About two-thirds translated, not yet switched on |
 | ⬜ | **Saves and the open world:** original saves, world streaming | Planned |
 
 After that come optional bug fixes, script-extender compatibility and more

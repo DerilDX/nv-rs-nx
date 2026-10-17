@@ -151,6 +151,73 @@ pub fn return_constant_00c903d0(_e: &mut Engine) -> u32 {
     0x0102_e388
 }
 
+/// `hkStatisticsCollectorUtil::hasContents` (`00cf6170`, cdecl `(out byte, class)`, returns
+/// `out`) and `addClassContentsAll` (`00cf6920`, cdecl `(object, class, collector)`).
+const HAS_CONTENTS: u32 = 0x00cf_6170;
+const ADD_CLASS_CONTENTS_ALL: u32 = 0x00cf_6920;
+/// The `hkClass` record at `0x01268748` that `calcContentStatistics` leaves out.
+const SKIPPED_CLASS: u32 = 0x0126_8748;
+
+// Translated from 00c90360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkReferencedObject::calcContentStatistics` (Xbox PDB), `this` = the object, `(collector,
+/// class)`: for a class that is not null and not the record at `0x01268748`, asks
+/// `hasContents` (the byte goes into the stack slot of the class argument) and when it is
+/// nonzero calls `addClassContentsAll(this, class, collector)`.
+pub fn calc_content_statistics(e: &mut Engine, this: Ptr, collector: Ptr, class: Ptr) {
+    if class.addr() == 0 || class.addr() == SKIPPED_CLASS {
+        return;
+    }
+    let has_contents = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), class.addr());
+        let out = e.call(HAS_CONTENTS, &args![slot, class]).u32();
+        e.mem.u8(out)
+    });
+    if has_contents != 0 {
+        e.call(ADD_CLASS_CONTENTS_ALL, &args![this, class, collector]);
+    }
+}
+
+// Translated from 00c90410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkReferencedObject::setLockMode` (Xbox PDB), cdecl `(mode)`: stores `mode` as the mode word
+/// (`+8`) of the lock record held at `0x012681d4`.
+pub fn set_lock_mode(e: &mut Engine, mode: u32) {
+    let lock = e.mem.u32(LOCK_RECORD);
+    e.mem.set_u32(lock + 8, mode);
+}
+
+// Translated from 00c90670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkReferencedObject::addReferences` (Xbox PDB), cdecl `(objects, count, stride)`: adds a
+/// reference (`addReferenceLockUnchecked`) to each of `count` objects whose pointers are
+/// `stride` bytes apart from `objects`. With a nonzero lock mode (`+8` of the lock record)
+/// and a thread that is not the owner the whole run is done under the recursive lock.
+pub fn add_references(e: &mut Engine, objects: Ptr, count: i32, stride: u32) {
+    let lock = e.mem.u32(LOCK_RECORD);
+    let mut locked = false;
+    if e.mem.u32(lock + 8) != 0 {
+        let index = e.mem.u32(LOCK_TLS_INDEX);
+        locked = e.call(TLS_GET_VALUE, &args![index]).u32() != OWNER_MARK;
+    }
+    if locked {
+        lock_enter(e, lock);
+    }
+    let mut cursor = objects.addr();
+    let mut remaining = count;
+    if remaining > 0 {
+        loop {
+            let object = e.mem.u32(cursor);
+            add_reference_lock_unchecked(e, Ptr::new(object));
+            cursor = cursor.wrapping_add(stride);
+            remaining -= 1;
+            if remaining == 0 {
+                break;
+            }
+        }
+    }
+    if locked {
+        lock_leave(e, lock);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -161,6 +228,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c9_04e0, fn_00c904e0()),
         entry!(0x00c9_0510, fn_00c90510(Ptr)),
         entry!(0x00c9_05b0, fn_00c905b0(Ptr)),
+        entry!(0x00c9_0360, calc_content_statistics(Ptr, Ptr, Ptr)),
+        entry!(0x00c9_0410, set_lock_mode(u32)),
+        entry!(0x00c9_0670, add_references(Ptr, i32, u32)),
     ]
 }
 
@@ -365,5 +435,94 @@ mod tests {
     fn return_constant_00c903d0_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c9_03d0, &args![]).u32(), 0x0102_e388);
+    }
+
+    #[test]
+    fn set_lock_mode_stores_the_word_in_the_lock_record() {
+        let mut e = engine();
+        e.call(0x00c9_0410, &args![2u32]);
+        assert_eq!(e.mem.u32(LOCK + 8), 2);
+    }
+
+    fn add_references_objects(e: &mut Engine) -> (u32, u32, u32) {
+        let (first, _) = object(e, 0x20, 1);
+        let (second, _) = object(e, 0x20, 7);
+        // Pointers 8 bytes apart.
+        let array = e.mem.alloc(0x20);
+        e.mem.set_u32(array, first);
+        e.mem.set_u32(array + 8, second);
+        (array, first, second)
+    }
+
+    #[test]
+    fn add_references_without_locking_counts_each_object() {
+        let mut e = engine();
+        let (_, log) = install_imports(&mut e);
+        let (array, first, second) = add_references_objects(&mut e);
+        e.call(0x00c9_0670, &args![array, 2u32, 8u32]);
+        assert_eq!(e.mem.u16(first + 6), 2);
+        assert_eq!(e.mem.u16(second + 6), 8);
+        assert!(log.borrow().is_empty());
+        // A count of zero touches nothing.
+        e.call(0x00c9_0670, &args![array, 0u32, 8u32]);
+        assert_eq!(e.mem.u16(first + 6), 2);
+    }
+
+    #[test]
+    fn add_references_under_the_lock_enters_and_leaves_it() {
+        let mut e = engine();
+        let (slot, log) = install_imports(&mut e);
+        e.mem.set_u32(LOCK + 8, 1);
+        let (array, first, second) = add_references_objects(&mut e);
+        e.call(0x00c9_0670, &args![array, 2u32, 8u32]);
+        assert_eq!(e.mem.u16(first + 6), 2);
+        assert_eq!(e.mem.u16(second + 6), 8);
+        assert!(log
+            .borrow()
+            .contains(&(ENTER_CRITICAL_SECTION, LOCK + 0x18)));
+        assert!(log
+            .borrow()
+            .contains(&(LEAVE_CRITICAL_SECTION, LOCK + 0x18)));
+        assert_eq!(*slot.borrow(), 0);
+    }
+
+    #[test]
+    fn add_references_as_the_owner_skips_the_lock() {
+        let mut e = engine();
+        let (slot, log) = install_imports(&mut e);
+        *slot.borrow_mut() = OWNER_MARK;
+        e.mem.set_u32(LOCK + 8, 1);
+        let (array, first, _) = add_references_objects(&mut e);
+        e.call(0x00c9_0670, &args![array, 1u32, 8u32]);
+        assert_eq!(e.mem.u16(first + 6), 2);
+        assert!(!entered(&log));
+    }
+
+    #[test]
+    fn calc_content_statistics_adds_the_contents_of_classes_that_have_some() {
+        let mut e = engine();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register(HAS_CONTENTS, |e, a| {
+            // The class record's first word says whether it has contents.
+            let has = e.mem.u32(a[1]) != 0;
+            e.mem.set_u8(a[0], u8::from(has));
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        e.register_double(ADD_CLASS_CONTENTS_ALL, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let with = e.mem.alloc(8);
+        e.mem.set_u32(with, 1);
+        let without = e.mem.alloc(8);
+        e.call(0x00c9_0360, &args![0x10u32, 0x20u32, with]);
+        e.call(0x00c9_0360, &args![0x10u32, 0x20u32, without]);
+        e.call(0x00c9_0360, &args![0x10u32, 0x20u32, 0u32]);
+        e.call(0x00c9_0360, &args![0x10u32, 0x20u32, SKIPPED_CLASS]);
+        assert_eq!(*seen.borrow(), vec![vec![0x10, with, 0x20]]);
     }
 }

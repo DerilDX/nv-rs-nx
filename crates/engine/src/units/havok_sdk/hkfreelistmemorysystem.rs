@@ -224,6 +224,330 @@ pub fn hk_free_list_memory_system_thread_init(
     }
 }
 
+/// `hkThreadMemory`'s virtual table (`010cacd0`; slot 0 is `00cd06a0`) and the memory
+/// block server's (`010cad0c`).
+const THREAD_MEMORY_VTABLE: u32 = 0x010c_acd0;
+const BLOCK_SERVER_VTABLE: u32 = 0x010c_ad0c;
+/// Callees outside this file: `hkThreadMemory::releaseCachedMemory` (`00d2c7a0`) and
+/// `getCachedSizeUnchecked` (`00d2c350`), both `thiscall` with no word; the base
+/// allocator destructor (`00cbf1a0`); `DeleteCriticalSection` (`kernel32` import slot,
+/// `stdcall`, one word); the solver allocator's destructor (`00d5e940`); the free list
+/// allocator's destructor (`00d5ffd0`); `hkMemorySystem`'s destructor (`00cbbfe0`);
+/// `hkMemUtil::memSet` (`00d2cab0`, cdecl: destination, value, count).
+const THREAD_MEMORY_RELEASE_CACHED: u32 = 0x00d2_c7a0;
+const THREAD_MEMORY_CACHED_SIZE: u32 = 0x00d2_c350;
+const BASE_ALLOCATOR_DESTRUCTOR: u32 = 0x00cb_f1a0;
+const DELETE_CRITICAL_SECTION: u32 = 0x00fd_f058;
+const SOLVER_ALLOCATOR_DESTRUCTOR: u32 = 0x00d5_e940;
+const FREE_LIST_ALLOCATOR_DESTRUCTOR: u32 = 0x00d5_ffd0;
+const MEMORY_SYSTEM_BASE_DESTRUCTOR: u32 = 0x00cb_bfe0;
+const MEM_SET: u32 = 0x00d2_cab0;
+/// The stream's text writer (`00cc01c0`, `thiscall` on the stream, one word) and the two
+/// texts `printStatistics` writes (`010cade0`, `010cadb4`); `hkMemorySystem`'s own
+/// `_printStatistics` (`00cbc220`, `thiscall`: stream, input); the memory router getter
+/// (`00c85750`, answers the router whose word at `+0x14` is the allocator) and the array
+/// growth (`00c90940`, cdecl: allocator, array, element size).
+const STREAM_WRITE_TEXT: u32 = 0x00cc_01c0;
+const STATISTICS_TEXT_FIRST: u32 = 0x010c_ade0;
+const STATISTICS_TEXT_SECOND: u32 = 0x010c_adb4;
+const MEMORY_SYSTEM_PRINT: u32 = 0x00cb_c220;
+const ROUTER_GETTER: u32 = 0x00c8_5750;
+const ARRAY_RESERVE_MORE: u32 = 0x00c9_0940;
+/// The bit an `hkArray` capacity word carries when the array does not own its memory.
+const ARRAY_NOT_OWNED: u32 = 0x8000_0000;
+const ARRAY_CAPACITY_MASK: u32 = 0x3fff_ffff;
+
+// Translated from 00cd06a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkThreadMemory::_scalar_deleting_destructor_` (Xbox PDB, from the engine map's vtable
+/// entry), `thiscall`, `RET 4`: stores the thread memory's virtual table, releases the
+/// cached memory (`00d2c7a0`) and runs the base destructor (`00cbf1a0`). The flags word is
+/// never read and nothing is freed here. Returns `this`.
+pub fn hk_thread_memory_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_1: u32,
+) -> Ptr {
+    e.mem.set_u32(this.addr(), THREAD_MEMORY_VTABLE);
+    e.call(THREAD_MEMORY_RELEASE_CACHED, &args![this]);
+    e.call(BASE_ALLOCATOR_DESTRUCTOR, &args![this]);
+    this
+}
+
+// Translated from 00cd06d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkFreeListMemorySystem::walkMemory` (Xbox PDB), `thiscall`, tail call: the free list
+/// allocator at `+0x1c` runs its virtual slot `0x5c` (`walkMemory`, `00d600c0`) with the
+/// same two words (`callback`, `user`) and answers what it answers.
+pub fn hk_free_list_memory_system_walk_memory(
+    e: &mut Engine,
+    this: Ptr,
+    callback: u32,
+    user: u32,
+) -> u32 {
+    e.vcall(this.addr() + SUB_OBJECT_1C, 0x5c, &args![callback, user])
+        .u32()
+}
+
+// Translated from 00cd06e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkFreeListMemorySystem::garbageCollect` (Xbox PDB), `thiscall`, tail call: the free
+/// list allocator at `+0x1c` runs its virtual slot `0x40` (`garbageCollect`, `00d5fac0`).
+pub fn hk_free_list_memory_system_garbage_collect(e: &mut Engine, this: Ptr) {
+    e.vcall(this.addr() + SUB_OBJECT_1C, 0x40, &args![]);
+}
+
+// Translated from 00cd06f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkFreeListMemorySystem::getMemoryStatistics` (Xbox PDB), `thiscall`, `RET 4`: for each
+/// of the 32 thread memory records (`+0xc6c`, 0x138 apart) whose used byte (`+0x12c`) is
+/// set, adds the record's cached size (`00d2c350`) to the word at `+4` of `stats` and the
+/// record's word at `+0x130` to the word at `+0`. Ends by clearing the word at `+8`.
+pub fn hk_free_list_memory_system_get_memory_statistics(e: &mut Engine, this: Ptr, stats: Ptr) {
+    let base = this.addr();
+    let stats = stats.addr();
+    for index in 0..THREAD_MEMORY_COUNT {
+        let record = base + THREAD_MEMORIES + index * THREAD_MEMORY_SIZE;
+        if e.mem.u8(record + 0x12c) != 0 {
+            let cached = e.call(THREAD_MEMORY_CACHED_SIZE, &args![record]).u32();
+            let second = e.mem.u32(stats + 4).wrapping_add(cached);
+            e.mem.set_u32(stats + 4, second);
+            let first = e.mem.u32(stats).wrapping_add(e.mem.u32(record + 0x130));
+            e.mem.set_u32(stats, first);
+        }
+    }
+    e.mem.set_u32(stats + 8, 0);
+}
+
+// Translated from 00cd0730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkFreeListMemorySystem::getMemorySnapshot` (Xbox PDB), `thiscall`, `RET 4`: answers 1;
+/// its argument is never read.
+pub fn hk_free_list_memory_system_get_memory_snapshot(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+) -> u32 {
+    1
+}
+
+// Translated from 00cd07b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkFreeListMemorySystem::mainQuit` (Xbox PDB), `thiscall`, `RET 4` (`flags`): when
+/// `flags & 2` and the solver buffer (`+0xb34` to `+0xb38`) is not empty, gives it back
+/// to the allocator at `+4` (its slot 8: buffer, size) and resets the solver allocator
+/// at `+0xb30` (`00d5e960`: 0, 0). When `flags & 1`, runs the virtual slot `0x10`
+/// (`threadQuit`, `00cd0940`) with the router at `+0xb0c` and `flags`, then the free list
+/// allocator's slot `0x40` (`garbageCollect`). Always clears the word at `+4`.
+pub fn hk_free_list_memory_system_main_quit(e: &mut Engine, this: Ptr, flags: u32) {
+    let base = this.addr();
+    if flags & 2 != 0 {
+        let size = e
+            .mem
+            .u32(base + SOLVER_ALLOCATOR + 8)
+            .wrapping_sub(e.mem.u32(base + SOLVER_ALLOCATOR + 4));
+        if size != 0 {
+            let allocator = e.mem.u32(base + 4);
+            let buffer = e.mem.u32(base + SOLVER_ALLOCATOR + 4);
+            e.vcall(allocator, 8, &args![buffer, size]);
+            e.call(
+                SOLVER_ALLOCATOR_SET_BUFFER,
+                &args![base + SOLVER_ALLOCATOR, 0u32, 0u32],
+            );
+        }
+    }
+    if flags & 1 != 0 {
+        e.vcall(base, 0x10, &args![base + MEMORY_ROUTER, flags]);
+        e.vcall(base + SUB_OBJECT_1C, 0x40, &args![]);
+    }
+    e.mem.set_u32(base + 4, 0);
+}
+
+// Translated from 00cd0940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkFreeListMemorySystem::threadQuit` (Xbox PDB), `thiscall`, `RET 8` (`router`,
+/// `flags`): the thread memory record is the one at index `router + 0x20` of the records
+/// at `+0xc6c`. When `flags & 2`: if the record's word at `+0x130` is not 0 and the
+/// router's buffer (`+4` to `+8`) is not empty, gives the buffer back to the free list
+/// allocator at `+0x1c` (slot 8: buffer, size) and clears the router's `+0`, `+4` and
+/// `+8`; then releases the record's cached memory (its slot `0x34`) and clears the
+/// router's `+0xc` and `+0x18`. When `flags & 1`: releases the cached memory again,
+/// clears the record's `+0x128` and used byte `+0x12c` and zeroes the router's 0x24
+/// bytes (`00d2cab0`).
+pub fn hk_free_list_memory_system_thread_quit(e: &mut Engine, this: Ptr, router: u32, flags: u32) {
+    let base = this.addr();
+    let record = e
+        .mem
+        .u32(router + 0x20)
+        .wrapping_mul(THREAD_MEMORY_SIZE)
+        .wrapping_add(base)
+        .wrapping_add(THREAD_MEMORIES);
+    if flags & 2 != 0 {
+        if e.mem.u32(record + 0x130) != 0 {
+            let start = e.mem.u32(router + 4);
+            let size = e.mem.u32(router + 8).wrapping_sub(start);
+            if size != 0 {
+                e.vcall(base + SUB_OBJECT_1C, 8, &args![start, size]);
+                e.mem.set_u32(router + 4, 0);
+                e.mem.set_u32(router, 0);
+                e.mem.set_u32(router + 8, 0);
+            }
+        }
+        e.vcall(record, 0x34, &args![]);
+        e.mem.set_u32(router + 0xc, 0);
+        e.mem.set_u32(router + 0x18, 0);
+    }
+    if flags & 1 != 0 {
+        e.vcall(record, 0x34, &args![]);
+        e.mem.set_u32(record + 0x128, 0);
+        e.mem.set_u8(record + 0x12c, 0);
+        e.call(MEM_SET, &args![router, 0u32, 0x24u32]);
+    }
+}
+
+// Translated from 00cd09d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkFreeListMemorySystem::~hkFreeListMemorySystem` (Xbox PDB), `thiscall`: stores the
+/// virtual table, clears the global at `012686cc`, deletes the critical section at
+/// `+0x336c`, destroys the 32 thread memory records from the last to the first (store
+/// the thread memory virtual table, `00d2c7a0`, `00cbf1a0`), destroys the solver
+/// allocator (`+0xb30`, `00d5e940`), deletes the critical section at `+0xad0` and runs
+/// the base destructor on the sub-object at `+0xab8` (`00cbf1a0`), destroys the free
+/// list allocator at `+0x1c` (`00d5ffd0`), stores the block server's virtual table at
+/// `+8` and tail-calls `hkMemorySystem`'s destructor (`00cbbfe0`).
+pub fn hk_free_list_memory_system_destructor(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, VTABLE);
+    e.set_global(SYSTEM_ALLOCATOR_GLOBAL, 0u32);
+    e.call(DELETE_CRITICAL_SECTION, &args![base + CRITICAL_SECTION_B]);
+    let mut record = base + CRITICAL_SECTION_B;
+    let mut remaining = 0x1fi32;
+    loop {
+        record = record.wrapping_sub(THREAD_MEMORY_SIZE);
+        e.mem.set_u32(record, THREAD_MEMORY_VTABLE);
+        e.call(THREAD_MEMORY_RELEASE_CACHED, &args![record]);
+        e.call(BASE_ALLOCATOR_DESTRUCTOR, &args![record]);
+        remaining -= 1;
+        if remaining < 0 {
+            break;
+        }
+    }
+    e.call(SOLVER_ALLOCATOR_DESTRUCTOR, &args![base + SOLVER_ALLOCATOR]);
+    e.call(DELETE_CRITICAL_SECTION, &args![base + 0xab8 + 0x18]);
+    e.call(BASE_ALLOCATOR_DESTRUCTOR, &args![base + 0xab8]);
+    e.call(FREE_LIST_ALLOCATOR_DESTRUCTOR, &args![base + SUB_OBJECT_1C]);
+    e.mem.set_u32(base + SUB_OBJECT_8, BLOCK_SERVER_VTABLE);
+    e.call(MEMORY_SYSTEM_BASE_DESTRUCTOR, &args![base]);
+}
+
+// Translated from 00cd0b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkFreeListMemorySystem::printStatistics` (Xbox PDB), `thiscall`, `RET 4` (`stream`):
+/// writes the two texts (`010cade0`, `010cadb4`) to the stream (`00cc01c0`), then builds
+/// the `hkMemorySystem::_PrintStatisticsInput` in a local of 0x24 bytes: the word at
+/// `+0xb08` first, two empty `hkArray`s (at `+4` and `+0x10`; capacity word
+/// `0x80000000`) and, in the last word, the free list allocator's soft limit (its slot
+/// `0x50`, called on the sub-object at `+0x1c`). For each used thread memory record (32,
+/// `+0xc6c`, 0x138 apart; used byte `+0x12c`) the record's address is appended to the
+/// first array and the record's word at `+0x134` to the second, growing an array with
+/// `00c90940` through the memory router's allocator (`00c85750`, `+0x14`; element size 4)
+/// when it is full. Then `hkMemorySystem::_printStatistics` (`00cbc220`) prints the
+/// statistics and the input's destructor (`00cd0c80`) frees the arrays.
+pub fn hk_free_list_memory_system_print_statistics(e: &mut Engine, this: Ptr, stream: u32) {
+    let base = this.addr();
+    e.call(STREAM_WRITE_TEXT, &args![stream, STATISTICS_TEXT_FIRST]);
+    e.call(STREAM_WRITE_TEXT, &args![stream, STATISTICS_TEXT_SECOND]);
+    e.with_stack(0x24, |e, input| {
+        let at = input.addr();
+        e.mem.set_u32(at + 0xc, ARRAY_NOT_OWNED);
+        e.mem.set_u32(at + 0x18, ARRAY_NOT_OWNED);
+        for offset in [0x4, 0x8, 0x10, 0x14, 0x1c, 0x20] {
+            e.mem.set_u32(at + offset, 0);
+        }
+        let limit = e.vcall(base + SUB_OBJECT_1C, 0x50, &args![]).u32();
+        e.mem.set_u32(at + 0x20, limit);
+        let word = e.mem.u32(base + 0xb08);
+        e.mem.set_u32(at, word);
+        for index in 0..THREAD_MEMORY_COUNT {
+            let record = base + THREAD_MEMORIES + index * THREAD_MEMORY_SIZE;
+            if e.mem.u8(record + 0x12c) == 0 {
+                continue;
+            }
+            for (array, value) in [(at + 4, record), (at + 0x10, e.mem.u32(record + 0x134))] {
+                let router = e.call(ROUTER_GETTER, &args![]).u32();
+                let capacity = e.mem.u32(array + 8) & ARRAY_CAPACITY_MASK;
+                if e.mem.u32(array + 4) == capacity {
+                    let allocator = e.mem.u32(router + 0x14);
+                    e.call(ARRAY_RESERVE_MORE, &args![allocator, array, 4u32]);
+                }
+                let data = e.mem.u32(array);
+                let size = e.mem.u32(array + 4);
+                e.mem
+                    .set_u32(data.wrapping_add(size.wrapping_mul(4)), value);
+                e.mem.set_u32(array + 4, size.wrapping_add(1));
+            }
+        }
+        e.call(MEMORY_SYSTEM_PRINT, &args![this, stream, input]);
+        hk_memory_system_print_statistics_input_destructor(e, input);
+    });
+}
+
+// Translated from 00cd0c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkLeakDetectAllocator::_scalar_deleting_destructor_` (Xbox PDB, the engine map's
+/// vtable entry), `thiscall`, `RET 4`: deletes the critical section at `+0x18` and runs
+/// the base destructor (`00cbf1a0`). The flags word is never read and nothing is freed
+/// here. Returns `this`.
+pub fn hk_leak_detect_allocator_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_1: u32,
+) -> Ptr {
+    e.call(DELETE_CRITICAL_SECTION, &args![this.addr() + 0x18]);
+    e.call(BASE_ALLOCATOR_DESTRUCTOR, &args![this]);
+    this
+}
+
+// Translated from 00cd0c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkFreeListMemorySystem::_scalar_deleting_destructor_` (Xbox PDB), `thiscall`,
+/// `RET 4`: runs the destructor (`00cd09d0`) and answers `this`; the flags word is never
+/// read and nothing is freed here.
+pub fn hk_free_list_memory_system_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_1: u32,
+) -> Ptr {
+    hk_free_list_memory_system_destructor(e, this);
+    this
+}
+
+// Translated from 00cd0c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkMemorySystem::_PrintStatisticsInput::~_PrintStatisticsInput` (Xbox PDB), `thiscall`:
+/// the two `hkArray`s of the input (the one at `+0x10`, then the one at `+4`; data, size,
+/// capacity-and-flag) are emptied: the size is cleared and, unless the capacity word has
+/// the not-owned bit, the data is freed through the memory router's allocator (`00c85750`,
+/// `+0x14`, slot `0x10`: data, capacity times 4 bytes); then the data is cleared and the
+/// capacity word set to `0x80000000`.
+pub fn hk_memory_system_print_statistics_input_destructor(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    for array in [at + 0x10, at + 4] {
+        let router = e.call(ROUTER_GETTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x14);
+        let capacity = e.mem.u32(array + 8);
+        e.mem.set_u32(array + 4, 0);
+        if (capacity as i32) >= 0 {
+            let bytes = (capacity & ARRAY_CAPACITY_MASK).wrapping_mul(4);
+            let data = e.mem.u32(array);
+            e.vcall(allocator, 0x10, &args![data, bytes]);
+        }
+        e.mem.set_u32(array, 0);
+        e.mem.set_u32(array + 8, ARRAY_NOT_OWNED);
+    }
+}
+
+// Translated from 00d60540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkMemoryBlockServer::_scalar_deleting_destructor_` (Xbox PDB), `thiscall`, `RET 4`:
+/// stores the block server's virtual table (`010cad0c`) and answers `this`; the flags
+/// word is never read and nothing is freed here.
+pub fn hk_memory_block_server_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_1: u32,
+) -> Ptr {
+    e.mem.set_u32(this.addr(), BLOCK_SERVER_VTABLE);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -238,6 +562,31 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00cd0a60,
             hk_free_list_memory_system_hk_free_list_memory_system(Ptr) -> Ptr
         ),
+        entry!(0x00cd06a0, hk_thread_memory_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x00cd06d0, hk_free_list_memory_system_walk_memory(Ptr, u32, u32) -> u32),
+        entry!(0x00cd06e0, hk_free_list_memory_system_garbage_collect(Ptr)),
+        entry!(
+            0x00cd06f0,
+            hk_free_list_memory_system_get_memory_statistics(Ptr, Ptr)
+        ),
+        entry!(0x00cd0730, hk_free_list_memory_system_get_memory_snapshot(Ptr, u32) -> u32),
+        entry!(0x00cd07b0, hk_free_list_memory_system_main_quit(Ptr, u32)),
+        entry!(
+            0x00cd0940,
+            hk_free_list_memory_system_thread_quit(Ptr, u32, u32)
+        ),
+        entry!(0x00cd09d0, hk_free_list_memory_system_destructor(Ptr)),
+        entry!(
+            0x00cd0b30,
+            hk_free_list_memory_system_print_statistics(Ptr, u32)
+        ),
+        entry!(0x00cd0c50, hk_leak_detect_allocator_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x00cd0c70, hk_free_list_memory_system_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(
+            0x00cd0c80,
+            hk_memory_system_print_statistics_input_destructor(Ptr)
+        ),
+        entry!(0x00d60540, hk_memory_block_server_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -464,5 +813,377 @@ mod tests {
             assert_eq!(e.mem.u32(record + 0x130), 0);
             assert_eq!(e.mem.u32(record + 0x134), 0xcdcd_cdcd);
         }
+    }
+
+    // ---- tests of the second batch (statistics, quit, destructors, printStatistics) ----
+
+    const SYSTEM_VTABLE: u32 = 0x4400_1000;
+    const ALLOCATOR_VTABLE: u32 = 0x4400_1100;
+    const LIST_VTABLE: u32 = 0x4400_1200;
+    const RECORD_VTABLE: u32 = 0x4400_1300;
+    const TARGET_A: u32 = 0x4400_0101;
+    const TARGET_B: u32 = 0x4400_0102;
+    const TARGET_C: u32 = 0x4400_0103;
+
+    fn vtable_with(e: &mut Engine, address: u32, slots: &[(u32, u32)]) {
+        e.map(address, 0x80);
+        for (offset, target) in slots {
+            e.mem.set_u32(address + offset, *target);
+        }
+    }
+
+    fn zeroed_system(e: &mut Engine) -> u32 {
+        e.mem.alloc(0x3400)
+    }
+
+    fn logged(e: &mut Engine, address: u32) -> Vec<Vec<u32>> {
+        calls_to(e.call_log.as_ref().unwrap(), address)
+    }
+
+    #[test]
+    fn the_thread_memory_destructor_releases_the_cache_and_runs_the_base_destructor() {
+        let mut e = Engine::new();
+        e.register(THREAD_MEMORY_RELEASE_CACHED, |_, _| Ret::default());
+        e.register(BASE_ALLOCATOR_DESTRUCTOR, |_, _| Ret::default());
+        let object = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00cd_06a0, &args![object, 1u32]).u32(), object);
+        assert_eq!(e.mem.u32(object), THREAD_MEMORY_VTABLE);
+        let order: Vec<u32> = e.call_log.as_ref().unwrap().iter().map(|c| c.0).collect();
+        assert_eq!(
+            order,
+            vec![
+                0x00cd_06a0,
+                THREAD_MEMORY_RELEASE_CACHED,
+                BASE_ALLOCATOR_DESTRUCTOR
+            ]
+        );
+    }
+
+    #[test]
+    fn walk_and_garbage_collect_go_to_the_free_list_allocator() {
+        let mut e = Engine::new();
+        let system = zeroed_system(&mut e);
+        e.mem.set_u32(system + 0x1c, LIST_VTABLE);
+        vtable_with(&mut e, LIST_VTABLE, &[(0x5c, TARGET_A), (0x40, TARGET_B)]);
+        e.register(TARGET_A, |_, _| Ret {
+            eax: 7,
+            ..Ret::default()
+        });
+        e.register(TARGET_B, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00cd_06d0, &args![system, 0x7000u32, 0x1234u32])
+                .u32(),
+            7
+        );
+        e.call(0x00cd_06e0, &args![system]);
+        assert_eq!(
+            logged(&mut e, TARGET_A),
+            vec![vec![system + 0x1c, 0x7000, 0x1234]]
+        );
+        assert_eq!(logged(&mut e, TARGET_B), vec![vec![system + 0x1c]]);
+    }
+
+    #[test]
+    fn the_statistics_add_the_used_thread_memories() {
+        let mut e = Engine::new();
+        e.register(THREAD_MEMORY_CACHED_SIZE, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x100),
+            ..Ret::default()
+        });
+        let system = zeroed_system(&mut e);
+        for (index, cached, held) in [(0u32, 7u32, 100u32), (5, 9, 40), (6, 1000, 1000)] {
+            let record = system + 0xc6c + index * 0x138;
+            e.mem.set_u32(record + 0x100, cached);
+            e.mem.set_u32(record + 0x130, held);
+            // Record 6 is not marked used.
+            e.mem.set_u8(record + 0x12c, u8::from(index != 6));
+        }
+        let stats = e.mem.alloc(0x10);
+        e.mem.set_u32(stats, 1);
+        e.mem.set_u32(stats + 4, 2);
+        e.mem.set_u32(stats + 8, 0x55);
+        e.call(0x00cd_06f0, &args![system, stats]);
+        assert_eq!(e.mem.u32(stats), 141);
+        assert_eq!(e.mem.u32(stats + 4), 18);
+        assert_eq!(e.mem.u32(stats + 8), 0);
+    }
+
+    #[test]
+    fn the_memory_snapshot_answers_one() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00cd_0730, &args![0x7000u32, 0u32]).u32(), 1);
+    }
+
+    #[test]
+    fn main_quit_frees_the_solver_buffer_and_quits_the_threads() {
+        let mut e = Engine::new();
+        e.register(SOLVER_ALLOCATOR_SET_BUFFER, |_, _| Ret::default());
+        let system = zeroed_system(&mut e);
+        e.mem.set_u32(system, SYSTEM_VTABLE);
+        vtable_with(&mut e, SYSTEM_VTABLE, &[(0x10, TARGET_A)]);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, ALLOCATOR_VTABLE);
+        vtable_with(&mut e, ALLOCATOR_VTABLE, &[(8, TARGET_B)]);
+        e.mem.set_u32(system + 4, allocator);
+        e.mem.set_u32(system + 0x1c, LIST_VTABLE);
+        vtable_with(&mut e, LIST_VTABLE, &[(0x40, TARGET_C)]);
+        e.mem.set_u32(system + 0xb34, 0x5000);
+        e.mem.set_u32(system + 0xb38, 0x5100);
+        e.register(TARGET_A, |_, _| Ret::default());
+        e.register(TARGET_B, |_, _| Ret::default());
+        e.register(TARGET_C, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00cd_07b0, &args![system, 3u32]);
+        assert_eq!(
+            logged(&mut e, TARGET_B),
+            vec![vec![allocator, 0x5000, 0x100]]
+        );
+        assert_eq!(
+            logged(&mut e, SOLVER_ALLOCATOR_SET_BUFFER),
+            vec![vec![system + 0xb30, 0, 0]]
+        );
+        assert_eq!(
+            logged(&mut e, TARGET_A),
+            vec![vec![system, system + 0xb0c, 3]]
+        );
+        assert_eq!(logged(&mut e, TARGET_C), vec![vec![system + 0x1c]]);
+        assert_eq!(e.mem.u32(system + 4), 0);
+        // Flag 2 alone with an empty buffer frees nothing and quits no thread.
+        e.mem.set_u32(system + 4, allocator);
+        e.mem.set_u32(system + 0xb38, 0x5000);
+        e.call_log = Some(vec![]);
+        e.call(0x00cd_07b0, &args![system, 2u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        assert_eq!(e.mem.u32(system + 4), 0);
+        // No flags: only the allocator word is cleared.
+        e.mem.set_u32(system + 4, allocator);
+        e.call(0x00cd_07b0, &args![system, 0u32]);
+        assert_eq!(e.mem.u32(system + 4), 0);
+    }
+
+    #[test]
+    fn thread_quit_frees_the_router_buffer_and_clears_the_router() {
+        let mut e = Engine::new();
+        e.register(MEM_SET, |_, _| Ret::default());
+        let system = zeroed_system(&mut e);
+        e.mem.set_u32(system + 0x1c, LIST_VTABLE);
+        vtable_with(&mut e, LIST_VTABLE, &[(8, TARGET_A)]);
+        let record = system + 0xc6c + 2 * 0x138;
+        e.mem.set_u32(record, RECORD_VTABLE);
+        vtable_with(&mut e, RECORD_VTABLE, &[(0x34, TARGET_B)]);
+        e.register(TARGET_A, |_, _| Ret::default());
+        e.register(TARGET_B, |_, _| Ret::default());
+        let router = e.mem.alloc(0x40);
+        for (offset, value) in [
+            (0x20, 2),
+            (0, 0x6000),
+            (4, 0x6000),
+            (8, 0x6040),
+            (0xc, 0x11),
+            (0x18, 0x22),
+        ] {
+            e.mem.set_u32(router + offset, value);
+        }
+        e.mem.set_u32(record + 0x130, 0x40);
+        e.mem.set_u32(record + 0x128, 0x33);
+        e.mem.set_u8(record + 0x12c, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00cd_0940, &args![system, router, 3u32]);
+        assert_eq!(
+            logged(&mut e, TARGET_A),
+            vec![vec![system + 0x1c, 0x6000, 0x40]]
+        );
+        assert_eq!(logged(&mut e, TARGET_B), vec![vec![record], vec![record]]);
+        assert_eq!(logged(&mut e, MEM_SET), vec![vec![router, 0, 0x24]]);
+        for offset in [0, 4, 8, 0xc, 0x18] {
+            assert_eq!(e.mem.u32(router + offset), 0);
+        }
+        assert_eq!(e.mem.u32(record + 0x128), 0);
+        assert_eq!(e.mem.u8(record + 0x12c), 0);
+        // Flag 2 alone with no kept bytes frees nothing but still releases the cache.
+        e.mem.set_u32(record + 0x130, 0);
+        e.mem.set_u32(router + 8, 0x6040);
+        e.mem.set_u32(router + 4, 0x6000);
+        e.call_log = Some(vec![]);
+        e.call(0x00cd_0940, &args![system, router, 2u32]);
+        assert!(logged(&mut e, TARGET_A).is_empty());
+        assert_eq!(logged(&mut e, TARGET_B).len(), 1);
+        assert_eq!(e.mem.u32(router + 4), 0x6000);
+        assert!(logged(&mut e, MEM_SET).is_empty());
+    }
+
+    fn destructor_doubles(e: &mut Engine) {
+        e.map(SYSTEM_ALLOCATOR_GLOBAL & !0xfff, 0x1000);
+        e.register(DELETE_CRITICAL_SECTION, |_, _| Ret::default());
+        e.register(THREAD_MEMORY_RELEASE_CACHED, |_, _| Ret::default());
+        e.register(BASE_ALLOCATOR_DESTRUCTOR, |_, _| Ret::default());
+        e.register(SOLVER_ALLOCATOR_DESTRUCTOR, |_, _| Ret::default());
+        e.register(FREE_LIST_ALLOCATOR_DESTRUCTOR, |_, _| Ret::default());
+        e.register(MEMORY_SYSTEM_BASE_DESTRUCTOR, |_, _| Ret::default());
+    }
+
+    #[test]
+    fn the_destructor_runs_every_part_in_the_exes_order() {
+        let mut e = Engine::new();
+        destructor_doubles(&mut e);
+        let system = zeroed_system(&mut e);
+        e.set_global(SYSTEM_ALLOCATOR_GLOBAL, 0x1234u32);
+        e.call_log = Some(vec![]);
+        e.call(0x00cd_09d0, &args![system]);
+        assert_eq!(e.global::<u32>(SYSTEM_ALLOCATOR_GLOBAL), 0);
+        assert_eq!(e.mem.u32(system), VTABLE);
+        assert_eq!(e.mem.u32(system + 8), BLOCK_SERVER_VTABLE);
+        let released = logged(&mut e, THREAD_MEMORY_RELEASE_CACHED);
+        assert_eq!(released.len(), 32);
+        assert_eq!(released[0], vec![system + 0x3234]);
+        assert_eq!(released[31], vec![system + 0xc6c]);
+        assert_eq!(e.mem.u32(system + 0x3234), THREAD_MEMORY_VTABLE);
+        assert_eq!(
+            logged(&mut e, DELETE_CRITICAL_SECTION),
+            vec![vec![system + 0x336c], vec![system + 0xad0]]
+        );
+        let base_destructions = logged(&mut e, BASE_ALLOCATOR_DESTRUCTOR);
+        assert_eq!(base_destructions.len(), 33);
+        assert_eq!(base_destructions[32], vec![system + 0xab8]);
+        let order: Vec<u32> = e.call_log.as_ref().unwrap().iter().map(|c| c.0).collect();
+        assert_eq!(
+            order[order.len() - 2..],
+            [
+                FREE_LIST_ALLOCATOR_DESTRUCTOR,
+                MEMORY_SYSTEM_BASE_DESTRUCTOR
+            ]
+        );
+        assert_eq!(
+            logged(&mut e, SOLVER_ALLOCATOR_DESTRUCTOR),
+            vec![vec![system + 0xb30]]
+        );
+    }
+
+    #[test]
+    fn the_scalar_deleting_destructors_answer_this() {
+        let mut e = Engine::new();
+        destructor_doubles(&mut e);
+        let system = zeroed_system(&mut e);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00cd_0c70, &args![system, 1u32]).u32(), system);
+        assert_eq!(
+            logged(&mut e, MEMORY_SYSTEM_BASE_DESTRUCTOR),
+            vec![vec![system]]
+        );
+        // The leak detector's destructor deletes its section at +0x18.
+        let object = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00cd_0c50, &args![object, 1u32]).u32(), object);
+        assert_eq!(
+            logged(&mut e, DELETE_CRITICAL_SECTION),
+            vec![vec![object + 0x18]]
+        );
+        assert_eq!(
+            logged(&mut e, BASE_ALLOCATOR_DESTRUCTOR),
+            vec![vec![object]]
+        );
+        // The block server's only stores its virtual table.
+        assert_eq!(e.call(0x00d6_0540, &args![object, 1u32]).u32(), object);
+        assert_eq!(e.mem.u32(object), BLOCK_SERVER_VTABLE);
+    }
+
+    fn router_engine(e: &mut Engine) -> u32 {
+        // The memory router answers an object whose +0x14 is an allocator; the allocator's
+        // slot 0x10 is the free.
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, ALLOCATOR_VTABLE);
+        vtable_with(e, ALLOCATOR_VTABLE, &[(0x10, TARGET_A)]);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x14, allocator);
+        e.register_double(ROUTER_GETTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register(TARGET_A, |_, _| Ret::default());
+        allocator
+    }
+
+    #[test]
+    fn the_print_input_destructor_frees_owned_arrays_only() {
+        let mut e = Engine::new();
+        let allocator = router_engine(&mut e);
+        let input = e.mem.alloc(0x24);
+        // The first array (at +4) owns 5 words, the second (at +0x10) does not own its memory.
+        for (offset, value) in [
+            (4, 0x7000),
+            (8, 3),
+            (0xc, 5),
+            (0x10, 0x8000),
+            (0x14, 2),
+            (0x18, 0x8000_0004),
+        ] {
+            e.mem.set_u32(input + offset, value);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00cd_0c80, &args![input]);
+        assert_eq!(logged(&mut e, TARGET_A), vec![vec![allocator, 0x7000, 20]]);
+        for offset in [4, 8, 0x10, 0x14] {
+            assert_eq!(e.mem.u32(input + offset), 0);
+        }
+        assert_eq!(e.mem.u32(input + 0xc), 0x8000_0000);
+        assert_eq!(e.mem.u32(input + 0x18), 0x8000_0000);
+    }
+
+    #[test]
+    fn print_statistics_collects_the_used_records_and_prints() {
+        let mut e = Engine::new();
+        let allocator = router_engine(&mut e);
+        e.register(STREAM_WRITE_TEXT, |_, _| Ret::default());
+        e.register(ARRAY_RESERVE_MORE, |e, a| {
+            // Gives the array room for 4 words.
+            let data = e.mem.alloc(16);
+            e.mem.set_u32(a[1], data);
+            e.mem.set_u32(a[1] + 8, 4);
+            Ret::default()
+        });
+        e.register(MEMORY_SYSTEM_PRINT, |e, a| {
+            // The input as printed: the word at +0xb08, 2 and 2 elements, the soft limit.
+            assert_eq!(e.mem.u32(a[2]), 0x5555);
+            assert_eq!(e.mem.u32(a[2] + 8), 2);
+            assert_eq!(e.mem.u32(a[2] + 0x14), 2);
+            assert_eq!(e.mem.u32(a[2] + 0x20), 0x3333);
+            let first = e.mem.u32(a[2] + 4);
+            assert_eq!(e.mem.u32(first), a[0] + 0xc6c);
+            assert_eq!(e.mem.u32(first + 4), a[0] + 0xc6c + 3 * 0x138);
+            let second = e.mem.u32(a[2] + 0x10);
+            assert_eq!(e.mem.u32(second), 0xaaaa);
+            assert_eq!(e.mem.u32(second + 4), 0xbbbb);
+            Ret::default()
+        });
+        let system = zeroed_system(&mut e);
+        e.mem.set_u32(system + 0xb08, 0x5555);
+        e.mem.set_u32(system + 0x1c, LIST_VTABLE);
+        vtable_with(&mut e, LIST_VTABLE, &[(0x50, TARGET_B)]);
+        e.register(TARGET_B, |_, _| Ret {
+            eax: 0x3333,
+            ..Ret::default()
+        });
+        for (index, router_word) in [(0u32, 0xaaaau32), (3, 0xbbbb)] {
+            let record = system + 0xc6c + index * 0x138;
+            e.mem.set_u8(record + 0x12c, 1);
+            e.mem.set_u32(record + 0x134, router_word);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00cd_0b30, &args![system, 0x7000u32]);
+        assert_eq!(
+            logged(&mut e, STREAM_WRITE_TEXT),
+            vec![
+                vec![0x7000, STATISTICS_TEXT_FIRST],
+                vec![0x7000, STATISTICS_TEXT_SECOND]
+            ]
+        );
+        // Each array is full (size 0 = capacity 0) on its first element: two growths.
+        assert_eq!(logged(&mut e, ARRAY_RESERVE_MORE).len(), 2);
+        assert_eq!(allocator, logged(&mut e, ARRAY_RESERVE_MORE)[0][0]);
+        assert_eq!(logged(&mut e, MEMORY_SYSTEM_PRINT).len(), 1);
+        // The input's destructor ran: it freed both arrays through slot 0x10.
+        assert_eq!(logged(&mut e, TARGET_A).len(), 2);
     }
 }

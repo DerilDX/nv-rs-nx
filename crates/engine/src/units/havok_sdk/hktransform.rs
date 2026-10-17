@@ -156,6 +156,48 @@ pub fn hk_transform_set_mul_inverse_mul(e: &mut Engine, this: Ptr, a: Ptr, b: Pt
     store_lanes(e, this.addr() + 0x30, combine_rows(difference, &rows));
 }
 
+/// The conversion `00ce5300` (a jump to `00ce51f0`; thiscall on the source object, one stack
+/// word: the `hkTransform` it writes).
+const CONVERT_TO_TRANSFORM: u32 = 0x00ce_5300;
+/// The size of an `hkTransform` the functions keep on their stack.
+const TRANSFORM_SIZE: u32 = 0x40;
+
+// Translated from 00cb22c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, thiscall, two stack words `(source, other)`: converts `source`
+/// into a temporary `hkTransform` (`00ce5300`, the source is its `this`) and sets `this =
+/// temporary * other` (`setMul`).
+pub fn fn_00cb22c0(e: &mut Engine, this: Ptr, source: Ptr, other: Ptr) {
+    e.with_stack(TRANSFORM_SIZE, |e, temporary| {
+        e.call(CONVERT_TO_TRANSFORM, &args![source, temporary]);
+        hk_transform_set_mul(e, this, temporary, other);
+    });
+}
+
+// Translated from 00cb23e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTransform::setMulEq` (engine map name), thiscall, one stack word `other`: `this = this *
+/// other`. The four columns of `this` are copied to a temporary first (so the product reads
+/// the old values) and `setMul(this, temporary, other)` runs.
+pub fn hk_transform_set_mul_eq(e: &mut Engine, this: Ptr, other: Ptr) {
+    e.with_stack(TRANSFORM_SIZE, |e, copy| {
+        for column in 0..4u32 {
+            let lanes = load_lanes(e, this.addr() + 0x10 * column);
+            store_lanes(e, copy.addr() + 0x10 * column, lanes);
+        }
+        hk_transform_set_mul(e, this, copy, other);
+    });
+}
+
+// Translated from 00cb2420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTransform::setMulMulInverse` (engine map name), thiscall, two stack words `(a, b)`:
+/// `this = a * inverse(b)`: the inverse of `b` is built in a temporary (`setInverse`) and
+/// `setMul(this, a, temporary)` runs.
+pub fn hk_transform_set_mul_mul_inverse(e: &mut Engine, this: Ptr, a: Ptr, b: Ptr) {
+    e.with_stack(TRANSFORM_SIZE, |e, inverse| {
+        hk_transform_set_inverse(e, inverse, b);
+        hk_transform_set_mul(e, this, a, inverse);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -166,6 +208,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cb_21e0, hk_transform_set_inverse(Ptr, Ptr)),
         entry!(0x00cb_2240, hk_transform_set_mul(Ptr, Ptr, Ptr)),
         entry!(0x00cb_22f0, hk_transform_set_mul_inverse_mul(Ptr, Ptr, Ptr)),
+        entry!(0x00cb_22c0, fn_00cb22c0(Ptr, Ptr, Ptr)),
+        entry!(0x00cb_23e0, hk_transform_set_mul_eq(Ptr, Ptr)),
+        entry!(0x00cb_2420, hk_transform_set_mul_mul_inverse(Ptr, Ptr, Ptr)),
     ]
 }
 
@@ -332,5 +377,130 @@ mod tests {
         // a NaN translation lane
         e.mem.set_f32(b + 0x34, f32::NAN);
         assert_eq!(approximate(&mut e, a, b, 100.0, true), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_composed {
+    use super::*;
+
+    fn transform(e: &mut Engine, columns: [Lanes; 4]) -> u32 {
+        let at = e.mem.alloc(TRANSFORM_SIZE);
+        for (index, column) in columns.iter().enumerate() {
+            store_lanes(e, at + 0x10 * index as u32, *column);
+        }
+        at
+    }
+
+    fn columns_of(e: &Engine, at: u32) -> [Lanes; 4] {
+        std::array::from_fn(|index| load_lanes(e, at + 0x10 * index as u32))
+    }
+
+    /// 90 degrees about z, translation (1, 2, 3).
+    const TURNED: [Lanes; 4] = [
+        [0.0, 1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [1.0, 2.0, 3.0, 1.0],
+    ];
+    const SHIFTED: [Lanes; 4] = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [10.0, 20.0, 30.0, 1.0],
+    ];
+
+    /// `hkMatrix3::setTranspose` double (the real one is in another unit).
+    fn install_transpose(e: &mut Engine) {
+        e.register(MATRIX3_SET_TRANSPOSE, |e, a| {
+            for column in 0..3u32 {
+                for row in 0..3u32 {
+                    let word = e.mem.u32(a[1] + 0x10 * row + 4 * column);
+                    e.mem.set_u32(a[0] + 0x10 * column + 4 * row, word);
+                }
+            }
+            Ret::default()
+        });
+    }
+
+    fn product(e: &mut Engine, a: u32, b: u32) -> [Lanes; 4] {
+        let out = e.mem.alloc(TRANSFORM_SIZE);
+        e.call(0x00cb_2240, &args![out, a, b]);
+        columns_of(e, out)
+    }
+
+    #[test]
+    fn set_mul_eq_multiplies_this_by_the_other_in_place() {
+        let mut e = Engine::new();
+        let this = transform(&mut e, TURNED);
+        let other = transform(&mut e, SHIFTED);
+        let same = transform(&mut e, TURNED);
+        let want = product(&mut e, same, other);
+        e.call(0x00cb_23e0, &args![this, other]);
+        assert_eq!(columns_of(&e, this), want);
+        // The other operand is not changed.
+        assert_eq!(columns_of(&e, other), SHIFTED);
+        // Squaring: both operands are the same object, which reads the old columns.
+        let square = transform(&mut e, TURNED);
+        let copy = transform(&mut e, TURNED);
+        let want = product(&mut e, copy, copy);
+        e.call(0x00cb_23e0, &args![square, square]);
+        assert_eq!(columns_of(&e, square), want);
+    }
+
+    #[test]
+    fn set_mul_mul_inverse_multiplies_by_the_inverse_of_the_second() {
+        let mut e = Engine::new();
+        install_transpose(&mut e);
+        e.map(0x0100_0000, 0x0030_0000);
+        for lane in 0..4 {
+            e.mem.set_u32(SIGN_MASK + 4 * lane, 0x8000_0000);
+        }
+        let a = transform(&mut e, SHIFTED);
+        let b = transform(&mut e, TURNED);
+        let this = e.mem.alloc(TRANSFORM_SIZE);
+        // a = SHIFTED, b = TURNED: result = a * inverse(b).
+        let inverse = e.mem.alloc(TRANSFORM_SIZE);
+        e.call(0x00cb_21e0, &args![inverse, b]);
+        let want = product(&mut e, a, inverse);
+        e.call(0x00cb_2420, &args![this, a, b]);
+        assert_eq!(columns_of(&e, this), want);
+        // a * inverse(a) is the identity rotation with no translation.
+        let identity = e.mem.alloc(TRANSFORM_SIZE);
+        e.call(0x00cb_2420, &args![identity, b, b]);
+        let got = columns_of(&e, identity);
+        assert_eq!(got[0][..3], [1.0, 0.0, 0.0]);
+        assert_eq!(got[1][..3], [0.0, 1.0, 0.0]);
+        assert_eq!(got[2][..3], [0.0, 0.0, 1.0]);
+        assert_eq!(got[3][..3], [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn fn_00cb22c0_multiplies_the_converted_source_by_the_other() {
+        let mut e = Engine::new();
+        // The conversion double writes the TURNED transform into its output word's target.
+        e.register_double(CONVERT_TO_TRANSFORM, |e, a| {
+            for (index, column) in TURNED.iter().enumerate() {
+                store_lanes(e, a[1] + 0x10 * index as u32, *column);
+            }
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let source = e.mem.alloc(0x40);
+        let other = transform(&mut e, SHIFTED);
+        let this = e.mem.alloc(TRANSFORM_SIZE);
+        let turned = transform(&mut e, TURNED);
+        let want = product(&mut e, turned, other);
+        e.call(0x00cb_22c0, &args![this, source, other]);
+        assert_eq!(columns_of(&e, this), want);
+        let conversions: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == CONVERT_TO_TRANSFORM)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(conversions, vec![source]);
     }
 }

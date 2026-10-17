@@ -23,7 +23,7 @@ Map provenance:
 | translated | cited on a translation marker (ADR-0003) in Rust |
 | static init (table) | a static initializer or an `atexit` destructor run from a generated table (`crates/engine/data/static_initializers.tsv`, `crates/engine/data/atexit_destructors.tsv`; research/initgen), not a hand translation |
 | traced | cited elsewhere in Rust |
-| platform | its subsystem is replaced by Rust/Bevy |
+| platform | the platform layer stands in for it: OS glue, the Direct3D 9 / D3DX libraries, Xbox system services (the renderer is game code, ADR-0007) |
 | library | compiler-generated code, C/C++ runtime, zlib |
 | open | none of the above |
 
@@ -31,15 +31,15 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 25123 | 37.9% |
+| translated | 25986 | 39.2% |
 | static init (table) | 20552 | 31.0% |
-| traced | 4463 | 6.7% |
-| platform | 2115 | 3.2% |
-| library | 633 | 1.0% |
-| open | 13373 | 20.2% |
+| traced | 4303 | 6.5% |
+| platform | 244 | 0.4% |
+| library | 625 | 0.9% |
+| open | 14549 | 22.0% |
 | **all** | **66259** | |
 
-Translation totals count markers, not complete behavior. **2270** engine functions
+Translation totals count markers, not complete behavior. **2309** engine functions
 have explicit incomplete markers and remain `partial` in the task queue.
 
 | Partial engine function | Gap location |
@@ -1269,7 +1269,15 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00b0d040` | `crates/engine/src/units/speedtree/speedtreert.rs:3747` |
 | `00b0d500` | `crates/engine/src/units/speedtree/speedtreert.rs:3817` |
 | `00b0d810` | `crates/engine/src/units/speedtree/speedtreert.rs:3882` |
+| `00b0dce0` | `crates/engine/src/units/speedtree/run_00b0dce0.rs:25` |
 | `00b0dfb0` | `crates/engine/src/units/speedtree/speedtreert.rs:2643` |
+| `00b0e1a0` | `crates/engine/src/units/speedtree/run_00b0e1a0.rs:155` |
+| `00b0ecf0` | `crates/engine/src/units/speedtree/run_00b0eca0.rs:151` |
+| `00b0f410` | `crates/engine/src/units/speedtree/run_00b0eca0.rs:275` |
+| `00b0fb80` | `crates/engine/src/units/speedtree/run_00b0eca0.rs:399` |
+| `00b0fc00` | `crates/engine/src/units/speedtree/run_00b0eca0.rs:420` |
+| `00b10990` | `crates/engine/src/units/speedtree/run_00b0eca0.rs:656` |
+| `00b10c20` | `crates/engine/src/units/speedtree/run_00b0eca0.rs:727` |
 | `00b10dc0` | `crates/engine/src/units/speedtree/branch.rs:244` |
 | `00b10e90` | `crates/engine/src/units/speedtree/branch.rs:269` |
 | `00b11050` | `crates/engine/src/units/speedtree/branch.rs:1944` |
@@ -1278,6 +1286,8 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00b151a0` | `crates/engine/src/units/speedtree/branch.rs:1687` |
 | `00b15210` | `crates/engine/src/units/speedtree/branch.rs:1697` |
 | `00b15280` | `crates/engine/src/units/speedtree/branch.rs:1707` |
+| `00b157e0` | `crates/engine/src/units/speedtree/run_00b156b0.rs:103` |
+| `00b16070` | `crates/engine/src/units/speedtree/run_00b156b0.rs:235` |
 | `00b16cd0` | `crates/engine/src/units/speedtree/branch.rs:1707, crates/engine/src/units/speedtree/run_00b169c0.rs:149` |
 | `00b17b40` | `crates/engine/src/units/speedtree/run_00b169c0.rs:506` |
 | `00b17c20` | `crates/engine/src/units/speedtree/run_00b169c0.rs:536` |
@@ -1298,6 +1308,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00b1df10` | `crates/engine/src/units/speedtree/frondengine.rs:2594` |
 | `00b1e090` | `crates/engine/src/units/speedtree/frondengine.rs:2613` |
 | `00b1e170` | `crates/engine/src/units/speedtree/frondengine.rs:2623` |
+| `00b1e3e0` | `crates/engine/src/units/speedtree/run_00b1e3e0.rs:26` |
+| `00b1e5d0` | `crates/engine/src/units/speedtree/run_00b1e3e0.rs:82` |
+| `00b1ebc0` | `crates/engine/src/units/speedtree/run_00b1eb00.rs:55` |
 | `00b1ecf0` | `crates/engine/src/units/speedtree/frondengine.rs:2722` |
 | `00b200f0` | `crates/engine/src/units/speedtree/run_00b1ff50.rs:341` |
 | `00b20360` | `crates/engine/src/units/speedtree/run_00b1ff50.rs:369` |
@@ -1347,6 +1360,19 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00b2ceb0` | `crates/engine/src/units/speedtree/treeengine.rs:1231` |
 | `00b2d090` | `crates/engine/src/units/speedtree/treeengine.rs:1287` |
 | `00b2d2e0` | `crates/engine/src/units/speedtree/treeengine.rs:1322` |
+| `00b2e570` | `crates/engine/src/units/speedtree/run_00b2e250.rs:304` |
+| `00b2e810` | `crates/engine/src/units/speedtree/run_00b2e250.rs:355` |
+| `00b2e9c0` | `crates/engine/src/units/speedtree/run_00b2e250.rs:410` |
+| `00b2ed70` | `crates/engine/src/units/speedtree/run_00b2e250.rs:454` |
+| `00b2fa30` | `crates/engine/src/units/speedtree/run_00b2e250.rs:642` |
+| `00b311b0` | `crates/engine/src/units/speedtree/run_00b31070.rs:310` |
+| `00b31270` | `crates/engine/src/units/speedtree/run_00b31070.rs:342` |
+| `00b31350` | `crates/engine/src/units/speedtree/run_00b31070.rs:354` |
+| `00b31480` | `crates/engine/src/units/speedtree/run_00b31070.rs:365` |
+| `00b314f0` | `crates/engine/src/units/speedtree/run_00b31070.rs:375` |
+| `00b31ad0` | `crates/engine/src/units/speedtree/run_00b31070.rs:406` |
+| `00b31c00` | `crates/engine/src/units/speedtree/run_00b31070.rs:416` |
+| `00b31c70` | `crates/engine/src/units/speedtree/run_00b31070.rs:426` |
 | `00b32600` | `crates/engine/src/units/speedtree/run_00b32410.rs:298` |
 | `00b326e0` | `crates/engine/src/units/speedtree/run_00b32410.rs:314` |
 | `00b32780` | `crates/engine/src/units/speedtree/run_00b32410.rs:345` |
@@ -1394,9 +1420,17 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00b3c660` | `crates/engine/src/units/speedtree/idvspline.rs:1101` |
 | `00b3c750` | `crates/engine/src/units/speedtree/idvspline.rs:1118` |
 | `00b3c840` | `crates/engine/src/units/speedtree/idvspline.rs:1140` |
+| `00b3c930` | `crates/engine/src/units/speedtree/run_00b3c910.rs:61` |
+| `00b3c9a0` | `crates/engine/src/units/speedtree/run_00b3c910.rs:73` |
+| `00b3caa0` | `crates/engine/src/units/speedtree/run_00b3c910.rs:107` |
+| `00b3ce30` | `crates/engine/src/units/speedtree/run_00b3c910.rs:194` |
 | `00b3cf40` | `crates/engine/src/units/speedtree/leafinfo.rs:201` |
 | `00b3d1b0` | `crates/engine/src/units/speedtree/leafinfo.rs:489` |
 | `00b3d910` | `crates/engine/src/units/speedtree/leafinfo.rs:329` |
+| `00b3dbd0` | `crates/engine/src/units/speedtree/run_00b3db50.rs:61` |
+| `00b3e5b0` | `crates/engine/src/units/speedtree/run_00b3db50.rs:229` |
+| `00b3e750` | `crates/engine/src/units/speedtree/projectedshadow.rs:116` |
+| `00b3ee40` | `crates/engine/src/units/speedtree/fileaccess.rs:78` |
 | `00b3f310` | `crates/engine/src/units/speedtree/branchinfo.rs:134` |
 | `00b3f8e0` | `crates/engine/src/units/speedtree/branchinfo.rs:359` |
 | `00b403a0` | `crates/engine/src/units/speedtree/billboardleaf.rs:250` |
@@ -1410,6 +1444,8 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00b42030` | `crates/engine/src/units/speedtree/run_00b40a60.rs:843` |
 | `00b42180` | `crates/engine/src/units/speedtree/run_00b40a60.rs:934` |
 | `00b429d0` | `crates/engine/src/units/speedtree/leaflod.rs:22` |
+| `00b42f40` | `crates/engine/src/units/speedtree/run_00b42a60.rs:243` |
+| `00b43230` | `crates/engine/src/units/speedtree/run_00b42a60.rs:330` |
 | `00b433a0` | `crates/engine/src/units/speedtree/robertdavies_random.rs:175` |
 | `00b43490` | `crates/engine/src/units/speedtree/robertdavies_random.rs:210` |
 | `00b43510` | `crates/engine/src/units/speedtree/robertdavies_random.rs:223` |
@@ -2172,6 +2208,8 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00d53a80` | `crates/engine/src/units/bshavok/bhkconstraintchain.rs:502` |
 | `00d54ed0` | `crates/engine/src/units/bshavok/bhkheightfieldshape.rs:21` |
 | `00d5a510` | `crates/engine/src/units/bshavok/bhkgeometryutil.rs:15` |
+| `00d5b990` | `crates/engine/src/units/havok_sdk/hkgeometryutility.rs:836` |
+| `00d5d270` | `crates/engine/src/units/havok_sdk/hkgeometryutility.rs:2100` |
 | `00d86300` | `crates/engine/src/units/bshavok/bhkpointtopathconstraint.rs:29` |
 | `00d86470` | `crates/engine/src/units/bshavok/bhkpointtopathconstraint.rs:73` |
 | `00dae220` | `crates/engine/src/units/havok_sdk/hkpgskmanifoldutil.rs:380` |
@@ -2180,6 +2218,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00dd0660` | `crates/engine/src/units/havok_sdk/hkpchainbuildjacobian.rs:160` |
 | `00dd0ad0` | `crates/engine/src/units/havok_sdk/hkpchainbuildjacobian.rs:191` |
 | `00de6390` | `crates/engine/src/units/havok_sdk/hkpconstraintchaindrawer.rs:17` |
+| `00e036b0` | `crates/engine/src/units/havok_sdk/hkobjectcopier.rs:796` |
 | `00e191a0` | `crates/engine/src/units/havok_sdk/hkgpmesh.rs:3253` |
 | `00e19200` | `crates/engine/src/units/havok_sdk/hkgpmesh.rs:3280` |
 | `00e19cf0` | `crates/engine/src/units/havok_sdk/hkgpmesh.rs:3321` |
@@ -2315,9 +2354,9 @@ have explicit incomplete markers and remain `partial` in the task queue.
 | `00fde450` | `crates/engine/src/units/unplaced/atexit_irregular.rs:1655` |
 | `00fde4d0` | `crates/engine/src/units/unplaced/atexit_irregular.rs:1662` |
 
-Game code (functions in subsystems that are neither platform nor library): **41968** functions, of which 28589 (68.1%) are translated, run from the static-initializer table, or traced.
+Game code (functions whose subsystem or unit is neither platform nor library): **43968** functions, of which 29413 (66.9%) are translated, run from the static-initializer table, or traced.
 
-Rust cites 52627 distinct `.text` addresses; 1525 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 54567 distinct `.text` addresses; 1543 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -2336,10 +2375,11 @@ How the subsystem was found:
 | atexit | 5020 |
 | calls | 1275 |
 | init | 16315 |
-| name | 17502 |
+| name | 17499 |
 | none | 2353 |
 | range | 16005 |
-| range-sub | 7789 |
+| range-sub | 7691 |
+| vtable | 101 |
 
 ## By subsystem
 
@@ -2348,30 +2388,30 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | static init (table) | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 735 | 20552 | 7 | 0 | 41 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 7800 | 0 | 854 | 0 | 0 | 1816 | 82.7% |
-| Havok SDK | 6591 | 1555 | 3499 | 4454 | 0 | 403 | 0 | 0 | 1734 | 73.7% |
+| fallout shared | 10470 | 2065 | 3149 | 7800 | 0 | 856 | 0 | 0 | 1814 | 82.7% |
+| Havok SDK | 6591 | 1555 | 3499 | 5187 | 0 | 300 | 0 | 0 | 1104 | 83.2% |
 | fallout/ai | 4849 | 1475 | 1888 | 3452 | 0 | 445 | 0 | 0 | 952 | 80.4% |
 | fallout/interface | 2645 | 991 | 1247 | 1330 | 0 | 598 | 0 | 0 | 717 | 72.9% |
 | (unplaced) | 2353 | 470 | 0 | 518 | 0 | 472 | 4 | 0 | 1359 | 42.1% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 1217 | 0 | 154 | 0 | 0 | 417 | 76.7% |
 | NiMain | 1619 | 261 | 1134 | 371 | 0 | 188 | 0 | 0 | 1060 | 34.5% |
 | BSHavok | 1615 | 316 | 1134 | 1614 | 0 | 0 | 0 | 0 | 1 | 99.9% |
-| BSShader | 1549 | 608 | 350 | 3 | 0 | 171 | 897 | 0 | 478 | - |
+| BSShader | 1548 | 608 | 350 | 3 | 0 | 171 | 0 | 0 | 1374 | 11.2% |
 | NiAnimation | 1279 | 171 | 903 | 192 | 0 | 90 | 0 | 0 | 997 | 22.0% |
 | fallout/misc | 1045 | 171 | 353 | 767 | 0 | 70 | 0 | 0 | 208 | 80.1% |
 | BSMain | 991 | 192 | 478 | 360 | 0 | 83 | 0 | 0 | 548 | 44.7% |
-| NiXenonRenderer | 965 | 172 | 298 | 7 | 0 | 30 | 928 | 0 | 0 | - |
-| SpeedTree | 732 | 234 | 151 | 587 | 0 | 81 | 0 | 0 | 64 | 91.3% |
+| NiXenonRenderer | 965 | 172 | 298 | 7 | 0 | 30 | 1 | 0 | 927 | 3.8% |
+| SpeedTree | 732 | 234 | 151 | 717 | 0 | 12 | 0 | 0 | 3 | 99.6% |
 | fallout/magic | 705 | 162 | 378 | 71 | 0 | 126 | 0 | 0 | 508 | 27.9% |
-| LIBCMT | 682 | 124 | 503 | 4 | 0 | 58 | 42 | 578 | 0 | - |
+| LIBCMT | 682 | 124 | 503 | 4 | 0 | 66 | 42 | 570 | 0 | - |
 | NiParticle | 649 | 89 | 540 | 138 | 0 | 94 | 0 | 0 | 417 | 35.7% |
 | fallout shared/havok | 478 | 60 | 110 | 258 | 0 | 72 | 0 | 0 | 148 | 69.0% |
-| FaceGen | 474 | 164 | 51 | 1 | 0 | 19 | 0 | 0 | 454 | 4.2% |
-| fallout shared/facegen | 433 | 63 | 91 | 27 | 0 | 76 | 0 | 0 | 330 | 23.8% |
+| FaceGen | 474 | 164 | 51 | 1 | 0 | 20 | 0 | 0 | 453 | 4.4% |
+| fallout shared/facegen | 433 | 63 | 91 | 27 | 0 | 77 | 0 | 0 | 329 | 24.0% |
 | BSMenu | 361 | 136 | 221 | 319 | 0 | 17 | 0 | 0 | 25 | 93.1% |
 | BSAudio | 304 | 75 | 141 | 244 | 0 | 9 | 0 | 0 | 51 | 83.2% |
 | fallout shared/magic | 296 | 43 | 83 | 166 | 0 | 51 | 0 | 0 | 79 | 73.3% |
-| BSSystem | 275 | 54 | 36 | 2 | 0 | 51 | 104 | 0 | 118 | - |
+| BSSystem | 276 | 54 | 37 | 2 | 0 | 51 | 70 | 0 | 153 | - |
 | NiCollision | 215 | 104 | 115 | 4 | 0 | 6 | 0 | 0 | 205 | 4.7% |
 | fallout shared/distant terrain system | 204 | 37 | 62 | 68 | 0 | 28 | 0 | 0 | 108 | 47.1% |
 | BSCore | 197 | 22 | 45 | 106 | 0 | 16 | 2 | 0 | 73 | 61.9% |
@@ -2380,10 +2420,10 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | fallout shared/region system | 159 | 26 | 74 | 45 | 0 | 25 | 0 | 0 | 89 | 44.0% |
 | fallout shared/tempeffects | 149 | 48 | 58 | 50 | 0 | 26 | 0 | 0 | 73 | 51.0% |
 | fallout shared/speedtree | 115 | 33 | 57 | 38 | 0 | 15 | 0 | 0 | 62 | 46.1% |
-| NiSystem | 92 | 7 | 39 | 20 | 0 | 14 | 0 | 0 | 58 | 37.0% |
+| NiSystem | 93 | 7 | 39 | 20 | 0 | 14 | 0 | 0 | 59 | 36.6% |
 | BSSystemUtilities | 86 | 5 | 25 | 2 | 0 | 8 | 76 | 0 | 0 | - |
 | fallout/dialogue | 74 | 14 | 46 | 1 | 0 | 19 | 0 | 0 | 54 | 27.0% |
-| BSMovie | 62 | 9 | 21 | 1 | 0 | 10 | 51 | 0 | 0 | - |
+| BSMovie | 64 | 9 | 23 | 1 | 0 | 10 | 42 | 0 | 11 | - |
 | libcpmt | 12 | 0 | 8 | 0 | 0 | 1 | 0 | 11 | 0 | - |
 | d3dx9 | 11 | 0 | 8 | 0 | 0 | 0 | 4 | 0 | 7 | - |
 | fallout/debug | 10 | 0 | 7 | 0 | 0 | 3 | 0 | 0 | 7 | 30.0% |
@@ -2391,11 +2431,10 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | BSDevices | 8 | 1 | 5 | 0 | 0 | 6 | 2 | 0 | 0 | - |
 | XAPILIB | 8 | 0 | 6 | 1 | 0 | 6 | 1 | 0 | 0 | - |
 | zLib | 4 | 10 | 1 | 0 | 0 | 1 | 0 | 3 | 0 | - |
-| BSDiag | 3 | 0 | 3 | 0 | 0 | 1 | 2 | 0 | 0 | - |
-| RemoteLog | 1 | 0 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | - |
+| BSDiag | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 | 0 | - |
+| RemoteLog | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 | - |
 | XBOXKRNL | 1 | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | - |
 | d3d9 | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 | 0 | - |
-| xaudio2 | 1 | 0 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | - |
 
 `done` is translated plus traced as a share of the subsystem; it is left out (`-`) for platform and library subsystems.
 
@@ -2406,9 +2445,9 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | Depth | Call sites | Functions | translated | static init (table) | traced | platform | library | open |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
-| 1 | 143 | 117 | 128 | 0 | 9 | 2 | 0 | 4 |
-| 2 | 1575 | 583 | 1372 | 0 | 161 | 20 | 0 | 22 |
-| 3 | 4973 | 1303 | 4321 | 0 | 420 | 112 | 17 | 103 |
+| 1 | 143 | 117 | 128 | 0 | 9 | 0 | 0 | 6 |
+| 2 | 1575 | 583 | 1372 | 0 | 161 | 17 | 0 | 25 |
+| 3 | 4973 | 1303 | 4321 | 0 | 420 | 78 | 17 | 137 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
@@ -2456,7 +2495,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 40 | `0086efe0` | `Main::OnIdle_ScaleLOD` | translated |
 | 41 | `00524c90` | - | translated |
 | 42 | `004a0ea0` | - | translated |
-| 43 | `00b6dd00` | - | platform |
+| 43 | `00b6dd00` | - | open |
 | 44 | `0086f450` | `Main::OnIdle_HandleMenuBackground` | translated |
 | 45 | `007011d0` | `FaderManager::UpdateFaders` | translated |
 | 46 | `004e0110` | `ScreenSplatter::Update` | open |
@@ -2536,7 +2575,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 120 | `007056f0` | `Interface::UpdateSleeping` | translated |
 | 121 | `00871dc0` | `Main::RenderMenuBackground` | translated |
 | 122 | `0057ab70` | - | translated |
-| 123 | `00b60040` | - | platform |
+| 123 | `00b60040` | - | open |
 | 124 | `0047e040` | `TESActorBaseData::GetAlignmentForKarma` | translated |
 | 125 | `0086ff70` | `Main::Swap` | translated |
 | 126 | `008705d0` | `Main::PostSwapProcess` | translated |

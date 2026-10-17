@@ -176,6 +176,26 @@ were not matched, such as a 23 KB block between `fallout/ai`'s last
 package and `BSMenu`'s `Tile`. More names (or the spot-checks below) will
 place them.
 
+The ledger gives every function without a unit one, on top of this map
+(the map itself is not changed):
+
+- `unit_overrides.tsv` (committed here; address, unit, subsystem, replaces,
+  evidence): a function placed by `range-sub` that is an RTTI vtable slot of
+  a class whose other methods sit in one unit joins that unit; the ledger
+  shows it as placed by `vtable`. `replaces` is empty for such a function;
+  a function the map placed in a unit by a wrong name match moves only when
+  `replaces` names that unit, and any other mismatch is an error. On
+  2026-10-17: 101 rows, 98 without a unit (44 `NiDX9Renderer` slots in
+  `NiXenonRenderer/nixenonrenderer.cpp`, `NiDX9FragmentShader`,
+  `NiDX9ShaderDeclaration` and other renderer classes, the Xbox system
+  utilities, a `NiFile` method, the `Archive` and `BSFile` destructors) and
+  3 wrong name matches (a `BSFileCache` slot named into `xaudio2`, two
+  `NiTMap<const char*, char*>` slots named into `BSDiag`).
+- Every other run of neighbouring functions with one subsystem and no unit
+  becomes `<subsystem>/run_<first address>`, in every subsystem except the
+  runtime libraries; a run in a platform subsystem keeps its status (the
+  ledger's `GAME_FUNCS` lists the game code inside them).
+
 ## Known limits
 
 - The Xbox build is from 2010-11-10, the PC build later. PC-only code (the

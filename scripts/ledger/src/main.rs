@@ -17,9 +17,15 @@
 //!   `crates/engine/data/atexit_destructors.tsv`; research/initgen): engine
 //!   coverage, but not a hand translation.
 //! - `traced`: an address in it is cited anywhere else in Rust.
-//! - `platform` / `library`: its subsystem is replaced by Rust/Bevy, or is
-//!   compiler or runtime-library code (`base_status`).
+//! - `platform` / `library`: the platform layer stands in for it (operating
+//!   system glue, the Direct3D 9 / D3DX libraries, Xbox system services), or
+//!   it is compiler or runtime-library code (`base_status`). The game's
+//!   renderer is game code (ADR-0007).
 //! - `open`: none of the above.
+//!
+//! Functions the map placed in a subsystem but in no unit get one from
+//! `research/engine-map/unit_overrides.tsv` (an RTTI vtable slot of a class
+//! whose unit is known) or else a run unit (`run_units`).
 //!
 //! An address counts for the function whose entry is the nearest at or
 //! below it, if the address lies within that function's size. Addresses
@@ -42,16 +48,18 @@ const TEXT: (u32, u32) = (0x0040_1000, 0x00fd_e600);
 
 /// Default status of a subsystem when no Rust cites the function.
 /// `library`: compiler-generated code and the C/C++ runtime and zlib.
-/// `platform`: replaced by Rust/Bevy (docs/ENGINE_PORT_PLAN.md, "Which
-/// parts get translated"): the renderer and shader layer, the Xbox/DirectX
-/// libraries, system, file, thread and device layers, movie playback and
-/// the debug transport, except the units in [`LOGIC_UNITS`].
+/// `platform`: the platform layer stands in for it (docs/ENGINE_PORT_PLAN.md,
+/// "Which parts get translated"): the Direct3D 9 / D3DX and other Xbox and
+/// DirectX libraries, system, file, thread and device layers, Xbox system
+/// services, movie playback and the debug transport, except the units in
+/// [`LOGIC_UNITS`]. The game's renderer (`NiXenonRenderer`, the Xbox name of
+/// the PC `NiDX9Renderer`, and `BSShader`) is game code: it is translated and
+/// its Direct3D 9 calls go to our own Direct3D 9 layer (ADR-0007), so only the
+/// functions in [`PLATFORM_FUNCS`] stay `platform` there.
 fn base_status(subsystem: &str) -> &'static str {
     match subsystem {
         "compiler: static init/exit" | "LIBCMT" | "libcpmt" | "OLDNAMES" | "zLib" => "library",
-        "NiXenonRenderer"
-        | "BSShader"
-        | "d3d9"
+        "d3d9"
         | "d3dx9"
         | "xgraphics"
         | "XAPILIB"
@@ -75,42 +83,75 @@ fn base_status(subsystem: &str) -> &'static str {
     }
 }
 
-/// Units inside platform subsystems that are game logic rather than drawing or
-/// OS calls, so they are translated like game code: scene-graph node types
-/// (fade, ordered and shadow-scene nodes, scene lights), the shader *property*
-/// objects and texture sets that models load and save, the shader manager's
-/// state, the image-space manager and its parameters (which effects run, from
-/// game state), the blood splatter timers, archive lookup and the file layer
+/// Functions in game-code subsystems that stay `platform` although their unit
+/// is game code: `00ee6e2e` is a 6-byte `JMP` through the D3DX9_38.DLL import
+/// `D3DXGetVertexShaderProfile` (an import thunk; the map's call-graph name
+/// for it, in the renderer, is wrong). Our Direct3D 9 layer supplies D3DX.
+const PLATFORM_FUNCS: &[u32] = &[0x00ee_6e2e];
+
+/// Functions in platform subsystems that are game code, so they are `open`
+/// although their subsystem or unit stays `platform` (read in the exe,
+/// 2026-10-17): archive and file helpers without OS calls in `BSSystem`
+/// (archive name hashing, buffered reads, `ArchiveManager::TrimFileName`,
+/// `BSFile` buffers), the `NiTMap<const char*, char*>` template code in the
+/// movie player object (including the two slots the map named into
+/// `BSDiag`, placed through `unit_overrides.tsv`), and a 7-byte
+/// return-the-argument stub in Havok vtables that the map named into
+/// `RemoteLog`. Only their OS calls go to the platform layer.
+const GAME_FUNCS: &[u32] = &[
+    0x00af_cfe0,
+    0x00af_d390,
+    0x00af_d4e0,
+    0x00af_d860,
+    0x00af_d960,
+    0x00af_dbc0,
+    0x00af_de50,
+    0x00af_f180,
+    0x00af_fd80,
+    0x00af_ff50,
+    0x00b0_0880,
+    0x00b0_08a0,
+    0x00b0_08b0,
+    0x00b0_08e0,
+    0x00b0_08f0,
+    0x00b0_0970,
+    0x00b0_0f20,
+    0x00b0_1020,
+    0x00b0_1040,
+    0x00b0_1070,
+    0x00b0_11b0,
+    0x00b0_11e0,
+    0x00b0_1220,
+    0x00b0_12a0,
+    0x00b0_12f0,
+    0x00b0_14b0,
+    0x00b0_1800,
+    0x00b0_1bc0,
+    0x00b0_1be0,
+    0x00b0_1c00,
+    0x00b0_1c20,
+    0x00b0_29a0,
+    0x00dc_1660,
+    0x00ec_1a40,
+    0x00ec_1a60,
+    0x00ec_1a90,
+    0x00ec_1c30,
+    0x00ec_1cc0,
+    0x00ec_1d50,
+    0x00ec_1dc0,
+    0x00ec_1df0,
+    0x00ec_1e40,
+    0x00ec_1ee0,
+    0x00ec_2ff0,
+];
+
+/// Units inside platform subsystems that are game logic rather than OS calls,
+/// so they are translated like game code: archive lookup and the file layer
 /// above the OS reads (which file wins), and D3DX's maths. SpeedTree is not a
 /// platform subsystem at all: its tree building, splines, random numbers and
 /// wind are maths that decide every tree's shape. Only the last step of each
-/// (handing data to the GPU or the OS) is a platform stand-in.
+/// (handing data to the OS) is a platform stand-in.
 const LOGIC_UNITS: &[&str] = &[
-    "BSShader/bsfadenode.cpp",
-    "BSShader/bsfadenodeculler.cpp",
-    "BSShader/bsorderednode.cpp",
-    "BSShader/shadowscenenode.cpp",
-    "BSShader/shadowscenelight.cpp",
-    "BSShader/bsshaderproperty.cpp",
-    "BSShader/bsshaderlightingproperty.cpp",
-    "BSShader/bsshaderpplightingproperty.cpp",
-    "BSShader/bsshadernolightingproperty.cpp",
-    "BSShader/bsshaderbloodsplatterproperty.cpp",
-    "BSShader/bsdistanttreeshaderproperty.cpp",
-    "BSShader/distantlodshaderproperty.cpp",
-    "BSShader/geometrydecalshaderproperty.cpp",
-    "BSShader/hairshaderproperty.cpp",
-    "BSShader/particleshaderproperty.cpp",
-    "BSShader/skyshaderproperty.cpp",
-    "BSShader/tallgrassshaderproperty.cpp",
-    "BSShader/tileshaderproperty.cpp",
-    "BSShader/watershaderproperty.cpp",
-    "BSShader/bsfogproperty.cpp",
-    "BSShader/bsshadertextureset.cpp",
-    "BSShader/bsshadermanager.cpp",
-    "BSShader/imagespacemanager.cpp",
-    "BSShader/imagespaceshaderparam.cpp",
-    "BSShader/bsshaderbloodsplatter.cpp",
     "BSSystem/archive.cpp",
     "BSSystem/bsfile.cpp",
     "BSSystem/bsfilecache.cpp",
@@ -125,6 +166,18 @@ fn unit_status(subsystem: &str, unit: &str) -> &'static str {
         "open"
     } else {
         base_status(subsystem)
+    }
+}
+
+/// [`unit_status`] for one function, with the [`PLATFORM_FUNCS`] and
+/// [`GAME_FUNCS`] exceptions.
+fn func_status(addr: u32, subsystem: &str, unit: &str) -> &'static str {
+    if PLATFORM_FUNCS.contains(&addr) {
+        "platform"
+    } else if GAME_FUNCS.contains(&addr) {
+        "open"
+    } else {
+        unit_status(subsystem, unit)
     }
 }
 
@@ -152,6 +205,11 @@ struct Func {
 }
 
 impl Func {
+    /// The status when no Rust cites the function ([`func_status`]).
+    fn base(&self) -> &'static str {
+        func_status(self.addr, &self.subsystem, &self.unit)
+    }
+
     /// Translated, run from the static-initializer table or replaced inside
     /// `crates/engine`: the engine has it. A translation elsewhere (an older
     /// marker in `crates/world`) still needs its engine version.
@@ -176,8 +234,8 @@ impl Func {
             "partial"
         } else if self.in_engine() {
             "done"
-        } else if unit_status(&self.subsystem, &self.unit) != "open" {
-            unit_status(&self.subsystem, &self.unit)
+        } else if self.base() != "open" {
+            self.base()
         } else {
             self.status()
         }
@@ -193,7 +251,7 @@ impl Func {
         } else if !self.traced.is_empty() {
             "traced"
         } else {
-            unit_status(&self.subsystem, &self.unit)
+            self.base()
         }
     }
 }
@@ -361,18 +419,71 @@ fn load_map(path: &Path) -> Result<(Vec<Func>, Vec<String>), String> {
         });
     }
     funcs.sort_by_key(|f| f.addr);
+    match fs::read_to_string(path.with_file_name(OVERRIDES)) {
+        Ok(t) => {
+            apply_overrides(&mut funcs, &t)?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("{OVERRIDES}: {e}")),
+    }
     run_units(&mut funcs);
     Ok((funcs, header))
+}
+
+/// Unit placements applied on top of the map (`research/engine-map/
+/// unit_overrides.tsv`, next to `engine_map.tsv`): functions the map placed
+/// in a subsystem but in no unit (or in a unit by a wrong name match), which
+/// the exe shows belong to an existing unit's class (an RTTI vtable slot of a
+/// class whose other methods are in that unit). Columns: address, unit, subsystem, replaces, evidence.
+/// `replaces` is empty for a function the map left without a unit; to
+/// correct a unit the map gave by a wrong name match it must name that unit.
+const OVERRIDES: &str = "unit_overrides.tsv";
+
+/// Sets the unit and subsystem of every row of [`OVERRIDES`] (`placed`
+/// becomes `vtable`). A row whose `replaces` does not equal the function's
+/// unit in the map (empty for none), or for an address that is no function
+/// of the map, is an error: the map's placements change only where a row
+/// names them.
+fn apply_overrides(funcs: &mut [Func], text: &str) -> Result<usize, String> {
+    let mut n = 0;
+    for line in text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty() && !l.starts_with("address\t"))
+    {
+        let f: Vec<&str> = line.split('\t').collect();
+        let (Some(a), Some(unit), Some(sub), Some(replaces)) =
+            (f.first(), f.get(1), f.get(2), f.get(3))
+        else {
+            return Err(format!("{OVERRIDES}: bad row {line:?}"));
+        };
+        let addr = u32::from_str_radix(a, 16).map_err(|e| format!("{OVERRIDES}: {line:?}: {e}"))?;
+        let i = funcs
+            .binary_search_by_key(&addr, |f| f.addr)
+            .map_err(|_| format!("{OVERRIDES}: {a} is no function of the map"))?;
+        let func = &mut funcs[i];
+        if func.unit != *replaces {
+            return Err(format!(
+                "{OVERRIDES}: {a} has unit {:?}, the row replaces {replaces:?}",
+                func.unit
+            ));
+        }
+        func.unit = unit.to_string();
+        func.subsystem = sub.to_string();
+        func.placed = "vtable".into();
+        n += 1;
+    }
+    Ok(n)
 }
 
 /// Functions the map placed in a subsystem but in no unit get a synthetic
 /// unit per run of such functions with the same subsystem:
 /// `<subsystem>/run_<first address>`, so they have a file and an owner
-/// like the others. Library and platform subsystems are left alone.
+/// like the others. Library subsystems are left alone; a run in a platform
+/// subsystem keeps that subsystem's status (except [`GAME_FUNCS`]).
 fn run_units(funcs: &mut [Func]) {
     let mut current: Option<(String, String)> = None;
     for f in funcs.iter_mut() {
-        if !f.unit.is_empty() || unit_status(&f.subsystem, &f.unit) != "open" {
+        if !f.unit.is_empty() || base_status(&f.subsystem) == "library" {
             current = None;
             continue;
         }
@@ -426,10 +537,7 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
             .or_default() += 1;
         *placed.entry(&f.placed).or_default() += 1;
     }
-    let game_fns: Vec<&Func> = funcs
-        .iter()
-        .filter(|f| unit_status(&f.subsystem, &f.unit) == "open")
-        .collect();
+    let game_fns: Vec<&Func> = funcs.iter().filter(|f| f.base() == "open").collect();
     let game = game_fns.len();
     let game_done = game_fns
         .iter()
@@ -463,7 +571,8 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
          `crates/engine/data/atexit_destructors.tsv`; research/initgen), not a hand \
          translation |\n\
          | traced | cited elsewhere in Rust |\n\
-         | platform | its subsystem is replaced by Rust/Bevy |\n\
+         | platform | the platform layer stands in for it: OS glue, the Direct3D 9 / D3DX \
+         libraries, Xbox system services (the renderer is game code, ADR-0007) |\n\
          | library | compiler-generated code, C/C++ runtime, zlib |\n\
          | open | none of the above |\n"
     );
@@ -497,7 +606,7 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
     }
     let _ = writeln!(
         s,
-        "\nGame code (functions in subsystems that are neither platform nor library): \
+        "\nGame code (functions whose subsystem or unit is neither platform nor library): \
          **{game}** functions, of which {game_done} ({}) are translated, run from the \
          static-initializer table, or traced.\n",
         pct(game_done, game)
@@ -789,7 +898,7 @@ fn main() {
             let mut done = BTreeSet::new();
             for f in &funcs {
                 if f.unit.is_empty()
-                    || unit_status(&f.subsystem, &f.unit) != "open"
+                    || f.base() != "open"
                     || !(want.contains(f.unit.as_str()) || want.contains(f.subsystem.as_str()))
                 {
                     continue;
@@ -900,9 +1009,10 @@ fn queue(funcs: &[Func], args: &[String]) {
         return;
     }
     let mut per: BTreeMap<(&str, &str), (usize, u64)> = BTreeMap::new();
-    for f in funcs.iter().filter(|f| {
-        !f.in_engine() && !f.unit.is_empty() && unit_status(&f.subsystem, &f.unit) == "open"
-    }) {
+    for f in funcs
+        .iter()
+        .filter(|f| !f.in_engine() && !f.unit.is_empty() && f.base() == "open")
+    {
         let e = per.entry((&f.subsystem, &f.unit)).or_default();
         e.0 += 1;
         e.1 += f.size as u64;
@@ -1031,7 +1141,7 @@ mod tests {
             func(0x0086e650, "fallout/misc"),
             func(0x00a00000, "fallout/ai"),
             func(0x00b00000, "LIBCMT"),
-            func(0x00c00000, "BSShader"),
+            func(0x00c00000, "BSSystem"),
         ];
         funcs[1]
             .translated
@@ -1072,16 +1182,71 @@ mod tests {
     #[test]
     fn statuses() {
         assert_eq!(base_status("LIBCMT"), "library");
-        assert_eq!(base_status("NiXenonRenderer"), "platform");
+        assert_eq!(base_status("BSSystem"), "platform");
+        assert_eq!(base_status("d3dx9"), "platform");
         assert_eq!(base_status("Havok SDK"), "open");
         assert_eq!(base_status("SpeedTree"), "open");
-        assert_eq!(
-            unit_status("BSShader", "BSShader/imagespacemanager.cpp"),
-            "open"
-        );
+        // ADR-0007: the renderer is game code.
+        assert_eq!(base_status("NiXenonRenderer"), "open");
         assert_eq!(
             unit_status("BSShader", "BSShader/lighting30shader.cpp"),
+            "open"
+        );
+        assert_eq!(unit_status("BSSystem", "BSSystem/archive.cpp"), "open");
+        assert_eq!(
+            unit_status("BSSystem", "BSSystem/bsfile_xenon.cpp"),
             "platform"
         );
+        // The D3DX import thunk inside a renderer unit stays platform.
+        let mut f = func(0x00ee_6e2e, "NiXenonRenderer");
+        f.unit = "NiXenonRenderer/nid3dshaderprogramcreatorhlsl.cpp".into();
+        assert_eq!(f.status(), "platform");
+        assert_eq!(f.queue_status(), "platform");
+        f.addr = 0x00ee_6e30;
+        assert_eq!(f.status(), "open");
+    }
+
+    #[test]
+    fn overrides_place_unitless_functions_and_move_placed_ones_only_when_named() {
+        let mut funcs = vec![
+            func(0x00e7_5000, "NiXenonRenderer"),
+            func(0x00e7_5010, "NiXenonRenderer"),
+            func(0x00e7_5020, "NiXenonRenderer"),
+        ];
+        funcs[2].unit = "NiXenonRenderer/nid3dpass.cpp".into();
+        let text = "# comment\naddress\tunit\tsubsystem\treplaces\tevidence\n\
+                    00e75010\tNiSystem/nifile.cpp\tNiSystem\t\tslot 4 of NiFile\n";
+        assert_eq!(apply_overrides(&mut funcs, text), Ok(1));
+        assert_eq!(funcs[1].unit, "NiSystem/nifile.cpp");
+        assert_eq!(funcs[1].subsystem, "NiSystem");
+        assert_eq!(funcs[1].placed, "vtable");
+        // A placed function moves only when the row names its unit.
+        assert!(apply_overrides(&mut funcs, "00e75020\tX/y.cpp\tX\t\te\n").is_err());
+        assert!(apply_overrides(&mut funcs, "00e75020\tX/y.cpp\tX\tX/z.cpp\te\n").is_err());
+        assert!(apply_overrides(&mut funcs, "00e75004\tX/y.cpp\tX\t\te\n").is_err());
+        let fix = "00e75020\tX/y.cpp\tX\tNiXenonRenderer/nid3dpass.cpp\te\n";
+        assert_eq!(apply_overrides(&mut funcs, fix), Ok(1));
+        assert_eq!(funcs[2].unit, "X/y.cpp");
+        run_units(&mut funcs);
+        assert_eq!(funcs[0].unit, "NiXenonRenderer/run_00e75000");
+    }
+
+    #[test]
+    fn runs_form_in_platform_subsystems_and_keep_their_status() {
+        let mut funcs = vec![
+            func(0x00b0_1080, "BSSystem"),
+            func(0x00b0_10d0, "BSSystem"),
+            func(0x00b0_1100, "LIBCMT"),
+            func(0x00b0_1130, "BSSystem"),
+        ];
+        run_units(&mut funcs);
+        assert_eq!(funcs[0].unit, "BSSystem/run_00b01080");
+        assert_eq!(funcs[1].unit, "BSSystem/run_00b01080");
+        assert_eq!(funcs[2].unit, "", "library code gets no run");
+        assert_eq!(funcs[3].unit, "BSSystem/run_00b01130");
+        assert_eq!(funcs[0].status(), "platform");
+        // Game code in a platform run is open.
+        funcs[1].addr = 0x00af_d4e0;
+        assert_eq!(funcs[1].status(), "open");
     }
 }
