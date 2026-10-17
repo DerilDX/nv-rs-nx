@@ -12,9 +12,10 @@
 //! - `translated`: an address in it is cited on a translation marker line
 //!   (ADR-0003: `Translated from <addr>` or `(decompiled, FalloutNV.exe ...)`;
 //!   when the marker line itself holds no address, the line above counts).
-//! - `static init (table)`: a static initializer run from the generated
-//!   table `crates/engine/data/static_initializers.tsv` (research/initgen):
-//!   engine coverage, but not a hand translation.
+//! - `static init (table)`: a static initializer, or an `atexit` destructor,
+//!   run from a generated table (`crates/engine/data/static_initializers.tsv`,
+//!   `crates/engine/data/atexit_destructors.tsv`; research/initgen): engine
+//!   coverage, but not a hand translation.
 //! - `traced`: an address in it is cited anywhere else in Rust.
 //! - `platform` / `library`: its subsystem is replaced by Rust/Bevy, or is
 //!   compiler or runtime-library code (`base_status`).
@@ -43,8 +44,8 @@ const TEXT: (u32, u32) = (0x0040_1000, 0x00fd_e600);
 /// `library`: compiler-generated code and the C/C++ runtime and zlib.
 /// `platform`: replaced by Rust/Bevy (docs/ENGINE_PORT_PLAN.md, "Which
 /// parts get translated"): the renderer and shader layer, the Xbox/DirectX
-/// libraries, system, file, thread and device layers, movie playback,
-/// SpeedTree rendering and the debug transport.
+/// libraries, system, file, thread and device layers, movie playback and
+/// the debug transport, except the units in [`LOGIC_UNITS`].
 fn base_status(subsystem: &str) -> &'static str {
     match subsystem {
         "compiler: static init/exit" | "LIBCMT" | "libcpmt" | "OLDNAMES" | "zLib" => "library",
@@ -67,7 +68,6 @@ fn base_status(subsystem: &str) -> &'static str {
         | "BSSystemUtilities"
         | "BSDevices"
         | "BSMovie"
-        | "SpeedTree"
         | "RemoteLog"
         | "BSDiag"
         | "fallout shared/steam" => "platform",
@@ -75,18 +75,65 @@ fn base_status(subsystem: &str) -> &'static str {
     }
 }
 
-/// The status of an entry run from the generated static-initializer table
-/// ([`INITIALIZER_TABLE`]): covered by the engine, but not a hand translation.
+/// Units inside platform subsystems that are game logic rather than drawing or
+/// OS calls, so they are translated like game code: scene-graph node types
+/// (fade, ordered and shadow-scene nodes, scene lights), the shader *property*
+/// objects and texture sets that models load and save, the shader manager's
+/// state, the image-space manager and its parameters (which effects run, from
+/// game state), the blood splatter timers, archive lookup and the file layer
+/// above the OS reads (which file wins), and D3DX's maths. SpeedTree is not a
+/// platform subsystem at all: its tree building, splines, random numbers and
+/// wind are maths that decide every tree's shape. Only the last step of each
+/// (handing data to the GPU or the OS) is a platform stand-in.
+const LOGIC_UNITS: &[&str] = &[
+    "BSShader/bsfadenode.cpp",
+    "BSShader/bsfadenodeculler.cpp",
+    "BSShader/bsorderednode.cpp",
+    "BSShader/shadowscenenode.cpp",
+    "BSShader/shadowscenelight.cpp",
+    "BSShader/bsshaderproperty.cpp",
+    "BSShader/bsshaderlightingproperty.cpp",
+    "BSShader/bsshaderpplightingproperty.cpp",
+    "BSShader/bsshadernolightingproperty.cpp",
+    "BSShader/bsshaderbloodsplatterproperty.cpp",
+    "BSShader/bsdistanttreeshaderproperty.cpp",
+    "BSShader/distantlodshaderproperty.cpp",
+    "BSShader/geometrydecalshaderproperty.cpp",
+    "BSShader/hairshaderproperty.cpp",
+    "BSShader/particleshaderproperty.cpp",
+    "BSShader/skyshaderproperty.cpp",
+    "BSShader/tallgrassshaderproperty.cpp",
+    "BSShader/tileshaderproperty.cpp",
+    "BSShader/watershaderproperty.cpp",
+    "BSShader/bsfogproperty.cpp",
+    "BSShader/bsshadertextureset.cpp",
+    "BSShader/bsshadermanager.cpp",
+    "BSShader/imagespacemanager.cpp",
+    "BSShader/imagespaceshaderparam.cpp",
+    "BSShader/bsshaderbloodsplatter.cpp",
+    "BSSystem/archive.cpp",
+    "BSSystem/bsfile.cpp",
+    "BSSystem/bsfilecache.cpp",
+    "BSSystem/bssearchpath.cpp",
+    "BSSystem/filefinder.cpp",
+    "d3dx9/d3dxmath.cpp",
+];
+
+/// [`base_status`] for one function: a [`LOGIC_UNITS`] unit is `open`.
+fn unit_status(subsystem: &str, unit: &str) -> &'static str {
+    if LOGIC_UNITS.contains(&unit) {
+        "open"
+    } else {
+        base_status(subsystem)
+    }
+}
+
+/// The status of a function run from a generated table ([`TABLES`]: static
+/// initializers, `atexit` destructors): covered by the engine, but not a hand
+/// translation.
 const TABLE: &str = "static init (table)";
 
-const STATUSES: [&str; 6] = [
-    "translated",
-    TABLE,
-    "traced",
-    "platform",
-    "library",
-    "open",
-];
+const STATUSES: [&str; 6] = ["translated", TABLE, "traced", "platform", "library", "open"];
 
 struct Func {
     addr: u32,
@@ -129,8 +176,8 @@ impl Func {
             "partial"
         } else if self.in_engine() {
             "done"
-        } else if base_status(&self.subsystem) != "open" {
-            base_status(&self.subsystem)
+        } else if unit_status(&self.subsystem, &self.unit) != "open" {
+            unit_status(&self.subsystem, &self.unit)
         } else {
             self.status()
         }
@@ -146,7 +193,7 @@ impl Func {
         } else if !self.traced.is_empty() {
             "traced"
         } else {
-            base_status(&self.subsystem)
+            unit_status(&self.subsystem, &self.unit)
         }
     }
 }
@@ -229,6 +276,16 @@ fn scan(text: &str) -> Vec<(u32, Cite, usize)> {
 /// executors of `crates/engine/src/static_init.rs`. It counts toward
 /// coverage under its own status ([`TABLE`]), not as a hand translation.
 const INITIALIZER_TABLE: &str = "crates/engine/data/static_initializers.tsv";
+
+/// The generated table of the `atexit` destructors
+/// (`crates/engine/data/atexit_destructors.tsv`, research/initgen `--atexit`):
+/// each row is the translation of the function in its first column
+/// (`crates/engine/src/static_exit.rs`), counted exactly as the rows of
+/// [`INITIALIZER_TABLE`].
+const EXIT_TABLE: &str = "crates/engine/data/atexit_destructors.tsv";
+
+/// Every generated table whose rows count as [`TABLE`].
+const TABLES: [&str; 2] = [INITIALIZER_TABLE, EXIT_TABLE];
 
 /// (entry address, line) of every row of the initializer table.
 fn table_rows(text: &str) -> Vec<(u32, usize)> {
@@ -315,7 +372,7 @@ fn load_map(path: &Path) -> Result<(Vec<Func>, Vec<String>), String> {
 fn run_units(funcs: &mut [Func]) {
     let mut current: Option<(String, String)> = None;
     for f in funcs.iter_mut() {
-        if !f.unit.is_empty() || base_status(&f.subsystem) != "open" {
+        if !f.unit.is_empty() || unit_status(&f.subsystem, &f.unit) != "open" {
             current = None;
             continue;
         }
@@ -371,7 +428,7 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
     }
     let game_fns: Vec<&Func> = funcs
         .iter()
-        .filter(|f| base_status(&f.subsystem) == "open")
+        .filter(|f| unit_status(&f.subsystem, &f.unit) == "open")
         .collect();
     let game = game_fns.len();
     let game_done = game_fns
@@ -401,8 +458,9 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
         s,
         "| Status | Meaning |\n| --- | --- |\n\
          | translated | cited on a translation marker (ADR-0003) in Rust |\n\
-         | static init (table) | a static initializer run from the generated table \
-         `crates/engine/data/static_initializers.tsv` (research/initgen), not a hand \
+         | static init (table) | a static initializer or an `atexit` destructor run \
+         from a generated table (`crates/engine/data/static_initializers.tsv`, \
+         `crates/engine/data/atexit_destructors.tsv`; research/initgen), not a hand \
          translation |\n\
          | traced | cited elsewhere in Rust |\n\
          | platform | its subsystem is replaced by Rust/Bevy |\n\
@@ -686,13 +744,16 @@ fn main() {
             };
         }
     }
-    if let Ok(text) = fs::read_to_string(root.join(INITIALIZER_TABLE)) {
+    for table in TABLES {
+        let Ok(text) = fs::read_to_string(root.join(table)) else {
+            continue;
+        };
         for (a, line) in table_rows(&text) {
             cited.insert(a);
             let k = funcs.partition_point(|f| f.addr <= a);
             match k.checked_sub(1).map(|k| &mut funcs[k]) {
                 Some(f) if a < f.addr + f.size.max(1) => {
-                    f.table.insert(format!("{INITIALIZER_TABLE}:{line}"));
+                    f.table.insert(format!("{table}:{line}"));
                 }
                 _ => {
                     unmapped.insert(a);
@@ -728,7 +789,7 @@ fn main() {
             let mut done = BTreeSet::new();
             for f in &funcs {
                 if f.unit.is_empty()
-                    || base_status(&f.subsystem) != "open"
+                    || unit_status(&f.subsystem, &f.unit) != "open"
                     || !(want.contains(f.unit.as_str()) || want.contains(f.subsystem.as_str()))
                 {
                     continue;
@@ -839,10 +900,9 @@ fn queue(funcs: &[Func], args: &[String]) {
         return;
     }
     let mut per: BTreeMap<(&str, &str), (usize, u64)> = BTreeMap::new();
-    for f in funcs
-        .iter()
-        .filter(|f| !f.in_engine() && !f.unit.is_empty() && base_status(&f.subsystem) == "open")
-    {
+    for f in funcs.iter().filter(|f| {
+        !f.in_engine() && !f.unit.is_empty() && unit_status(&f.subsystem, &f.unit) == "open"
+    }) {
         let e = per.entry((&f.subsystem, &f.unit)).or_default();
         e.0 += 1;
         e.1 += f.size as u64;
@@ -880,6 +940,20 @@ mod tests {
                     xyz\tconst\n\
                     00f352d0\treg\t00a26e20 011c32f8\n";
         assert_eq!(table_rows(text), [(0x00f6_2250, 2), (0x00f3_52d0, 5)]);
+    }
+
+    #[test]
+    fn exit_table_rows_cite_their_functions_and_are_a_table_too() {
+        assert_eq!(TABLES, [INITIALIZER_TABLE, EXIT_TABLE]);
+        let text = "# generated\n\
+                    00fc7a70\tcall\t011c3264 00404a00\n\
+                    00fde581\ttail\t0126fc95 00ec3b35\n";
+        assert_eq!(table_rows(text), [(0x00fc_7a70, 2), (0x00fd_e581, 3)]);
+        let mut f = func(0x00fc_7a70, "compiler: static init/exit");
+        f.table.insert(format!("{EXIT_TABLE}:2"));
+        assert_eq!(f.status(), TABLE);
+        assert!(f.in_engine());
+        assert_eq!(f.queue_status(), "done");
     }
 
     #[test]
@@ -1000,5 +1074,14 @@ mod tests {
         assert_eq!(base_status("LIBCMT"), "library");
         assert_eq!(base_status("NiXenonRenderer"), "platform");
         assert_eq!(base_status("Havok SDK"), "open");
+        assert_eq!(base_status("SpeedTree"), "open");
+        assert_eq!(
+            unit_status("BSShader", "BSShader/imagespacemanager.cpp"),
+            "open"
+        );
+        assert_eq!(
+            unit_status("BSShader", "BSShader/lighting30shader.cpp"),
+            "platform"
+        );
     }
 }

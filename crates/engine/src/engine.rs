@@ -109,8 +109,11 @@ impl Engine {
         self.funcs.len()
     }
 
+    /// Whether a call at `addr` has something to run: a registered function,
+    /// or a row of the atexit-destructor table ([`crate::static_exit`]) whose
+    /// destructor is translated.
     pub fn is_translated(&self, addr: u32) -> bool {
-        self.funcs.contains_key(&addr)
+        self.funcs.contains_key(&addr) || crate::static_exit::runs(self, addr)
     }
 
     /// Registers (or replaces) the function at `addr`. Tests use this for
@@ -134,14 +137,19 @@ impl Engine {
     /// Calls the function at exe address `addr` with argument words in
     /// the uniform form ([`crate::abi`]). Panics if nobody has translated
     /// it yet: the translation that called it can only be checked once
-    /// that callee exists (or a test supplies a double).
+    /// that callee exists (or a test supplies a double). An address with no
+    /// registered function runs its row of the atexit-destructor table
+    /// ([`crate::static_exit`]) if it has one.
     pub fn call(&mut self, addr: u32, args: &[u32]) -> Ret {
         if let Some(log) = &mut self.call_log {
             log.push((addr, args.to_vec()));
         }
-        let f = self.funcs.get(&addr).cloned().unwrap_or_else(|| {
+        let Some(f) = self.funcs.get(&addr).cloned() else {
+            if let Some(row) = crate::static_exit::row(addr) {
+                return crate::static_exit::run_row(self, row);
+            }
             panic!("open function {addr:08x}: not translated yet (FalloutNV.exe 1.4.0.525, docs/LEDGER.md)")
-        });
+        };
         match f {
             Callable::Abi(f) => f(self, args),
             Callable::Double(d) => (d.borrow_mut())(self, args),

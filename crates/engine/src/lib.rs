@@ -57,6 +57,7 @@ pub mod extra_data;
 pub mod mem;
 pub mod ptr;
 pub mod reference;
+pub mod static_exit;
 pub mod static_init;
 pub mod types;
 pub mod units;

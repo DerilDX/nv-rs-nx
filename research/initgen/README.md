@@ -60,3 +60,55 @@ matched against its exact form (used once to write the functions in
 precision, NaN rules, argument order); `crates/host/tests/static_initializers.rs`
 (opt-in, `NV_EXE`) runs the whole table on the real executable and checks
 settings against their initializers' values.
+
+## The shut-down table (`--atexit`)
+
+The counterpart of the start-up table. The engine map lists 5,020 functions
+of the unit "compiler: atexit destructors" (`00fc7a70` onwards): the small
+functions the static initializers hand to `_atexit` (`00ec658f`), which the
+CRT runs when the program exits. `--atexit` reads their list from the engine
+map and each one's code from the same read-only Ghidra server (and cache),
+and writes `crates/engine/data/atexit_destructors.tsv`:
+
+```text
+cargo run --release -- --atexit --map ../engine-map/engine_map.tsv --cache <private dir> \
+    --by-hand 00fd9bf0 \
+    --out ../../crates/engine/data/atexit_destructors.tsv --report <refused.tsv>
+```
+
+Rows are `entry`, `shape`, `global destructor` (addresses). A function becomes
+a row only if its whole body is one of these two shapes, instruction by
+instruction, and its size in the engine map is the shape's size (so no other
+byte exists); anything else goes to `--report` (`entry`, size, the reason; a
+refused body is named by its instructions with every number replaced by `#`).
+`--by-hand <addr,...>` leaves out functions that have a hand translation (the
+hand translation is the translation; `00fd9bf0`).
+
+| Shape | Code | Bytes | Rows |
+| --- | --- | ---: | ---: |
+| `call` | `PUSH EBP; MOV EBP,ESP; MOV ECX,global; CALL destructor; POP EBP; RET` | 15 | 4,698 |
+| `tail` | `MOV ECX,global; JMP destructor` | 10 | 92 |
+
+The two shapes have the same effect; they stay separate rows because the
+code differs, and the engine checks each translation against its own code
+(`crates/engine/src/static_exit.rs`). Both are faithful for the same reasons:
+`ECX` is the global and the destructor is `__thiscall`, so the global is its
+`this`; the frame of `call` restores `EBP` and `ESP` and its closing `POP EBP;
+RET` touch neither `EAX`, `EDX` nor `ST0`, and `tail` jumps so that the
+destructor's own `RET` is the shape's; so the function's answer is the
+destructor's. initgen also checks that the destructor takes nothing from the
+stack: every `RET` in its code (following direct tail jumps, at most four) is
+a plain `RET`, never `RET n`. All 84 distinct destructors passed.
+
+Everything else (229 functions) is refused and left for hand translation. By
+shape, with the counts: 72 are 117-byte bodies with an `FS:[0]` exception
+frame, a virtual call and a destructor call; 54 load a global object pointer, branch on it, call an
+import on a field of it and end in a virtual tail call; 21 `PUSH` four words, `CALL` and `RET`; 12
+`PUSH` a word, `CALL dword ptr [import]`, `RET`; 10 and 9 the same two in a
+frame; 7 store a constant to a global; the rest are single cases. They are
+regular enough to look alike but each has a branch, a frame handler, or an
+imported callee whose argument count needs reading from its `RET n`; none was
+made a shape.
+
+The ledger counts each row as the translation of its function (status
+`static init (table)`), as for the start-up table.

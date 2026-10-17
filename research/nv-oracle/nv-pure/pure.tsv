@@ -507,6 +507,7 @@ address	cc	params	ret	unit	callees	consts
 00db7c40	cdecl		u32	crates/engine/src/units/havok_sdk/run_00db7c40.rs	00cb0a70	
 00dc0eb0	cdecl		u32	crates/engine/src/units/havok_sdk/hknativepackfileutils.rs		
 00dc0fb0	cdecl		u32	crates/engine/src/units/havok_sdk/hkversionutil.rs		
+00dcd4d0	cdecl	u32	u32	crates/engine/src/units/havok_sdk/hkpsavecontactpointsutil.rs		i1,i2,i3,i4,i5,i6,i7,i8,i9
 00dd73d0	cdecl	u32,u32	u32	crates/engine/src/units/havok_sdk/hkfreelist.rs		i16
 00ddce10	cdecl	f32	u32	crates/engine/src/units/havok_sdk/hkpmeshweldingutility.rs		i1,i31,i5,i68,d3fcaceea00000000,d400921fb60000000
 00dfb590	cdecl		u32	crates/engine/src/units/havok_sdk/run_00dfb2b0.rs		
@@ -634,3 +635,4 @@ address	cc	params	ret	unit	callees	consts
 00e02640	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e02640.rs		
 00e026f0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e026f0.rs		
 00e027a0	cdecl		u32	crates/engine/src/units/havok_sdk/run_00e026f0.rs		
+00e3b5b0	cdecl		u32	crates/engine/src/units/havok_sdk/hkprotationalconstraintdata.rs		i16

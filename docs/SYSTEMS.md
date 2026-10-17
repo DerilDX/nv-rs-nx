@@ -30,7 +30,7 @@ functions. Regenerate the numbers before relying on them.
 | Code group | Functions | Covered | % | System(s) | Phase |
 |---|---:|---:|---:|---|---|
 | compiler: dynamic initializers | 16,213 | 15,709 | 97 | Start-up (table-run) | done |
-| compiler: atexit destructors | 5,020 | 0 | 0 | Shut-down (likely table-run, like start-up) | D |
+| compiler: atexit destructors | 5,020 | 4,791 | 95 | Shut-down (table-run: 4,698 `call` and 92 `tail` rows, 1 by hand; 229 refused, left for hand translation) | D |
 | (unplaced: no unit in the map) | 10,142 | 1,218 | 12 | Spread across every system; assign by caller | all |
 | fallout shared (forms, references, world data) | 8,761 | 7,043 | 80 | Forms, records, references, cells, extra data | C |
 | fallout/ai | 4,344 | 2,952 | 68 | AI, processes, movement, combat AI | A (movement), C |
@@ -95,7 +95,7 @@ functions. Regenerate the numbers before relying on them.
 
 ### Phase D: the rest
 - **Saves**: through the game's own save code, so old saves work.
-- **Shut-down**: the 5,020 atexit destructors (likely table-run, like start-up).
+- **Shut-down**: the 5,020 atexit destructors. 4,790 are rows of `crates/engine/data/atexit_destructors.tsv` (research/initgen `--atexit`, run by `engine::static_exit`), one is translated by hand, 229 are refused for hand translation. The CRT exit path is translated too: `_atexit` records its function and `units::crt::doexit` (`00eccd99`) runs the exit functions last first, then the pre-terminator and terminator tables. Not yet connected to the host's shut-down; the exit functions' own destructors run only as far as they are translated.
 - **Video**: intro and ending Bink videos (`BSMovie` plus `crates/bink`).
 - **Settings and INI files**, debug, diagnostics.
 - **Real threads**: swap the stepped-thread seam for real OS threads to replicate the original.

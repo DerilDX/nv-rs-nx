@@ -166,6 +166,16 @@ fn instructions(text: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// The instructions of the function at `addr`: Ghidra's disassembly, or, for
+/// an address Ghidra made no function of, the entry's own bytes decoded.
+fn function_instructions(args: &Args, addr: u32) -> Result<Vec<String>, String> {
+    let text = disassembly(args, addr)?;
+    if text.starts_with('{') {
+        return decode(addr, &raw_bytes(args, addr)?);
+    }
+    instructions(&text)
+}
+
 /// A hex number `0x...` (or a negative `-0x...`) as a 32-bit word.
 fn number(s: &str) -> Option<u32> {
     if let Some(h) = s.strip_prefix("-0x") {
@@ -444,6 +454,10 @@ fn main() {
         rust_main(&list);
         return;
     }
+    if std::env::args().any(|a| a == "--atexit") {
+        atexit_main();
+        return;
+    }
     let args = match args() {
         Ok(a) => a,
         Err(e) => {
@@ -469,14 +483,7 @@ fn main() {
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut refused = String::new();
     for (n, &addr) in list.iter().enumerate() {
-        let result = disassembly(&args, addr).and_then(|text| {
-            if text.starts_with('{') {
-                // No function in Ghidra: decode the entry's own bytes.
-                let bytes = raw_bytes(&args, addr)?;
-                return row(&decode(addr, &bytes)?);
-            }
-            row(&instructions(&text)?)
-        });
+        let result = function_instructions(&args, addr).and_then(|ins| row(&ins));
         match result {
             Ok(r) => {
                 let shape = r.split('\t').next().unwrap_or("");
@@ -596,6 +603,12 @@ fn decode(addr: u32, bytes: &[u8]) -> Result<Vec<String>, String> {
                 let target = at(i + 5).wrapping_add(d32(i + 1)?);
                 (format!("CALL 0x{target:08x}"), 5)
             }
+            // A tail jump ends the function as a `RET` does.
+            0xe9 => {
+                let target = at(i + 5).wrapping_add(d32(i + 1)?);
+                out.push(format!("JMP 0x{target:08x}"));
+                return Ok(out);
+            }
             0xa3 => (format!("MOV [0x{:08x}],EAX", d32(i + 1)?), 5),
             0xa1 => (format!("MOV EAX,[0x{:08x}]", d32(i + 1)?), 5),
             0xb9 => (format!("MOV ECX,0x{:x}", d32(i + 1)?), 5),
@@ -664,6 +677,237 @@ fn decode(addr: u32, bytes: &[u8]) -> Result<Vec<String>, String> {
             return Err(format!("{addr:08x}: no RET in {} bytes", bytes.len()));
         }
     }
+}
+
+// ---- The atexit destructors ----------------------------------------------------
+
+/// The engine map's unit of the compiler-generated `atexit` destructors:
+/// the functions the static initializers hand to `_atexit` (`00ec658f`).
+const ATEXIT_UNIT: &str = "compiler: atexit destructors";
+/// Size in bytes of each shape's code (the engine map's size is checked
+/// against it, so no byte outside the matched instructions exists).
+const CALL_SIZE: u32 = 15;
+const TAIL_SIZE: u32 = 10;
+/// `.text` of FalloutNV.exe 1.4.0.525; a destructor lies inside it.
+const TEXT: std::ops::Range<u32> = 0x0040_1000..0x00fd_e600;
+
+/// `(address, size)` of every function of the engine map's atexit unit.
+fn atexit_list(map: &str) -> Result<Vec<(u32, u32)>, String> {
+    let mut cols: Vec<&str> = Vec::new();
+    let mut out = Vec::new();
+    for line in map.lines().filter(|l| !l.starts_with('#')) {
+        let f: Vec<&str> = line.split('\t').collect();
+        if cols.is_empty() {
+            cols = f;
+            continue;
+        }
+        let col = |k: &str| {
+            cols.iter()
+                .position(|c| *c == k)
+                .and_then(|i| f.get(i))
+                .copied()
+                .ok_or(format!("engine map: no column {k}"))
+        };
+        if col("unit")? != ATEXIT_UNIT {
+            continue;
+        }
+        let addr = u32::from_str_radix(col("address")?, 16).map_err(|e| format!("{line}: {e}"))?;
+        let size = col("size")?.parse().map_err(|e| format!("{line}: {e}"))?;
+        out.push((addr, size));
+    }
+    if out.is_empty() {
+        return Err(format!("engine map: no function of unit {ATEXIT_UNIT}"));
+    }
+    Ok(out)
+}
+
+/// A non-negative `0x...` address operand.
+fn address_operand(s: &str) -> Option<u32> {
+    u32::from_str_radix(s.strip_prefix("0x")?, 16).ok()
+}
+
+/// The instructions with every number replaced by `#`: the shape of a body
+/// the matchers refuse, to count the refused ones by shape.
+fn signature(ins: &[String]) -> String {
+    let mut out = String::new();
+    for (n, s) in ins.iter().enumerate() {
+        if n > 0 {
+            out.push_str("; ");
+        }
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '0' && chars.peek() == Some(&'x') {
+                chars.next();
+                while chars.peek().is_some_and(|d| d.is_ascii_hexdigit()) {
+                    chars.next();
+                }
+                out.push('#');
+            } else {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// What a destructor function does, when it is one of the exact shapes:
+/// `(shape, global, destructor)`.
+///
+/// - `call`: `PUSH EBP; MOV EBP,ESP; MOV ECX,g; CALL d; POP EBP; RET`
+///   (15 bytes).
+/// - `tail`: `MOV ECX,g; JMP d` (10 bytes).
+fn atexit_shape(ins: &[String], size: u32) -> Result<(&'static str, u32, u32), String> {
+    let text: Vec<&str> = ins.iter().map(String::as_str).collect();
+    let (shape, mov, target, expect) = match text.as_slice() {
+        ["PUSH EBP", "MOV EBP,ESP", mov, call, "POP EBP", "RET"] => {
+            ("call", mov, call.strip_prefix("CALL "), CALL_SIZE)
+        }
+        [mov, jmp] => ("tail", mov, jmp.strip_prefix("JMP "), TAIL_SIZE),
+        _ => return Err(format!("shape {}", signature(ins))),
+    };
+    let global = mov.strip_prefix("MOV ECX,").and_then(address_operand);
+    let dtor = target.and_then(address_operand);
+    let (Some(global), Some(dtor)) = (global, dtor) else {
+        return Err(format!("shape {}", signature(ins)));
+    };
+    if size != expect {
+        return Err(format!("{shape} shape of {size} bytes, expected {expect}"));
+    }
+    if !TEXT.contains(&dtor) {
+        return Err(format!("{shape}: destructor {dtor:#010x} is outside .text"));
+    }
+    Ok((shape, global, dtor))
+}
+
+/// Whether the destructor takes no stack arguments: every `RET` of its code
+/// is a plain `RET` (a `__thiscall` callee with `RET n` would read words the
+/// caller didn't push). A body with no `RET` but a direct tail `JMP` is
+/// followed (at most four jumps).
+fn takes_no_stack_arguments(args: &Args, dtor: u32) -> Result<(), String> {
+    let mut at = dtor;
+    for _ in 0..4 {
+        let ins = function_instructions(args, at).map_err(|e| format!("callee {at:#010x}: {e}"))?;
+        if let Some(r) = ins.iter().find(|s| s.starts_with("RET ")) {
+            return Err(format!("callee {at:#010x} returns with {r}"));
+        }
+        if ins.iter().any(|s| s == "RET") {
+            return Ok(());
+        }
+        match ins.last().and_then(|s| s.strip_prefix("JMP ")) {
+            Some(t) => {
+                at = address_operand(t).ok_or(format!("callee {at:#010x} ends in JMP {t}"))?;
+            }
+            None => return Err(format!("callee {at:#010x} has no RET")),
+        }
+    }
+    Err(format!("callee {dtor:#010x}: more than four tail jumps"))
+}
+
+/// `--atexit --map <engine_map.tsv> --cache <dir> [--ghidra <url>]
+/// [--out <tsv>] [--report <file>]`: the shut-down table.
+fn atexit_main() {
+    let mut a = std::env::args().skip(1);
+    let (mut map, mut cache, mut out, mut report) = (None, None, None, None);
+    let mut ghidra = "http://127.0.0.1:8090".to_string();
+    let mut by_hand: Vec<u32> = Vec::new();
+    while let Some(k) = a.next() {
+        let mut v = || {
+            a.next()
+                .unwrap_or_else(|| fail(&format!("{k} needs a value")))
+        };
+        match k.as_str() {
+            "--atexit" => {}
+            "--map" => map = Some(PathBuf::from(v())),
+            "--cache" => cache = Some(PathBuf::from(v())),
+            "--ghidra" => ghidra = v(),
+            "--out" => out = Some(PathBuf::from(v())),
+            "--report" => report = Some(PathBuf::from(v())),
+            "--by-hand" => {
+                by_hand = v()
+                    .split(',')
+                    .map(|h| {
+                        u32::from_str_radix(h.trim(), 16)
+                            .unwrap_or_else(|_| fail("--by-hand takes hex addresses"))
+                    })
+                    .collect();
+            }
+            _ => fail(&format!("unknown argument {k}")),
+        }
+    }
+    let map = map.unwrap_or_else(|| fail("--map <engine_map.tsv> is required"));
+    let args = Args {
+        exe: PathBuf::new(),
+        cache: cache.unwrap_or_else(|| fail("--cache <dir> is required")),
+        ghidra,
+        out,
+        report,
+    };
+    let text =
+        std::fs::read_to_string(&map).unwrap_or_else(|e| fail(&format!("{}: {e}", map.display())));
+    let list = atexit_list(&text).unwrap_or_else(|e| fail(&e));
+    let mut table = String::from(
+        "# Generated by research/initgen --atexit from FalloutNV.exe 1.4.0.525; do not edit.\n\
+         # One row per atexit destructor function that matches a shape: entry, shape,\n\
+         # parameters `global destructor` (see research/initgen/README.md). Functions\n\
+         # without a row are hand translations or open.\n",
+    );
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut shapes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut refused = String::new();
+    for (n, &(addr, size)) in list.iter().enumerate() {
+        // A function translated by hand is the translation; no row duplicates it.
+        if by_hand.contains(&addr) {
+            *counts.entry("by hand, no row".into()).or_default() += 1;
+            let _ = writeln!(
+                refused,
+                "{addr:08x}\t{size}\ttranslated by hand (--by-hand)"
+            );
+            continue;
+        }
+        let result = function_instructions(&args, addr).and_then(|ins| {
+            let (shape, global, dtor) = atexit_shape(&ins, size)?;
+            takes_no_stack_arguments(&args, dtor)?;
+            Ok(format!("{shape}\t{global:08x} {dtor:08x}"))
+        });
+        match result {
+            Ok(r) => {
+                let shape = r.split('\t').next().unwrap_or("").to_string();
+                *counts.entry(shape).or_default() += 1;
+                let _ = writeln!(table, "{addr:08x}\t{r}");
+            }
+            Err(why) => {
+                *shapes
+                    .entry(signature(std::slice::from_ref(&why)))
+                    .or_default() += 1;
+                *counts.entry("refused".into()).or_default() += 1;
+                let _ = writeln!(refused, "{addr:08x}\t{size}\t{why}");
+            }
+        }
+        if (n + 1) % 1000 == 0 {
+            eprintln!("initgen: {} of {}", n + 1, list.len());
+        }
+    }
+    eprintln!("initgen: {} atexit destructors", list.len());
+    for (k, v) in &counts {
+        eprintln!("  {k}: {v}");
+    }
+    let mut top: Vec<_> = shapes.iter().collect();
+    top.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    for (k, v) in top.iter().take(15) {
+        eprintln!("  refused {v:5}  {k}");
+    }
+    match &args.out {
+        Some(p) => std::fs::write(p, &table).unwrap_or_else(|e| panic!("{}: {e}", p.display())),
+        None => print!("{table}"),
+    }
+    if let Some(p) = &args.report {
+        std::fs::write(p, &refused).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    }
+}
+
+fn fail(why: &str) -> ! {
+    eprintln!("initgen: {why}");
+    std::process::exit(2);
 }
 
 // ---- Rust for the registration callees -----------------------------------------
@@ -972,6 +1216,116 @@ mod tests {
         let call = decode(0x0040_0000, &[0xe8, 0x10, 0x00, 0x00, 0x00, 0xc3]).unwrap();
         assert_eq!(call[0], "CALL 0x00400015");
         assert!(decode(0x0040_0000, &[0x90, 0xc3]).is_err());
+    }
+
+    #[test]
+    fn a_framed_destructor_call() {
+        let ins = lines(&[
+            "PUSH EBP",
+            "MOV EBP,ESP",
+            "MOV ECX,0x11c3264",
+            "CALL 0x00404a00",
+            "POP EBP",
+            "RET",
+        ]);
+        assert_eq!(
+            atexit_shape(&ins, 15),
+            Ok(("call", 0x011c_3264, 0x0040_4a00))
+        );
+        // The size is the shape's own: a longer encoding is another body.
+        assert!(atexit_shape(&ins, 16).is_err());
+    }
+
+    #[test]
+    fn a_destructor_tail_jump() {
+        let ins = lines(&["MOV ECX,0x126fc95", "JMP 0x00ec3b35"]);
+        assert_eq!(
+            atexit_shape(&ins, 10),
+            Ok(("tail", 0x0126_fc95, 0x00ec_3b35))
+        );
+        assert!(atexit_shape(&ins, 15).is_err());
+    }
+
+    #[test]
+    fn other_destructors_are_refused_with_their_shape() {
+        let call = [
+            "PUSH EBP",
+            "MOV EBP,ESP",
+            "MOV ECX,0x11c3264",
+            "CALL 0x00404a00",
+            "POP EBP",
+            "RET",
+        ];
+        // One instruction different at a time.
+        for (at, other) in [
+            (0, "NOP"),
+            (1, "MOV EBP,ECX"),
+            (2, "MOV ECX,dword ptr [0x11c3264]"),
+            (2, "MOV EDX,0x11c3264"),
+            (3, "CALL EAX"),
+            (3, "CALL dword ptr [0x00fdf0e4]"),
+            (3, "JMP 0x00404a00"),
+            (4, "LEAVE"),
+            (5, "RET 0x4"),
+        ] {
+            let mut ins = lines(&call);
+            ins[at] = other.to_string();
+            assert!(atexit_shape(&ins, 15).is_err(), "{at}: {other}");
+        }
+        // A tail jump through memory, or a negative or non-address operand.
+        for jmp in [
+            "JMP dword ptr [0x00fdf0e4]",
+            "JMP EAX",
+            "JMP -0x10",
+            "JMP 0x00402000 ",
+        ] {
+            let ins = lines(&["MOV ECX,0x11c3264", jmp]);
+            assert!(atexit_shape(&ins, 10).is_err(), "{jmp}");
+        }
+        // A destructor outside .text, an extra or a missing instruction.
+        let outside = lines(&["MOV ECX,0x11c3264", "JMP 0x01000000"]);
+        assert!(atexit_shape(&outside, 10).is_err());
+        let mut longer = lines(&call);
+        longer.insert(5, "NOP".to_string());
+        assert!(atexit_shape(&longer, 16).is_err());
+        assert!(atexit_shape(&lines(&call[..5]), 14).is_err());
+        let err = atexit_shape(
+            &lines(&["PUSH 0x1", "CALL dword ptr [0xfdf0e4]", "RET"]),
+            12,
+        )
+        .unwrap_err();
+        assert_eq!(err, "shape PUSH #; CALL dword ptr [#]; RET");
+    }
+
+    #[test]
+    fn a_tail_jump_ends_decoded_bytes() {
+        // MOV ECX,0x126fc95; JMP rel32 (target 0x00ec3b35).
+        let at = 0x00fd_e581u32;
+        let rel = 0x00ec_3b35u32.wrapping_sub(at + 10);
+        let mut bytes = vec![0xb9, 0x95, 0xfc, 0x26, 0x01, 0xe9];
+        bytes.extend(rel.to_le_bytes());
+        bytes.push(0xcc);
+        let ins = decode(at, &bytes).unwrap();
+        assert_eq!(ins, lines(&["MOV ECX,0x126fc95", "JMP 0x00ec3b35"]));
+        assert_eq!(
+            atexit_shape(&ins, 10),
+            Ok(("tail", 0x0126_fc95, 0x00ec_3b35))
+        );
+    }
+
+    #[test]
+    fn the_atexit_list_is_the_engine_maps_unit() {
+        let map = "# header\n\
+                   address\tsize\tname\tname_tier\txbox\tunit\tsubsystem\tplaced\n\
+                   00401000\t21\t\t\t\t(unplaced)/run\t(unplaced)\t\n\
+                   00fc7a70\t15\t\t\t\tcompiler: atexit destructors\tcompiler: static init/exit\tatexit\n\
+                   00fde581\t10\t\t\t\tcompiler: atexit destructors\tcompiler: static init/exit\tatexit\n";
+        assert_eq!(
+            atexit_list(map),
+            Ok(vec![(0x00fc_7a70, 15), (0x00fd_e581, 10)])
+        );
+        assert!(atexit_list("address\tsize\tunit\n00401000\t1\tx\n").is_err());
+        assert!(atexit_list("address\tsize\n").is_err());
     }
 
     #[test]

@@ -352,6 +352,24 @@ initializers pass, and 55 settings across all seven `Setting` constructors
 and their three collections hold their names, values and vtables.
 
 
+### Shut-down: the atexit destructors and the exit path
+
+`research/initgen --atexit` does for shut-down what it does for start-up:
+4,790 of the 5,020 `atexit` destructor functions (`00fc7a70` onwards) are
+rows of `crates/engine/data/atexit_destructors.tsv` (shapes `call` and `tail`,
+`engine::static_exit`; one more has a hand translation and the 229 others stay for hand translation). A row is
+callable at its own address: when no function is registered at an address,
+`Engine::call` and `Engine::is_translated` consult that table (a registered
+function or a test double wins; a row whose destructor is untranslated is
+not translated). `_atexit` (`00ec658f`) is a platform stand-in that records
+its function in the CRT's own table (`01271a8c`/`01271a88`), and
+`units::crt::doexit` (`00eccd99`) runs the exit sequence in the exe's order:
+the registered functions last first, then the pre-terminator table
+(`010113f4..01011400`), then the terminator table (`01011404..01011408`);
+what is untranslated is skipped and counted (`ExitReport`), and the final
+`ExitProcess` is only reported. The host does not call it yet.
+
+
 ## Lessons from the first sessions (2026-10-09)
 
 - **Test doubles that keep state.** `e.register` takes a plain `fn`; a double that

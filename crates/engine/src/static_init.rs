@@ -512,7 +512,7 @@ pub fn entries(e: &Engine, (start, end): (u32, u32)) -> Vec<u32> {
 
 /// Runs `f`; a stop in an untranslated function (the engine panics with
 /// its address) comes back as its message instead.
-fn guarded<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> Result<R, String> {
+pub(crate) fn guarded<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> Result<R, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e))).map_err(|payload| {
         let text = payload
             .downcast_ref::<String>()

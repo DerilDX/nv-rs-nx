@@ -116,7 +116,7 @@ Not all 63k functions should be translated. Each function gets one status:
 | --- | --- | --- |
 | `translated` | Rust translation, marked with its address (ADR-0003), with a test | Havok solver |
 | `traced` | Behaviour read from it and written in our own code | most current systems |
-| `platform` | Replaced by Rust/Bevy. Any behaviour the game shows is still traced (shader constants, audio falloff) | D3D9 renderer, DirectInput, DirectSound, Win32 files and threads, allocator |
+| `platform` | Replaced by Rust/Bevy. Any behaviour the game shows is still traced (shader constants, audio falloff) | D3D9 renderer, shader passes, DirectInput, DirectSound, Win32 threads, allocator |
 | `library` | Compiler or standard library code | CRT, STL templates, thunks |
 | `open` | Not looked at yet | |
 
@@ -124,6 +124,15 @@ The layers to translate are Bethesda's game code (forms, references,
 process/AI, scripts, quests, menus' logic, save/load), Havok, Gamebryo's
 scene graph and animation controllers, and FaceGen. The renderer stays
 Bevy, driven by data traced from the game and its shaders.
+
+Inside the platform layers, the parts that are logic rather than drawing
+or OS calls are translated too (the ledger's `LOGIC_UNITS`): all of
+SpeedTree (tree building, splines, random numbers, wind), the scene-graph
+nodes and shader property objects that models load, the shader manager's
+state, the image-space manager (which effects run, from game state),
+archive lookup and the file layer above the OS reads, and D3DX's maths.
+About 600 shader and file-system functions the map placed in no unit stay
+`platform` until someone sorts them by reading them.
 
 ## What happens to the existing code
 

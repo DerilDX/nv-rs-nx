@@ -114,9 +114,22 @@ pub fn hkp_shape_get_maximum_projection(e: &mut Engine, this: Ptr, direction: Pt
     })
 }
 
+// Translated from 00c9e3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpShape::calcSizeForSpu` (Xbox PDB), thiscall with two stack words (`RET 8`): none of
+/// them is read; answers `0xffffffff` (the shape has no size for the SPU).
+pub fn hkp_shape_calc_size_for_spu(
+    _e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+) -> u32 {
+    u32::MAX
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c9e3f0, hkp_shape_calc_size_for_spu(u32, u32, u32) -> u32),
         entry!(
             0x00c9e400,
             hkp_shape_cast_ray_bundle_impl(Ptr, Ptr, Ptr, u32, Ptr)
@@ -317,5 +330,12 @@ mod tests {
         let projection = e.call(0x00c9e560, &args![shape, direction]).f32();
         // 1 + 2 + 3.
         assert_eq!(projection, 6.0);
+    }
+
+    #[test]
+    fn calc_size_for_spu_00c9e3f0_answers_all_ones() {
+        let (mut e, _) = engine();
+        let got = e.call(0x00c9e3f0, &args![0x1234u32, 1u32, 2u32]);
+        assert_eq!(got.u32(), 0xffff_ffff);
     }
 }
