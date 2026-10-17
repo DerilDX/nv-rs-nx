@@ -12,7 +12,7 @@
 //! Functions that open a C++ exception frame (`FS:[0]`) carry a
 //! `Translation incomplete` marker: the unwinding states are not translated.
 //! The x87 loads of float globals are `FLD`/`FSTP` copies, which quiet a
-//! signalling NaN (`x87_copy`).
+//! signalling NaN (`x87_quiet`).
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -95,19 +95,9 @@ layout! {
     }
 }
 
-/// `FLD m32` / `FSTP m32`: copies a float through the x87 stack, which quiets a
-/// signalling NaN.
-fn x87_copy(value: f32) -> f32 {
-    if value.is_nan() {
-        f32::from_bits(value.to_bits() | 0x0040_0000)
-    } else {
-        value
-    }
-}
-
 /// A float global as `FLD`/`FSTP` copies it.
 fn float_global(e: &Engine, address: u32) -> f32 {
-    x87_copy(e.global::<f32>(address))
+    x87_quiet(e.global::<f32>(address))
 }
 
 fn group_count(e: &mut Engine, manager: u32) -> u32 {

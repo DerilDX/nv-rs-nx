@@ -1176,18 +1176,23 @@ pub fn fn_006e9000(
     start_tangent: Ptr,
     end_tangent: Ptr,
 ) -> f32 {
-    let start_weight = e.get(this, CurveSegment::fWeightStartPosition) as f64;
-    let start_tangent_weight = e.get(this, CurveSegment::fWeightStartTangent) as f64;
-    let end_weight = e.get(this, CurveSegment::fWeightEndPosition) as f64;
-    let end_tangent_weight = e.get(this, CurveSegment::fWeightEndTangent) as f64;
-    let start_value = e.mem.f32(start.addr()) as f64;
-    let start_tangent_value = e.mem.f32(start_tangent.addr()) as f64;
-    let end_value = e.mem.f32(end.addr()) as f64;
-    let end_tangent_value = e.mem.f32(end_tangent.addr()) as f64;
-    (start_weight * start_value
-        + start_tangent_weight * start_tangent_value
-        + end_weight * end_value
-        + end_tangent_weight * end_tangent_value) as f32
+    // Each weight is loaded (`FLD`, quiet) and multiplied by the value in
+    // memory (`FMUL dword ptr`); the products are summed with `FADDP`
+    // (x87 NaN choice, #199).
+    let start_weight = f64::from(x87_quiet(e.get(this, CurveSegment::fWeightStartPosition)));
+    let start_tangent_weight = f64::from(x87_quiet(e.get(this, CurveSegment::fWeightStartTangent)));
+    let end_weight = f64::from(x87_quiet(e.get(this, CurveSegment::fWeightEndPosition)));
+    let end_tangent_weight = f64::from(x87_quiet(e.get(this, CurveSegment::fWeightEndTangent)));
+    let start_value = x87_m32(e.mem.u32(start.addr()));
+    let start_tangent_value = x87_m32(e.mem.u32(start_tangent.addr()));
+    let end_value = x87_m32(e.mem.u32(end.addr()));
+    let end_tangent_value = x87_m32(e.mem.u32(end_tangent.addr()));
+    let sum = x87_add(
+        x87_mul(start_weight, start_value),
+        x87_mul(start_tangent_weight, start_tangent_value),
+    );
+    let sum = x87_add(sum, x87_mul(end_weight, end_value));
+    x87_add(sum, x87_mul(end_tangent_weight, end_tangent_value)) as f32
 }
 
 // Translated from 006e9050 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2402,6 +2407,31 @@ mod tests {
         // start 2, end 4, start tangent 8, end tangent 16:
         // 0.5*2 + 0.25*8 + 0.125*4 + 0.0625*16.
         assert_eq!(fn_006e9000(&mut e, curve, at(0), at(1), at(2), at(3)), 4.5);
+    }
+
+    #[test]
+    fn weighted_sum_keeps_the_x87_nan_when_two_nans_meet() {
+        // #199: the weights hold -qNaN and +qNaN; FADDP keeps the positive one.
+        let mut e = engine();
+        let curve = e.new_object::<CurveSegment>();
+        e.set(
+            curve,
+            CurveSegment::fWeightStartPosition,
+            f32::from_bits(0xffff_ffff),
+        );
+        e.set(curve, CurveSegment::fWeightStartTangent, 0.25);
+        e.set(curve, CurveSegment::fWeightEndPosition, 0.125);
+        e.set(
+            curve,
+            CurveSegment::fWeightEndTangent,
+            f32::from_bits(0x7fff_ffff),
+        );
+        let values = e.mem.alloc(16);
+        put_point(&mut e, values, [1.0, 1.0, 1.0]);
+        e.mem.set_f32(values + 12, 1.0);
+        let at = |k: u32| Ptr::new(values + 4 * k);
+        let result = fn_006e9000(&mut e, curve, at(0), at(1), at(2), at(3));
+        assert_eq!(result.to_bits(), 0x7fff_ffff);
     }
 
     #[test]

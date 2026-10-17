@@ -13,44 +13,15 @@ const PREPARE_TABLES: u32 = 0x00e6_3c60;
 const SCALE_BY_WIDTH: u32 = 0x010e_c880;
 const ROUNDING_OFFSET: u32 = 0x0101_1588;
 
-/// One x87 arithmetic step on two stack values with the hardware NaN rules: with a NaN operand
-/// the one with the larger significand wins (the first one on a tie; a NaN against a number
-/// gives the NaN), made quiet.
-fn x87_arithmetic(first: f64, second: f64, op: impl Fn(f64, f64) -> f64) -> f64 {
-    let quiet = 1u64 << 51;
-    let significand = 0x000f_ffff_ffff_ffffu64;
-    match (first.is_nan(), second.is_nan()) {
-        (true, true) => {
-            if first.to_bits() & significand >= second.to_bits() & significand {
-                f64::from_bits(first.to_bits() | quiet)
-            } else {
-                f64::from_bits(second.to_bits() | quiet)
-            }
-        }
-        (true, false) => f64::from_bits(first.to_bits() | quiet),
-        (false, true) => f64::from_bits(second.to_bits() | quiet),
-        (false, false) => op(first, second),
-    }
-}
-
-/// `FLD dword`: the float's bits, a signalling NaN quieted, as the stack value.
-fn x87_load_float(bits: u32) -> f64 {
-    f64::from(f32::from_bits(x87_quiet_bits(bits)))
-}
-
-/// `FSTP dword`: the stack value rounded to a float, as its bits.
-fn x87_store_float(value: f64) -> u32 {
-    (value as f32).to_bits()
-}
-
 /// One stored integer turned into a float: `(raw + half) * scale + offset`, each step an x87
 /// operation, the sum rounded to a float when stored. `offset_bits` is read from the header
 /// (float at +8) for every value.
 fn expand_value(e: &Engine, header: u32, scale: f64, half: f64, raw: i32) -> u32 {
-    let widened = x87_arithmetic(f64::from(raw), half, |a, b| a + b);
-    let scaled = x87_arithmetic(widened, scale, |a, b| a * b);
-    let offset = x87_load_float(e.mem.u32(header + 8));
-    x87_store_float(x87_arithmetic(scaled, offset, |a, b| a + b))
+    let widened = x87_add(f64::from(raw), half);
+    let scaled = x87_mul(widened, scale);
+    // `FADD dword ptr [header + 8]`: the offset is a memory operand.
+    let offset = x87_m32(e.mem.u32(header + 8));
+    x87_store32(x87_add(scaled, offset))
 }
 
 /// An unaligned little-endian 16-bit read at `at`, byte by byte as the exe does.
@@ -95,12 +66,12 @@ pub fn hk_expand_real(e: &mut Engine, stream: Ptr, header: Ptr, out: Ptr, total:
     let raw_count = u32::from(e.mem.u8(head + 1));
     let values = out.wrapping_add(raw_count * 4);
     let remaining = total.wrapping_sub(raw_count);
-    let scale_bits = x87_store_float(x87_arithmetic(
-        x87_load_float(e.mem.u32(SCALE_BY_WIDTH.wrapping_add(width * 4))),
-        x87_load_float(e.mem.u32(head + 4)),
-        |a, b| a * b,
+    // `FLD dword` of the table entry, `FMUL dword ptr [header + 4]` (a memory operand).
+    let scale_bits = x87_store32(x87_mul(
+        x87_load32(e.mem.u32(SCALE_BY_WIDTH.wrapping_add(width * 4))),
+        x87_m32(e.mem.u32(head + 4)),
     ));
-    let scale = x87_load_float(scale_bits);
+    let scale = x87_load32(scale_bits);
     let half = e.mem.f64(ROUNDING_OFFSET);
     if width == 8 {
         for index in 0..remaining {

@@ -5403,16 +5403,6 @@ const VTABLE_NI_T_PRIMITIVE_ARRAY: u32 = 0x0104_aae8;
 const VTABLE_BS_SCRAP_ARRAY: u32 = 0x0104_aaf0;
 const VTABLE_BS_SIMPLE_ARRAY: u32 = 0x0104_ab04;
 
-/// What an x87 `FLD float` / `FSTP float` round trip does to a float's bits:
-/// a signalling NaN comes back quiet.
-fn x87_float_round_trip(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// Runs `body` with `words` stored one after the other in game memory (the
 /// exe's wrappers take the address of their own arguments); `extra` more
 /// zeroed bytes follow for locals. The closure receives the address of the
@@ -5671,7 +5661,7 @@ pub fn fn_0060b4d0(
     let tail = (last.wrapping_sub(where_pointer) as i32 >> 2) as u32;
     // The value is copied through the x87 before the elements move (it may
     // live inside the vector).
-    let copy = x87_float_round_trip(e.mem.u32(value.addr()));
+    let copy = x87_quiet_bits(e.mem.u32(value.addr()));
     e.with_stack(4, |e, slot| {
         let slot = slot.addr();
         e.mem.set_u32(slot, copy);
@@ -6065,7 +6055,7 @@ pub fn fn_0060be00(e: &mut Engine, first: u32, last: u32, destination: u32, allo
 pub fn fn_0060be50(e: &mut Engine, first: u32, last: u32, value: u32) {
     let mut pointer = first;
     while pointer != last {
-        let bits = x87_float_round_trip(e.mem.u32(value));
+        let bits = x87_quiet_bits(e.mem.u32(value));
         e.mem.set_u32(pointer, bits);
         pointer = pointer.wrapping_add(4);
     }

@@ -31,17 +31,6 @@ const QUERY_PERFORMANCE_COUNTER: u32 = 0x00fd_f0a0;
 /// execute script '%s'.`
 const NESTED_RUN_MESSAGE: u32 = 0x0103_d498;
 
-/// An x87 `FLD dword` of a stack argument quiets a signaling NaN (payload
-/// kept); every other value passes unchanged through `FLD`/`FSTP dword`.
-fn x87_reload_f32(value: f32) -> f32 {
-    let bits = value.to_bits();
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        f32::from_bits(bits | 0x0040_0000)
-    } else {
-        value
-    }
-}
-
 // Translated from 005e0c60 (PC disassembly, FalloutNV.exe 1.4.0.525).
 /// `ScriptRunner::ScriptRunner` (Xbox PDB). Preserves the two padding bytes.
 pub fn runner_construct(e: &mut Engine, this: Ptr<ScriptRunner>) -> Ptr<ScriptRunner> {
@@ -152,7 +141,7 @@ pub fn runner_run(
                     let effect = e.mem.u32(e.mem.u32(this.addr() + 8) + 0x10);
                     e.mem.set_u8(effect + 1, effect_finish);
                     let effect = e.mem.u32(e.mem.u32(this.addr() + 8) + 0x10);
-                    e.mem.set_f32(effect + 4, x87_reload_f32(elapsed));
+                    e.mem.set_f32(effect + 4, x87_quiet(elapsed));
                 }
                 e.mem.set_u32(length.addr(), 0);
                 e.mem.set_u32(target.addr(), 0);
@@ -350,7 +339,7 @@ pub fn run(
             keep_actions as u32,
             effect_start as u32,
             effect_finish as u32,
-            x87_reload_f32(elapsed)
+            x87_quiet(elapsed)
         ]
     };
     let result = if e.call(0x0040_b460, &args![RUN_DEPTH]).u32() == 1 {

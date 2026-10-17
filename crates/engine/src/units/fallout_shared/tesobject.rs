@@ -15,7 +15,7 @@
 //! frames, security cookie).
 //!
 //! Float notes: the game copies floats through `FLD` / `FSTP`, which turns a
-//! signalling NaN into a quiet one ([`x87_float_copy`]), and compares them
+//! signalling NaN into a quiet one ([`x87_quiet_bits`]), and compares them
 //! with `FCOM` / `FUCOMPP` and `TEST AH,0x44`, where only "ordered and equal"
 //! leaves the parity flag clear: every comparison here is an `==` or `!=` on
 //! `f64` values, which gives the same answer for NaN.
@@ -209,20 +209,9 @@ const SCALE_INVALID_MESSAGE: u32 = 0x0102_9798;
 /// The message printer (cdecl, printf style).
 const PRINT_MESSAGE: u32 = 0x005b_5e40;
 
-/// What `FLD dword` followed by `FSTP dword` leaves of a float's bits: the
-/// x87 load turns a signalling NaN into a quiet one (bit 22 set); every other
-/// value, denormals included, comes back unchanged.
-fn x87_float_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// A `float` argument pushed with `FLD` / `FSTP [ESP]`.
 fn pushed_float(value: f32) -> u32 {
-    x87_float_copy(value.to_bits())
+    x87_quiet_bits(value.to_bits())
 }
 
 /// Copies three words from `from` to `to` with integer moves.
@@ -1347,7 +1336,7 @@ pub fn tes_object_get_scaled_model_file_name(e: &mut Engine, this: Ptr, referenc
     let scale = e.call(0x0056_7400, &args![reference]).f64();
     let percent = e.global::<f64>(ONE_HUNDRED);
     // FMUL, FSTP to a float, then FLD/FSTP again to push it on the stack.
-    let product = x87_float_copy(((scale * percent) as f32).to_bits());
+    let product = x87_quiet_bits(((scale * percent) as f32).to_bits());
     let rounded = e.call(0x0040_6d90, &args![product]).u32();
     e.call(
         0x0040_6d00,

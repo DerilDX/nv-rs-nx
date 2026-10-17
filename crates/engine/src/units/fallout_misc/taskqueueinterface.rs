@@ -19,17 +19,6 @@ layout! {
     }
 }
 
-/// The FLD/FSTP pairs in the PC wrappers quiet signaling single-precision
-/// NaNs while preserving their sign and payload.
-fn x87_task_float(value: f32) -> f32 {
-    let bits = value.to_bits();
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        f32::from_bits(bits | 0x0040_0000)
-    } else {
-        value
-    }
-}
-
 /// Build the exe's local task record, retaining only the fields the caller
 /// writes. `prepare` includes its calls before the record is dispatched.
 fn with_task(
@@ -315,7 +304,7 @@ pub fn fn_0087af50(
     }
     with_task(e, this, 0xd, |e, task| {
         e.mem.set_u32(task.addr() + 4, argument_1.addr());
-        e.mem.set_f32(task.addr() + 8, x87_task_float(argument_2));
+        e.mem.set_f32(task.addr() + 8, x87_quiet(argument_2));
         e.mem.set_u8(task.addr() + 12, argument_3);
     });
 }
@@ -394,10 +383,10 @@ pub fn task_queue_interface_queue_actor_knock_explosion(
     }
     with_task(e, this, 0x10, |e, task| {
         e.mem.set_u32(task.addr() + 4, argument_1.addr());
-        e.mem.set_f32(task.addr() + 8, x87_task_float(argument_2));
-        e.mem.set_f32(task.addr() + 12, x87_task_float(argument_3));
-        e.mem.set_f32(task.addr() + 16, x87_task_float(argument_4));
-        e.mem.set_f32(task.addr() + 20, x87_task_float(argument_5));
+        e.mem.set_f32(task.addr() + 8, x87_quiet(argument_2));
+        e.mem.set_f32(task.addr() + 12, x87_quiet(argument_3));
+        e.mem.set_f32(task.addr() + 16, x87_quiet(argument_4));
+        e.mem.set_f32(task.addr() + 20, x87_quiet(argument_5));
     });
 }
 
@@ -591,7 +580,7 @@ pub fn fn_0087b4a0(
     with_task(e, this, 0x19, |e, task| {
         e.mem.set_u32(task.addr() + 4, argument_1);
         e.mem.set_u32(task.addr() + 8, argument_2);
-        e.mem.set_f32(task.addr() + 12, x87_task_float(argument_3));
+        e.mem.set_f32(task.addr() + 12, x87_quiet(argument_3));
     });
 }
 
@@ -608,7 +597,7 @@ pub fn fn_0087b4f0(
     with_task(e, this, 0x1a, |e, task| {
         e.mem.set_u32(task.addr() + 4, argument_1);
         e.mem.set_u32(task.addr() + 8, argument_2);
-        e.mem.set_f32(task.addr() + 12, x87_task_float(argument_3));
+        e.mem.set_f32(task.addr() + 12, x87_quiet(argument_3));
     });
 }
 
@@ -667,7 +656,7 @@ pub fn fn_0087b650(e: &mut Engine, this: Ptr<TaskQueueInterface>, value: u32, ve
     with_task(e, this, 0x21, |e, task| {
         e.mem.set_u32(task.addr() + 4, value);
         for offset in [0, 4, 8] {
-            let value = x87_task_float(e.mem.f32(vector.addr() + offset));
+            let value = x87_quiet(e.mem.f32(vector.addr() + offset));
             e.mem.set_f32(task.addr() + 8 + offset, value);
         }
     });
@@ -678,10 +667,9 @@ pub fn fn_0087b650(e: &mut Engine, this: Ptr<TaskQueueInterface>, value: u32, ve
 /// Packs a value and three x87-rounded vector components into the task record.
 pub fn fn_0087b700(e: &mut Engine, this: Ptr<TaskQueueInterface>, value: f32, vector: Ptr) {
     with_task(e, this, 0x24, |e, task| {
-        e.mem
-            .set_u32(task.addr() + 4, x87_task_float(value).to_bits());
+        e.mem.set_u32(task.addr() + 4, x87_quiet(value).to_bits());
         for offset in [0, 4, 8] {
-            let value = x87_task_float(e.mem.f32(vector.addr() + offset));
+            let value = x87_quiet(e.mem.f32(vector.addr() + offset));
             e.mem.set_f32(task.addr() + 8 + offset, value);
         }
     });
@@ -697,10 +685,9 @@ pub fn task_queue_interface_queue_add_ripple(
     vector: Ptr,
 ) {
     with_task(e, this, 0x25, |e, task| {
-        e.mem
-            .set_u32(task.addr() + 4, x87_task_float(value).to_bits());
+        e.mem.set_u32(task.addr() + 4, x87_quiet(value).to_bits());
         for offset in [0, 4, 8] {
-            let value = x87_task_float(e.mem.f32(vector.addr() + offset));
+            let value = x87_quiet(e.mem.f32(vector.addr() + offset));
             e.mem.set_f32(task.addr() + 8 + offset, value);
         }
     });
@@ -1043,9 +1030,9 @@ pub fn node_array_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> 
 /// The dispatcher calls the original vector constructor; do not substitute
 /// stores because its return and memory effects belong to another unit.
 fn unpack_vector(e: &mut Engine, task: Ptr, output: Ptr) {
-    let x = x87_task_float(e.mem.f32(task.addr() + 8));
-    let y = x87_task_float(e.mem.f32(task.addr() + 12));
-    let z = x87_task_float(e.mem.f32(task.addr() + 16));
+    let x = x87_quiet(e.mem.f32(task.addr() + 8));
+    let y = x87_quiet(e.mem.f32(task.addr() + 12));
+    let z = x87_quiet(e.mem.f32(task.addr() + 16));
     e.call(0x00416870, &args![output, x, y, z]);
 }
 
@@ -1062,7 +1049,7 @@ fn unpack_script_task(e: &mut Engine, task: Ptr) {
                 0x005c0b10
             };
             let axis = e.mem.u8(task.addr() + 12);
-            let value = x87_task_float(e.mem.f32(task.addr() + 16));
+            let value = x87_quiet(e.mem.f32(task.addr() + 16));
             e.call(callee, &args![object, axis, value]);
         }
         0x113c | 0x1156 | 0x116c => {
@@ -1071,16 +1058,16 @@ fn unpack_script_task(e: &mut Engine, task: Ptr) {
                 0x1156 => 0x005d3c20,
                 _ => 0x005d4c20,
             };
-            let value = x87_task_float(e.mem.f32(task.addr() + 12));
+            let value = x87_quiet(e.mem.f32(task.addr() + 12));
             e.call(callee, &args![object, value]);
         }
         0x109e | 0x124f => {
             let target = e
                 .call(0x004839c0, &args![e.mem.u32(task.addr() + 12)])
                 .u32();
-            let x = x87_task_float(e.mem.f32(task.addr() + 16));
-            let y = x87_task_float(e.mem.f32(task.addr() + 20));
-            let z = x87_task_float(e.mem.f32(task.addr() + 24));
+            let x = x87_quiet(e.mem.f32(task.addr() + 16));
+            let y = x87_quiet(e.mem.f32(task.addr() + 20));
+            let z = x87_quiet(e.mem.f32(task.addr() + 24));
             let fade = u32::from(e.mem.u32(task.addr() + 4) == 0x124f);
             let use_fade = e.vcall(object, 0x100, &[]).u8() != 0
                 && object != e.global::<u32>(0x011dea3c)
@@ -1118,7 +1105,7 @@ pub fn task_queue_interface_task_unpack_func(e: &mut Engine, task: Ptr) {
     let tag = e.mem.u32(task.addr());
     match tag {
         0 => {
-            let value = x87_task_float(e.mem.f32(task.addr() + 4)) as f64;
+            let value = x87_quiet(e.mem.f32(task.addr() + 4)) as f64;
             e.call(0x005b5e40, &args![0x01084064u32, value]);
         }
         1 => {
@@ -1223,10 +1210,10 @@ pub fn task_queue_interface_task_unpack_func(e: &mut Engine, task: Ptr) {
         11 => {
             let actor = e.mem.u32(task.addr() + 4);
             let data = e.mem.u32(task.addr() + 8);
-            let value = x87_task_float(e.mem.f32(data + 0x14));
+            let value = x87_quiet(e.mem.f32(data + 0x14));
             e.call(0x0088e8d0, &args![actor, value, data]);
             if e.mem.u32(data) != 0 {
-                let value = x87_task_float(e.mem.f32(data + 0x14));
+                let value = x87_quiet(e.mem.f32(data + 0x14));
                 e.call(0x0088fb00, &args![e.mem.u32(data), value, data, actor]);
             }
             fn_0087cea0(e, Ptr::new(data));
@@ -1239,7 +1226,7 @@ pub fn task_queue_interface_task_unpack_func(e: &mut Engine, task: Ptr) {
                 }
             }
             let object = e.mem.u32(task.addr() + 4);
-            let value = x87_task_float(e.mem.f32(task.addr() + 8));
+            let value = x87_quiet(e.mem.f32(task.addr() + 8));
             let flag = e.mem.u8(task.addr() + 12);
             let collection = fn_0087ce70(e);
             let iterator = e.call(0x004b9ba0, &args![collection]).u32();
@@ -1267,7 +1254,7 @@ pub fn task_queue_interface_task_unpack_func(e: &mut Engine, task: Ptr) {
         14 => {
             let actor = e.mem.u32(task.addr() + 4);
             let value_ptr = e.mem.u32(task.addr() + 8);
-            let value = x87_task_float(e.mem.f32(value_ptr));
+            let value = x87_quiet(e.mem.f32(value_ptr));
             e.call(0x0089d900, &args![actor, e.mem.u32(actor + 0xc0), value]);
             let dismember = e.mem.u32(task.addr() + 12);
             if dismember != 0 {
@@ -1298,7 +1285,7 @@ pub fn task_queue_interface_task_unpack_func(e: &mut Engine, task: Ptr) {
             let actor = e.mem.u32(task.addr() + 4);
             e.with_stack(12, |e, vector| {
                 unpack_vector(e, task, vector);
-                let force = x87_task_float(e.mem.f32(task.addr() + 20));
+                let force = x87_quiet(e.mem.f32(task.addr() + 20));
                 if actor != 0 && e.call(0x008d8520, &args![actor]).u32() != 0 {
                     let process = e.call(0x008d8520, &args![actor]).u32();
                     e.vcall(
@@ -1402,7 +1389,7 @@ pub fn task_queue_interface_task_unpack_func(e: &mut Engine, task: Ptr) {
         25 | 26 => {
             let object = e.mem.u32(task.addr() + 4);
             let group = e.mem.u32(task.addr() + 8);
-            let value = x87_task_float(e.mem.f32(task.addr() + 12));
+            let value = x87_quiet(e.mem.f32(task.addr() + 12));
             let water = e
                 .call(0x0070ec90, &args![e.global::<u32>(0x011dea10)])
                 .u32();
@@ -1475,7 +1462,7 @@ pub fn task_queue_interface_task_unpack_func(e: &mut Engine, task: Ptr) {
             }
         }
         36 | 37 => {
-            let value = x87_task_float(e.mem.f32(task.addr() + 4));
+            let value = x87_quiet(e.mem.f32(task.addr() + 4));
             e.with_stack(12, |e, vector| {
                 unpack_vector(e, task, vector);
                 let x = e.mem.u32(vector.addr());

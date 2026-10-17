@@ -242,20 +242,9 @@ const LAST_LIGHTING_ENGINE: u32 = 0x011f_8bf8;
 const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
 const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
 
-/// `FLD dword` then `FSTP dword`: the x87 load quiets a signalling NaN
-/// (sets bit 22); every other value is copied unchanged.
-fn x87_copy(bits: u32) -> u32 {
-    let nan = bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0;
-    if nan {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// The float constant at `address`, as `FLD`/`FSTP` copy it.
 fn constant(e: &Engine, address: u32) -> f32 {
-    f32::from_bits(x87_copy(e.mem.u32(address)))
+    f32::from_bits(x87_quiet_bits(e.mem.u32(address)))
 }
 
 // Translated from 00b029f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -623,11 +612,11 @@ mod tests {
 
     #[test]
     fn x87_copy_quiets_only_signalling_nans() {
-        assert_eq!(x87_copy(0x7f80_0001), 0x7fc0_0001);
-        assert_eq!(x87_copy(0xff80_0001), 0xffc0_0001);
-        assert_eq!(x87_copy(0x7fc0_0000), 0x7fc0_0000);
-        assert_eq!(x87_copy(0x7f80_0000), 0x7f80_0000);
-        assert_eq!(x87_copy(MINUS_ONE_BITS), MINUS_ONE_BITS);
+        assert_eq!(x87_quiet_bits(0x7f80_0001), 0x7fc0_0001);
+        assert_eq!(x87_quiet_bits(0xff80_0001), 0xffc0_0001);
+        assert_eq!(x87_quiet_bits(0x7fc0_0000), 0x7fc0_0000);
+        assert_eq!(x87_quiet_bits(0x7f80_0000), 0x7f80_0000);
+        assert_eq!(x87_quiet_bits(MINUS_ONE_BITS), MINUS_ONE_BITS);
     }
 
     #[test]

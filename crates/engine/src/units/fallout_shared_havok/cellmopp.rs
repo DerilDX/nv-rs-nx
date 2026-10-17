@@ -11,7 +11,7 @@
 //! `Translation incomplete` line.
 //!
 //! x87 note: a `float` loaded and stored again (`FLD`/`FSTP`) turns a
-//! signalling NaN into a quiet one; `x87_copy` does that on the bit pattern.
+//! signalling NaN into a quiet one; `x87_quiet_bits` does that on the bit pattern.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -108,15 +108,6 @@ const LIST_SET_AT: u32 = 0x0062_28e0;
 const OWNER_LOOKUP: u32 = 0x0062_1480;
 /// `bhkBvTreeShape::FindShapeCollection` target.
 const FIND_SHAPE_COLLECTION: u32 = 0x0057_7190;
-
-/// `FLD`/`FSTP` of a `float`: a signalling NaN comes out quiet.
-fn x87_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
 
 // Translated from 00621d90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `CellMopp::_scalar_deleting_destructor_` (Xbox PDB): runs the destructor
@@ -244,7 +235,7 @@ pub fn cell_mopp_create(
         e.call(CINFO_SET_FIRST_FLOAT, &args![cinfo, 0.0f32]);
         e.call(CINFO_SET_SMALL_INTEGER, &args![cinfo, 5u32]);
         let lookup = e.call(SETTING_VALUE_ADDRESS, &args![SETTING_OBJECT]).u32();
-        let lookup_value = x87_copy(e.mem.u32(lookup));
+        let lookup_value = x87_quiet_bits(e.mem.u32(lookup));
         e.call(CINFO_SET_SECOND_FLOAT, &args![cinfo, lookup_value]);
         fn_00622290(e, Ptr::new(color_word), 0x11, 1, 0);
         let color = e.call(POINTER_GET, &args![color_word]).u32();
@@ -258,14 +249,14 @@ pub fn cell_mopp_create(
             e.call(SHAPE_CINFO_CONSTRUCT, &args![shape_cinfo]);
             e.mem.set_u32(ebp - 0x13c, 0x11);
             e.mem.set_u32(ebp - 0x140, 0x11);
-            let base = x87_copy(e.mem.u32(EXTENT_BASE));
+            let base = x87_quiet_bits(e.mem.u32(EXTENT_BASE));
             let first = e.call(SCALE_FLOAT, &args![base]).f32();
             let second = e.call(SCALE_FLOAT, &args![1.0f32]).f32();
             let third = e.call(SCALE_FLOAT, &args![base]).f32();
             e.call(SET_VECTOR4, &args![extents, third, second, first, 0.0f32]);
             let form = e.call(GET_OBJECT_FORM, &args![object]).u32();
             e.mem.set_u32(ebp - 0x120, form);
-            e.mem.set_u32(ebp - 0x11c, x87_copy(scale.to_bits()));
+            e.mem.set_u32(ebp - 0x11c, x87_quiet_bits(scale.to_bits()));
             e.call(EXTENTS_UPDATE_RANGE, &args![extents]);
 
             let shape_memory = e.call(ALLOCATE, &args![0x14u32]).u32();

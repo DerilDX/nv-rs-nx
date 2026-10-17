@@ -134,16 +134,6 @@ const DESTRUCTOR_OBJECT_CHECK: u32 = 0x0048_cee0;
 const DESTRUCTOR_TARGET: u32 = 0x011c_3b3c;
 const DESTRUCTOR_TARGET_CALL: u32 = 0x0045_a5e0;
 
-/// `FLD m32` / `FSTP m32`: copies a float through the x87 stack, which quiets a
-/// signalling NaN.
-fn x87_copy(value: f32) -> f32 {
-    if value.is_nan() {
-        f32::from_bits(value.to_bits() | 0x0040_0000)
-    } else {
-        value
-    }
-}
-
 /// `FCOMP double 0.0; FNSTSW; TEST AH,0x41; JP skip`: runs when the value is
 /// below or equal to the constant (false for NaN).
 fn at_most_zero(e: &Engine, value: f64) -> bool {
@@ -282,7 +272,7 @@ pub fn muzzle_flash_update(e: &mut Engine, this: Ptr<MuzzleFlash>, elapsed: f32,
         let projectile = e.get(this, MuzzleFlash::pProjectile);
         let reload = e.call(PROJECTILE_FLASH_DURATION, &args![projectile]).f64() as f32;
         e.set(this, MuzzleFlash::fDurationTimer, reload);
-        let reset = x87_copy(e.global(ENABLE_TIMER_RESET));
+        let reset = x87_quiet(e.global(ENABLE_TIMER_RESET));
         e.set(this, MuzzleFlash::fEnableTimer, reset);
         e.set(this, MuzzleFlash::bEnabled, false);
         e.set(this, MuzzleFlash::bUpdateLight, true);
@@ -402,7 +392,7 @@ fn position_with_frame(
                 )
                 .u32();
             copy_words(e, inverse + 0x24, rotated, 3);
-            let scale = x87_copy(e.mem.f32(inverse + 0x30));
+            let scale = x87_quiet(e.mem.f32(inverse + 0x30));
             e.call(POINT_SCALE, &args![inverse + 0x24, scale]);
         }
         let world = e.call(NODE_WORLD_TRANSFORM, &args![fire_node]).u32();
@@ -455,7 +445,7 @@ fn position_with_frame(
     e.call(NODE_SET_TRANSLATE, &args![node, local + 0x24]);
     let node = flash_node(e, this);
     e.call(NODE_SET_ROTATE, &args![node, local]);
-    let scale = x87_copy(e.mem.f32(local + 0x30));
+    let scale = x87_quiet(e.mem.f32(local + 0x30));
     let node = flash_node(e, this);
     e.call(NODE_SET_SCALE, &args![node, scale]);
 
@@ -464,7 +454,7 @@ fn position_with_frame(
             let data = frame.at(UPDATE_DATA);
             e.call(
                 UPDATE_DATA_CONSTRUCT,
-                &args![data, x87_copy(time), 0u32, 0u32],
+                &args![data, x87_quiet(time), 0u32, 0u32],
             );
             let node = flash_node(e, this);
             e.call(NODE_UPDATE, &args![node, data]);

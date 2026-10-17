@@ -40,18 +40,22 @@ pub fn calc_aerodynamic_lift(
     this: Ptr<HkpVehicleDefaultAerodynamics>,
     x: f32,
 ) -> f32 {
+    // `FLD airDensity; FMUL 0.5; FMUL dword liftCoefficient; FMUL dword frontalArea;
+    // FLD x; FLD ST0; FMULP ST2; FMULP`, with the x87 NaN choice (#199).
     let density = f64::from(x87_quiet(
         e.get(this, HkpVehicleDefaultAerodynamics::m_air_density),
     ));
-    let lift = f64::from(x87_quiet(
-        e.get(this, HkpVehicleDefaultAerodynamics::m_lift_coefficient),
-    ));
-    let area = f64::from(x87_quiet(
-        e.get(this, HkpVehicleDefaultAerodynamics::m_frontal_area),
-    ));
-    let product = density * HALF * lift * area;
+    let lift = x87_m32(
+        e.get(this, HkpVehicleDefaultAerodynamics::m_lift_coefficient)
+            .to_bits(),
+    );
+    let area = x87_m32(
+        e.get(this, HkpVehicleDefaultAerodynamics::m_frontal_area)
+            .to_bits(),
+    );
+    let product = x87_mul(x87_mul(x87_mul(density, HALF), lift), area);
     let x = f64::from(x87_quiet(x));
-    let result = ((product * x) * x) as f32;
+    let result = x87_mul(x87_mul(product, x), x) as f32;
     x87_quiet(result)
 }
 
@@ -64,19 +68,23 @@ pub fn calc_aerodynamic_drag(
     this: Ptr<HkpVehicleDefaultAerodynamics>,
     x: f32,
 ) -> f32 {
+    // `FLD x; FLD ST0; FABS; FSTP/FLD |x|; FLD airDensity; FMUL -0.5; FMUL dword
+    // dragCoefficient; FMUL dword frontalArea; FMULP; FMULP`, with the x87 NaN choice (#199).
     let x = x87_quiet(x);
     let magnitude = x.abs();
     let density = f64::from(x87_quiet(
         e.get(this, HkpVehicleDefaultAerodynamics::m_air_density),
     ));
-    let drag = f64::from(x87_quiet(
-        e.get(this, HkpVehicleDefaultAerodynamics::m_drag_coefficient),
-    ));
-    let area = f64::from(x87_quiet(
-        e.get(this, HkpVehicleDefaultAerodynamics::m_frontal_area),
-    ));
-    let product = density * MINUS_HALF * drag * area;
-    let result = (f64::from(x) * (f64::from(magnitude) * product)) as f32;
+    let drag = x87_m32(
+        e.get(this, HkpVehicleDefaultAerodynamics::m_drag_coefficient)
+            .to_bits(),
+    );
+    let area = x87_m32(
+        e.get(this, HkpVehicleDefaultAerodynamics::m_frontal_area)
+            .to_bits(),
+    );
+    let product = x87_mul(x87_mul(x87_mul(density, MINUS_HALF), drag), area);
+    let result = x87_mul(f64::from(x), x87_mul(f64::from(magnitude), product)) as f32;
     x87_quiet(result)
 }
 
@@ -212,6 +220,29 @@ mod tests {
         assert_eq!(e.call(0x00e4_4340, &args![this, 5.0f32]).f32(), -37.5);
         assert_eq!(e.call(0x00e4_4340, &args![this, -5.0f32]).f32(), 37.5);
         assert_eq!(e.call(0x00e4_4340, &args![this, 0.0f32]).f32(), 0.0);
+    }
+
+    #[test]
+    fn drag_keeps_the_x87_nan_when_x_and_its_magnitude_meet() {
+        // #199: x = 0xffc00000 and |x| are two NaNs; FMULP keeps the positive one.
+        let mut e = engine();
+        let this = aerodynamics(&mut e);
+        let result = e.call(0x00e4_4340, &args![this, 0xffc0_0000u32]).f32();
+        assert_eq!(result.to_bits(), 0x7fc0_0000);
+    }
+
+    #[test]
+    fn lift_keeps_the_x87_nan_when_two_nans_meet() {
+        // Oracle vector (#199): density -qNaN, frontal area -0.0, lift +qNaN, x = 1.5;
+        // FMUL keeps the positive NaN.
+        let mut e = engine();
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 8, 0xffff_ffff);
+        e.mem.set_u32(this + 0xc, 0x8000_0000);
+        e.mem.set_u32(this + 0x10, 0);
+        e.mem.set_u32(this + 0x14, 0x7fff_ffff);
+        let result = e.call(0x00e4_42e0, &args![this, 1.5f32]).f32();
+        assert_eq!(result.to_bits(), 0x7fff_ffff);
     }
 
     #[test]

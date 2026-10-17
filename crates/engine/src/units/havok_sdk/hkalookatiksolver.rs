@@ -16,27 +16,6 @@ const PAIR_ANGLE: u32 = 0x00ce_00f0;
 const LAST_LANE: u32 = 0x0101_1d78;
 const MINIMUM_LENGTH: u32 = 0x0103_2980;
 
-/// One x87 operation on two float values with the hardware NaN rules: with a NaN operand the
-/// one with the larger significand wins (`first`, the value on the stack, on a tie; a NaN
-/// against a number gives the NaN), made quiet; otherwise `op` (a float operation gives what
-/// the extended-precision operation rounded to a float gives).
-fn x87_float_op(first: f32, second: f32, op: impl Fn(f32, f32) -> f32) -> f32 {
-    let quiet = 0x0040_0000;
-    let significand = 0x007f_ffff;
-    match (first.is_nan(), second.is_nan()) {
-        (true, true) => {
-            if first.to_bits() & significand >= second.to_bits() & significand {
-                f32::from_bits(first.to_bits() | quiet)
-            } else {
-                f32::from_bits(second.to_bits() | quiet)
-            }
-        }
-        (true, false) => f32::from_bits(first.to_bits() | quiet),
-        (false, true) => f32::from_bits(second.to_bits() | quiet),
-        (false, false) => op(first, second),
-    }
-}
-
 // Translated from 00ce0110 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed (cdecl, one stack word `vector`; no PDB name): turns the vector `(r, a, b)` at
 /// `vector` (the first three floats; each is copied through a load/store pair, which quiets a
@@ -48,7 +27,10 @@ pub fn fn_00ce0110(e: &mut Engine, vector: Ptr) {
     let radius = x87_quiet(e.mem.f32(at));
     let azimuth = x87_quiet(e.mem.f32(at + 4));
     let elevation = x87_quiet(e.mem.f32(at + 8));
-    let multiply = |first: f32, second: f32| x87_float_op(first, second, |a, b| a * b);
+    // x87 `FMUL` with the x87 NaN choice (#199), rounded to a float at the store.
+    let multiply = |first: f32, second: f32| {
+        x87_mul(x87_m32(first.to_bits()), x87_m32(second.to_bits())) as f32
+    };
     let cos_elevation = e.call(CRT_FIRST_TRIG, &args![f64::from(elevation)]).f32();
     let horizontal = multiply(cos_elevation, radius);
     let cos_azimuth = e.call(CRT_FIRST_TRIG, &args![f64::from(azimuth)]).f32();
@@ -89,9 +71,8 @@ pub fn fn_00ce01c0(e: &mut Engine, vector: Ptr) {
     }
     let x = x87_quiet(e.mem.f32(at));
     let y = x87_quiet(e.mem.f32(at + 4));
-    let ratio = x87_float_op(length, e.mem.f32(at + 8), |divisor, dividend| {
-        dividend / divisor
-    });
+    // `z / length` with the x87 NaN choice (#199), rounded to a float.
+    let ratio = x87_div(x87_m32(e.mem.u32(at + 8)), x87_m32(length.to_bits())) as f32;
     let phi = e.call(RATIO_ANGLE, &args![ratio]).f32();
     let theta = e.call(PAIR_ANGLE, &args![y, x]).f32();
     let last = e.mem.u32(LAST_LANE);

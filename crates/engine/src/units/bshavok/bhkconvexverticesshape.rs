@@ -145,26 +145,12 @@ fn reserve_array(e: &mut Engine, array: u32, wanted: u32) {
 }
 
 /// `FLD`/`FMUL`/`FSTP` of two floats through the x87 stack: both operands are quieted when
-/// loaded, a NaN operand wins (the larger significand when both are NaN), otherwise the
-/// product rounded to a float.
+/// loaded, a NaN operand wins (the larger significand, then the positive
+/// one, when both are NaN), otherwise the product rounded to a float.
 fn x87_mul_bits(first: u32, second: u32) -> u32 {
-    let first = x87_quiet_bits(first);
-    let second = x87_quiet_bits(second);
-    match (
-        f32::from_bits(first).is_nan(),
-        f32::from_bits(second).is_nan(),
-    ) {
-        (true, true) => {
-            if first & 0x007f_ffff >= second & 0x007f_ffff {
-                first
-            } else {
-                second
-            }
-        }
-        (true, false) => first,
-        (false, true) => second,
-        (false, false) => (f32::from_bits(first) * f32::from_bits(second)).to_bits(),
-    }
+    // Both operands loaded (quiet), the x87 NaN choice (#199); the product of two floats is
+    // exact in f64, so it is rounded once.
+    x87_store32(x87_mul(x87_load32(first), x87_load32(second)))
 }
 
 // Translated from 00ccbb40 (decompiled, FalloutNV.exe 1.4.0.525)

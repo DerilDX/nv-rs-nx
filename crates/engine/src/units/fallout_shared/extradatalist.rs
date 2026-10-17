@@ -481,17 +481,6 @@ pub(crate) const fn chunk_tag(name: &[u8; 4]) -> u32 {
     u32::from_le_bytes(*name)
 }
 
-/// A `float` word loaded and stored through the x87 stack (`FLD`/`FSTP`):
-/// the same bits, except that a signalling NaN comes out quiet.
-pub(crate) fn x87_float_bits(bits: u32) -> u32 {
-    let is_nan = bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0;
-    if is_nan {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// Copies `bytes` bytes (a multiple of 4) from `source` to `target`.
 pub(crate) fn copy_block(e: &mut Engine, source: u32, target: u32, bytes: u32) {
     for offset in (0..bytes).step_by(4) {
@@ -2099,7 +2088,7 @@ pub fn fn_00413fc0(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
 /// (through the x87 stack, so a signalling NaN comes out quiet). Returns
 /// `this`.
 pub fn fn_00413ff0(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
-    let bits = x87_float_bits(e.mem.u32(source.addr()));
+    let bits = x87_quiet_bits(e.mem.u32(source.addr()));
     e.mem.set_u32(this.addr(), bits);
     this
 }
@@ -2190,7 +2179,7 @@ pub fn fn_004143f0(e: &mut Engine, this: Ptr) -> Ptr {
 /// constructor of an `NiColorA`. Returns `this`.
 pub fn fn_00414430(e: &mut Engine, this: Ptr, a: f32, b: f32, c: f32, d: f32) -> Ptr {
     for (index, value) in [a, b, c, d].into_iter().enumerate() {
-        let bits = x87_float_bits(value.to_bits());
+        let bits = x87_quiet_bits(value.to_bits());
         e.mem.set_u32(this.addr() + index as u32 * 4, bits);
     }
     this
@@ -2212,7 +2201,7 @@ pub fn fn_00414470(e: &mut Engine, this: Ptr) -> Ptr {
 /// constructor of an `NiPoint3`. Returns `this`.
 pub fn fn_00416870(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32) -> Ptr {
     for (index, value) in [x, y, z].into_iter().enumerate() {
-        let bits = x87_float_bits(value.to_bits());
+        let bits = x87_quiet_bits(value.to_bits());
         e.mem.set_u32(this.addr() + index as u32 * 4, bits);
     }
     this
@@ -2535,9 +2524,9 @@ pub(crate) fn save_extra_data(
             add_chunk_word(e, chunk_tag(b"XUSE"), uses as u32);
         }
         // EXTRA_TIMELEFT
-        0x27 => add_chunk_word(e, chunk_tag(b"XTIM"), x87_float_bits(value)),
+        0x27 => add_chunk_word(e, chunk_tag(b"XTIM"), x87_quiet_bits(value)),
         // EXTRA_CHARGE
-        0x28 => add_chunk_word(e, chunk_tag(b"XCHG"), x87_float_bits(value)),
+        0x28 => add_chunk_word(e, chunk_tag(b"XCHG"), x87_quiet_bits(value)),
         // EXTRA_LOCK: a REFR_LOCK (0x14 bytes) with the key as a form id.
         0x2a => e.with_stack(0x14, |e, record| {
             fn_00411b00(e, record);
@@ -2625,9 +2614,9 @@ pub(crate) fn save_extra_data(
             });
         }
         // EXTRA_RADIUS
-        0x5c => add_chunk_word(e, chunk_tag(b"XRDS"), x87_float_bits(value)),
+        0x5c => add_chunk_word(e, chunk_tag(b"XRDS"), x87_quiet_bits(value)),
         // EXTRA_RADIATION
-        0x5d => add_chunk_word(e, chunk_tag(b"XRAD"), x87_float_bits(value)),
+        0x5d => add_chunk_word(e, chunk_tag(b"XRAD"), x87_quiet_bits(value)),
         // EXTRA_MULTIBOUND
         0x61 => add_chunk_empty(e, chunk_tag(b"XMBP")),
         // EXTRA_MULTIBOUND_DATA: MultiBoundMarkerData::Save (`00438f90`).
@@ -2750,7 +2739,7 @@ pub(crate) fn save_extra_data(
             add_swapped_chunk_data(e, chunk_tag(b"XPOD"), record, 8, swap_two_words);
         }),
         // EXTRA_HEALTH_PERC
-        0x7a => add_chunk_word(e, chunk_tag(b"XHLP"), x87_float_bits(value)),
+        0x7a => add_chunk_word(e, chunk_tag(b"XHLP"), x87_quiet_bits(value)),
         // EXTRA_ROOM_REF_DATA: RoomLinkedRefData, the count of linked portals
         // with the master flag in bit 16, then each linked room as a form id.
         0x7b => {
@@ -2802,7 +2791,7 @@ pub(crate) fn save_extra_data(
             let id = form_id(e, extra.addr());
             add_chunk_word(e, chunk_tag(b"XSRF"), id);
             let second = payload(e, extra, 0x10);
-            add_chunk_word(e, chunk_tag(b"XSRD"), x87_float_bits(second));
+            add_chunk_word(e, chunk_tag(b"XSRD"), x87_quiet_bits(second));
         }
         _ => {}
     }
@@ -2988,7 +2977,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         return;
     }
     if let Some(&(_, setter)) = LOAD_FLOAT_SETTERS.iter().find(|entry| *entry.0 == name) {
-        let value = x87_float_bits(read_chunk_word(e, file));
+        let value = x87_quiet_bits(read_chunk_word(e, file));
         e.call(setter, &args![this, f32::from_bits(value)]);
         return;
     }
@@ -3156,7 +3145,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
                 fn_00414220(e, record);
             }
             let location = e.mem.u32(record.addr());
-            let z_rotation = x87_float_bits(e.mem.u32(record.addr() + 0x10));
+            let z_rotation = x87_quiet_bits(e.mem.u32(record.addr() + 0x10));
             e.call(
                 SET_PACKAGE_START_LOCATION,
                 &args![
@@ -3191,7 +3180,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         // EXTRA_DISTANTDATA: three floats (the first two zero, the third the
         // constant at `010145a8` unless the chunk gives it).
         b"XLOD" => e.with_stack(12, |e, local| {
-            let third = x87_float_bits(e.global::<u32>(LOD_DEFAULT));
+            let third = x87_quiet_bits(e.global::<u32>(LOD_DEFAULT));
             fn_00416870(e, local, 0.0, 0.0, f32::from_bits(third));
             read_chunk_data(e, file, local.addr(), 12);
             if file_needs_swap(e, file) {
@@ -3260,7 +3249,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
                 let node = new_object(e, 8, |e, block| fn_00414010(e, Ptr::new(block)).addr());
                 let reference = e.mem.u32(old.addr());
                 e.mem.set_u32(node, reference);
-                let delay = x87_float_bits(e.mem.u32(old.addr() + 4));
+                let delay = x87_quiet_bits(e.mem.u32(old.addr() + 4));
                 e.mem.set_u32(node + 4, delay);
                 e.with_stack(4, |e, local| {
                     e.mem.set_u32(local.addr(), node);
@@ -3389,10 +3378,10 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
             fn_004169f0(e, Ptr::new(plane), record.byte_add(8));
             e.with_stack(0x24, |e, matrix| {
                 e.call(SIMPLE_LIST_ITEM, &args![matrix]);
-                let angle = x87_float_bits(e.mem.u32(record.addr() + 0x20));
-                let axis_x = x87_float_bits(e.mem.u32(record.addr() + 0x14));
-                let axis_y = x87_float_bits(e.mem.u32(record.addr() + 0x18));
-                let axis_z = x87_float_bits(e.mem.u32(record.addr() + 0x1c));
+                let angle = x87_quiet_bits(e.mem.u32(record.addr() + 0x20));
+                let axis_x = x87_quiet_bits(e.mem.u32(record.addr() + 0x14));
+                let axis_y = x87_quiet_bits(e.mem.u32(record.addr() + 0x18));
+                let axis_z = x87_quiet_bits(e.mem.u32(record.addr() + 0x1c));
                 e.call(
                     MATRIX_MAKE_ROTATION,
                     &args![
@@ -3496,7 +3485,7 @@ pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr,
         // Type 0x92, the float at +0x10.
         b"XSRD" => {
             let extra = get_or_add_special_render_flags(e, this);
-            let value = x87_float_bits(read_chunk_word(e, file));
+            let value = x87_quiet_bits(read_chunk_word(e, file));
             e.mem.set_u32(extra.addr() + 0x10, value);
         }
         // Two chunks that are read into a byte and dropped.
@@ -4107,7 +4096,7 @@ pub(crate) fn extra_float_or(
     default: u32,
 ) -> f32 {
     let bits = extra_word_or(e, list, extra_type, default);
-    f32::from_bits(x87_float_bits(bits))
+    f32::from_bits(x87_quiet_bits(bits))
 }
 
 /// A sound getter's body: copies the `BSSoundHandle` at +0x0C of the first
@@ -5066,7 +5055,7 @@ pub fn fn_004198a0(e: &mut Engine, this: Ptr<ExtraDataList>, rank: i32) {
 /// `00431d10`) and adds it. The float goes through the x87 stack on the way,
 /// so a signalling NaN comes out quiet.
 pub fn extra_data_list_set_health(e: &mut Engine, this: Ptr<ExtraDataList>, health: f32) {
-    let bits = x87_float_bits(health.to_bits());
+    let bits = x87_quiet_bits(health.to_bits());
     set_or_add_extra(
         e,
         this,
@@ -5118,7 +5107,7 @@ pub fn extra_data_list_set_count(e: &mut Engine, this: Ptr<ExtraDataList>, count
 /// The float goes through the x87 stack on the way, so a signalling NaN comes
 /// out quiet.
 pub fn fn_00419bb0(e: &mut Engine, this: Ptr<ExtraDataList>, time_left: f32) {
-    let bits = x87_float_bits(time_left.to_bits());
+    let bits = x87_quiet_bits(time_left.to_bits());
     set_or_add_extra(
         e,
         this,
@@ -5136,7 +5125,7 @@ pub fn fn_00419bb0(e: &mut Engine, this: Ptr<ExtraDataList>, time_left: f32) {
 /// float goes through the x87 stack on the way, so a signalling NaN comes out
 /// quiet.
 pub fn fn_00419c60(e: &mut Engine, this: Ptr<ExtraDataList>, charge: f32) {
-    let bits = x87_float_bits(charge.to_bits());
+    let bits = x87_quiet_bits(charge.to_bits());
     set_or_add_extra(
         e,
         this,
@@ -5237,7 +5226,7 @@ pub fn fn_00419f80(e: &mut Engine, this: Ptr<ExtraDataList>, locals: u32) {
 pub fn extra_data_list_set_scale(e: &mut Engine, this: Ptr<ExtraDataList>, scale: f32) {
     let extra = find_extra(e, this, EXTRA_SCALE);
     let is_one = scale as f64 == e.mem.f64(ONE_DOUBLE);
-    let bits = x87_float_bits(scale.to_bits());
+    let bits = x87_quiet_bits(scale.to_bits());
     if extra.is_null() {
         if !is_one {
             add_new_extra(e, this, 0x10, EXTRA_SCALE_INIT, &[bits]);

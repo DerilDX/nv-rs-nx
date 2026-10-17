@@ -304,15 +304,6 @@ fn any_transform_controller(e: &mut Engine, this: Ptr<NiAVObject>) -> bool {
     false
 }
 
-/// `x87` `FLD`/`FSTP` of a `float`: a signalling NaN comes out quiet.
-fn x87_float_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 // Translated from 00a59cc0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `NiAVObject::PreAttachUpdate` (Xbox PDB): sets the parent for the
 /// duration of an `UpdateDownwardPass(update, 0)` and clears it again.
@@ -1342,7 +1333,7 @@ pub fn ni_av_object_get_viewer_strings(
             )
             .u32();
         add_string_result(e, strings, slot, text);
-        let scale = x87_float_copy(e.mem.u32(this.addr() + LOCAL_SCALE));
+        let scale = x87_quiet_bits(e.mem.u32(this.addr() + LOCAL_SCALE));
         let text = e
             .call(VIEWER_STRING_FLOAT, &args![TEXT_LOCAL_SCALE, scale])
             .u32();
@@ -1361,7 +1352,7 @@ pub fn ni_av_object_get_viewer_strings(
             )
             .u32();
         add_string_result(e, strings, slot, text);
-        let scale = x87_float_copy(e.mem.u32(this.addr() + WORLD_SCALE));
+        let scale = x87_quiet_bits(e.mem.u32(this.addr() + WORLD_SCALE));
         let text = e
             .call(VIEWER_STRING_FLOAT, &args![TEXT_WORLD_SCALE, scale])
             .u32();

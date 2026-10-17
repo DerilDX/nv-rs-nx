@@ -119,47 +119,6 @@ fn construct(e: &mut Engine, block: u32) {
     increment_count(e, COUNT_TRI_SAMPLED_HEIGHT_FIELD);
 }
 
-/// One `FLD`, arithmetic, `FSTP` step on the x87 stack (held as `f64`): a NaN operand wins
-/// (the larger significand when both are NaN) and comes out quiet, otherwise `op`.
-fn x87_op(first: f64, second: f64, op: impl Fn(f64, f64) -> f64) -> f64 {
-    let quiet = 1u64 << 51;
-    let significand = 0x000f_ffff_ffff_ffffu64;
-    match (first.is_nan(), second.is_nan()) {
-        (true, true) => {
-            if first.to_bits() & significand >= second.to_bits() & significand {
-                f64::from_bits(first.to_bits() | quiet)
-            } else {
-                f64::from_bits(second.to_bits() | quiet)
-            }
-        }
-        (true, false) => f64::from_bits(first.to_bits() | quiet),
-        (false, true) => f64::from_bits(second.to_bits() | quiet),
-        (false, false) => op(first, second),
-    }
-}
-
-fn x87_add(first: f64, second: f64) -> f64 {
-    x87_op(first, second, |a, b| a + b)
-}
-
-fn x87_sub(first: f64, second: f64) -> f64 {
-    x87_op(first, second, |a, b| a - b)
-}
-
-fn x87_mul(first: f64, second: f64) -> f64 {
-    x87_op(first, second, |a, b| a * b)
-}
-
-/// `FLD dword`: the float's bits (a signalling NaN quieted) as the stack value.
-fn x87_load32(bits: u32) -> f64 {
-    f64::from(f32::from_bits(x87_quiet_bits(bits)))
-}
-
-/// `FSTP dword`: the stack value rounded to a float, as its bits.
-fn x87_store32(value: f64) -> u32 {
-    (value as f32).to_bits()
-}
-
 /// A value stored to a float slot and loaded back.
 fn x87_round32(value: f64) -> f64 {
     x87_load32(x87_store32(value))

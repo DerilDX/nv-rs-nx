@@ -87,41 +87,6 @@ const PLANE_VALUE_34: u32 = 0x010e_a5d0;
 /// The float 3.0.
 const PLANE_THREE: u32 = 0x0101_7718;
 
-/// `x87` arithmetic on two stack values with the hardware NaN rules: with a NaN operand the one
-/// with the larger significand wins (a NaN against a number: the NaN), made quiet.
-fn x87_op(first: f64, second: f64, op: impl Fn(f64, f64) -> f64) -> f64 {
-    let quiet = 1u64 << 51;
-    let significand = 0x000f_ffff_ffff_ffffu64;
-    match (first.is_nan(), second.is_nan()) {
-        (true, true) => {
-            if first.to_bits() & significand >= second.to_bits() & significand {
-                f64::from_bits(first.to_bits() | quiet)
-            } else {
-                f64::from_bits(second.to_bits() | quiet)
-            }
-        }
-        (true, false) => f64::from_bits(first.to_bits() | quiet),
-        (false, true) => f64::from_bits(second.to_bits() | quiet),
-        (false, false) => op(first, second),
-    }
-}
-
-fn x87_add(first: f64, second: f64) -> f64 {
-    x87_op(first, second, |a, b| a + b)
-}
-
-fn x87_sub(first: f64, second: f64) -> f64 {
-    x87_op(first, second, |a, b| a - b)
-}
-
-fn x87_mul(first: f64, second: f64) -> f64 {
-    x87_op(first, second, |a, b| a * b)
-}
-
-fn x87_div(first: f64, second: f64) -> f64 {
-    x87_op(first, second, |a, b| a / b)
-}
-
 /// One lane of an SSE arithmetic instruction: a NaN in the destination operand wins
 /// (quieted), then a NaN in the source operand, otherwise `op`.
 fn sse(dest: u32, source: u32, op: fn(f32, f32) -> f32) -> u32 {

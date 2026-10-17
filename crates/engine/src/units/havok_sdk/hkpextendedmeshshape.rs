@@ -514,9 +514,10 @@ fn maxps(dst: f32, src: f32) -> f32 {
     }
 }
 
-/// `FLD m32; FMUL m32; FSTP m32`: the product of two floats (signalling NaNs quieted on load).
+/// `FLD m32; FMUL m32; FSTP m32`: the product of two floats (`a` quieted by the load, `b` the
+/// memory operand), with the x87 choice of NaN (#199).
 fn x87_product(a: f32, b: f32) -> f32 {
-    x87_quiet(a) * x87_quiet(b)
+    x87_mul(f64::from(x87_quiet(a)), x87_m32(b.to_bits())) as f32
 }
 
 fn router_allocator(e: &mut Engine) -> u32 {

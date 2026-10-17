@@ -489,14 +489,6 @@ fn remove_from_reference_list(e: &mut Engine, list: Ptr<ExtraDataList>, extra_ty
     }
 }
 
-/// A `float` loaded and stored through the x87 stack (`FLD`/`FSTP`): the
-/// same bits, except that a signalling NaN comes out quiet.
-fn x87_float(value: f32) -> f32 {
-    let bits = value.to_bits();
-    let is_nan = bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0;
-    f32::from_bits(if is_nan { bits | 0x0040_0000 } else { bits })
-}
-
 /// A new `REF_ACTIVATE_DATA` (8 bytes, node constructor `00414010`): its
 /// address, or 0 when the allocation fails (then the code stores through the
 /// null pointer all the same; the model has no failing allocation).
@@ -1023,7 +1015,7 @@ pub fn fn_0041e9e0(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32) -> 
     if !extra.is_null() {
         let entry: Ptr<RefActivateData> = e.call(ACTIVATE_REF_FIND, &args![extra, reference]).ptr();
         if !entry.is_null() {
-            return x87_float(e.get(entry, RefActivateData::fActivateDelay));
+            return x87_quiet(e.get(entry, RefActivateData::fActivateDelay));
         }
     }
     0.0
@@ -1060,7 +1052,7 @@ pub fn fn_0041ea30(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32, del
     e.set(
         Ptr::<RefActivateData>::new(entry),
         RefActivateData::fActivateDelay,
-        x87_float(delay),
+        x87_quiet(delay),
     );
 }
 
@@ -1371,7 +1363,7 @@ pub fn extra_data_list_set_activate_children_timer(
         e.set(
             extra,
             ExtraActivateRefChildren::fActivateChildrenTimer,
-            x87_float(timer),
+            x87_quiet(timer),
         );
     }
 }
@@ -1392,7 +1384,7 @@ pub fn extra_data_list_get_activate_children_timer(
     } else {
         e.get(extra, ExtraActivateRefChildren::fActivateChildrenTimer)
     };
-    x87_float(timer)
+    x87_quiet(timer)
 }
 
 // Translated from 0041f050 (decompiled, FalloutNV.exe 1.4.0.525)

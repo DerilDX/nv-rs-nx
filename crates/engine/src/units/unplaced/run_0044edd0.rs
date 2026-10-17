@@ -13,17 +13,6 @@ const INI_SETTINGS: u32 = 0x0044_f560;
 /// Slot of the collection's vtable that adds a setting.
 const COLLECTION_ADD_SLOT: u32 = 0x4;
 
-/// A float passed through the x87 stack (`FLD float` then `FSTP float`):
-/// the same bits, except that a signaling NaN comes out quiet.
-fn x87_float_copy(bits: u32) -> u32 {
-    let nan = bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0;
-    if nan {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 // Translated from 0044f440 (PC disassembly, FalloutNV.exe 1.4.0.525)
 /// The constructor of a float INI setting (`thiscall`, `RET 8`): the base
 /// constructor (`0040e130`) with the name and the value (passed on through
@@ -33,7 +22,7 @@ fn x87_float_copy(bits: u32) -> u32 {
 pub fn fn_0044f440(e: &mut Engine, this: Ptr, name: u32, value: u32) -> Ptr {
     e.call(
         SETTING_CONSTRUCT_FLOAT,
-        &args![this, name, x87_float_copy(value)],
+        &args![this, name, x87_quiet_bits(value)],
     );
     e.mem.set_u32(this.addr(), INI_SETTING_VTABLE);
     let collection = e.call(INI_SETTINGS, &[]).u32();

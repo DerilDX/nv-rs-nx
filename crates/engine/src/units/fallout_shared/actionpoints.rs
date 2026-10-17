@@ -55,30 +55,11 @@ fn quiet(value: f32) -> f32 {
 /// `FLD a; FMUL b; FSTP float`: the product rounded once to a float (the
 /// exact product of two floats fits a double). NaNs follow the x87 rules:
 /// a NaN operand comes out quiet; of two NaNs, a quiet one wins over a
-/// signalling one and otherwise the larger significand wins (on equal
-/// significands `a`, the ST0 operand, is kept; that tie is not checked
-/// against the CPU).
+/// signalling one, then the larger significand, then the positive one
+/// (the shared x87 choice, #199). `a` is loaded (`FLD`, quiet), `b` is the
+/// memory operand.
 fn x87_mul(a: f32, b: f32) -> f32 {
-    match (a.is_nan(), b.is_nan()) {
-        (false, false) => (a as f64 * b as f64) as f32,
-        (true, false) => quiet(a),
-        (false, true) => quiet(b),
-        (true, true) => {
-            let quiet_bit = 0x0040_0000;
-            let (a_quiet, b_quiet) = (a.to_bits() & quiet_bit != 0, b.to_bits() & quiet_bit != 0);
-            if a_quiet != b_quiet {
-                if a_quiet {
-                    a
-                } else {
-                    b
-                }
-            } else if (b.to_bits() & 0x007f_ffff) > (a.to_bits() & 0x007f_ffff) {
-                quiet(b)
-            } else {
-                quiet(a)
-            }
-        }
-    }
+    crate::x87::x87_mul(f64::from(x87_quiet(a)), x87_m32(b.to_bits())) as f32
 }
 
 /// The float a setting holds, through `00403e20`.

@@ -224,16 +224,6 @@ layout! {
     }
 }
 
-/// What `FLD dword` / `FSTP dword` leave of a float's bits: a signalling
-/// NaN comes back quiet (bit 22 set), every other value unchanged.
-fn x87_float_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// Copies three words (an `NiPoint3` copied with `MOV`s, no x87).
 fn copy_point(e: &mut Engine, from: u32, to: u32) {
     for offset in [0, 4, 8] {
@@ -245,7 +235,7 @@ fn copy_point(e: &mut Engine, from: u32, to: u32) {
 /// The float at `address` passed through `FLD`/`FSTP` to `FLOAT_TO_INT`,
 /// shifted right by 12 (arithmetic): the cell grid coordinate.
 fn cell_coordinate(e: &mut Engine, address: u32) -> i32 {
-    let bits = x87_float_copy(e.mem.u32(address));
+    let bits = x87_quiet_bits(e.mem.u32(address));
     e.call(FLOAT_TO_INT, &args![bits]).i32() >> 12
 }
 

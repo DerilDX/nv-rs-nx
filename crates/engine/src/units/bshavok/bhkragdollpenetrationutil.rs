@@ -14,7 +14,7 @@
 //! rule), SSE code lane by lane in `f32`, and read the x87 condition codes the way the
 //! `FNSTSW`/`TEST AH` pairs read them (NaN included). `RSQRTSS` / `RCPPS` are the host
 //! CPU's estimates. A float that the code copies with `FLD`/`FSTP` has a signalling NaN
-//! quieted ([`x87_copy`]).
+//! quieted ([`x87_quiet`]).
 //!
 //! The exception-unwinding frames (`FS:[0]` registrations) and `/GS` cookie checks of the
 //! functions marked `Translation incomplete` are not modeled.
@@ -216,17 +216,6 @@ layout! {
         0x2c wordsData: Ptr,
         0x30 wordsSize: i32,
         0x34 wordsCapacity: u32,
-    }
-}
-
-/// `FLD m32` / `FSTP m32`: copies a float through the x87 stack, which quiets a
-/// signalling NaN.
-fn x87_copy(value: f32) -> f32 {
-    let bits = value.to_bits();
-    if value.is_nan() {
-        f32::from_bits(bits | 0x0040_0000)
-    } else {
-        value
     }
 }
 
@@ -485,7 +474,7 @@ pub fn fn_00ca0cd0(e: &mut Engine, this: Ptr<BhkRagdollPenetrationUtil>) {
     }
     let budget = e.global::<f32>(BUDGET_SECONDS);
     let milliseconds = e.global::<f64>(MILLISECONDS);
-    let budget = (f64::from(x87_copy(budget)) * milliseconds) as f32;
+    let budget = (f64::from(x87_quiet(budget)) * milliseconds) as f32;
     let now = e.call(GET_TIMER, &args![]).u64();
     e.set(this, BhkRagdollPenetrationUtil::timerStart, now);
     let scale = e.global::<f32>(TICK_SCALE);
@@ -1198,7 +1187,7 @@ pub fn bhk_ragdoll_penetration_util_cast_ray(
                 let mut hit = 0u32;
                 while (hit as i32) < count && !found {
                     let entry = e.mem.u32(collector.addr() + 0x10) + 0x60 * hit;
-                    let fraction = x87_copy(e.mem.f32(entry + 0x10));
+                    let fraction = x87_quiet(e.mem.f32(entry + 0x10));
                     let normal = load_vec(e, entry);
                     let collidable = e.mem.u32(entry + 0x50);
                     if e.mem.u8(collidable + 0x18) == 1 {
@@ -1668,7 +1657,7 @@ fn add_extra_bones(e: &mut Engine, skeleton: u32, body_count: u32, extras: u32, 
                 let length_a = pair_length(end_a);
                 let length_b = pair_length(end_b);
                 let chosen = if length_b < length_a { end_a } else { end_b };
-                let radius = x87_copy(e.mem.f32(shape + 0x10));
+                let radius = x87_quiet(e.mem.f32(shape + 0x10));
                 let half = e.global::<f32>(HALF);
                 let three = e.global::<f32>(THREE);
                 let difference = subps(end_a, end_b);
@@ -1679,7 +1668,7 @@ fn add_extra_bones(e: &mut Engine, skeleton: u32, body_count: u32, extras: u32, 
                 position = addps(chosen, offset);
             }
             if kind == 4 || kind == 6 || kind == 1 {
-                let radius = x87_copy(e.mem.f32(shape + 0x10));
+                let radius = x87_quiet(e.mem.f32(shape + 0x10));
                 position[0] = (f64::from(radius) * two) as f32;
             }
             let name = e.mem.u32(body + 0x74);
@@ -2846,8 +2835,8 @@ mod tests {
     #[test]
     fn a_signalling_hit_fraction_is_quieted_like_the_x87_copy() {
         let signalling = f32::from_bits(0x7f80_0001);
-        assert_eq!(x87_copy(signalling).to_bits(), 0x7fc0_0001);
-        assert_eq!(x87_copy(1.5), 1.5);
+        assert_eq!(x87_quiet(signalling).to_bits(), 0x7fc0_0001);
+        assert_eq!(x87_quiet(1.5), 1.5);
         let (found, point, _, _) =
             run_cast(vec![vec![(signalling, [0.0, 1.0, 0.0, 0.0], 5, 1)]], 0);
         assert_eq!(found, 1);

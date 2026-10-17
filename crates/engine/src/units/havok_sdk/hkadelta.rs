@@ -5,28 +5,11 @@
 use crate::prelude::*;
 
 /// `FADD dword` on the x87 stack: `first` is the value on the stack, `second` the memory
-/// operand, both as float bit patterns. A signalling NaN is quieted on the way in; with NaNs
-/// the one with the larger significand wins (the first one on a tie), a NaN against a number
-/// gives that NaN, otherwise the sum is rounded to a float.
+/// operand, both as float bit patterns, with the x87 NaN choice (#199: a quiet NaN beats a
+/// signalling memory operand, then the larger significand, then the positive one); otherwise
+/// the sum rounded to a float (rounding the f64 sum once gives the same float).
 fn x87_add_bits(first: u32, second: u32) -> u32 {
-    let first = x87_quiet_bits(first);
-    let second = x87_quiet_bits(second);
-    let significand = 0x007f_ffff;
-    match (
-        f32::from_bits(first).is_nan(),
-        f32::from_bits(second).is_nan(),
-    ) {
-        (true, true) => {
-            if first & significand >= second & significand {
-                first
-            } else {
-                second
-            }
-        }
-        (true, false) => first,
-        (false, true) => second,
-        (false, false) => (f32::from_bits(first) + f32::from_bits(second)).to_bits(),
-    }
+    x87_store32(x87_add(x87_load32(first), x87_m32(second)))
 }
 
 // Translated from 00e592a0 (decompiled, FalloutNV.exe 1.4.0.525)

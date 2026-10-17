@@ -632,27 +632,16 @@ fn extra_word_or(e: &mut Engine, list: Ptr<ExtraDataList>, extra_type: u8, defau
     }
 }
 
-/// A `float` word loaded and stored through the x87 stack (`FLD`/`FSTP`):
-/// the same bits, except that a signalling NaN comes out quiet.
-fn x87_float_bits(bits: u32) -> u32 {
-    let is_nan = bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0;
-    if is_nan {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// A `float` as the x87 stack stores it.
 fn x87_float(value: f32) -> u32 {
-    x87_float_bits(value.to_bits())
+    x87_quiet_bits(value.to_bits())
 }
 
 /// The `float` at +0x0C of the first extra data of `extra_type`, or 0.0
 /// (`FLDZ`); returned in ST0.
 fn extra_float_or_zero(e: &mut Engine, list: Ptr<ExtraDataList>, extra_type: u8) -> f32 {
     let bits = extra_word_or(e, list, extra_type, 0);
-    f32::from_bits(x87_float_bits(bits))
+    f32::from_bits(x87_quiet_bits(bits))
 }
 
 /// `new` and construct: allocates `size` bytes and runs the constructor at
@@ -2207,7 +2196,7 @@ pub fn extra_data_list_load_game(
                 let world = dynamic_cast(e, form, RTTI_TES_WORLD_SPACE);
                 let cell = dynamic_cast(e, form, RTTI_TES_OBJECT_CELL);
                 if world != 0 || cell != 0 {
-                    let rotation = f32::from_bits(x87_float_bits(e.mem.u32(record.addr() + 0x10)));
+                    let rotation = f32::from_bits(x87_quiet_bits(e.mem.u32(record.addr() + 0x10)));
                     e.call(
                         SET_PACKAGE_START_LOCATION,
                         &args![this, world, cell, record.addr() + 4, rotation],
@@ -2308,7 +2297,7 @@ pub fn extra_data_list_load_game(
             0x30 => {
                 if save_version(e) < 0x43 && flags & 0x10 != 0 {
                     let word = load_local(e, 4);
-                    let scale = f32::from_bits(x87_float_bits(word));
+                    let scale = f32::from_bits(x87_quiet_bits(word));
                     if reference.is_null() {
                         e.call(SET_SCALE, &args![this, scale]);
                     } else {
@@ -3278,7 +3267,7 @@ fn load_extra_ov2(
         0x56 => {
             let extra = ov2_get_or_create(e, this, present, extra_type);
             load_bytes_ov2(e, buffer, extra + 0x0c, 4);
-            let damage = f32::from_bits(x87_float_bits(e.mem.u32(extra + 0x0c)));
+            let damage = f32::from_bits(x87_quiet_bits(e.mem.u32(extra + 0x0c)));
             let target = e
                 .call(DESTRUCTIBLE_LOOKUP_00477BC0, &args![reference, damage])
                 .u32();
@@ -4371,7 +4360,7 @@ pub fn fn_0042cc10(e: &mut Engine, this: Ptr) -> Ptr {
     e.mem.set_u32(this.addr(), 0);
     e.mem.set_u32(this.addr() + 4, 0xffff_ffff);
     let value = e.mem.u32(FLOAT_COPIED_BY_RECORD_INIT);
-    e.mem.set_u32(this.addr() + 8, x87_float_bits(value));
+    e.mem.set_u32(this.addr() + 8, x87_quiet_bits(value));
     this
 }
 

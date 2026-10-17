@@ -74,19 +74,11 @@ pub fn fn_00402820(e: &mut Engine, this: Ptr) -> Ptr {
 /// `ST0`).
 const SQRT: u32 = 0x00ec_6054;
 
-/// A float loaded on the x87 stack (`FLD float`): the value, except that a
-/// signaling NaN comes out quiet.
-fn x87_load_float(bits: u32) -> f64 {
-    let nan = bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0;
-    let bits = if nan { bits | 0x0040_0000 } else { bits };
-    f64::from(f32::from_bits(bits))
-}
-
 // Translated from 004019b0 (PC disassembly, FalloutNV.exe 1.4.0.525)
 /// `cdecl` (one float): passes the float through the x87 stack to
 /// [`fn_004019d0`] and returns its result in `ST0`.
 pub fn fn_004019b0(e: &mut Engine, value: u32) -> f64 {
-    let passed = (x87_load_float(value) as f32).to_bits();
+    let passed = (x87_load32(value) as f32).to_bits();
     fn_004019d0(e, passed)
 }
 
@@ -95,7 +87,7 @@ pub fn fn_004019b0(e: &mut Engine, value: u32) -> f64 {
 /// (`sqrt`, `00ec6054`), rounded to a float (`FSTP float` then `FLD float`)
 /// and returned in `ST0`. (Ghidra shows a `this`; `ECX` is never read.)
 pub fn fn_004019d0(e: &mut Engine, value: u32) -> f64 {
-    let root = e.call(SQRT, &args![x87_load_float(value)]).f64();
+    let root = e.call(SQRT, &args![x87_load32(value)]).f64();
     f64::from(root as f32)
 }
 

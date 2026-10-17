@@ -2359,7 +2359,7 @@ pub fn extra_leveled_item_compare(e: &mut Engine, this: Ptr<ExtraLeveledItem>, o
 /// `health` through x87 FLD/FSTP (signaling NaNs become quiet). Returns `this`.
 pub fn fn_00431d10(e: &mut Engine, this: Ptr<ExtraHealth>, health: f32) -> Ptr<ExtraHealth> {
     construct_base(e, this.cast(), TYPE_HEALTH, EXTRA_HEALTH_VTABLE);
-    let bits = super::extradatalist::x87_float_bits(health.to_bits());
+    let bits = x87_quiet_bits(health.to_bits());
     e.set(this, ExtraHealth::fHealth, f32::from_bits(bits));
     this
 }

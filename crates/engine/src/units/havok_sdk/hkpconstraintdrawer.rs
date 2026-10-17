@@ -17,35 +17,6 @@ const DISPLAY_ARROW: u32 = 0x00e1_0d50;
 const ORANGE_GREEN: u32 = 0x0101_6248;
 const ARROW_FACTOR: u32 = 0x0101_8a90;
 
-/// `x87` arithmetic on two stack values with the hardware NaN rules: with a NaN operand the one
-/// with the larger significand wins (a NaN against a number: the NaN), made quiet.
-fn x87_mul(first: f64, second: f64) -> f64 {
-    let quiet = 1u64 << 51;
-    let significand = 0x000f_ffff_ffff_ffffu64;
-    match (first.is_nan(), second.is_nan()) {
-        (true, true) => {
-            if first.to_bits() & significand >= second.to_bits() & significand {
-                f64::from_bits(first.to_bits() | quiet)
-            } else {
-                f64::from_bits(second.to_bits() | quiet)
-            }
-        }
-        (true, false) => f64::from_bits(first.to_bits() | quiet),
-        (false, true) => f64::from_bits(second.to_bits() | quiet),
-        (false, false) => first * second,
-    }
-}
-
-/// `FLD dword`: the float's bits (a signalling NaN quieted) as the stack value.
-fn x87_load32(bits: u32) -> f64 {
-    f64::from(f32::from_bits(x87_quiet_bits(bits)))
-}
-
-/// `FSTP dword`: the stack value rounded to a float, as its bits.
-fn x87_store32(value: f64) -> u32 {
-    (value as f32).to_bits()
-}
-
 /// Copies the four words at `from` to `to` (the `MOVAPS` copies; the bits are not looked at).
 fn copy_vector(e: &mut Engine, from: u32, to: u32) {
     for word in 0..4 {

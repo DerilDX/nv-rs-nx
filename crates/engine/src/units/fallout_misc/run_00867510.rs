@@ -66,23 +66,13 @@ layout! {
     }
 }
 
-/// A `float` as the x87 `FLD`/`FSTP` pair copies it: a signalling NaN comes
-/// out quiet (bit 22 set), everything else unchanged.
-fn x87_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 // Translated from 00867510 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Constructor of the 0x48-byte record: eleven floats are set to -1.0, the
 /// two words at `+0x30` and `+0x34` to -1, the floats at `+0x38` and `+0x3c`
 /// to 0, the byte at `+0x40` and the word at `+0x44` to 0 (the word at `+0x18`
 /// and the bytes `+0x41` to `+0x43` are not written). Returns `this`.
 pub fn fn_00867510(e: &mut Engine, this: Ptr<Block48>) -> Ptr<Block48> {
-    let minus_one = x87_copy(e.global::<u32>(MINUS_ONE));
+    let minus_one = x87_quiet_bits(e.global::<u32>(MINUS_ONE));
     for offset in [
         0x00, 0x04, 0x08, 0x0c, 0x10, 0x14, 0x1c, 0x20, 0x24, 0x28, 0x2c,
     ] {
@@ -109,7 +99,7 @@ pub fn fn_008675e0(e: &mut Engine, this: Ptr<Block48>, source: Ptr<Block48>) {
     for offset in [
         0x00, 0x04, 0x08, 0x0c, 0x10, 0x14, 0x1c, 0x20, 0x24, 0x28, 0x2c,
     ] {
-        let bits = x87_copy(e.mem.u32(source.addr().wrapping_add(offset)));
+        let bits = x87_quiet_bits(e.mem.u32(source.addr().wrapping_add(offset)));
         e.mem.set_u32(this.addr().wrapping_add(offset), bits);
     }
     let word = e.get(source, Block48::word_30);
@@ -117,7 +107,7 @@ pub fn fn_008675e0(e: &mut Engine, this: Ptr<Block48>, source: Ptr<Block48>) {
     let word = e.get(source, Block48::word_34);
     e.set(this, Block48::word_34, word);
     for offset in [0x38, 0x3c] {
-        let bits = x87_copy(e.mem.u32(source.addr().wrapping_add(offset)));
+        let bits = x87_quiet_bits(e.mem.u32(source.addr().wrapping_add(offset)));
         e.mem.set_u32(this.addr().wrapping_add(offset), bits);
     }
     let byte = e.get(source, Block48::byte_40);

@@ -10,7 +10,7 @@
 //! - The float code is x87: intermediate results are computed in `f64`
 //!   (the game's x87 control word rounds to 53 bits) and rounded to `f32`
 //!   wherever the code stores a `float` (`FSTP dword`). A `FLD`/`FSTP` copy of
-//!   a `float` turns a signalling NaN into a quiet one ([`x87_float_copy`]).
+//!   a `float` turns a signalling NaN into a quiet one ([`x87_quiet_bits`]).
 //!   Comparisons use the status word the exe tests ([`x87_compare`] and
 //!   [`parity_even`], which `JP`/`JNP` read), so NaN behaves as in the game.
 //! - Game settings are read through `00403e20` (a pointer to the setting's
@@ -321,21 +321,6 @@ const WEAPON_FIELD_130: u32 = 0x130;
 const WEAPON_FIELD_11C: u32 = 0x11c;
 
 // ---- x87 helpers -----------------------------------------------------------------------------------
-
-/// What `FLD dword` followed by `FSTP dword` leaves of a float's bits: a signalling NaN comes back
-/// quiet (bit 22 set); every other value, denormals included, is unchanged.
-fn x87_float_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
-/// A float that went through `FLD` / `FSTP` (a signalling NaN comes back quiet).
-fn x87_quiet(value: f32) -> f32 {
-    f32::from_bits(x87_float_copy(value.to_bits()))
-}
 
 /// The high byte of the x87 status word (`FNSTSW AX`, then `AH`) after `FCOM st0, operand`: C0
 /// (`0x01`) when `st0 < operand`, C3 (`0x40`) when equal, nothing when `st0 > operand`, and

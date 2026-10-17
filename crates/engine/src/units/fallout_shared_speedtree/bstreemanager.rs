@@ -216,19 +216,9 @@ const SLOT_CREATE_ART: u32 = 0x0c;
 const NI_REF_OBJECT_CONSTRUCT: u32 = 0x0049_68b0;
 const MODEL_VTABLE: u32 = 0x0106_6768;
 
-/// A `float` copied through the x87 stack (`FLD`/`FSTP`): a signalling NaN
-/// comes out quiet.
-fn x87_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// `FLD float [address]`: the value as the x87 stack holds it.
 fn load_float(e: &Engine, address: u32) -> f32 {
-    f32::from_bits(x87_copy(e.mem.u32(address)))
+    f32::from_bits(x87_quiet_bits(e.mem.u32(address)))
 }
 
 /// Value pointer of a setting object, as `00403e20` returns it.
@@ -626,13 +616,13 @@ pub fn fn_006652e0(e: &mut Engine, camera: u32, skip_update: u8) {
         if camera != 0 {
             for lane in 0..3u32 {
                 let at = e.call(OBJECT_POSITION, &args![camera]).u32();
-                let bits = x87_copy(e.mem.u32(at + lane * 4));
+                let bits = x87_quiet_bits(e.mem.u32(at + lane * 4));
                 e.mem.set_u32(position + lane * 4, bits);
             }
             let facing = e
                 .call(OBJECT_DIRECTION, &args![camera, scratch_direction])
                 .u32();
-            let minus_one = x87_copy(e.mem.u32(FLOAT_MINUS_ONE));
+            let minus_one = x87_quiet_bits(e.mem.u32(FLOAT_MINUS_ONE));
             let scaled = e
                 .call(SCALED_VECTOR, &args![scratch_scaled, minus_one, facing])
                 .u32();
@@ -641,7 +631,7 @@ pub fn fn_006652e0(e: &mut Engine, camera: u32, skip_update: u8) {
                 e.mem.set_u32(vector + lane * 4, bits);
             }
             for lane in 0..3u32 {
-                let bits = x87_copy(e.mem.u32(vector + lane * 4));
+                let bits = x87_quiet_bits(e.mem.u32(vector + lane * 4));
                 e.mem.set_u32(direction + lane * 4, bits);
             }
             e.call(SPEEDTREE_SET_CAMERA, &args![position, direction]);
@@ -879,7 +869,7 @@ pub fn fn_006658b0(e: &mut Engine, this: Ptr<BSTreeManager>) {
     if e.global::<u32>(LAST_WIND_SPEED_READY) & 1 == 0 {
         let flags = e.global::<u32>(LAST_WIND_SPEED_READY);
         e.set_global(LAST_WIND_SPEED_READY, flags | 1);
-        e.set_global(LAST_WIND_SPEED, x87_copy(wind_bits));
+        e.set_global(LAST_WIND_SPEED, x87_quiet_bits(wind_bits));
     }
     let wind = load_float(e, this.addr() + BSTreeManager::fWindSpeed.off);
     let zero = e.global::<f64>(DOUBLE_ZERO);
@@ -940,7 +930,7 @@ pub fn fn_006658b0(e: &mut Engine, this: Ptr<BSTreeManager>) {
         SPEEDTREE_SET_LIGHTING,
         &args![fourth, third, second_light, first_light],
     );
-    let bits = x87_copy(e.mem.u32(this.addr() + BSTreeManager::fWindSpeed.off));
+    let bits = x87_quiet_bits(e.mem.u32(this.addr() + BSTreeManager::fWindSpeed.off));
     e.set_global(LAST_WIND_SPEED, bits);
 }
 

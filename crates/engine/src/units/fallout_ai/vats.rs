@@ -13,7 +13,7 @@
 //! is the exe's own flag test: `x87_compare` gives the status-word high byte `FNSTSW AX` leaves in
 //! `AH` (NaN sets all of C0, C2 and C3), and the branch is the same `TEST AH,mask` / `JZ` / `JP`
 //! the code uses, so NaN operands take the same branch as in the game. A `FLD dword` followed by
-//! `FSTP dword` turns a signalling NaN into a quiet one (`x87_float_copy`).
+//! `FSTP dword` turns a signalling NaN into a quiet one (`x87_quiet_bits`).
 //!
 //! Call conventions: arguments of every call are the words the exe pushes (read from the
 //! disassembly; the decompiler often hangs a pushed word on the wrong callee), `this` first.
@@ -536,16 +536,6 @@ layout! {
 
 // ---- helpers ----------------------------------------------------------------------------------
 
-/// What `FLD dword` followed by `FSTP dword` leaves of a float's bits: a signalling NaN comes back
-/// quiet (bit 22 set); every other value, denormals included, is unchanged.
-fn x87_float_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// The high byte of the x87 status word (`FNSTSW AX`, then `AH`) after `FCOM st0, operand`: C0
 /// (`0x01`) when `st0 < operand`, C3 (`0x40`) when equal, nothing when `st0 > operand`, and
 /// C0 | C2 | C3 (`0x45`) when either is a NaN.
@@ -597,14 +587,14 @@ fn write_vec3(e: &mut Engine, address: u32, value: [u32; 3]) {
 
 /// Copies a float with `FLD` / `FSTP` (a signalling NaN is quieted).
 fn copy_float(e: &mut Engine, from: u32, to: u32) {
-    let bits = x87_float_copy(e.mem.u32(from));
+    let bits = x87_quiet_bits(e.mem.u32(from));
     e.mem.set_u32(to, bits);
 }
 
 /// A float setting the way the game pushes it (`FLD [value]`, `FSTP [ESP]`).
 fn setting_float(e: &mut Engine, setting: u32) -> f32 {
     let value = e.call(SETTING_FLOAT_POINTER, &args![setting]).u32();
-    f32::from_bits(x87_float_copy(e.mem.u32(value)))
+    f32::from_bits(x87_quiet_bits(e.mem.u32(value)))
 }
 
 /// `frame time / divisor` as the update code computes it (`FSTP double`, `FDIVR double`).
@@ -759,7 +749,7 @@ pub fn vats_set_mode(e: &mut Engine, this: Ptr<Vats>, mode: i32, force: u8) {
                 // The point (0.5, 0.5) is a local of the exe; its constructor takes two floats and
                 // the third word pushed with them (0.0) stays on the stack for the trigger call.
                 let point = e.mem.alloc(8);
-                let half = f32::from_bits(x87_float_copy(e.mem.u32(HALF_FLOAT)));
+                let half = f32::from_bits(x87_quiet_bits(e.mem.u32(HALF_FLOAT)));
                 e.call(POINT2_CONSTRUCTOR, &args![point, half, half]);
                 let setting_a = setting_float(e, TRANSITION_SETTING_A);
                 let setting_b = setting_float(e, TRANSITION_SETTING_B);
@@ -1270,7 +1260,7 @@ pub fn fn_009c8ef0(e: &mut Engine) -> f32 {
     } else {
         PICK_TIME_FLOAT_OFF
     };
-    f32::from_bits(x87_float_copy(e.mem.u32(source)))
+    f32::from_bits(x87_quiet_bits(e.mem.u32(source)))
 }
 
 /// The blocks the line-of-sight ray cast keeps on the exe's stack: the ray query (0xb0 bytes), the
@@ -2307,7 +2297,7 @@ fn update_head_command(e: &mut Engine, this: Ptr<Vats>) {
                 }
             }
             if finished {
-                pending = f32::from_bits(x87_float_copy(e.mem.u32(head.wrapping_add(0x20))));
+                pending = f32::from_bits(x87_quiet_bits(e.mem.u32(head.wrapping_add(0x20))));
                 vats_free_head_action(e, this);
             }
         }
@@ -2318,7 +2308,7 @@ fn update_head_command(e: &mut Engine, this: Ptr<Vats>) {
     } else if e.global::<u8>(ACTION_STARTED) != 0 {
         let actor = current_actor(e);
         if e.call(ACTOR_GET_ANIM_ACTION, &args![actor]).i32() == -1 {
-            pending = f32::from_bits(x87_float_copy(e.mem.u32(head.wrapping_add(0x20))));
+            pending = f32::from_bits(x87_quiet_bits(e.mem.u32(head.wrapping_add(0x20))));
             vats_free_head_action(e, this);
         }
     } else {
@@ -2356,7 +2346,7 @@ fn update_head_command(e: &mut Engine, this: Ptr<Vats>) {
                             e.call(ACTOR_START_ACTION, &args![actor, ten]);
                         }
                     }
-                    pending = f32::from_bits(x87_float_copy(e.mem.u32(head.wrapping_add(0x20))));
+                    pending = f32::from_bits(x87_quiet_bits(e.mem.u32(head.wrapping_add(0x20))));
                     vats_free_head_action(e, this);
                 }
             }
@@ -2662,19 +2652,19 @@ fn update_camera_timing(e: &mut Engine, this: Ptr<Vats>) {
         let time: f32 = e.global(PLAYBACK_TIME);
         e.call(CAMERA_ADVANCE, &args![camera, time]);
         if e.global::<u8>(SLOW_MOTION_ACTIVE) != 0 {
-            let multiplier = f32::from_bits(x87_float_copy(e.mem.u32(SLOW_FLOAT_A)));
+            let multiplier = f32::from_bits(x87_quiet_bits(e.mem.u32(SLOW_FLOAT_A)));
             set_time_multiplier(e, multiplier, 0);
         } else {
             let last = e.global::<u32>(LAST_COMMAND);
             if last != 0 && e.mem.u32(last) == 0x12 {
-                let multiplier = f32::from_bits(x87_float_copy(e.mem.u32(SLOW_FLOAT_B)));
+                let multiplier = f32::from_bits(x87_quiet_bits(e.mem.u32(SLOW_FLOAT_B)));
                 set_time_multiplier(e, multiplier, 0);
             } else {
                 let multiplier = e.call(FLOAT_AT_0X50, &args![camera]).f32();
                 set_time_multiplier(e, multiplier, 0);
             }
         }
-        let mut blend = f32::from_bits(x87_float_copy(e.mem.u32(SLOW_MOTION_BLEND)));
+        let mut blend = f32::from_bits(x87_quiet_bits(e.mem.u32(SLOW_MOTION_BLEND)));
         if x87_compare(blend as f64, e.global::<f64>(HALF_DOUBLE)) & 0x41 == 0 {
             blend = (1.0 - blend as f64) as f32;
         }
@@ -2759,7 +2749,7 @@ fn update_end_countdown(e: &mut Engine, this: Ptr<Vats>) {
             e.call(CAMERA_ADVANCE, &args![camera, time]);
         }
         if e.global::<u8>(SLOW_MOTION_ACTIVE) != 0 {
-            let multiplier = f32::from_bits(x87_float_copy(e.mem.u32(SLOW_FLOAT_A)));
+            let multiplier = f32::from_bits(x87_quiet_bits(e.mem.u32(SLOW_FLOAT_A)));
             set_time_multiplier(e, multiplier, 0);
         } else if !camera.is_null() && e.call(CAMERA_IS_INITIALIZED, &args![camera]).bool() {
             let multiplier = e.call(FLOAT_AT_0X50, &args![camera]).f32();
@@ -3068,9 +3058,9 @@ mod tests {
         assert!(parity_even(0x44));
         assert!(!parity_even(0x40));
         assert!(!parity_even(0x04));
-        assert_eq!(x87_float_copy(0x7f80_0001), 0x7fc0_0001);
-        assert_eq!(x87_float_copy(0x3f80_0000), 0x3f80_0000);
-        assert_eq!(x87_float_copy(0x0000_0001), 0x0000_0001);
+        assert_eq!(x87_quiet_bits(0x7f80_0001), 0x7fc0_0001);
+        assert_eq!(x87_quiet_bits(0x3f80_0000), 0x3f80_0000);
+        assert_eq!(x87_quiet_bits(0x0000_0001), 0x0000_0001);
     }
 
     // ---- the small functions ------------------------------------------------------------------

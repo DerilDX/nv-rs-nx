@@ -1033,23 +1033,29 @@ pub fn fn_00e0a6c0(e: &mut Engine, this: Ptr, state: Ptr) -> f32 {
 /// polynomial cost scaled by the float at `this + 0x14`. `zero_when_positive` tells which side
 /// of the scaled distance gives 0.
 fn side_cost(e: &Engine, settings: u32, s: u32, key_offset: u32, zero_when_positive: bool) -> f32 {
-    let key = e.mem.f32(s + key_offset);
-    let middle = (((f64::from(e.mem.f32(s + 0xc))) + f64::from(e.mem.f32(s + 8))) * HALF) as f32;
-    let offset = (f64::from(key) - f64::from(middle)) as f32;
+    // Arithmetic in the exe's operand order with the x87 NaN choice (#199): `FADD`/`FSUB`/
+    // `FMUL dword ptr` read their operand from memory (`x87_m32`); `FLD` values are quiet.
+    let wide = |value: f32| f64::from(x87_quiet(value));
+    let key = wide(e.mem.f32(s + key_offset));
+    let middle = x87_mul(
+        x87_add(wide(e.mem.f32(s + 0xc)), x87_m32(e.mem.u32(s + 8))),
+        HALF,
+    ) as f32;
+    let offset = x87_sub(key, x87_m32(middle.to_bits())) as f32;
     let inverse = if (e.mem.u32(s) as i32) >= (e.mem.u32(s + 4) as i32) {
         e.mem.f32(s + 0x10)
     } else {
-        let width = sub_f32(e.mem.f32(s + 0xc), e.mem.f32(s + 8));
-        let limit = e.mem.f32(settings + 0x1c);
+        let width = x87_sub(wide(e.mem.f32(s + 0xc)), x87_m32(e.mem.u32(s + 8))) as f32;
+        let limit = x87_quiet(e.mem.f32(settings + 0x1c));
         let smaller = if limit < width { limit } else { width };
-        let sum = f64::from(width) + f64::from(smaller);
+        let sum = x87_add(wide(width), x87_m32(smaller.to_bits()));
         if 0.0 < sum {
-            (1.0f64 / sum) as f32
+            x87_div(1.0, sum) as f32
         } else {
             f32::from_bits(HUGE_COST)
         }
     };
-    let scaled = (f64::from(inverse) * f64::from(offset)) as f32;
+    let scaled = x87_mul(wide(inverse), x87_m32(offset.to_bits())) as f32;
     let outside = if zero_when_positive {
         scaled > 0.0
     } else {
@@ -1058,12 +1064,16 @@ fn side_cost(e: &Engine, settings: u32, s: u32, key_offset: u32, zero_when_posit
     if outside {
         return 0.0;
     }
-    let square = (f64::from(scaled) * f64::from(scaled)) as f32;
-    let fourth = (f64::from(square) * f64::from(square)) as f32;
-    let polynomial = f64::from(fourth) * THREE + f64::from(square) * TWO_NINE;
-    let eighth = (f64::from(fourth) * f64::from(fourth)) as f32;
-    let sum = (polynomial + f64::from(eighth) * FIFTEEN_HUNDRED) as f32;
-    (f64::from(sum) * f64::from(e.mem.f32(settings + 0x14))) as f32
+    let square = x87_mul(f64::from(scaled), f64::from(scaled)) as f32;
+    let fourth = x87_mul(f64::from(square), f64::from(square)) as f32;
+    // FADDP ST2,ST0: fourth * 3 + square * 2.9.
+    let polynomial = x87_add(
+        x87_mul(f64::from(fourth), THREE),
+        x87_mul(f64::from(square), TWO_NINE),
+    );
+    let eighth = x87_mul(f64::from(fourth), f64::from(fourth)) as f32;
+    let sum = x87_add(polynomial, x87_mul(f64::from(eighth), FIFTEEN_HUNDRED)) as f32;
+    x87_mul(f64::from(sum), x87_m32(e.mem.u32(settings + 0x14))) as f32
 }
 
 // Translated from 00e0a750 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1868,6 +1878,22 @@ mod a06_tests {
         e.mem.set_f32(record + 0xc, 0.0);
         let got = e.call(0x00e0a750, &args![settings, record]).f32();
         assert!(got.is_infinite() || got > 1.0e30);
+    }
+
+    #[test]
+    fn the_side_costs_keep_the_x87_nan_when_two_nans_meet() {
+        // #199: the key 0x7fc00000 makes the polynomial a NaN that meets the scale
+        // 0xffffffff in the last FMUL; the larger significand wins.
+        let mut e = Engine::new();
+        let settings = settings(&mut e);
+        e.mem.set_u32(settings + 0x14, 0xffff_ffff);
+        let record = state(&mut e, 3, 2);
+        e.mem.set_u32(record + 0x20, 0x7fc0_0000);
+        e.mem.set_u32(record + 0x38, 0x7fc0_0000);
+        let above = e.call(0x00e0a750, &args![settings, record]).f32();
+        assert_eq!(above.to_bits(), 0xffff_ffff);
+        let below = e.call(0x00e0a850, &args![settings, record]).f32();
+        assert_eq!(below.to_bits(), 0xffff_ffff);
     }
 
     /// Records of 20 bytes whose first word is the id `i`, in an array of `count`.

@@ -719,18 +719,13 @@ const POST_COLLIDE_STATE_TABLE: u32 = 0x0126_9210;
 /// The global the exe compares with 1 to stop a step early (`01269200`).
 const STOP_FLAG: u32 = 0x0126_9200;
 
-/// The double the x87 stack holds after `FLD dword` of the float with the bit pattern `bits`.
-fn x87_double(bits: u32) -> f64 {
-    f64::from(f32::from_bits(x87_quiet_bits(bits)))
-}
-
 /// The four words of a step info `(start, end, delta, 1 / delta)` the exe builds from two
 /// stored times: the times pass through the x87 stack, the delta is the single precision
 /// difference `end - start` and the inverse is 0 for a delta that compares equal to 0 (the
 /// `FUCOM` test; a NaN delta is divided) and `1 / delta` otherwise.
 fn step_info(start: u32, end: u32) -> [u32; 4] {
     let (start, end) = (x87_quiet_bits(start), x87_quiet_bits(end));
-    let delta = (x87_double(end) - x87_double(start)) as f32;
+    let delta = (x87_load32(end) - x87_load32(start)) as f32;
     let inverse = if delta == 0.0 {
         0.0
     } else {
@@ -835,7 +830,7 @@ pub fn step_begin_st(e: &mut Engine, this: Ptr, queue: u32, delta_time: u32) -> 
     let step = x87_quiet_bits(delta_time);
     e.mem.set_u32(me + 0x1c, step);
     let start = e.mem.u32(me + 0x18);
-    let end = ((f64::from(f32::from_bits(step)) + x87_double(start)) as f32).to_bits();
+    let end = ((f64::from(f32::from_bits(step)) + x87_load32(start)) as f32).to_bits();
     let info = step_info(start, end);
     e.with_stack(0x20, |e, frame| {
         let frame = frame.addr();
@@ -889,11 +884,11 @@ pub fn step_begin_st(e: &mut Engine, this: Ptr, queue: u32, delta_time: u32) -> 
             e.mem.set_u32(world + 0x1d0 + 4 * lane as u32, bits);
         }
         let world = e.mem.u32(me + SIM_WORLD);
-        let scale = (x87_double(e.mem.u32(world + 0x300)) * x87_double(info[2])) as f32;
+        let scale = (x87_load32(e.mem.u32(world + 0x300)) * x87_load32(info[2])) as f32;
         e.mem.set_f32(world + 0x2ec, scale);
         let ticks = f64::from(e.mem.i32(world + 0x2f4));
         e.mem
-            .set_f32(world + 0x2f0, (ticks * x87_double(info[3])) as f32);
+            .set_f32(world + 0x2f0, (ticks * x87_load32(info[3])) as f32);
         let from_scale = e.mem.f32(world + 0x2ec);
         let gravity = super::hkpsphereshape::load_vec(e, world + 0x10);
         super::hkpsphereshape::store_vec(
@@ -1703,7 +1698,7 @@ pub fn finish_mt_step(e: &mut Engine, this: Ptr, queue: u32, pool: u32) -> u32 {
         let violation = e.mem.u32(e.mem.u32(world + 0x1b8) + index * 4 + 4);
         e.call(0x00d0_0aa0, &args![world, violation]);
     }
-    let time = x87_double(e.mem.u32(me + 0x1c)) + x87_double(e.mem.u32(me + 0x18));
+    let time = x87_load32(e.mem.u32(me + 0x1c)) + x87_load32(e.mem.u32(me + 0x18));
     e.mem.set_f32(me + 0x18, time as f32);
     let world = e.mem.u32(me + SIM_WORLD);
     leave_world_scope(e, world);
@@ -1711,14 +1706,14 @@ pub fn finish_mt_step(e: &mut Engine, this: Ptr, queue: u32, pool: u32) -> u32 {
     let mut result = 0u32;
     if e.global::<u32>(STOP_FLAG) == 1 {
         result = 2;
-        let time = x87_double(e.mem.u32(me + 0x18)) - x87_double(e.mem.u32(me + 0x1c));
+        let time = x87_load32(e.mem.u32(me + 0x18)) - x87_load32(e.mem.u32(me + 0x1c));
         e.mem.set_f32(me + 0x18, time as f32);
         e.call(0x00c9_1190, &args![world]);
         profile_record(e, PROFILE_END);
     } else {
         if e.mem.u32(world + 0x180) != 0 {
             profile_record(e, 0x010c_c530);
-            let start = ((x87_double(e.mem.u32(me + 0x18)) - x87_double(e.mem.u32(me + 0x1c)))
+            let start = ((x87_load32(e.mem.u32(me + 0x18)) - x87_load32(e.mem.u32(me + 0x1c)))
                 as f32)
                 .to_bits();
             let info = step_info(start, e.mem.u32(me + 0x18));

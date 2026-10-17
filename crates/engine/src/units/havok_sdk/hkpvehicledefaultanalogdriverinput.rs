@@ -236,17 +236,28 @@ pub fn calc_steering_input(
         this,
         HkpVehicleDefaultAnalogDriverInput::m_slope_change_point_x,
     );
-    let slope = f64::from(e.get(this, HkpVehicleDefaultAnalogDriverInput::m_initial_slope));
+    let slope = e.get(this, HkpVehicleDefaultAnalogDriverInput::m_initial_slope);
     let wide = f64::from;
+    // Arithmetic in the exe's operand order with the x87 NaN choice (#199): `FSUB`/`FMUL
+    // dword ptr` read the field from memory (`x87_m32`); `FLD` values are quiet.
+    let dead_zone_m = x87_m32(dead_zone.to_bits());
     if point > a {
-        let y = ((wide(a) - wide(dead_zone)) * slope) as f32;
-        return x87_quiet((wide(y) * wide(sign)) as f32);
+        // FSUB dword deadZone; FMUL dword initialSlope; FSTP/FLD; FMUL dword sign.
+        let y = x87_mul(x87_sub(wide(a), dead_zone_m), x87_m32(slope.to_bits())) as f32;
+        return x87_quiet(x87_mul(wide(y), x87_m32(sign.to_bits())) as f32);
     }
-    let span = wide(point) - wide(dead_zone);
-    let c = (slope * span) as f32;
-    let q = ((1.0 - wide(c)) / ((1.0 - wide(dead_zone)) - span)) as f32;
-    let z = ((wide(a) - wide(point)) * wide(q) + wide(c)) as f32;
-    x87_quiet((wide(z) * wide(sign)) as f32)
+    // FLD point; FSUB dword deadZone; FLD initialSlope; FMUL ST0,ST1 (D8 C9).
+    let span = x87_sub(wide(x87_quiet(point)), dead_zone_m);
+    let c = x87_mul(wide(x87_quiet(slope)), span) as f32;
+    // FSUBRP ST2 (1 - c); FSUB dword deadZone; FSUBRP ST3; FDIVRP ST2.
+    let one_minus_c = x87_sub(1.0, wide(c));
+    let q = x87_div(one_minus_c, x87_sub(x87_sub(1.0, dead_zone_m), span)) as f32;
+    // FLD point; FSUBP ST3 (a - point); FMULP ST2; FADDP.
+    let z = x87_add(
+        x87_mul(x87_sub(wide(a), wide(x87_quiet(point))), wide(q)),
+        wide(c),
+    ) as f32;
+    x87_quiet(x87_mul(wide(z), x87_m32(sign.to_bits())) as f32)
 }
 
 // Translated from 00e43780 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -594,6 +605,31 @@ mod tests {
         assert_eq!(run(-0.75), -0.875);
         // A NaN is not inside the dead zone, is negative, and takes the curved part.
         assert!(run(f32::NAN).is_nan());
+    }
+
+    #[test]
+    fn steering_keeps_the_x87_nan_when_two_nans_meet() {
+        // #199: -qNaN 0xffffffff and +qNaN 0x7fffffff meet; the x87 keeps the positive one.
+        let mut e = engine();
+        let log = new_log();
+        let this = input(&mut e, &log, 1);
+        let status = status(&mut e, 1.0, 0.0, 0, 0);
+        // Linear part: (a - deadZone) * initialSlope with both NaNs.
+        e.mem.set_f32(this + 8, 2.0);
+        e.mem.set_u32(this + 0xc, 0x7fff_ffff);
+        e.mem.set_u32(this + 0x10, 0xffff_ffff);
+        let linear = e
+            .call(0x00e4_36b0, &args![this, 0u32, 0u32, status, 0u32])
+            .f32();
+        assert_eq!(linear.to_bits(), 0x7fff_ffff);
+        // Curved part: point - deadZone with both NaNs.
+        e.mem.set_u32(this + 8, 0xffff_ffff);
+        e.mem.set_f32(this + 0xc, 2.0);
+        e.mem.set_u32(this + 0x10, 0x7fff_ffff);
+        let curved = e
+            .call(0x00e4_36b0, &args![this, 0u32, 0u32, status, 0u32])
+            .f32();
+        assert_eq!(curved.to_bits(), 0x7fff_ffff);
     }
 
     /// A body with the identity matrix columns, the given velocity and a vehicle data whose

@@ -13,7 +13,7 @@
 //! `Translation incomplete` line.
 //!
 //! x87 note: a `float` loaded and stored again (`FLD`/`FSTP`) turns a
-//! signalling NaN into a quiet one; `x87_copy` does that on the bit pattern.
+//! signalling NaN into a quiet one; `x87_quiet_bits` does that on the bit pattern.
 //! Comparisons of `float`s follow the flag tests the code makes, NaN
 //! included (every "greater/less" below is an ordered comparison).
 
@@ -75,15 +75,6 @@ const PHANTOM_SLOT_9C: u32 = 0x9c;
 const RGB_FROM_CHARS: u32 = 0x00ca_bb00;
 const SET_DEBUG_OBJECT_COLOR: u32 = 0x00c6_8e30;
 
-/// `FLD`/`FSTP` of a `float`: a signalling NaN comes out quiet.
-fn x87_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 // Translated from 006319e0 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 006319e0 - the FS:[0] exception-unwinding frame is not modeled.
 /// The `ViewCaster` constructor (layout from the Xbox PDB; the function has
@@ -127,7 +118,7 @@ pub fn fn_00631ab0(e: &mut Engine, this: Ptr<ViewCaster>, radius: f32, group: u3
         let sphere = if sphere_memory == 0 {
             0
         } else {
-            let bits = x87_copy(radius.to_bits());
+            let bits = x87_quiet_bits(radius.to_bits());
             e.call(SPHERE_SHAPE_CONSTRUCT, &args![sphere_memory, bits, 1u32])
                 .u32()
         };
@@ -357,11 +348,6 @@ pub fn fn_00631d60(
     })
 }
 
-/// A `float` copied through the x87 stack.
-fn x87_float(value: f32) -> f32 {
-    f32::from_bits(x87_copy(value.to_bits()))
-}
-
 /// The body of `fn_00631d60`; `ebp` is the game's frame pointer, the objects
 /// sit at their `EBP`-relative offsets.
 #[allow(clippy::too_many_arguments)]
@@ -415,12 +401,12 @@ fn pick(
         let scaled = e
             .call(
                 VECTOR_SCALED,
-                &args![direction, end_point, x87_copy(range.to_bits())],
+                &args![direction, end_point, x87_quiet_bits(range.to_bits())],
             )
             .u32();
         e.call(VECTOR_FROM, &args![start, far_point, scaled]);
         e.mem.set_u8(out_flag, 0);
-        let max = x87_copy(e.mem.u32(FLOAT_MAX));
+        let max = x87_quiet_bits(e.mem.u32(FLOAT_MAX));
         e.mem.set_u32(out_distance, max);
         e.call(PICK_CONSTRUCT, &args![picker, 0u32, 8u32]);
         fn_00632d20(e, Ptr::new(picker), 0);
@@ -432,9 +418,9 @@ fn pick(
         e.call(VECTOR4_ASSIGN, &args![target4, far_point]);
         e.mem.set_u8(at(0x431), 0);
         e.call(CAST_INPUT_CONSTRUCT, &args![cast_input]);
-        let radius = x87_copy(e.mem.u32(CAST_RADIUS));
+        let radius = x87_quiet_bits(e.mem.u32(CAST_RADIUS));
         e.mem.set_u32(at(0x44c), radius);
-        let radius = x87_copy(e.mem.u32(CAST_RADIUS));
+        let radius = x87_quiet_bits(e.mem.u32(CAST_RADIUS));
         e.mem.set_u32(at(0x450), radius);
         e.call(CAST_INPUT_SET_END, &args![cast_input, target4]);
         fn_00632df0(e, Ptr::new(this));
@@ -455,10 +441,10 @@ fn pick(
         // candidate (reference, its distances and group value) and the
         // counters of the three limits.
         let mut best_reference = 0u32;
-        let mut best_distance = x87_float(f32::from_bits(e.mem.u32(FLOAT_MAX)));
+        let mut best_distance = x87_quiet(f32::from_bits(e.mem.u32(FLOAT_MAX)));
         let mut ground_reference = 0u32;
-        let mut ground_distance = x87_float(f32::from_bits(e.mem.u32(FLOAT_MAX)));
-        let mut ground_nearest = x87_float(f32::from_bits(e.mem.u32(FLOAT_MAX)));
+        let mut ground_distance = x87_quiet(f32::from_bits(e.mem.u32(FLOAT_MAX)));
+        let mut ground_nearest = x87_quiet(f32::from_bits(e.mem.u32(FLOAT_MAX)));
         let mut ground_value = 0u32;
         let switch = e.call(SWITCH_ADDRESS, &args![SWITCH_OBJECT]).u32();
         let rays_enabled = e.mem.u8(switch);
@@ -563,7 +549,7 @@ fn pick(
                                 let hit_distance = e.mem.f32(ray_result + 0x10);
                                 if best_distance > hit_distance {
                                     best_reference = current_reference;
-                                    best_distance = x87_float(hit_distance);
+                                    best_distance = x87_quiet(hit_distance);
                                 }
                             }
                         }
@@ -583,7 +569,7 @@ fn pick(
                                         picker,
                                         start,
                                         direction,
-                                        x87_copy(range.to_bits()),
+                                        x87_quiet_bits(range.to_bits()),
                                         name,
                                         0u32
                                     ],
@@ -658,7 +644,7 @@ fn pick(
                                 let squared = e.call(VECTOR_LENGTH_SQUARED, &args![source]).f32();
                                 ground_distance =
                                     e.call(SQUARE_ROOT, &args![squared.to_bits()]).f32();
-                                ground_nearest = x87_float(distance);
+                                ground_nearest = x87_quiet(distance);
                             } else {
                                 ray_count += 1;
                                 e.call(RAY_INPUT_CONSTRUCT, &args![ray_input]);
@@ -685,7 +671,7 @@ fn pick(
                                             e.call(VECTOR_LENGTH_SQUARED, &args![source]).f32();
                                         ground_distance =
                                             e.call(SQUARE_ROOT, &args![squared.to_bits()]).f32();
-                                        ground_nearest = x87_float(distance);
+                                        ground_nearest = x87_quiet(distance);
                                         ground_value = e.call(GROUP_VALUE, &args![group]).u32();
                                     } else {
                                         let hits = e.call(HITS_ARRAY, &args![ray_collector]).u32();
@@ -716,7 +702,7 @@ fn pick(
                                             ground_distance = e
                                                 .call(SQUARE_ROOT, &args![squared.to_bits()])
                                                 .f32();
-                                            ground_nearest = x87_float(distance);
+                                            ground_nearest = x87_quiet(distance);
                                             ground_value = e.call(GROUP_VALUE, &args![group]).u32();
                                         }
                                     }
@@ -751,12 +737,12 @@ fn pick(
             e.set_global(STEP_NUMBER, 0xdb9u32);
             if best_distance < e.mem.f32(out_distance) {
                 e.mem
-                    .set_u32(out_distance, x87_copy(best_distance.to_bits()));
+                    .set_u32(out_distance, x87_quiet_bits(best_distance.to_bits()));
                 result = best_reference;
             }
         } else if best_reference != 0 {
             e.mem
-                .set_u32(out_distance, x87_copy(best_distance.to_bits()));
+                .set_u32(out_distance, x87_quiet_bits(best_distance.to_bits()));
             result = best_reference;
         }
 
@@ -785,7 +771,7 @@ fn pick(
             }
             if allowed && ground_reference != 0 && result != ground_reference {
                 e.mem
-                    .set_u32(out_distance, x87_copy(ground_distance.to_bits()));
+                    .set_u32(out_distance, x87_quiet_bits(ground_distance.to_bits()));
                 result = ground_reference;
                 e.mem.set_u8(out_flag, 1);
                 e.set_global(LAST_GROUND_VALUE, ground_value);
@@ -950,7 +936,10 @@ pub fn fn_00632ec0(e: &mut Engine, this: Ptr) -> Ptr {
 /// vtable, and the registration with the collection's virtual function at
 /// `+4`. Returns `this`.
 pub fn fn_00632ee0(e: &mut Engine, this: Ptr, name: u32, value: f32) -> Ptr {
-    e.call(0x0040_e130, &args![this, name, x87_copy(value.to_bits())]);
+    e.call(
+        0x0040_e130,
+        &args![this, name, x87_quiet_bits(value.to_bits())],
+    );
     e.mem.set_u32(this.addr(), 0x0104_e6e8);
     let collection = fn_00632e20(e);
     e.vcall(collection, 4, &args![this]);
@@ -1506,11 +1495,11 @@ mod tests {
 
     #[test]
     fn signalling_nans_are_quieted_by_the_x87_copy() {
-        assert_eq!(x87_copy(0x7f80_0001), 0x7fc0_0001);
-        assert_eq!(x87_copy(0xff80_0001), 0xffc0_0001);
-        assert_eq!(x87_copy(0x7fc0_0000), 0x7fc0_0000);
-        assert_eq!(x87_copy(0x7f80_0000), 0x7f80_0000);
-        assert_eq!(x87_copy(1.5f32.to_bits()), 1.5f32.to_bits());
+        assert_eq!(x87_quiet_bits(0x7f80_0001), 0x7fc0_0001);
+        assert_eq!(x87_quiet_bits(0xff80_0001), 0xffc0_0001);
+        assert_eq!(x87_quiet_bits(0x7fc0_0000), 0x7fc0_0000);
+        assert_eq!(x87_quiet_bits(0x7f80_0000), 0x7f80_0000);
+        assert_eq!(x87_quiet_bits(1.5f32.to_bits()), 1.5f32.to_bits());
     }
 
     // -- The pick -------------------------------------------------------

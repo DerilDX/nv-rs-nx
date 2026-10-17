@@ -72,16 +72,6 @@ layout! {
     }
 }
 
-/// A `float` as the x87 `FLD`/`FSTP` pair copies it: a signalling NaN comes
-/// out quiet, everything else unchanged.
-fn x87_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 // Translated from 00878610 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `SceneGraph::SceneGraph` (Xbox PDB): runs `BSSceneGraph`'s constructor
 /// (`00c517b0`) with the three stack words, then installs `SceneGraph`'s
@@ -132,7 +122,7 @@ pub fn fn_00878690(e: &mut Engine, this: Ptr<SceneGraph>) {
 /// `setting`, copied the way `FLD`/`FSTP` copy it.
 fn setting_value(e: &mut Engine, setting: u32) -> f32 {
     let address = e.call(SETTING_FLOAT_ADDRESS, &args![setting]).u32();
-    f32::from_bits(x87_copy(e.mem.u32(address)))
+    f32::from_bits(x87_quiet_bits(e.mem.u32(address)))
 }
 
 /// The distance of the interior cell, when there is one: the cell
@@ -174,11 +164,11 @@ fn interior_cell_distance(e: &mut Engine, tes: u32) -> Option<f32> {
 ///   settings.
 pub fn scene_graph_get_far_distance(e: &mut Engine, this: Ptr<SceneGraph>) -> f32 {
     if e.get(this, SceneGraph::flag_b8) != 0 {
-        return f32::from_bits(x87_copy(e.global::<u32>(FIXED_FAR_DISTANCE)));
+        return f32::from_bits(x87_quiet_bits(e.global::<u32>(FIXED_FAR_DISTANCE)));
     }
     let tes = e.global::<u32>(TES_SINGLETON);
     let threshold: f64 = e.global(CELL_DISTANCE_THRESHOLD);
-    let default_distance = f32::from_bits(x87_copy(e.global::<u32>(DEFAULT_FAR_DISTANCE)));
+    let default_distance = f32::from_bits(x87_quiet_bits(e.global::<u32>(DEFAULT_FAR_DISTANCE)));
     let mut use_default_path = true;
     if tes != 0 {
         let world_space = e.call(TES_GET_WORLD_SPACE, &args![tes]).u32();

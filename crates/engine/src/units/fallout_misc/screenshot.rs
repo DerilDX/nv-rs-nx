@@ -152,16 +152,6 @@ const FRAME_STAGING_SURFACE: u32 = 0x0c8;
 const FRAME_LOCKED_RECT: u32 = 0x0d0;
 const FRAME_BMP_HEADER: u32 = 0x100;
 
-/// A `float` as the x87 `FLD`/`FSTP` pair copies it: a signalling NaN comes
-/// out quiet, everything else unchanged.
-fn x87_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// The failure exit: logs `message`, destroys the smart pointer and the
 /// scope, and returns 0.
 fn fail(e: &mut Engine, message: u32, smart_pointer: u32, scope: u32) -> u32 {
@@ -489,8 +479,10 @@ pub fn fn_00879860(e: &mut Engine, this: Ptr, first: f32, second: f32, third: f3
         (0x310, third),
         (0x314, fourth),
     ] {
-        e.mem
-            .set_u32(this.addr().wrapping_add(offset), x87_copy(value.to_bits()));
+        e.mem.set_u32(
+            this.addr().wrapping_add(offset),
+            x87_quiet_bits(value.to_bits()),
+        );
     }
 }
 

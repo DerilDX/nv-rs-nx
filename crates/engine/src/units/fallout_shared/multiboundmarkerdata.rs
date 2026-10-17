@@ -54,15 +54,6 @@ fn read_vector(e: &Engine, p: Ptr<()>) -> [f32; 3] {
     ]
 }
 
-/// `FLD m32fp` / `FSTP m32fp` quiets a signaling NaN on the original x87.
-fn x87_float_round_trip(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 fn write_vector(e: &mut Engine, p: Ptr<()>, v: [f32; 3]) {
     e.mem.set_f32(p.addr(), v[0]);
     e.mem.set_f32(p.addr() + 4, v[1]);
@@ -344,9 +335,8 @@ pub fn multi_bound_marker_data_create_for_ref(e: &mut Engine, reference: Ptr<()>
     let mut oriented = false;
     for offset in [0, 4, 8] {
         let rotation_angles: Ptr<()> = e.call(0x0043_0830, &args![reference]).ptr();
-        let extent_value = f32::from_bits(x87_float_round_trip(
-            e.mem.u32(rotation_angles.addr() + offset),
-        ));
+        let extent_value =
+            f32::from_bits(x87_quiet_bits(e.mem.u32(rotation_angles.addr() + offset)));
         let extent = e.call(0x0040_8840, &args![extent_value]).f64();
         let threshold = e.global::<f64>(0x0101_6408);
         if extent.partial_cmp(&threshold) != Some(core::cmp::Ordering::Less) {
@@ -555,7 +545,7 @@ pub fn multibound_matrix_get_axis(e: &mut Engine, matrix: Ptr<()>, index: u32, r
             .addr()
             .wrapping_add(offset)
             .wrapping_add(index.wrapping_mul(4));
-        let value = f32::from_bits(x87_float_round_trip(e.mem.u32(component_address)));
+        let value = f32::from_bits(x87_quiet_bits(e.mem.u32(component_address)));
         e.mem.set_f32(result.addr() + (component as u32) * 4, value);
     }
 }
@@ -1433,11 +1423,8 @@ mod tests {
     #[test]
     fn x87_float_round_trip_quiets_generated_signaling_nan() {
         let signaling_nan = f32::from_bits(0xff80_0123);
-        assert_eq!(x87_float_round_trip(signaling_nan.to_bits()), 0xffc0_0123);
-        assert_eq!(
-            x87_float_round_trip((-3.5f32).to_bits()),
-            (-3.5f32).to_bits()
-        );
+        assert_eq!(x87_quiet_bits(signaling_nan.to_bits()), 0xffc0_0123);
+        assert_eq!(x87_quiet_bits((-3.5f32).to_bits()), (-3.5f32).to_bits());
     }
 
     #[test]

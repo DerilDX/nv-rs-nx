@@ -14,17 +14,6 @@ const GAME_SETTINGS: u32 = 0x0040_4a70;
 /// game settings).
 const COLLECTION_ADD_SLOT: u32 = 0x4;
 
-/// A float passed through the x87 stack (`FLD float` then `FSTP float`):
-/// the same bits, except that a signaling NaN comes out quiet.
-fn x87_float_copy(bits: u32) -> u32 {
-    let nan = bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0;
-    if nan {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 // Translated from 0040e0b0 (PC disassembly, FalloutNV.exe 1.4.0.525)
 /// The constructor of a float game setting (`thiscall`, `RET 8`): the base
 /// constructor [`fn_0040e130`] with the name and the value (passed on through
@@ -32,7 +21,7 @@ fn x87_float_copy(bits: u32) -> u32 {
 /// the game-setting collection (`00404a70`, its vtable slot +4). Returns
 /// `this`. The exception-unwinding frame is not translated.
 pub fn fn_0040e0b0(e: &mut Engine, this: Ptr, name: u32, value: u32) -> Ptr {
-    fn_0040e130(e, this, name, x87_float_copy(value));
+    fn_0040e130(e, this, name, x87_quiet_bits(value));
     e.mem.set_u32(this.addr(), GAME_SETTING_VTABLE);
     let collection = e.call(GAME_SETTINGS, &[]).u32();
     e.vcall(collection, COLLECTION_ADD_SLOT, &args![this]);
@@ -46,7 +35,7 @@ pub fn fn_0040e0b0(e: &mut Engine, this: Ptr, name: u32, value: u32) -> Ptr {
 pub fn fn_0040e130(e: &mut Engine, this: Ptr, name: u32, value: u32) -> Ptr {
     e.mem.set_u32(this.addr(), SETTING_VTABLE);
     e.mem.set_u32(this.addr() + 8, name);
-    e.mem.set_u32(this.addr() + 4, x87_float_copy(value));
+    e.mem.set_u32(this.addr() + 4, x87_quiet_bits(value));
     this
 }
 

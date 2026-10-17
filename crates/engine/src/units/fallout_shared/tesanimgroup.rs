@@ -41,15 +41,6 @@ fn read_c_string_byte(e: &Engine, address: u32) -> u8 {
     e.mem.u8(address)
 }
 
-/// The PC's `FLD m32fp` / `FSTP m32fp` sequence quiets signaling NaNs.
-fn x87_float_round_trip(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -257,7 +248,7 @@ pub fn fn_005f29f0(e: &mut Engine, this: Ptr, index: u32, value: f32) {
     if index < count && array != 0 {
         e.mem.set_u32(
             array.wrapping_add(index.wrapping_mul(0x10)),
-            x87_float_round_trip(value.to_bits()),
+            x87_quiet_bits(value.to_bits()),
         );
     }
 }
@@ -335,7 +326,7 @@ pub fn fn_005f3740(e: &mut Engine, this: Ptr, index: u32, time: f32) -> bool {
     }
     e.mem.set_u32(
         times.wrapping_add(index.wrapping_mul(4)),
-        x87_float_round_trip(time.to_bits()),
+        x87_quiet_bits(time.to_bits()),
     );
     true
 }

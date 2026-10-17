@@ -18,7 +18,6 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::{BSSimpleArray, NiPoint3};
-use crate::units::fallout_shared::extradatalist::x87_float_bits;
 
 layout! {
     /// `NavMeshBounds` (Xbox PDB), 0x38 bytes; the PC offsets are the
@@ -151,12 +150,12 @@ const TRIANGLE_ARRAY_COPY: u32 = 0x0069_d050;
 /// The bits of a `float` copied through `FLD`/`FSTP` (a signalling NaN
 /// comes out quiet), as a float argument word.
 fn pushed_float(value: f32) -> u32 {
-    x87_float_bits(value.to_bits())
+    x87_quiet_bits(value.to_bits())
 }
 
 /// The `float` global at `address` as the exe pushes it (`FLD`, `FSTP`).
 fn pushed_global(e: &Engine, address: u32) -> u32 {
-    x87_float_bits(e.global::<u32>(address))
+    x87_quiet_bits(e.global::<u32>(address))
 }
 
 /// Copies three words.
@@ -557,7 +556,7 @@ pub fn fn_0069c070(
                 let zero = pushed_float(0.0);
                 e.call(
                     POINT3_CONSTRUCT,
-                    &args![result, zero, zero, x87_float_bits(z)],
+                    &args![result, zero, zero, x87_quiet_bits(z)],
                 );
                 return;
             }

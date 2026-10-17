@@ -76,31 +76,6 @@ fn x87_load(value: f64) -> f64 {
     }
 }
 
-/// An x87 arithmetic instruction (`FADD`/`FSUB`/`FMUL`/`FDIV`, 53-bit
-/// precision as the crate computes, docs/ENGINE_CRATE.md) with `left` in
-/// the register (loaded by `FLD`/`FILD`, so quiet) and `right` the memory
-/// operand as stored. With one NaN the answer is that NaN, quieted. With
-/// two, a signaling memory operand gives the register's quiet NaN;
-/// otherwise the larger significand wins and on equal significands the
-/// positive one, as nv-call shows on the real CPU (SSE and Rust answer the
-/// first operand instead).
-fn x87_arithmetic(left: f64, right: f64, op: impl Fn(f64, f64) -> f64) -> f64 {
-    let left = x87_load(left);
-    if left.is_nan() && right.is_nan() {
-        if right.to_bits() & 0x0008_0000_0000_0000 == 0 {
-            return left;
-        }
-        let significand = |v: f64| v.to_bits() & 0x000f_ffff_ffff_ffff;
-        return match significand(right).cmp(&significand(left)) {
-            std::cmp::Ordering::Greater => right,
-            std::cmp::Ordering::Less => left,
-            std::cmp::Ordering::Equal if left.is_sign_negative() => right,
-            std::cmp::Ordering::Equal => left,
-        };
-    }
-    op(left, x87_load(right))
-}
-
 /// A 16-byte operand as it sits on the operand stack: a type byte in the
 /// low byte of word 0 (0 integer, otherwise double), word 1 unused, and the
 /// value at word 2 (integer: word 2 only; double: words 2 and 3).
@@ -734,9 +709,9 @@ fn binary(
             }
             let (l, r) = (left.as_f64(), right.memory_f64());
             let v = match operator {
-                10 => x87_arithmetic(l, r, |a, b| a - b),
-                11 => x87_arithmetic(l, r, |a, b| a + b),
-                _ => x87_arithmetic(l, r, |a, b| a * b),
+                10 => x87_sub(x87_load(l), r),
+                11 => x87_add(x87_load(l), r),
+                _ => x87_mul(x87_load(l), r),
             };
             Some((true, Value::Float(v)))
         }
@@ -761,7 +736,7 @@ fn binary(
                 return Some((false, Value::Int(if divide { quotient } else { remainder })));
             }
             let value = match (left.is_float(), right.is_float(), divide) {
-                (_, _, true) => x87_arithmetic(left.as_f64(), right.memory_f64(), |a, b| a / b),
+                (_, _, true) => x87_div(x87_load(left.as_f64()), right.memory_f64()),
                 (false, true, false) => {
                     let divisor = to_int(e, right.float());
                     idiv(left.int(), divisor).1 as f64

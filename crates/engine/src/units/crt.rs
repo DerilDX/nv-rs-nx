@@ -354,6 +354,65 @@ pub fn acos(_e: &mut Engine, x: f64) -> f64 {
     x.acos()
 }
 
+/// `_CIpow` (`00ec9b00`, base in `ST1`, exponent in `ST0`) and `_CIacos` (`00eca1d0`,
+/// argument in `ST0`): the register-argument entries that stand in for the shared bodies.
+const CI_POW: u32 = 0x00ec_9b00;
+const CI_ACOS: u32 = 0x00ec_a1d0;
+
+// Translated from 00ec9ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `pow` (LIBCMT, `cdecl`, the base then the exponent as doubles on the stack, the result in
+/// `ST0`). It makes the same choice as `_CIpow` (`00ec9b00`): with `__use_sse2_mathfcns`
+/// (`01270a64`) set and every MXCSR and x87 exception masked it jumps to the SSE2 body
+/// (`00ed87a9`, the stack form of `_CIpow`'s `00ed8790`), otherwise it loads the exponent from
+/// the stack (`00ed27c5`) and runs the x87 body `00ec9b5d`, the one `_CIpow` calls after storing
+/// its two registers to the same stack slots. Only where the arguments come from differs, so
+/// the bodies are reached through `_CIpow`, which stands in for them (`Platform`).
+pub fn pow_cdecl(e: &mut Engine, x: f64, y: f64) -> f64 {
+    e.call(CI_POW, &args![x, y]).f64()
+}
+
+// Translated from 00eca190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `acos` (LIBCMT, `cdecl`, one double on the stack, the result in `ST0`). It makes the same
+/// choice as `_CIacos` (`00eca1d0`): with `__use_sse2_mathfcns` (`01270a64`) set and every
+/// MXCSR and x87 exception masked it jumps to the SSE2 body (`00ed9b18`, which loads the stack
+/// argument and falls into `_CIacos`'s `00ed9b1e`), otherwise it loads the argument from the
+/// stack (`00ed27c5`) and falls into the x87 body `00eca228` that `_CIacos` calls. Only where the
+/// argument comes from differs, so the bodies are reached through `_CIacos`, which stands in
+/// for them (`Platform`).
+pub fn acos_cdecl(e: &mut Engine, x: f64) -> f64 {
+    e.call(CI_ACOS, &args![x]).f64()
+}
+
+/// Where the engine keeps the x87 control word (`FSTCW`/`FLDCW`): a word of the thread's
+/// block past the exe's `.tls` data, holding `0x10000 | cw` once set; zero means the
+/// control word the game runs with, `0x027F` (all exceptions masked, 53-bit precision,
+/// round to nearest), the value the CRT's x87 code checks for. The engine computes in `f64`
+/// whatever the control word says.
+const X87_CONTROL_WORD: u32 = 0x0e04;
+
+/// The x87 control word as `FSTCW` reads it.
+fn x87_control_word(e: &mut Engine) -> u16 {
+    let at = e.tls() + X87_CONTROL_WORD;
+    let slot = e.mem.u32(at);
+    if slot & 0x1_0000 == 0 {
+        0x027f
+    } else {
+        slot as u16
+    }
+}
+
+// Translated from 00ed5abb (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_ctrlfp(newctrl, mask)` (LIBCMT, `cdecl`; `fabs` `00ec6cde` calls it): reads the x87
+/// control word (`FSTCW`), loads `(old & !mask) | (newctrl & mask)` (its low 16 bits,
+/// `FLDCW`) and returns the old control word sign-extended (`MOVSX`).
+pub fn ctrlfp(e: &mut Engine, newctrl: u32, mask: u32) -> i32 {
+    let old = x87_control_word(e);
+    let new = (!mask & u32::from(old)) | (newctrl & mask);
+    let at = e.tls() + X87_CONTROL_WORD;
+    e.mem.set_u32(at, 0x1_0000 | (new & 0xffff));
+    i32::from(old as i16)
+}
+
 // Platform: replaces 00ec9050 (x87 arctangent, LIBCMT; the name is unconfirmed): argument
 // in ST0. Dispatches on the SSE2 flag (`01270a64`) and the masked exception state to the
 // SSE2 routine `00ed5d80`, otherwise computes `FPATAN` of the argument and 1 through
@@ -1339,6 +1398,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00eca060, sin(f64) -> f64),
         entry!(0x00ec9b00, pow(f64, f64) -> f64),
         entry!(0x00eca1d0, acos(f64) -> f64),
+        entry!(0x00ec9ac0, pow_cdecl(f64, f64) -> f64),
+        entry!(0x00eca190, acos_cdecl(f64) -> f64),
+        entry!(0x00ed5abb, ctrlfp(u32, u32) -> i32),
         entry!(0x00ec9050, ci_atan(f64) -> f64),
         entry!(0x00ec8660, alloca_probe(u32, u32) -> u32),
         entry!(0x00ecadda, time64(Ptr) -> u64),
@@ -2106,5 +2168,60 @@ mod exit_tests {
         atexit(&mut e, Ptr::new(0x0090_0010));
         e.call(0x00eccd99, &args![0u32, 0u32, 1u32]);
         assert_eq!(*order.borrow(), [0x0090_0010]);
+    }
+
+    #[test]
+    fn the_stack_forms_of_pow_and_acos_reach_the_register_forms_bodies() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ec9ac0, &args![2.0f64, 10.0f64]).f64(), 1024.0);
+        assert_eq!(e.call(0x00eca190, &args![0.5f64]).f64(), 0.5f64.acos());
+        let log = e.call_log.take().unwrap();
+        let words = |addr: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|(a, _)| *a == addr)
+                .map(|(_, w)| w.clone())
+                .collect()
+        };
+        let two = 2.0f64.to_bits();
+        let ten = 10.0f64.to_bits();
+        let half = 0.5f64.to_bits();
+        assert_eq!(
+            words(CI_POW),
+            [vec![
+                two as u32,
+                (two >> 32) as u32,
+                ten as u32,
+                (ten >> 32) as u32
+            ]]
+        );
+        assert_eq!(words(CI_ACOS), [vec![half as u32, (half >> 32) as u32]]);
+    }
+
+    #[test]
+    fn ctrlfp_merges_the_masked_bits_and_returns_the_old_control_word() {
+        let mut e = Engine::new();
+        // The game's control word until something loads another.
+        assert_eq!(ctrlfp(&mut e, 0x133f, 0xffff), 0x027f);
+        assert_eq!(x87_control_word(&mut e), 0x133f);
+        // Only the masked bits change.
+        assert_eq!(ctrlfp(&mut e, 0x0c00, 0x0c00), 0x133f);
+        assert_eq!(x87_control_word(&mut e), 0x1f3f);
+        // FLDCW takes the low 16 bits; the old word comes back sign-extended.
+        assert_eq!(
+            e.call(0x00ed5abb, &args![0x0001_8000u32, 0xffff_ffffu32])
+                .i32(),
+            0x1f3f
+        );
+        assert_eq!(ctrlfp(&mut e, 0x027f, 0xffff), -0x8000);
+        assert_eq!(x87_control_word(&mut e), 0x027f);
+    }
+
+    #[test]
+    fn fabs_restores_the_control_word_through_ctrlfp() {
+        let mut e = Engine::new();
+        ctrlfp(&mut e, 0x037f, 0xffff);
+        assert_eq!(e.call(0x00ec6cde, &args![-0.75f64]).f64(), 0.75);
+        assert_eq!(x87_control_word(&mut e), 0x037f);
     }
 }

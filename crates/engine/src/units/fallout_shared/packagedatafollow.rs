@@ -75,17 +75,6 @@ layout! {
     }
 }
 
-/// A float that went through `FLD` / `FSTP`: a signalling NaN comes back
-/// quiet (bit 22 set), every other value unchanged.
-fn x87_quiet(value: f32) -> f32 {
-    let bits = value.to_bits();
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        f32::from_bits(bits | 0x0040_0000)
-    } else {
-        value
-    }
-}
-
 /// `dynamic_cast<TESFollowPackageData *>` of a `TESPackageData *`.
 fn cast_to_follow_data(e: &mut Engine, data: Ptr) -> Ptr<TESFollowPackageData> {
     e.call(

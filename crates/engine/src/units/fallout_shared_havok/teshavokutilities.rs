@@ -42,15 +42,6 @@ const DEFAULT_POINT_011F426C: u32 = 0x011f_426c;
 /// Table the first argument of `0043b300` points to (`012683c8`).
 const BODY_TABLE_012683C8: u32 = 0x0126_83c8;
 
-/// FLD/FSTP of a float: the bits unchanged, a signalling NaN quieted.
-fn x87_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// Reads the float `00403e20` points to for `object`.
 fn value_at(e: &mut Engine, object: u32) -> f32 {
     let pointer = e.call(VALUE_POINTER_GETTER, &args![object]).u32();
@@ -60,7 +51,7 @@ fn value_at(e: &mut Engine, object: u32) -> f32 {
 /// Copies the float `00403e20` points to for `object` (FLD/FSTP).
 fn copy_value_at(e: &mut Engine, object: u32) -> u32 {
     let pointer = e.call(VALUE_POINTER_GETTER, &args![object]).u32();
-    x87_copy(e.mem.u32(pointer))
+    x87_quiet_bits(e.mem.u32(pointer))
 }
 
 fn copy_words(e: &mut Engine, destination: u32, source: u32, words: u32) {
@@ -112,7 +103,7 @@ pub fn tes_havok_utilities_find_collidable_ref(e: &mut Engine, collidable: Ptr) 
 /// `011d070c`. A null body returns `value` unchanged.
 pub fn fn_0062b520(e: &mut Engine, value: f32, body: Ptr, limited: bool) -> f32 {
     if body.is_null() {
-        return f32::from_bits(x87_copy(value.to_bits()));
+        return f32::from_bits(x87_quiet_bits(value.to_bits()));
     }
     let mut factor = 1.0f32;
     let code = e.with_stack(4, |e, temporary| {
@@ -166,7 +157,7 @@ pub fn tes_havok_utilities_add_explosion_impulse(
             let impulse = at(0x50);
             let layer = e.call(0x0043_b4f0, &args![body, temporary]).u32();
             let index = e.call(0x0062_40b0, &args![layer]).u32();
-            let mut multiplier = x87_copy(
+            let mut multiplier = x87_quiet_bits(
                 e.mem
                     .u32(IMPULSE_MULTIPLIERS.wrapping_add(index.wrapping_mul(4))),
             );
@@ -179,7 +170,7 @@ pub fn tes_havok_utilities_add_explosion_impulse(
                         || (matches!(kind, 7..=9) && matches!(index, 8..=10))
                         || (matches!(kind, 10..=12) && matches!(index, 0xe..=0x10));
                     if boosted {
-                        multiplier = x87_copy(e.global::<u32>(ONE_AND_A_HALF));
+                        multiplier = x87_quiet_bits(e.global::<u32>(ONE_AND_A_HALF));
                     }
                 }
             }
@@ -189,7 +180,10 @@ pub fn tes_havok_utilities_add_explosion_impulse(
             e.call(0x0096_1190, &args![velocity, origin]);
             e.call(0x0062_aea0, &args![velocity]);
             let havok_body = e.call(0x0062_0b80, &args![body]).u32();
-            e.call(0x005d_bf20, &args![impulse, x87_copy(scaled.to_bits())]);
+            e.call(
+                0x005d_bf20,
+                &args![impulse, x87_quiet_bits(scaled.to_bits())],
+            );
             e.call(0x0062_7920, &args![velocity, impulse]);
             let mass = e.call(0x0056_0dc0, &args![havok_body]).u32();
             e.call(0x0055_3f70, &args![velocity, mass]);
@@ -201,7 +195,7 @@ pub fn tes_havok_utilities_add_explosion_impulse(
         let mut index = 0;
         while index < child_count(e, children) {
             let child = child_at(e, children, index);
-            let force = f32::from_bits(x87_copy(force.to_bits()));
+            let force = f32::from_bits(x87_quiet_bits(force.to_bits()));
             tes_havok_utilities_add_explosion_impulse(e, child, origin, force, source);
             index += 1;
         }
@@ -227,7 +221,7 @@ fn set_vector_from(e: &mut Engine, vector: u32, source: Ptr) {
     let mut components = [0u32; 3];
     for component in [2u32, 1, 0] {
         let pointer = e.call(0x0056_0d30, &args![source, component]).u32();
-        components[component as usize] = x87_copy(e.mem.u32(pointer));
+        components[component as usize] = x87_quiet_bits(e.mem.u32(pointer));
     }
     e.call(
         0x004b_4d50,
@@ -426,7 +420,7 @@ pub fn fn_0062be70(e: &mut Engine, this: Ptr) -> u32 {
 /// (limits `011cfb38`, `011ce714`, `011cfa88`); below the first limit the
 /// scale is 0 (threshold 1000.0). Slope `011ce984`, offset `011cf2fc`.
 pub fn fn_0062be90(e: &mut Engine, a: f32, b: f32) -> f32 {
-    let initial_threshold = f32::from_bits(x87_copy(e.global::<u32>(ONE_THOUSAND)));
+    let initial_threshold = f32::from_bits(x87_quiet_bits(e.global::<u32>(ONE_THOUSAND)));
     // Each band test is FCOMPP with the limit in ST0: taken only when the
     // limit is strictly above `a` (not on equality or NaN).
     let (scale_bits, threshold) = if value_at(e, 0x011c_fb38) > a {
@@ -488,17 +482,17 @@ pub fn tes_havok_utilities_get_local_point_within_collision(
             let high = at(0x58);
             e.call(VECTOR_CONSTRUCTOR, &args![high]);
             e.call(0x0045_8620, &args![high, at(0x30)]);
-            let near_low = x87_copy(e.global::<u32>(FORTY_FIVE_HUNDREDTHS));
+            let near_low = x87_quiet_bits(e.global::<u32>(FORTY_FIVE_HUNDREDTHS));
             let first = e.call(SCALED_VECTOR, &args![at(0x64), near_low, low]).u32();
-            let near_high = x87_copy(e.global::<u32>(FIFTY_FIVE_HUNDREDTHS));
+            let near_high = x87_quiet_bits(e.global::<u32>(FIFTY_FIVE_HUNDREDTHS));
             let second = e
                 .call(SCALED_VECTOR, &args![at(0x7c), near_high, high])
                 .u32();
             let lower = at(0x70);
             e.call(VECTOR_SUM, &args![second, lower, first]);
-            let far_low = x87_copy(e.global::<u32>(FIFTY_FIVE_HUNDREDTHS));
+            let far_low = x87_quiet_bits(e.global::<u32>(FIFTY_FIVE_HUNDREDTHS));
             let third = e.call(SCALED_VECTOR, &args![at(0x88), far_low, low]).u32();
-            let far_high = x87_copy(e.global::<u32>(FORTY_FIVE_HUNDREDTHS));
+            let far_high = x87_quiet_bits(e.global::<u32>(FORTY_FIVE_HUNDREDTHS));
             let fourth = e
                 .call(SCALED_VECTOR, &args![at(0xa0), far_high, high])
                 .u32();
@@ -506,10 +500,10 @@ pub fn tes_havok_utilities_get_local_point_within_collision(
             e.call(VECTOR_SUM, &args![fourth, upper, third]);
             let mut axes = [0u32; 3];
             for axis in [2u32, 1, 0] {
-                let from_upper = x87_copy(e.mem.u32(upper + 4 * axis));
-                let from_lower = x87_copy(e.mem.u32(lower + 4 * axis));
+                let from_upper = x87_quiet_bits(e.mem.u32(upper + 4 * axis));
+                let from_lower = x87_quiet_bits(e.mem.u32(lower + 4 * axis));
                 let value = e.call(0x0047_6b70, &args![from_upper, from_lower]).f32();
-                axes[axis as usize] = x87_copy(value.to_bits());
+                axes[axis as usize] = x87_quiet_bits(value.to_bits());
             }
             let random = e
                 .call(0x0041_6870, &args![at(0xac), axes[0], axes[1], axes[2]])
@@ -562,7 +556,7 @@ pub fn fn_0062c250(e: &mut Engine, this: Ptr, out: Ptr, other: Ptr) -> Ptr {
         let rotated = e
             .call(0x004b_4500, &args![this, at(0x64), other.addr() + 0x24])
             .u32();
-        let factor = x87_copy(e.mem.u32(this.addr() + 0x30));
+        let factor = x87_quiet_bits(e.mem.u32(this.addr() + 0x30));
         let scaled = e
             .call(SCALED_VECTOR, &args![at(0x70), factor, rotated])
             .u32();

@@ -113,15 +113,6 @@ const TYPE_LOW_PROCESS: u32 = 0x011a_364c;
 const TYPE_MOBILE_OBJECT: u32 = 0x0118_4920;
 const TYPE_ACTOR: u32 = 0x0118_46d4;
 
-/// A `float` loaded onto the x87 stack: a signalling NaN comes back quiet.
-fn x87_load(value: f32) -> f32 {
-    if value.is_nan() {
-        f32::from_bits(value.to_bits() | 0x0040_0000)
-    } else {
-        value
-    }
-}
-
 /// `__RTDynamicCast(object, 0, from, to, 0)`.
 fn dynamic_cast(e: &mut Engine, object: u32, from: u32, to: u32) -> u32 {
     e.call(RT_DYNAMIC_CAST, &args![object, 0u32, from, to, 0u32])
@@ -205,7 +196,7 @@ pub fn base_process_get_last_time_detected(
     _unused_0: u32,
     _unused_1: u32,
 ) -> f32 {
-    -x87_load(e.global(LARGEST_FLOAT))
+    -x87_quiet(e.global(LARGEST_FLOAT))
 }
 
 // Translated from 008d02f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1051,7 +1042,7 @@ pub fn base_process_finish_load_game(e: &mut Engine, this: Ptr<BaseProcess>, buf
 /// (`ActorPackage::Revert`, `008c6c80`) and clears the cached values'
 /// flags when there are cached values.
 pub fn base_process_revert_ov2(e: &mut Engine, this: Ptr<BaseProcess>, buffer: u32) {
-    let hour = x87_load(e.global(MINUS_ONE_FLOAT));
+    let hour = x87_quiet(e.global(MINUS_ONE_FLOAT));
     e.mem
         .set_f32(this.addr().wrapping_add(HOUR_LAST_PROCESSED), hour);
     e.mem
@@ -1068,7 +1059,7 @@ pub fn base_process_revert_ov2(e: &mut Engine, this: Ptr<BaseProcess>, buffer: u
 /// `BaseProcess::GetBreathTimer` (Xbox PDB): answers the `float` at
 /// `01017868` (20.0 in the image).
 pub fn base_process_get_breath_timer(e: &mut Engine, _this: Ptr<BaseProcess>) -> f32 {
-    x87_load(e.global(BREATH_TIMER_FLOAT))
+    x87_quiet(e.global(BREATH_TIMER_FLOAT))
 }
 
 // Translated from 00401280 (PC disassembly, FalloutNV.exe 1.4.0.525).

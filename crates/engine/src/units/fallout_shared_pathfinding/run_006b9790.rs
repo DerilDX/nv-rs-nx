@@ -165,9 +165,15 @@ pub fn fn_006b9940(e: &mut Engine, point: Ptr, start: Ptr, end: Ptr) -> f64 {
 /// Unnamed in the engine map: the 2D dot product `x * other.x + y *
 /// other.y`, stored as a `float` and returned. `RET 4`.
 pub fn fn_006b99e0(e: &mut Engine, this: Ptr, other: Ptr) -> f32 {
-    let (x, y) = xy(e, this.addr());
-    let (ox, oy) = xy(e, other.addr());
-    (x * ox + y * oy) as f32
+    // `FLD this.x; FMUL dword ptr other.x; FLD this.y; FMUL dword ptr
+    // other.y; FADDP`, with the x87 NaN choice (#199).
+    let p = this.addr();
+    let q = other.addr();
+    let x = f64::from(x87_quiet(e.mem.f32(p)));
+    let y = f64::from(x87_quiet(e.mem.f32(p.wrapping_add(4))));
+    let ox = x87_m32(e.mem.u32(q));
+    let oy = x87_m32(e.mem.u32(q.wrapping_add(4)));
+    x87_add(x87_mul(x, ox), x87_mul(y, oy)) as f32
 }
 
 // Translated from 006b9a10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -657,6 +663,16 @@ mod tests {
         let a = p3(&mut e, 2.0, 3.0, 100.0);
         let b = p3(&mut e, 4.0, 5.0, 100.0);
         assert_eq!(e.call(0x006b99e0, &args![a, b]).f32(), 23.0);
+    }
+
+    #[test]
+    fn dot_2d_keeps_the_x87_nan_when_two_nans_meet() {
+        // #199: x = -qNaN, other.x = +qNaN; FMUL keeps the positive one.
+        let mut e = geometry_engine();
+        let a = p3(&mut e, f32::from_bits(0xffff_ffff), 3.0, 100.0);
+        let b = p3(&mut e, f32::from_bits(0x7fff_ffff), 5.0, 100.0);
+        let result = e.call(0x006b99e0, &args![a, b]).f32();
+        assert_eq!(result.to_bits(), 0x7fff_ffff);
     }
 
     #[test]

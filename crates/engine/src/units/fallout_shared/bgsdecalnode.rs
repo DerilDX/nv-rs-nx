@@ -101,16 +101,6 @@ layout! {
     }
 }
 
-/// `FLD`/`FSTP` of a `float`: a signalling NaN becomes a quiet one.
-fn x87_float_copy(value: f32) -> f32 {
-    let bits = value.to_bits();
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        f32::from_bits(bits | 0x0040_0000)
-    } else {
-        value
-    }
-}
-
 /// Adds `node` to the global node list through a stack slot holding it.
 fn add_to_node_list(e: &mut Engine, node: Ptr<BGSDecalNode>) {
     e.with_stack(4, |e, slot| {
@@ -278,7 +268,7 @@ pub fn bgs_decal_node_attach_child(e: &mut Engine, this: Ptr<BGSDecalNode>, chil
 /// Stores `value` at 0x5c (`FLD`/`FSTP`: a signalling NaN is quieted).
 pub fn fn_004ee4b0(e: &mut Engine, this: Ptr, value: f32) {
     e.mem
-        .set_f32(this.addr().wrapping_add(0x5c), x87_float_copy(value));
+        .set_f32(this.addr().wrapping_add(0x5c), x87_quiet(value));
 }
 
 // Translated from 004ee4d0 (decompiled, FalloutNV.exe 1.4.0.525)

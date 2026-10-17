@@ -4485,26 +4485,9 @@ pub fn fn_00ae8550(e: &mut Engine, _this: Ptr<BSSimpleList>, array: u32, compare
     }
 }
 
-/// What `FLD dword` followed by `FSTP dword` leaves of a float's bits: the
-/// x87 load turns a signalling NaN into a quiet one (bit 22 set); every other
-/// value, denormals included, comes back unchanged.
-fn x87_float_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
-/// A float that went through `FLD` / `FSTP`: a signalling NaN comes back
-/// quiet, every other value unchanged.
-fn x87_quiet(value: f32) -> f32 {
-    f32::from_bits(x87_float_copy(value.to_bits()))
-}
-
 /// Copies the float at `from` to `to` the way `FLD` / `FSTP` do.
 fn copy_float_x87(e: &mut Engine, from: u32, to: u32) {
-    let bits = x87_float_copy(e.mem.u32(from));
+    let bits = x87_quiet_bits(e.mem.u32(from));
     e.mem.set_u32(to, bits);
 }
 
@@ -4718,7 +4701,7 @@ pub fn fn_00ae8b90(e: &mut Engine, sound: u32, flag: u8) {
         state & 0xffff_fbff
     };
     e.mem.set_u32(sound + SOUND_STATE_FLAGS, state);
-    let volume = x87_float_copy(e.mem.u32(sound + SOUND_CURRENT_VOLUME));
+    let volume = x87_quiet_bits(e.mem.u32(sound + SOUND_CURRENT_VOLUME));
     e.vcall(sound, SOUND_SLOT_SET_VOLUME, &args![volume]);
 }
 
@@ -12058,12 +12041,12 @@ mod tests {
         const QUIET: u32 = 0x7fc0_0001;
         const ONE: u32 = 0x3f80_0000;
         // The helper: only a signalling NaN changes.
-        assert_eq!(x87_float_copy(SIGNALLING), QUIET);
-        assert_eq!(x87_float_copy(0xffa0_0000), 0xffe0_0000);
-        assert_eq!(x87_float_copy(QUIET), QUIET);
-        assert_eq!(x87_float_copy(0x7f80_0000), 0x7f80_0000);
-        assert_eq!(x87_float_copy(ONE), ONE);
-        assert_eq!(x87_float_copy(0x0000_0001), 0x0000_0001);
+        assert_eq!(x87_quiet_bits(SIGNALLING), QUIET);
+        assert_eq!(x87_quiet_bits(0xffa0_0000), 0xffe0_0000);
+        assert_eq!(x87_quiet_bits(QUIET), QUIET);
+        assert_eq!(x87_quiet_bits(0x7f80_0000), 0x7f80_0000);
+        assert_eq!(x87_quiet_bits(ONE), ONE);
+        assert_eq!(x87_quiet_bits(0x0000_0001), 0x0000_0001);
         // SetPosition: the queued message's vector (FLD / FSTP in the exe).
         let mut f = Fixture::new();
         f.call(0x00adb970, &[3, SIGNALLING, ONE, SIGNALLING]);

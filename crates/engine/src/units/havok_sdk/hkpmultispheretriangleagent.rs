@@ -125,14 +125,14 @@ fn transform_into(e: &mut Engine, frame: u32, body_a: u32, body_b: u32) -> i32 {
 }
 
 /// `float(a + b)` through the x87 stack: the sum in double precision, rounded to a `float`
-/// where the exe stores it.
+/// where the exe stores it, with the x87 choice of NaN (#199).
 fn x87_sum(a: f32, b: f32) -> f32 {
-    (f64::from(a) + f64::from(b)) as f32
+    x87_add(f64::from(a), f64::from(b)) as f32
 }
 
 /// `float(a - b)` likewise.
 fn x87_difference(a: f32, b: f32) -> f32 {
-    (f64::from(a) - f64::from(b)) as f32
+    x87_sub(f64::from(a), f64::from(b)) as f32
 }
 
 /// Asks `00cd7850` for the closest point of sphere `index` of `frame` to the transformed

@@ -22,7 +22,7 @@
 //! Functions that open a C++ exception frame (`FS:[0]`) carry a
 //! `Translation incomplete` marker: the unwinding states are not translated.
 //! The x87 loads of float globals are `FLD`/`FSTP` copies, which quiet a
-//! signalling NaN (`x87_copy`).
+//! signalling NaN (`x87_quiet`).
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -118,16 +118,6 @@ layout! {
         0x18 pWeaponSource: Ptr,
         /// `pParentReference` (Xbox PDB): `TESObjectREFR*`.
         0x1c pParentReference: Ptr,
-    }
-}
-
-/// `FLD m32` / `FSTP m32`: copies a float through the x87 stack, which quiets a
-/// signalling NaN.
-fn x87_copy(value: f32) -> f32 {
-    if value.is_nan() {
-        f32::from_bits(value.to_bits() | 0x0040_0000)
-    } else {
-        value
     }
 }
 
@@ -232,7 +222,7 @@ pub fn fn_009ba660(e: &mut Engine, this: Ptr<MissileProjectile>) {
         let guard = e.global::<u32>(STICK_VALUE_GUARD);
         e.set_global(STICK_VALUE_GUARD, guard | 1);
         let source = e.call(0x0040_3e20, &args![STICK_VALUE_SOURCE]).u32();
-        let value = x87_copy(e.mem.f32(source));
+        let value = x87_quiet(e.mem.f32(source));
         e.set_global(STICK_VALUE, value);
     }
     let query_object = e.global::<u32>(IMPACT_QUERY_OBJECT);
@@ -247,7 +237,7 @@ pub fn fn_009ba660(e: &mut Engine, this: Ptr<MissileProjectile>) {
     if e.call(0x007a_f430, &args![REFERENCE_HOLDER]).u32() == this_addr {
         e.call(0x009c_8c40, &args![REFERENCE_HOLDER, 0u32]);
     }
-    let stick_time = x87_copy(e.global::<f32>(STICK_TIME));
+    let stick_time = x87_quiet(e.global::<f32>(STICK_TIME));
     e.set(this, MissileProjectile::fStickTime, stick_time);
 
     let list_head = e.call(SELF_GETTER, &args![list]).u32();
@@ -294,7 +284,7 @@ pub fn fn_009ba660(e: &mut Engine, this: Ptr<MissileProjectile>) {
         });
     }
     if !skip_reposition {
-        let static_value = x87_copy(e.global::<f32>(STICK_VALUE));
+        let static_value = x87_quiet(e.global::<f32>(STICK_VALUE));
         e.with_stack(12, |e, first| {
             e.with_stack(12, |e, second| {
                 e.with_stack(12, |e, offset| {

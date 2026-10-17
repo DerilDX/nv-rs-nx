@@ -304,18 +304,6 @@ const LOAD_BYTES: u32 = 0x0086_4980;
 /// not confirmed).
 const LOOK_AHEAD_SETTING: u32 = 0x011c_e3fc;
 
-/// What `FLD dword` followed by `FSTP dword` leaves of a float: a
-/// signalling NaN comes back quiet (bit 22 set), every other value
-/// unchanged.
-fn x87_quiet(value: f32) -> f32 {
-    let bits = value.to_bits();
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        f32::from_bits(bits | 0x0040_0000)
-    } else {
-        value
-    }
-}
-
 /// The attacker through `0097ae90`, as the code fetches it.
 fn attacker_of(e: &mut Engine, this: Ptr<CombatController>) -> u32 {
     e.call(GET_ATTACKER, &args![this]).u32()

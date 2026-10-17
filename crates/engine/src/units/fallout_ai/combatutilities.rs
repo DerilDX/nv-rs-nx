@@ -148,16 +148,6 @@ fn parity_even(status: u8, mask: u8) -> bool {
     (status & mask).count_ones() % 2 == 0
 }
 
-/// What `FLD dword` then `FSTP dword` leaves of a float's bits: a
-/// signalling NaN comes back quiet; every other value is unchanged.
-fn x87_copy(bits: u32) -> u32 {
-    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
-        bits | 0x0040_0000
-    } else {
-        bits
-    }
-}
-
 /// `FLD dword [address]`.
 fn load_f32(e: &Engine, address: u32) -> f64 {
     e.mem.f32(address) as f64
@@ -170,7 +160,7 @@ fn store_f32(e: &mut Engine, address: u32, value: f64) {
 
 /// Copies a float with `FLD` / `FSTP`.
 fn copy_f32(e: &mut Engine, from: u32, to: u32) {
-    let bits = x87_copy(e.mem.u32(from));
+    let bits = x87_quiet_bits(e.mem.u32(from));
     e.mem.set_u32(to, bits);
 }
 
@@ -620,7 +610,7 @@ fn projectile_los_segment(
     let cell = e.call(REFR_PARENT_CELL, &args![attacker]).u32();
     let cell_hit = e.call(CELL_PICK, &args![cell, pick]).u32();
     e.mem.set_u32(picked, cell_hit);
-    let far = x87_copy(e.mem.u32(FLOAT_FLT_MAX));
+    let far = x87_quiet_bits(e.mem.u32(FLOAT_FLT_MAX));
     let hit = e
         .call(
             PROJECTILE_PICK,
@@ -637,7 +627,7 @@ fn projectile_los_segment(
         let selected: u32 = e.global(DEBUG_REFERENCE);
         let player: u32 = e.global(PLAYER_CHARACTER);
         if selected == 0 || selected == player || selected == attacker.addr() {
-            let fraction_bits = x87_copy(e.mem.u32(fraction));
+            let fraction_bits = x87_quiet_bits(e.mem.u32(fraction));
             combat_utilities_add_los_debug_geomtry(
                 e,
                 Ptr::new(start),
@@ -681,7 +671,7 @@ fn assign_sectors(e: &mut Engine, entries: u32, count: u32, mask: &mut u32, flag
             let sector = fn_009a98a0(e, *mask, own);
             if sector != -1 {
                 *mask = fn_009a9940(e, *mask, sector);
-                let mut angle = f32::from_bits(x87_copy(e.mem.u32(entry + 0x10)));
+                let mut angle = f32::from_bits(x87_quiet_bits(e.mem.u32(entry + 0x10)));
                 if sector != own {
                     angle = fn_009a99f0(e, sector);
                 }
@@ -988,7 +978,7 @@ pub fn fn_009a6ae0(e: &mut Engine, actor: Ptr, target: Ptr, angle_out: Ptr) -> b
             let root = e.call(PLAYER_950BB0, &args![player, 0u32]).u32();
             let node = e.call(FIND_NODE, &args![root, PROJECTILE_NODE_NAME]).u32();
             e.mem.set_u32(local(0x2c), node);
-            let flt_min = x87_copy(e.mem.u32(FLOAT_FLT_MIN));
+            let flt_min = x87_quiet_bits(e.mem.u32(FLOAT_FLT_MIN));
             let player: u32 = e.global(PLAYER_CHARACTER);
             e.call(
                 PLAYER_965620,
@@ -1211,7 +1201,7 @@ pub fn combat_utilities_calculate_projectile_los(
                 .call(GET_UNCLAMPED_Z_ANGLE_FROM_VECTOR, &args![offset])
                 .f32();
             e.mem.set_f32(local(0x450), yaw);
-            e.mem.set_u32(local(0x454), x87_copy(speed.to_bits()));
+            e.mem.set_u32(local(0x454), x87_quiet_bits(speed.to_bits()));
             if !parity_even(fcom(load_f32(e, local(0x454)), zero), 0x44) {
                 let default_speed = e.call(PROJECTILE_SPEED, &args![projectile]).f32();
                 e.mem.set_f32(local(0x454), default_speed);
@@ -1351,7 +1341,7 @@ pub fn combat_utilities_check_projectile_arc(
             velocity,
             high_arc,
             out,
-            f32::from_bits(x87_copy(threshold.to_bits())),
+            f32::from_bits(x87_quiet_bits(threshold.to_bits())),
         )
     })
 }
@@ -1395,7 +1385,7 @@ pub fn combat_utilities_check_projectile_arc_ov2(
                     &args![SETTING_GRENADE_THROW_HIT_FRACTION_THRESHOLD],
                 )
                 .u32();
-            threshold = f32::from_bits(x87_copy(e.mem.u32(value)));
+            threshold = f32::from_bits(x87_quiet_bits(e.mem.u32(value)));
         }
         let fraction = local(0x8);
         let hit_reference = local(0x4);
@@ -1642,7 +1632,7 @@ pub fn fn_009a7d50(
 ) -> f32 {
     e.with_stack(0xc, |e, point| {
         offset.store(e, point.addr());
-        let height = f32::from_bits(x87_copy(offset.0[2]));
+        let height = f32::from_bits(x87_quiet_bits(offset.0[2]));
         e.mem.set_f32(point.addr() + 8, 0.0);
         let distance = e.call(POINT_LENGTH, &args![point]).f32();
         let zero: f64 = e.global(DOUBLE_ZERO);
@@ -1689,7 +1679,7 @@ pub fn combat_utilities_compute_projectile_time(
         let offset = local(0xc);
         e.call(POINT_SUBTRACT, &args![from_arg, offset, to_arg]);
         let mut speed = speed;
-        let mut time_speed = f32::from_bits(x87_copy(speed.to_bits()));
+        let mut time_speed = f32::from_bits(x87_quiet_bits(speed.to_bits()));
         let zero: f64 = e.global(DOUBLE_ZERO);
         if !parity_even(fcom(speed as f64, zero), 0x44) {
             time_speed = e.call(PROJECTILE_SPEED, &args![projectile]).f32();
@@ -1708,7 +1698,7 @@ pub fn combat_utilities_compute_projectile_time(
                 .u32();
             speed = (speed as f64 * load_f32(e, value)) as f32;
         }
-        let height = f32::from_bits(x87_copy(e.mem.u32(local(0x4))));
+        let height = f32::from_bits(x87_quiet_bits(e.mem.u32(local(0x4))));
         let distance = e.call(POINT_LENGTH_XY, &args![offset]).f32();
         let gravity = projectile_gravity(e, projectile) as f32;
         let angle = fn_009a7c60(e, distance, height, speed, gravity, false);
@@ -1763,7 +1753,7 @@ pub fn combat_utilities_get_attacker_firing_z_offset(
         } else {
             e.call(ACTOR_GET_HEIGHT, &args![reference]).f32()
         };
-        let height = f32::from_bits(x87_copy(height.to_bits()));
+        let height = f32::from_bits(x87_quiet_bits(height.to_bits()));
         let three_quarters: f64 = e.global(DOUBLE_THREE_QUARTERS);
         return (height as f64 * three_quarters) as f32;
     }
@@ -1951,7 +1941,7 @@ pub fn combat_utilities_get_target_firing_z_offset(
     } else {
         e.call(ACTOR_GET_HEIGHT, &args![reference]).f32()
     };
-    let height = f32::from_bits(x87_copy(height.to_bits())) as f64;
+    let height = f32::from_bits(x87_quiet_bits(height.to_bits())) as f64;
     if e.vcall(reference.addr(), 0x230, &[]).bool()
         || e.call(ACTOR_FLAG_579670, &args![reference]).bool()
         || e.vcall(reference.addr(), 0x22c, &args![0u32]).bool()
@@ -2037,8 +2027,8 @@ pub fn combat_utilities_get_angle_to_projected_target(
         combat_utilities_get_attacker_firing_location(e, Ptr::new(location), attacker);
         let angles = local(0x18);
         let from = PointArg::load(e, location);
-        let speed = f32::from_bits(x87_copy(speed.to_bits()));
-        let gravity = f32::from_bits(x87_copy(gravity.to_bits()));
+        let speed = f32::from_bits(x87_quiet_bits(speed.to_bits()));
+        let gravity = f32::from_bits(x87_quiet_bits(gravity.to_bits()));
         combat_utilities_get_angle_to_projected_target_ov2(
             e,
             Ptr::new(angles),
@@ -2085,8 +2075,8 @@ pub fn combat_utilities_get_angle_to_projected_target_ov2(
         combat_utilities_get_target_firing_location(e, Ptr::new(local(0xc)), target, mode);
         let velocity = PointArg::load(e, local(0x24));
         let location = PointArg::load(e, local(0xc));
-        let speed = f32::from_bits(x87_copy(speed.to_bits()));
-        let gravity = f32::from_bits(x87_copy(gravity.to_bits()));
+        let speed = f32::from_bits(x87_quiet_bits(speed.to_bits()));
+        let gravity = f32::from_bits(x87_quiet_bits(gravity.to_bits()));
         combat_utilities_get_projected_point_for_target_ov4(
             e,
             Ptr::new(local(0x18)),
@@ -2220,8 +2210,8 @@ pub fn combat_utilities_get_angle_to_projected_point_ov2(
         e.mem.set_f32(local(0x4), yaw);
         copy_f32(e, local(0x4), local(0x18));
         wrap_angle(e, local(0x18));
-        let pitch = f32::from_bits(x87_copy(e.mem.u32(local(0x8))));
-        let yaw = f32::from_bits(x87_copy(e.mem.u32(local(0x18))));
+        let pitch = f32::from_bits(x87_quiet_bits(e.mem.u32(local(0x8))));
+        let yaw = f32::from_bits(x87_quiet_bits(e.mem.u32(local(0x18))));
         e.call(POINT_SET, &args![result, pitch, 0.0f32, yaw]);
         result
     })
@@ -2291,7 +2281,7 @@ pub fn combat_utilities_get_projected_point_for_target(
         combat_utilities_get_target_velocity(e, Ptr::new(velocity), target);
         let location = PointArg::load(e, location);
         let velocity = PointArg::load(e, velocity);
-        let speed = f32::from_bits(x87_copy(speed.to_bits()));
+        let speed = f32::from_bits(x87_quiet_bits(speed.to_bits()));
         combat_utilities_get_projected_point_for_target_ov3(
             e, result, attacker, location, velocity, from, projectile, speed, high,
         )
@@ -2315,7 +2305,7 @@ pub fn combat_utilities_get_projected_point_for_target_ov2(
 ) -> Ptr {
     let still = PointArg::load(e, ZERO_POINT);
     let location = PointArg::load(e, point.addr());
-    let speed = f32::from_bits(x87_copy(speed.to_bits()));
+    let speed = f32::from_bits(x87_quiet_bits(speed.to_bits()));
     combat_utilities_get_projected_point_for_target_ov3(
         e, result, attacker, location, still, from, projectile, speed, high,
     )
@@ -2356,7 +2346,7 @@ pub fn combat_utilities_get_projected_point_for_target_ov3(
         }
         let gravity = projectile_gravity(e, projectile) as f32;
         let zero: f64 = e.global(DOUBLE_ZERO);
-        let mut speed = f32::from_bits(x87_copy(speed.to_bits()));
+        let mut speed = f32::from_bits(x87_quiet_bits(speed.to_bits()));
         if !parity_even(fcom(speed as f64, zero), 0x44) {
             speed = e.call(PROJECTILE_SPEED, &args![projectile]).f32();
         }
@@ -2736,7 +2726,7 @@ pub fn combat_utilities_is_dangerous_explosion(e: &mut Engine, explosion: Ptr) -
             &args![SETTING_DANGEROUS_PROJECTILE_EXPLOSION_DAMAGE],
         )
         .u32();
-    let setting = f32::from_bits(x87_copy(e.mem.u32(value)));
+    let setting = f32::from_bits(x87_quiet_bits(e.mem.u32(value)));
     let reach = e
         .call(EXPLOSION_FORMULA_6479A0, &args![radius, damage, setting])
         .f32();
@@ -2930,7 +2920,8 @@ pub fn fn_009a9a20(e: &mut Engine, target: Ptr, actor: Ptr) -> bool {
 /// Stores `value` into the float at +0xe0 (thiscall; on what vtable +0x428
 /// of an attacker returns, in `fn_009a9a20`).
 pub fn fn_009a9f00(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_u32(this.addr() + 0xe0, x87_copy(value.to_bits()));
+    e.mem
+        .set_u32(this.addr() + 0xe0, x87_quiet_bits(value.to_bits()));
 }
 
 // Translated from 009a9f20 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2998,7 +2989,7 @@ pub fn combat_utilities_add_los_debug_geomtry(
                     &args![SETTING_DEBUG_COMBAT_PROJECTILE_LOS_TIME],
                 )
                 .u32();
-            let seconds = f32::from_bits(x87_copy(e.mem.u32(seconds)));
+            let seconds = f32::from_bits(x87_quiet_bits(e.mem.u32(seconds)));
             let tes: u32 = e.global(TES_OBJECT);
             e.call(TES_ADD_TEMP_DEBUG_OBJECT, &args![tes, object, seconds]);
         };
@@ -3007,7 +2998,7 @@ pub fn combat_utilities_add_los_debug_geomtry(
             .u32();
         tes_add(e, line);
         if hit != 0 {
-            let size = f32::from_bits(x87_copy(e.mem.u32(FLOAT_5)));
+            let size = f32::from_bits(x87_quiet_bits(e.mem.u32(FLOAT_5)));
             let marker = e.call(MAKE_TRI_POINT, &args![size, hit_color, 1u32]).u32();
             e.call(UPDATE_PROPERTIES, &args![marker]);
             e.call(NODE_SET_TRANSLATE, &args![marker, end]);
