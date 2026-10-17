@@ -421,6 +421,15 @@ pub fn ci_atan(_e: &mut Engine, v: f64) -> f64 {
     v.atan()
 }
 
+// Platform: replaces 00ec9760 (atan2, LIBCMT): `cdecl`, `y` then `x` as doubles on the stack, the
+// result in ST0. The function is `MOV EDX,0x11c26a0; JMP 0x00ed60eb`: the shared dispatcher that
+// picks the SSE2 body (`__use_sse2_mathfcns`, `01270a64`) or the x87 body `00ed7cbc`, which
+// computes `FPATAN` of the two stack operands; the descriptor handlers for NaN, infinite and zero
+// operands and the error report (`_matherr`, `atan2`) are not modelled.
+pub fn atan2(_e: &mut Engine, y: f64, x: f64) -> f64 {
+    y.atan2(x)
+}
+
 // Platform: replaces 00ec8660 (__alloca_probe, LIBCMT)
 /// The stack probe the compiler calls before a large frame. It takes its inputs in
 /// registers, so they come first: `size` is `EAX` (the bytes wanted) and `esp` the value
@@ -1402,6 +1411,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00eca190, acos_cdecl(f64) -> f64),
         entry!(0x00ed5abb, ctrlfp(u32, u32) -> i32),
         entry!(0x00ec9050, ci_atan(f64) -> f64),
+        entry!(0x00ec9760, atan2(f64, f64) -> f64),
         entry!(0x00ec8660, alloca_probe(u32, u32) -> u32),
         entry!(0x00ecadda, time64(Ptr) -> u64),
         entry!(0x00ecadb8, rand() -> i32),
@@ -2196,6 +2206,29 @@ mod exit_tests {
             ]]
         );
         assert_eq!(words(CI_ACOS), [vec![half as u32, (half >> 32) as u32]]);
+    }
+
+    #[test]
+    fn atan2_takes_y_first_and_keeps_the_quadrant() {
+        let mut e = Engine::new();
+        let quarter_turn = std::f64::consts::FRAC_PI_2;
+        assert_eq!(
+            e.call(0x00ec9760, &args![1.0f64, 1.0f64]).f64(),
+            1.0f64.atan2(1.0)
+        );
+        assert_eq!(
+            e.call(0x00ec9760, &args![1.0f64, 0.0f64]).f64(),
+            quarter_turn
+        );
+        assert_eq!(
+            e.call(0x00ec9760, &args![0.0f64, -1.0f64]).f64(),
+            std::f64::consts::PI
+        );
+        assert_eq!(
+            e.call(0x00ec9760, &args![-1.0f64, -1.0f64]).f64(),
+            (-1.0f64).atan2(-1.0)
+        );
+        assert!(e.call(0x00ec9760, &args![-1.0f64, -1.0f64]).f64() < -quarter_turn);
     }
 
     #[test]

@@ -7,6 +7,43 @@ use crate::prelude::*;
 /// The memory router (`0x00c8_5750`): its field `+0x10` is the allocator the block is freed through.
 const MEMORY_ROUTER: u32 = 0x00c8_5750;
 
+/// `hkStringPtr::~hkStringPtr` (`00cb0c00`, `this` = the string pointer) and the vtable of the
+/// base class (`0102e388`) the destructor leaves in the object.
+const STRING_PTR_DESTRUCT: u32 = 0x00cb_0c00;
+const BASE_VTABLE: u32 = 0x0102_e388;
+
+// Translated from 00dfdfe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkMonitorStreamColorTable::~hkMonitorStreamColorTable` (Xbox PDB; `this` = the table).
+/// The entries (`+8` array of 8-byte `hkStringPtr`s, `+0xc` count, `+0x10` capacity word) are
+/// destroyed in order (`00cb0c00`), the count cleared, the buffer returned through slot `0x10`
+/// of the memory router's allocator with `(capacity & 0x3fffffff) * 8` bytes unless the
+/// capacity word has its top bit (non-owning) set, the array pointer cleared, the capacity
+/// word set to `0x80000000` and the vtable set to the base class's (`0102e388`).
+pub fn hk_monitor_stream_color_table_destruct(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let count = e.mem.i32(at + 0xc);
+    let mut entry = e.mem.u32(at + 8);
+    for _ in 0..count.max(0) {
+        e.call(STRING_PTR_DESTRUCT, &args![entry]);
+        entry = entry.wrapping_add(8);
+    }
+    e.mem.set_u32(at + 0xc, 0);
+    let capacity = e.mem.u32(at + 0x10);
+    if (capacity as i32) >= 0 {
+        let data = e.mem.u32(at + 8);
+        e.vcall(
+            allocator,
+            0x10,
+            &args![data, (capacity & 0x3fff_ffff).wrapping_shl(3)],
+        );
+    }
+    e.mem.set_u32(at + 8, 0);
+    e.mem.set_u32(at + 0x10, 0x8000_0000);
+    e.mem.set_u32(at, BASE_VTABLE);
+}
+
 // Translated from 00dfe050 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Deleting destructor: runs the base destructor (`0x00df_dfe0`) on `this` and, when bit 0 of
 /// `flags` is set, returns the block to the memory router's allocator (slot `8`) with the
@@ -24,7 +61,10 @@ pub fn deleting_destructor_00dfe050(e: &mut Engine, this: Ptr, flags: u8) -> Ptr
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00df_e050, deleting_destructor_00dfe050(Ptr, u8) -> Ptr)]
+    vec![
+        entry!(0x00df_dfe0, hk_monitor_stream_color_table_destruct(Ptr)),
+        entry!(0x00df_e050, deleting_destructor_00dfe050(Ptr, u8) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +128,52 @@ mod tests {
     #[test]
     fn deleting_destructor_00dfe050_frees_only_when_bit_zero_is_set() {
         check(0x00df_e050, 0x00df_dfe0);
+    }
+
+    /// The table destructor destroys every entry in order (`hkStringPtr` destructor with the entry
+    /// address), clears the count, frees an owned buffer with `capacity * 8` bytes (not a
+    /// non-owning one), clears the array pointer, sets the capacity word to `0x80000000` and
+    /// installs the base vtable.
+    #[test]
+    fn color_table_destructor_destroys_entries_and_frees_an_owned_buffer() {
+        for (capacity, freed) in [(4u32, true), (0x8000_0004u32, false)] {
+            let mut e = engine();
+            let log = Rc::new(RefCell::new(Vec::new()));
+            let vtable = e.mem.alloc(0x20);
+            e.mem.set_u32(vtable + 0x10, FREE_SLOT_DOUBLE);
+            let allocator = e.mem.alloc(0x10);
+            e.mem.set_u32(allocator, vtable);
+            let router = e.mem.alloc(0x20);
+            e.mem.set_u32(router + 0x10, allocator);
+            e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+                eax: router,
+                ..Ret::default()
+            });
+            let destroy_log = Rc::clone(&log);
+            e.register_double(STRING_PTR_DESTRUCT, move |_, a| {
+                destroy_log.borrow_mut().extend([1, a[0]]);
+                Ret::default()
+            });
+            let free_log = Rc::clone(&log);
+            e.register_double(FREE_SLOT_DOUBLE, move |_, a| {
+                free_log.borrow_mut().extend([2, a[1], a[2]]);
+                Ret::default()
+            });
+            let table = e.mem.alloc(0x20);
+            let entries = e.mem.alloc(0x20);
+            e.mem.set_u32(table + 8, entries);
+            e.mem.set_u32(table + 0xc, 3);
+            e.mem.set_u32(table + 0x10, capacity);
+            e.call(0x00df_dfe0, &args![table]);
+            let mut expected = vec![1, entries, 1, entries + 8, 1, entries + 16];
+            if freed {
+                expected.extend([2, entries, 32]);
+            }
+            assert_eq!(*log.borrow(), expected);
+            assert_eq!(e.mem.u32(table + 8), 0);
+            assert_eq!(e.mem.u32(table + 0xc), 0);
+            assert_eq!(e.mem.u32(table + 0x10), 0x8000_0000);
+            assert_eq!(e.mem.u32(table), BASE_VTABLE);
+        }
     }
 }

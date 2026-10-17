@@ -107,9 +107,23 @@ pub fn bhk_spring_damper_constraint_motor_get_viewer_strings(
     e.mem.set_u32(thread + SCOPE_WORD, saved);
 }
 
+// Translated from 00cf45f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkSpringDamperConstraintMotor::GetRTTI` (engine map name): the address of the class's
+/// RTTI record (`01268740`, the same word `GetViewerStrings` reads); `this` is not read.
+pub fn bhk_spring_damper_constraint_motor_get_rtti(
+    _e: &mut Engine,
+    _this: Ptr<BhkSpringDamperConstraintMotor>,
+) -> u32 {
+    CLASS_RTTI
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00cf45f0,
+            bhk_spring_damper_constraint_motor_get_rtti(Ptr<BhkSpringDamperConstraintMotor>) -> u32
+        ),
         entry!(
             0x00cf4600,
             fn_00cf4600(Ptr<BhkSpringDamperConstraintMotor>, Ptr)
@@ -249,6 +263,12 @@ mod tests {
         assert_eq!(calls_to(&e, STRING_ARRAY_SET_SIZE), vec![vec![strings, 8]]);
         assert_eq!(e.mem.u32(base + 8), 0xa000);
         assert_eq!(e.mem.u32(thread + SCOPE_WORD), 0x42);
+    }
+
+    #[test]
+    fn bhk_spring_damper_constraint_motor_get_rtti_returns_the_class_record() {
+        let mut e = logged_engine();
+        assert_eq!(e.call(0x00cf_45f0, &args![0x5000u32]).u32(), CLASS_RTTI);
     }
 
     #[test]

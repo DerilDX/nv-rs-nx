@@ -199,6 +199,20 @@ pub fn fn_00a2d5b0(e: &mut Engine, row: u32, column: u32) {
     e.mem.set_u32(at.wrapping_add(0x011f_3810), 0xa2d4a0);
 }
 
+// Translated from 00a2e180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A reference-counted start-up hook of the animation unit (no Xbox PDB name; `this`, in `ECX`,
+/// is returned unchanged): increments the counter at `011f36a0` and, when it was zero, registers
+/// the unit's two functions (`00a2d8a0` and `00a2de70`) with the runtime's registration
+/// (`00aa2080`, `cdecl`).
+pub fn fn_00a2e180(e: &mut Engine, this: u32) -> u32 {
+    let count = e.mem.u32(0x011f_36a0);
+    e.mem.set_u32(0x011f_36a0, count.wrapping_add(1));
+    if count == 0 {
+        e.call(0x00aa_2080, &args![0x00a2_d8a0u32, 0x00a2_de70u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -210,5 +224,30 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a2d610, fn_00a2d610() -> u32),
         entry!(0x00a2d810, fn_00a2d810() -> u32),
         entry!(0x00a2d5b0, fn_00a2d5b0(u32, u32)),
+        entry!(0x00a2e180, fn_00a2e180(u32) -> u32),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_call_registers_the_unit_and_every_call_returns_this() {
+        let mut e = Engine::new();
+        e.map(0x011f_3000, 0x1000);
+        e.register(0x00aa_2080, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a2_e180, &args![0x1234u32]).u32(), 0x1234);
+        assert_eq!(e.mem.u32(0x011f_36a0), 1);
+        assert_eq!(e.call(0x00a2_e180, &args![0x5678u32]).u32(), 0x5678);
+        assert_eq!(e.mem.u32(0x011f_36a0), 2);
+        let log = e.call_log.take().unwrap();
+        let registrations: Vec<_> = log
+            .iter()
+            .filter(|(addr, _)| *addr == 0x00aa_2080)
+            .collect();
+        assert_eq!(registrations.len(), 1);
+        assert_eq!(registrations[0].1, vec![0x00a2_d8a0, 0x00a2_de70]);
+    }
 }
