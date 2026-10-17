@@ -681,11 +681,14 @@ fn cast_ray_against_cylinder(
         p * q
     }));
     // `side * g`, then `* -1.0` (a `double` constant): the distance to the plane along the axis.
-    let plane_distance = ((f64::from(to_end_along) * f64::from(side)) * -1.0) as f32;
+    // `black_box` keeps the multiply: LLVM folds `x * -1.0` into a negation in release builds,
+    // which flips a NaN's sign where the exe's `FMUL` passes it through.
+    let plane_distance =
+        ((f64::from(to_end_along) * f64::from(side)) * std::hint::black_box(-1.0)) as f32;
     if plane_distance < 0.0 {
         return false;
     }
-    let negated_side = f64::from(side) * -1.0;
+    let negated_side = f64::from(side) * std::hint::black_box(-1.0);
     let approach = (negated_side * f64::from(sum3(product))) as f32;
     let scaled_nearest = f64::from(approach) * f64::from(nearest);
     // `FCOMP`: miss for "less" and for "equal".

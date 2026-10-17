@@ -303,6 +303,382 @@ fn inplace_array_init(e: &mut Engine, array: u32) {
     e.mem.set_u32(array + 8, 0x8000_0010);
 }
 
+/// `hkUnionFind::reindex` (Xbox PDB, `00d282c0`, `this` = the union-find object, `RET 0xC`:
+/// the address of the word holding the group array, the number of groups, the parent array).
+const UNION_FIND_REINDEX: u32 = 0x00d2_82c0;
+/// The `KERNEL32` import slots of `EnterCriticalSection` and `LeaveCriticalSection`.
+const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
+const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
+/// `hkpWorld` words used by the island-splitting functions below: +0xC0 the critical section
+/// pointer, +0xD5 a byte choosing how entities are ranked, +0x305 and +0x306 the two bytes the
+/// ranks are compared against (PC offsets; the names are not confirmed).
+const WORLD_CRITICAL_SECTION: u32 = 0xc0;
+const WORLD_RANKING_ENABLED: u32 = 0xd5;
+const WORLD_RANK_BYTE_FIRST: u32 = 0x305;
+const WORLD_RANK_BYTE_SECOND: u32 = 0x306;
+/// The 16-bit words of an `hkpEntity` the rank is read from (+0xEA, +0xEC) and the 16-bit
+/// count of its master constraints (+0xB0).
+const ENTITY_RANK_WORD_FIRST: u32 = 0xea;
+const ENTITY_RANK_WORD_SECOND: u32 = 0xec;
+const ENTITY_MASTER_COUNT: u32 = 0xb0;
+
+/// The rank of an entity as the splitting code computes it: each 16-bit word is shifted
+/// right by 7 when its top two bits equal the world's byte, and masked with 0x7f; the larger
+/// of the two (signed) is the rank.
+fn entity_rank(e: &Engine, world: u32, entity: u32) -> i32 {
+    let mut second = i32::from(e.mem.u16(entity + ENTITY_RANK_WORD_SECOND));
+    if i32::from(e.mem.u8(world + WORLD_RANK_BYTE_SECOND)) == second >> 14 {
+        second >>= 7;
+    }
+    let mut first = i32::from(e.mem.u16(entity + ENTITY_RANK_WORD_FIRST));
+    if i32::from(e.mem.u8(world + WORLD_RANK_BYTE_FIRST)) == first >> 14 {
+        first >>= 7;
+    }
+    (second & 0x7f).max(first & 0x7f)
+}
+
+/// Entry `index` of the integer array that the union-find object points at through two
+/// levels (`**union_find`).
+fn union_find_entry(e: &Engine, union_find: u32, index: u32) -> u32 {
+    let inner = e.mem.u32(union_find);
+    let data = e.mem.u32(inner);
+    e.mem.u32(data.wrapping_add(index.wrapping_mul(4)))
+}
+
+/// Address of entry `index` of an array of words.
+fn word_at(array: u32, index: i32) -> u32 {
+    array.wrapping_add((index as u32).wrapping_mul(4))
+}
+
+/// Calls the sort's comparison function (cdecl, `(result byte, a, b)`) and reads the byte it
+/// answers the address of.
+fn sort_compare(e: &mut Engine, compare: u32, slot: u32, a: u32, b: u32) -> bool {
+    let result = e.call(compare, &args![slot, a, b]).u32();
+    e.mem.u8(result) != 0
+}
+
+// Translated from 00cb3c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorldOperationUtil::addConstraintToCriticalLockedIsland` (Xbox PDB), cdecl `(world,
+/// constraint)`: `hkpWorldConstraintUtil::addConstraint` (`00d27ac0`) then
+/// `hkpWorldCallbackUtil::fireConstraintAdded` (`00d00960`), both with the same two words.
+pub fn hkp_world_operation_util_add_constraint_to_critical_locked_island(
+    e: &mut Engine,
+    world: Ptr,
+    constraint: Ptr,
+) {
+    e.call(WORLD_CONSTRAINT_UTIL_ADD, &args![world, constraint]);
+    e.call(FIRE_CONSTRAINT_ADDED, &args![world, constraint]);
+}
+
+// Translated from 00cb3da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorldOperationUtil::removeConstraintFromCriticalLockedIsland` (Xbox PDB), cdecl `(world,
+/// constraint)`: when the world's constraint listener count (+0x144) is not 0, runs
+/// `hkpWorldCallbackUtil::fireConstraintRemoved` (`00d00a00`) with both words; then
+/// `hkpWorldConstraintUtil::removeConstraint` (`00d27820`) on the constraint.
+pub fn hkp_world_operation_util_remove_constraint_from_critical_locked_island(
+    e: &mut Engine,
+    world: Ptr,
+    constraint: Ptr,
+) {
+    if e.mem.u32(world.addr() + WORLD_CONSTRAINT_LISTENERS_SIZE) != 0 {
+        e.call(FIRE_CONSTRAINT_REMOVED, &args![world, constraint]);
+    }
+    e.call(WORLD_CONSTRAINT_UTIL_REMOVE, &args![constraint]);
+}
+
+// Translated from 00cb4890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no caller in the exe). Takes `entities` in `EAX` (an `hkArray` of entity pointers),
+/// then cdecl `(union_find, world, parents, group_flags)`; the register value comes first.
+/// On the memory router's stack it makes a zeroed array of one word per element of `parents`
+/// (count at `parents + 4`; the router's top moves up by the byte size rounded to 0x80). Every
+/// entity whose rank (`entity_rank`) is at most 5 sets the word, at the index
+/// `**union_find` holds for it, to 1. Then, with `group_flags` the address of a word holding
+/// a byte array, byte 0 is set to 1 and each word is numbered: a set word is cleared, a clear
+/// one gets the next number (from 1) and its byte (at the number) is cleared. If the next
+/// number is above the count, byte 0 is cleared and the router's top is restored; otherwise
+/// `hkUnionFind::reindex` (`00d282c0`, `this` = `union_find`) is called with the address of a
+/// stack word holding the array, the next number and `parents`, and the router's top is set
+/// to the word's value afterwards.
+pub fn fn_00cb4890(
+    e: &mut Engine,
+    entities: u32,
+    union_find: u32,
+    world: u32,
+    parents: u32,
+    group_flags: u32,
+) {
+    let count = e.mem.i32(parents + 4);
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let marks = e.mem.u32(router);
+    let size = (count as u32).wrapping_mul(4).wrapping_add(0x7f) & 0xffff_ff80;
+    e.mem.set_u32(router, size.wrapping_add(marks));
+    for index in 0..count.max(0) as u32 {
+        e.mem.set_u32(marks + index * 4, 0);
+    }
+    let mut index = 0i32;
+    while index < e.mem.i32(entities + 4) {
+        let data = e.mem.u32(entities);
+        let entity = e.mem.u32(word_at(data, index));
+        if entity_rank(e, world, entity) <= 5 {
+            let group = union_find_entry(e, union_find, index as u32);
+            e.mem.set_u32(word_at(marks, group as i32), 1);
+        }
+        index += 1;
+    }
+    let flags = e.mem.u32(group_flags);
+    e.mem.set_u8(flags, 1);
+    let mut next = 1u32;
+    for index in 0..count.max(0) {
+        let slot = word_at(marks, index);
+        if e.mem.u32(slot) != 0 {
+            e.mem.set_u32(slot, 0);
+        } else {
+            e.mem.set_u32(slot, next);
+            let flags = e.mem.u32(group_flags);
+            e.mem.set_u8(flags.wrapping_add(next), 0);
+            next += 1;
+        }
+    }
+    if (next as i32) <= count {
+        let restored = e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), marks);
+            e.call(UNION_FIND_REINDEX, &args![union_find, slot, next, parents]);
+            e.mem.u32(slot.addr())
+        });
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        e.mem.set_u32(router, restored);
+    } else {
+        let flags = e.mem.u32(group_flags);
+        e.mem.set_u8(flags, 0);
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        e.mem.set_u32(router, marks);
+    }
+}
+
+// Translated from 00cb49e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no caller in the exe), cdecl `(world, union_find, entities, parents, group_flags)`:
+/// splits entities into groups for new islands. Two zeroed word arrays (weights, then marks;
+/// one word per element of `parents`, count at `parents + 4`) are taken from the memory
+/// router's stack. Every entity adds its master constraint count (+0xB0, at least 1) to the
+/// weight at the index `**union_find` holds for it and sets the mark to 1: with the world's
+/// byte at +0xD5 clear always, otherwise only when its rank (`entity_rank`) is at most 5.
+/// Weights with no mark become -1. Then the weights are walked: a weight of -2 is skipped;
+/// otherwise the next group number is given to the element in the marks array, its flag byte
+/// (the byte array `group_flags` points at) is cleared and, for a weight of 0 or more, the
+/// later weights are merged in while the running total plus 10 stays below the world's
+/// word at +0xB4: each later weight of 0 or more that keeps the total below it gets the
+/// group number, becomes -2, adds to the total and sets the group's flag byte to 1. At the
+/// end `hkUnionFind::reindex` (`00d282c0`, `this` = `union_find`) runs with the address of a
+/// stack word holding the marks, the group count and `parents`; the router's top is set to the
+/// word's value and then to the start of the weights.
+pub fn fn_00cb49e0(
+    e: &mut Engine,
+    world: u32,
+    union_find: u32,
+    entities: u32,
+    parents: u32,
+    group_flags: u32,
+) {
+    let count = e.mem.i32(parents + 4);
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let weights = e.mem.u32(router);
+    let size = (count as u32).wrapping_mul(4).wrapping_add(0x7f) & 0xffff_ff80;
+    e.mem.set_u32(router, size.wrapping_add(weights));
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let marks = e.mem.u32(router);
+    e.mem.set_u32(router, size.wrapping_add(marks));
+    for index in 0..count.max(0) {
+        e.mem.set_u32(word_at(marks, index), 0);
+        e.mem.set_u32(word_at(weights, index), 0);
+    }
+    let ranked = e.mem.u8(world + WORLD_RANKING_ENABLED) != 0;
+    let mut index = 0i32;
+    while index < e.mem.i32(entities + 4) {
+        let data = e.mem.u32(entities);
+        let entity = e.mem.u32(word_at(data, index));
+        let group = union_find_entry(e, union_find, index as u32);
+        if !ranked || entity_rank(e, world, entity) <= 5 {
+            e.mem.set_u32(word_at(marks, group as i32), 1);
+        }
+        let weight = u32::from(e.mem.u16(entity + ENTITY_MASTER_COUNT)).max(1);
+        add_word(e, word_at(weights, group as i32), weight);
+        index += 1;
+    }
+    for index in 0..count.max(0) {
+        if e.mem.u32(word_at(marks, index)) == 0 {
+            e.mem.set_u32(word_at(weights, index), 0xffff_ffff);
+        }
+    }
+    let mut next_group = 0i32;
+    if count > 0 {
+        let mut weight_cursor = weights;
+        let mut mark_cursor = marks;
+        let mut first_later = 1i32;
+        let mut remaining = count;
+        loop {
+            let mut running = e.mem.i32(weight_cursor);
+            if running != -2 {
+                let group = next_group;
+                next_group += 1;
+                let flags = e.mem.u32(group_flags);
+                e.mem.set_u8(flags.wrapping_add(group as u32), 0);
+                e.mem.set_i32(mark_cursor, group);
+                if running >= 0 && first_later < count {
+                    let mut later = first_later;
+                    let mut cursor = weight_cursor + 4;
+                    loop {
+                        let limit = e.mem.i32(world + WORLD_MIN_ISLAND_SIZE);
+                        if running.wrapping_add(10) >= limit {
+                            break;
+                        }
+                        let other = e.mem.i32(cursor);
+                        if other >= 0 {
+                            let total = other.wrapping_add(running);
+                            if total < limit {
+                                let flags = e.mem.u32(group_flags);
+                                e.mem.set_u8(flags.wrapping_add(group as u32), 1);
+                                let mark = marks.wrapping_sub(weights).wrapping_add(cursor);
+                                e.mem.set_i32(mark, group);
+                                running = total;
+                                e.mem.set_i32(cursor, -2);
+                            }
+                        }
+                        later += 1;
+                        cursor += 4;
+                        if later >= count {
+                            break;
+                        }
+                    }
+                }
+            }
+            mark_cursor += 4;
+            first_later += 1;
+            weight_cursor += 4;
+            remaining -= 1;
+            if remaining == 0 {
+                break;
+            }
+        }
+    }
+    let restored = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), marks);
+        e.call(
+            UNION_FIND_REINDEX,
+            &args![union_find, slot, next_group as u32, parents],
+        );
+        e.mem.u32(slot.addr())
+    });
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    e.mem.set_u32(router, restored);
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    e.mem.set_u32(router, weights);
+}
+
+// Translated from 00cb5480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed, cdecl `(world, island)`: clears bits 2 and 3 of the island's flag byte at +0x26,
+/// then, inside the world's critical section (the pointer at +0xC0, `EnterCriticalSection` and
+/// `LeaveCriticalSection`), puts the island in the world's dirty list (+0x40) unless its
+/// 16-bit index at +0x22 shows it already is (`mark_island_dirty`).
+pub fn fn_00cb5480(e: &mut Engine, world: Ptr, island: Ptr) {
+    let (world, island) = (world.addr(), island.addr());
+    let flags = e.mem.u8(island + ISLAND_FLAGS_26);
+    e.mem.set_u8(island + ISLAND_FLAGS_26, flags & 0xf3);
+    let lock = e.mem.u32(world + WORLD_CRITICAL_SECTION);
+    e.call(ENTER_CRITICAL_SECTION, &args![lock]);
+    mark_island_dirty(e, world, island);
+    let lock = e.mem.u32(world + WORLD_CRITICAL_SECTION);
+    e.call(LEAVE_CRITICAL_SECTION, &args![lock]);
+}
+
+// Translated from 00cb7480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed, thiscall `(instance, info)` on the constraint owner (`RET 8`): the opposite of
+/// `hkpConstraintOwner::addConstraintInfo` for an instance with a record (+0x30; without one
+/// nothing happens). The owner's words at +0xC, +0x10 and +0x14 lose the info's words at +4,
+/// +8 and +0xC; the record's 16-bit +0x14 loses the info's +4, its +0x16 loses the 16 bits of
+/// the info's +8 and its +0x18 loses the info's +0xC.
+pub fn fn_00cb7480(e: &mut Engine, this: Ptr, instance: Ptr, info: Ptr) {
+    if e.mem.u32(instance.addr() + 0x30) == 0 {
+        return;
+    }
+    let (owner, info) = (this.addr(), info.addr());
+    for (field, word) in [(0xc, 4), (0x10, 8), (0x14, 0xc)] {
+        let amount = e.mem.u32(info + word);
+        add_word(e, owner + field, amount.wrapping_neg());
+    }
+    let record = e.mem.u32(instance.addr() + 0x30);
+    let first = u32::from(e.mem.u16(record + 0x14));
+    let third = u32::from(e.mem.u16(record + 0x18));
+    let first = first.wrapping_sub(e.mem.u32(info + 4));
+    let third = third.wrapping_sub(e.mem.u32(info + 0xc));
+    let second = e.mem.u16(info + 8);
+    let current = e.mem.u16(record + 0x16);
+    e.mem.set_u16(record + 0x16, current.wrapping_sub(second));
+    e.mem.set_u16(record + 0x14, first as u16);
+    e.mem.set_u16(record + 0x18, third as u16);
+}
+
+// Translated from 00dd7d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkAlgorithm::quickSortRecursive<hkpSimulationIsland*, hkBool (*)(const hkpSimulationIsland*
+/// const&, ...)>` (Xbox PDB name abbreviated), cdecl `(array, low, high, compare)`: sorts the
+/// pointers `array[low..=high]` in place. The pivot is the element at `(low + high) >> 1`;
+/// the scans use `compare(result slot, a, b)` (cdecl, answering the address of a byte): the
+/// lower index advances while `compare(array[i], pivot)` is true, the upper one retreats
+/// while `compare(pivot, array[j])` is true, elements are swapped while `i <= j`, the lower
+/// part is sorted by recursion and the upper part by the outer loop. Index compares are
+/// signed.
+pub fn hk_algorithm_quick_sort_recursive_hkp_simulation_island(
+    e: &mut Engine,
+    array: u32,
+    low: i32,
+    high: i32,
+    compare: u32,
+) {
+    e.with_stack(4, |e, slots| {
+        let (first_slot, second_slot) = (slots.addr() + 2, slots.addr() + 3);
+        let mut low = low;
+        loop {
+            let mut lower = low;
+            let mut upper = high;
+            let pivot = e.mem.u32(word_at(array, lower.wrapping_add(upper) >> 1));
+            loop {
+                let mut candidate = e.mem.u32(word_at(array, lower));
+                while sort_compare(e, compare, first_slot, candidate, pivot) {
+                    candidate = e.mem.u32(word_at(array, lower.wrapping_add(1)));
+                    lower = lower.wrapping_add(1);
+                }
+                let mut candidate = e.mem.u32(word_at(array, upper));
+                while sort_compare(e, compare, second_slot, pivot, candidate) {
+                    candidate = e.mem.u32(word_at(array, upper.wrapping_sub(1)));
+                    upper = upper.wrapping_sub(1);
+                }
+                if upper < lower {
+                    break;
+                }
+                if upper != lower {
+                    let at_lower = e.mem.u32(word_at(array, lower));
+                    let at_upper = e.mem.u32(word_at(array, upper));
+                    e.mem.set_u32(word_at(array, upper), at_lower);
+                    e.mem.set_u32(word_at(array, lower), at_upper);
+                }
+                upper = upper.wrapping_sub(1);
+                lower = lower.wrapping_add(1);
+                if lower > upper {
+                    break;
+                }
+            }
+            if low < upper {
+                hk_algorithm_quick_sort_recursive_hkp_simulation_island(
+                    e, array, low, upper, compare,
+                );
+            }
+            low = lower;
+            if lower >= high {
+                break;
+            }
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -329,6 +705,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cb6f70, hkp_world_operation_util_set_rigid_body_motion_type(Ptr, u32, u32, u32)),
         entry!(0x00cb7460, fn_00cb7460(Ptr, u32) -> u32),
         entry!(0x00cb74d0, hkp_constraint_owner_add_constraint_info(Ptr, Ptr, Ptr)),
+        entry!(0x00cb_3c80, hkp_world_operation_util_add_constraint_to_critical_locked_island(Ptr, Ptr)),
+        entry!(0x00cb_3da0, hkp_world_operation_util_remove_constraint_from_critical_locked_island(Ptr, Ptr)),
+        entry!(0x00cb_4890, fn_00cb4890(u32, u32, u32, u32, u32)),
+        entry!(0x00cb_49e0, fn_00cb49e0(u32, u32, u32, u32, u32)),
+        entry!(0x00cb_5480, fn_00cb5480(Ptr, Ptr)),
+        entry!(0x00cb_7480, fn_00cb7480(Ptr, Ptr, Ptr)),
+        entry!(0x00dd_7d00, hk_algorithm_quick_sort_recursive_hkp_simulation_island(u32, i32, i32, u32)),
     ]
 }
 
@@ -2790,5 +3173,417 @@ mod tests {
         e.mem.set_u32(owner + 8, 99);
         e.call(0x00cb_74d0, &args![owner, constraint, info]);
         assert_eq!(e.mem.i32(owner + 8), 99);
+    }
+}
+
+#[cfg(test)]
+mod island_split_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e
+    }
+
+    fn log_double(e: &mut Engine, log: &Log, address: u32) {
+        let log = Rc::clone(log);
+        e.register_double(address, move |_, a| {
+            log.borrow_mut().push((address, a.to_vec()));
+            Ret::default()
+        });
+    }
+
+    fn calls(log: &Log, address: u32) -> Vec<Vec<u32>> {
+        log.borrow()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, args)| args.clone())
+            .collect()
+    }
+
+    /// A memory router with a stack of 0x1000 bytes; returns the router and the stack base.
+    fn router_with_stack(e: &mut Engine) -> (u32, u32) {
+        let router = e.mem.alloc(0x20);
+        let stack = e.mem.alloc(0x1000);
+        e.mem.set_u32(router, stack);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        (router, stack)
+    }
+
+    #[test]
+    fn constraint_added_and_removed_in_a_critical_locked_island() {
+        let mut e = engine();
+        let log: Log = Rc::default();
+        for address in [
+            WORLD_CONSTRAINT_UTIL_ADD,
+            FIRE_CONSTRAINT_ADDED,
+            FIRE_CONSTRAINT_REMOVED,
+            WORLD_CONSTRAINT_UTIL_REMOVE,
+        ] {
+            log_double(&mut e, &log, address);
+        }
+        e.call(0x00cb_3c80, &args![0x1000u32, 0x2000u32]);
+        let order: Vec<u32> = log.borrow().iter().map(|(a, _)| *a).collect();
+        assert_eq!(
+            order,
+            vec![WORLD_CONSTRAINT_UTIL_ADD, FIRE_CONSTRAINT_ADDED]
+        );
+        assert_eq!(
+            calls(&log, WORLD_CONSTRAINT_UTIL_ADD),
+            vec![vec![0x1000, 0x2000]]
+        );
+        assert_eq!(
+            calls(&log, FIRE_CONSTRAINT_ADDED),
+            vec![vec![0x1000, 0x2000]]
+        );
+        // No listeners: only the removal itself.
+        log.borrow_mut().clear();
+        let world = e.mem.alloc(0x200);
+        e.call(0x00cb_3da0, &args![world, 0x2000u32]);
+        assert!(calls(&log, FIRE_CONSTRAINT_REMOVED).is_empty());
+        assert_eq!(
+            calls(&log, WORLD_CONSTRAINT_UTIL_REMOVE),
+            vec![vec![0x2000]]
+        );
+        // With listeners the callback runs first.
+        log.borrow_mut().clear();
+        e.mem.set_u32(world + 0x144, 1);
+        e.call(0x00cb_3da0, &args![world, 0x2000u32]);
+        let order: Vec<u32> = log.borrow().iter().map(|(a, _)| *a).collect();
+        assert_eq!(
+            order,
+            vec![FIRE_CONSTRAINT_REMOVED, WORLD_CONSTRAINT_UTIL_REMOVE]
+        );
+        assert_eq!(
+            calls(&log, FIRE_CONSTRAINT_REMOVED),
+            vec![vec![world, 0x2000]]
+        );
+    }
+
+    #[test]
+    fn island_goes_into_the_dirty_list_once_inside_the_critical_section() {
+        let mut e = engine();
+        let log: Log = Rc::default();
+        log_double(&mut e, &log, ENTER_CRITICAL_SECTION);
+        log_double(&mut e, &log, LEAVE_CRITICAL_SECTION);
+        let allocator = e.mem.alloc(0x10);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        log_double(&mut e, &log, ARRAY_RESERVE_MORE);
+        let world = e.mem.alloc(0x100);
+        e.mem.set_u32(world + 0xc0, 0x7000);
+        let list = e.mem.alloc(16);
+        e.mem.set_u32(world + 0x40, list);
+        e.mem.set_u32(world + 0x44, 2);
+        e.mem.set_u32(world + 0x48, 0x8000_0004);
+        let island = e.mem.alloc(0x80);
+        e.mem.set_u8(island + 0x26, 0xff);
+        e.mem.set_u16(island + 0x22, 0xffff);
+        e.call(0x00cb_5480, &args![world, island]);
+        assert_eq!(e.mem.u8(island + 0x26), 0xf3);
+        assert_eq!(e.mem.u16(island + 0x22), 2);
+        assert_eq!(e.mem.u32(world + 0x44), 3);
+        assert_eq!(e.mem.u32(list + 8), island);
+        assert_eq!(calls(&log, ENTER_CRITICAL_SECTION), vec![vec![0x7000]]);
+        assert_eq!(calls(&log, LEAVE_CRITICAL_SECTION), vec![vec![0x7000]]);
+        let order: Vec<u32> = log.borrow().iter().map(|(a, _)| *a).collect();
+        assert_eq!(order, vec![ENTER_CRITICAL_SECTION, LEAVE_CRITICAL_SECTION]);
+        // Already listed: the index stays and nothing is added, but the section is still used.
+        e.mem.set_u16(island + 0x22, 1);
+        e.call(0x00cb_5480, &args![world, island]);
+        assert_eq!(e.mem.u16(island + 0x22), 1);
+        assert_eq!(e.mem.u32(world + 0x44), 3);
+        assert_eq!(calls(&log, ENTER_CRITICAL_SECTION).len(), 2);
+        assert_eq!(calls(&log, LEAVE_CRITICAL_SECTION).len(), 2);
+    }
+
+    #[test]
+    fn owner_info_is_taken_off_the_owner_and_the_record() {
+        let mut e = engine();
+        let owner = e.mem.alloc(0x40);
+        for (offset, value) in [(0xc, 100u32), (0x10, 200), (0x14, 300)] {
+            e.mem.set_u32(owner + offset, value);
+        }
+        let info = e.mem.alloc(0x20);
+        for (offset, value) in [(4, 5u32), (8, 6), (0xc, 7)] {
+            e.mem.set_u32(info + offset, value);
+        }
+        let instance = e.mem.alloc(0x40);
+        // Without a record nothing changes.
+        e.call(0x00cb_7480, &args![owner, instance, info]);
+        assert_eq!(e.mem.u32(owner + 0xc), 100);
+        let record = e.mem.alloc(0x40);
+        e.mem.set_u16(record + 0x14, 50);
+        e.mem.set_u16(record + 0x16, 3);
+        e.mem.set_u16(record + 0x18, 60);
+        e.mem.set_u32(instance + 0x30, record);
+        e.call(0x00cb_7480, &args![owner, instance, info]);
+        assert_eq!(e.mem.u32(owner + 0xc), 95);
+        assert_eq!(e.mem.u32(owner + 0x10), 194);
+        assert_eq!(e.mem.u32(owner + 0x14), 293);
+        assert_eq!(e.mem.u16(record + 0x14), 45);
+        // 3 - 6 wraps in 16 bits.
+        assert_eq!(e.mem.u16(record + 0x16), 0xfffd);
+        assert_eq!(e.mem.u16(record + 0x18), 53);
+    }
+
+    /// A comparison that is "a is less than b" on the pointer values themselves.
+    fn less_double(e: &mut Engine, log: &Log) {
+        let log = Rc::clone(log);
+        e.register_double(0x0900_0001, move |e, a| {
+            log.borrow_mut().push((0x0900_0001, a.to_vec()));
+            e.mem.set_u8(a[0], u8::from(a[1] < a[2]));
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+    }
+
+    #[test]
+    fn quick_sort_orders_the_given_range_only() {
+        let mut e = engine();
+        let log: Log = Rc::default();
+        less_double(&mut e, &log);
+        let values = [9u32, 3, 7, 3, 1, 8, 2, 5, 4, 6, 0];
+        let array = e.mem.alloc(4 * values.len() as u32);
+        for (i, &v) in values.iter().enumerate() {
+            e.mem.set_u32(array + 4 * i as u32, v);
+        }
+        e.call(0x00dd_7d00, &args![array, 1i32, 9i32, 0x0900_0001u32]);
+        let got: Vec<u32> = (0..values.len() as u32)
+            .map(|i| e.mem.u32(array + 4 * i))
+            .collect();
+        let mut expected = values.to_vec();
+        expected[1..=9].sort_unstable();
+        assert_eq!(got, expected);
+        // Two comparison slots are used, and every comparison goes through the callback.
+        assert!(log.borrow().len() >= 9);
+        let slots: Vec<u32> = log.borrow().iter().map(|(_, a)| a[0]).collect();
+        assert!(slots.iter().any(|&s| s != slots[0]));
+        // A single element and an already sorted run need no change.
+        e.call(0x00dd_7d00, &args![array, 4i32, 4i32, 0x0900_0001u32]);
+        e.call(0x00dd_7d00, &args![array, 1i32, 9i32, 0x0900_0001u32]);
+        let again: Vec<u32> = (0..values.len() as u32)
+            .map(|i| e.mem.u32(array + 4 * i))
+            .collect();
+        assert_eq!(again, expected);
+    }
+
+    /// The structures the splitting functions read: a world with the rank bytes, `count`
+    /// parents, the entities `(first rank word, second rank word, master count)`, a union-find
+    /// whose two-level array maps entity `i` to `groups[i]`, and a flag byte array.
+    struct Rig {
+        world: u32,
+        parents: u32,
+        entities: u32,
+        union_find: u32,
+        flags: u32,
+        flag_bytes: u32,
+    }
+
+    fn rig(e: &mut Engine, count: u32, entities: &[(u16, u16, u16)], groups: &[u32]) -> Rig {
+        let world = e.mem.alloc(0x400);
+        e.mem.set_u8(world + 0x305, 1);
+        e.mem.set_u8(world + 0x306, 2);
+        e.mem.set_u32(world + 0xb4, 30);
+        let parents = e.mem.alloc(0x10);
+        e.mem.set_u32(parents + 4, count);
+        let entity_data = e.mem.alloc(4 * entities.len().max(1) as u32);
+        for (i, &(first, second, masters)) in entities.iter().enumerate() {
+            let entity = e.mem.alloc(0x100);
+            e.mem.set_u16(entity + 0xea, first);
+            e.mem.set_u16(entity + 0xec, second);
+            e.mem.set_u16(entity + 0xb0, masters);
+            e.mem.set_u32(entity_data + 4 * i as u32, entity);
+        }
+        let entity_array = e.mem.alloc(0x10);
+        e.mem.set_u32(entity_array, entity_data);
+        e.mem.set_u32(entity_array + 4, entities.len() as u32);
+        let group_data = e.mem.alloc(4 * groups.len().max(1) as u32);
+        for (i, &g) in groups.iter().enumerate() {
+            e.mem.set_u32(group_data + 4 * i as u32, g);
+        }
+        let inner = e.mem.alloc(0x10);
+        e.mem.set_u32(inner, group_data);
+        let union_find = e.mem.alloc(0x10);
+        e.mem.set_u32(union_find, inner);
+        let flag_bytes = e.mem.alloc(0x20);
+        for i in 0..0x20 {
+            e.mem.set_u8(flag_bytes + i, 0x77);
+        }
+        let flags = e.mem.alloc(8);
+        e.mem.set_u32(flags, flag_bytes);
+        Rig {
+            world,
+            parents,
+            entities: entity_array,
+            union_find,
+            flags,
+            flag_bytes,
+        }
+    }
+
+    /// The reindex double: records the marks array (`count` words) it is given through the
+    /// slot, the group count and the parents.
+    type Seen = Rc<RefCell<Vec<(Vec<i32>, u32, u32)>>>;
+
+    fn reindex_double(e: &mut Engine, count: u32, seen: &Seen) {
+        let seen = Rc::clone(seen);
+        e.register_double(UNION_FIND_REINDEX, move |e, a| {
+            let marks = e.mem.u32(a[1]);
+            let words = (0..count)
+                .map(|i| e.mem.i32(marks + 4 * i))
+                .collect::<Vec<_>>();
+            seen.borrow_mut().push((words, a[2], a[3]));
+            Ret::default()
+        });
+    }
+
+    // Entities `(word at +0xEA, word at +0xEC, master count)` with the ranks 4 (0x4185 is
+    // `1 << 14 | 3 << 7 | 5` and 0x8209 is `2 << 14 | 4 << 7 | 9`), 32 and 3.
+    const ENTITIES: [(u16, u16, u16); 3] = [(0x4185, 0x8209, 2), (0x0020, 0, 0), (0, 3, 1)];
+
+    #[test]
+    fn marking_numbers_the_marked_groups_and_reindexes() {
+        let mut e = engine();
+        let (router, stack) = router_with_stack(&mut e);
+        let seen: Seen = Rc::default();
+        reindex_double(&mut e, 3, &seen);
+        let rig = rig(&mut e, 3, &ENTITIES, &[2, 0, 1]);
+        e.call(
+            0x00cb_4890,
+            &args![
+                rig.entities,
+                rig.union_find,
+                rig.world,
+                rig.parents,
+                rig.flags
+            ],
+        );
+        // Entities 0 and 2 (groups 2 and 1) have a rank of at most 5; element 0 is unmarked
+        // and gets number 1, the marked ones are cleared.
+        assert_eq!(*seen.borrow(), vec![(vec![1, 0, 0], 2, rig.parents)]);
+        assert_eq!(e.mem.u8(rig.flag_bytes), 1);
+        assert_eq!(e.mem.u8(rig.flag_bytes + 1), 0);
+        assert_eq!(e.mem.u8(rig.flag_bytes + 2), 0x77);
+        // The router's top is back where it was.
+        assert_eq!(e.mem.u32(router), stack);
+    }
+
+    #[test]
+    fn marking_with_nothing_marked_gives_up_without_reindexing() {
+        let mut e = engine();
+        let (router, stack) = router_with_stack(&mut e);
+        let seen: Seen = Rc::default();
+        reindex_double(&mut e, 2, &seen);
+        let rig = rig(&mut e, 2, &[], &[]);
+        e.mem.set_u8(rig.flag_bytes, 9);
+        e.call(
+            0x00cb_4890,
+            &args![
+                rig.entities,
+                rig.union_find,
+                rig.world,
+                rig.parents,
+                rig.flags
+            ],
+        );
+        assert!(seen.borrow().is_empty());
+        assert_eq!(e.mem.u8(rig.flag_bytes), 0);
+        assert_eq!(e.mem.u8(rig.flag_bytes + 1), 0);
+        assert_eq!(e.mem.u8(rig.flag_bytes + 2), 0);
+        assert_eq!(e.mem.u32(router), stack);
+    }
+
+    #[test]
+    fn splitting_merges_light_groups_without_ranking() {
+        let mut e = engine();
+        let (router, stack) = router_with_stack(&mut e);
+        let seen: Seen = Rc::default();
+        reindex_double(&mut e, 3, &seen);
+        let rig = rig(&mut e, 3, &ENTITIES, &[0, 1, 2]);
+        // The byte at +0xD5 is clear: every entity marks its group, weights are 2, 1 and 1.
+        e.call(
+            0x00cb_49e0,
+            &args![
+                rig.world,
+                rig.union_find,
+                rig.entities,
+                rig.parents,
+                rig.flags
+            ],
+        );
+        // One group takes all three (total 4 stays below the limit of 30): marks 0, 0, 0.
+        assert_eq!(*seen.borrow(), vec![(vec![0, 0, 0], 1, rig.parents)]);
+        assert_eq!(e.mem.u8(rig.flag_bytes), 1);
+        assert_eq!(e.mem.u8(rig.flag_bytes + 1), 0x77);
+        assert_eq!(e.mem.u32(router), stack);
+    }
+
+    #[test]
+    fn splitting_with_ranks_leaves_unmarked_elements_apart() {
+        let mut e = engine();
+        let (router, stack) = router_with_stack(&mut e);
+        let seen: Seen = Rc::default();
+        reindex_double(&mut e, 3, &seen);
+        let rig = rig(&mut e, 3, &ENTITIES, &[0, 1, 2]);
+        e.mem.set_u8(rig.world + 0xd5, 1);
+        e.call(
+            0x00cb_49e0,
+            &args![
+                rig.world,
+                rig.union_find,
+                rig.entities,
+                rig.parents,
+                rig.flags
+            ],
+        );
+        // Weights are 2, -1 (the middle entity's rank is above 5, so nothing marks its group)
+        // and 1; the first element takes the third (total 3), so groups 0 and 1 remain:
+        // marks 0, 1, 0.
+        assert_eq!(*seen.borrow(), vec![(vec![0, 1, 0], 2, rig.parents)]);
+        assert_eq!(e.mem.u8(rig.flag_bytes), 1);
+        assert_eq!(e.mem.u8(rig.flag_bytes + 1), 0);
+        assert_eq!(e.mem.u32(router), stack);
+    }
+
+    #[test]
+    fn splitting_stops_merging_when_the_total_reaches_the_limit() {
+        let mut e = engine();
+        let (router, stack) = router_with_stack(&mut e);
+        let seen: Seen = Rc::default();
+        reindex_double(&mut e, 3, &seen);
+        let rig = rig(&mut e, 3, &ENTITIES, &[0, 1, 2]);
+        // With a limit of 11 even the smallest total (1 + 10) is not below it: nothing merges
+        // and every element is its own group.
+        e.mem.set_u32(rig.world + 0xb4, 11);
+        e.call(
+            0x00cb_49e0,
+            &args![
+                rig.world,
+                rig.union_find,
+                rig.entities,
+                rig.parents,
+                rig.flags
+            ],
+        );
+        assert_eq!(*seen.borrow(), vec![(vec![0, 1, 2], 3, rig.parents)]);
+        assert_eq!(e.mem.u8(rig.flag_bytes), 0);
+        assert_eq!(e.mem.u8(rig.flag_bytes + 1), 0);
+        assert_eq!(e.mem.u8(rig.flag_bytes + 2), 0);
+        assert_eq!(e.mem.u32(router), stack);
     }
 }

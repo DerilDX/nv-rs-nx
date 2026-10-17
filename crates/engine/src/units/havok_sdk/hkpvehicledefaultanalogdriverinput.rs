@@ -133,7 +133,9 @@ pub fn calc_accelerator_input(
     if value > 0.0 {
         return 0.0;
     }
-    x87_quiet((f64::from(value) * -1.0) as f32)
+    // `black_box` keeps the multiply (00e4358f `FMUL`): LLVM folds `x * -1.0` into a negation
+    // in release builds, which would flip a NaN's sign.
+    x87_quiet((f64::from(value) * std::hint::black_box(-1.0)) as f32)
 }
 
 // Translated from 00e435a0 (decompiled, FalloutNV.exe 1.4.0.525)

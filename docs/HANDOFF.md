@@ -7,7 +7,97 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-16 (current; give this to the next account first)
+### Claude lead, 2026-10-16 evening (current; give this to the next account first)
+
+The session stopped at the weekly limit (95-96 % rule). Every finished
+batch is merged or listed below; the next account continues from here.
+
+**State:**
+- **Merged this session:** #209 to #214 and the PR that carries this note.
+  23,502 hand-translated functions (35.5 %), 15,762 start-up table
+  rows (23.8 %) and 4,790 shut-down table rows (7.2 %): 66.5 % covered.
+  Engine tests: 30,188.
+- **Havok:** 3,981 of the 6,591 ledger rows translated, 392 traced and
+  2,218 open.
+  `bin/havoktask.sh NN 120` hands out the next whole units.
+- **Shut-down table (#213):** research/initgen `--atexit` matches the 5,020
+  atexit destructors against two shapes (`call`, `tail`) and writes
+  `crates/engine/data/atexit_destructors.tsv`; `static_exit.rs` runs a row
+  by shape and `Engine::call` falls back to the tables when nothing is
+  registered at an address. The `_atexit` stand-in records into the exe's
+  own table and `crt::doexit` (00eccd99) runs it in reverse, then the
+  pre-terminator and terminator tables. Not wired into the host shutdown.
+  229 irregular destructors are left for hand translation.
+- **Game code vs platform (#213):** SpeedTree (all of it: tree building,
+  splines, random numbers, wind) and the logic units of BSShader, BSSystem
+  and d3dx9 (`LOGIC_UNITS` in scripts/ledger) are game code to translate:
+  1,214 functions moved from platform to open. About 600 shader and file
+  functions the engine map placed in no unit are still `platform` until
+  someone sorts them by reading them. Unit files are scaffolded (#214).
+- **SpeedTree** is under way: 177 translated, 456 open. Batch 1 (random
+  numbers, splines, leaf and branch info) and batch 2 (branches, indexed
+  geometry) are in the PR with this note; `frondengine.rs` is next.
+- **The two largest solver functions** (00d8aac0, 00d8fb70, about 2,600
+  instructions each) are translated as block state machines and were
+  checked bit-exact against the real exe through nv-call (185 scenarios).
+
+**Where the last batches stopped** (start at the address given):
+- `hkdataobjectutil.rs`: none of its 37 functions done; start at 00dc1bf0.
+  In 00dc1d30, subtype 0x1d fills its array twice because it falls through
+  into the 0x21 body. 00dc3d40, 00dc4430 and 00dc4710 pass an `hkDataObject`
+  temporary by address (`with_stack`).
+- hkDataObjectDict: about 60 functions left after the 58 in this PR.
+- `hkbinarytagfilewriter.rs`: 25 left, from 00dbe790.
+- `hkaragdollutils.rs`: 10 left, from 00ce9880.
+- Animation: 17 of `hkawaveletcompressedanimation` (from 00e2f7c0), its
+  class (7), `hkbasesystem` (12), `hkclassenum` (5), and two large ones:
+  00cdbae0 (two-joint IK solve) and 00ce61c0 (skeleton-mapping creation).
+- SpeedTree: `frondengine.rs` (55, from 00b17fd0), then the remaining units.
+- CRT gaps found by tests: acos 00eca190 and pow 00ec9ac0 have no entry
+  (`crt.rs` registers 00eca1d0 and 00ec9b00), and `fabs` 00ec6cde calls
+  00ed5abb, which is also unregistered.
+- 229 irregular atexit destructors and 498 leftover start-up entries.
+
+**Open questions for the maintainer:**
+- **Renderer design.** Either keep the Bevy renderer redrawing the game's
+  look from traced data, or translate the game's own renderer (about 2,100
+  platform functions) and implement the DirectX 9 calls on wgpu in our own
+  layer, which matches the original exactly. No decision yet; the renderer
+  comes after the game logic.
+- **x87 precision.** The engine models x87 in 53-bit precision. Direct3D 9
+  switches the FPU to 24-bit unless the device is created with
+  `D3DCREATE_FPU_PRESERVE`. Check the exe's CreateDevice flags and the game
+  thread's control word: it changes x87 results everywhere.
+- **SSE flush-to-zero.** Havok's job worker thread (00d2cfb0) sets the
+  MXCSR flush-to-zero bit, so SSE results on Havok threads flush
+  denormals. The engine does not model MXCSR yet (00d2cfb0 is marked
+  incomplete for it); decide how the stepped threads carry it.
+- **Two NaNs meeting (#199).** When two NaNs meet in an x87 `FMUL` or
+  `FADD`, the exe keeps the one with the larger significand (the positive one
+  on a tie); f64 arithmetic keeps the first operand. The pointer-argument
+  check (#200) found it in 006e9000, 006b99e0, 00e0a750, 00e0a850, 00e436b0
+  and 00e44340. Fix it once, in the x87 NaN helpers, not per function.
+- **Multiply by -1.0 (#215).** LLVM folds `x * -1.0` into a negation in
+  release builds, which flips a NaN's sign that the exe's `FMUL` keeps. The
+  three known sites now multiply by `std::hint::black_box(-1.0)`; use the
+  same form for any new one.
+
+**Machinery notes:**
+- Slot rules added today (private slot_rules.txt): avoid clippy's
+  approx_constant, redundant closures, unnecessary to_vec and manual
+  clamp/div_ceil/saturating_sub, or allow them with a one-line reason.
+- Base new batches on the branch that holds every collected commit
+  (havoktask.sh and listtask.sh reset slots to `claude/engine-crate`; move
+  the slot to the collection branch when that is ahead). A slot started
+  from a stale base once re-translated 31 functions main already had.
+- The private purity facts missed the register inputs of 00d49c20 (reads
+  EAX and ECX via SUB and LEA), so the oracle called it with stack words
+  and failed; that row was patched by hand. The facts generator should
+  count register reads by arithmetic and LEA, not only MOV.
+- The README progress bar shows hand translation, the start-up table and
+  the shut-down table as three segments (private bin/progress.sh).
+
+### Claude lead, 2026-10-16 morning (previous)
 
 **State:**
 - **Merged this session:** #203 (GPL-3.0-or-later as the single licence),

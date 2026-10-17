@@ -222,12 +222,161 @@ pub fn hk_aabb_util_init_offset_aabb_input(e: &mut Engine, input: Ptr, output: P
     });
 }
 
+/// The largest float (`0104da48`) and its negative (`0104e148`): the bounds an empty point set
+/// is given (min = largest, max = most negative). The mask that clears the last lane
+/// (`010c4c10`: three all-ones words, then zero).
+const BOUNDS_START_MIN: u32 = 0x0104_da48;
+const BOUNDS_START_MAX: u32 = 0x0104_e148;
+const KEEP_THREE_LANES: u32 = 0x010c_4c10;
+
+/// `MINPS dst, src` per lane: `dst` when it is less than `src`, else `src`.
+fn min_lanes(dst: [f32; 4], src: [f32; 4]) -> [f32; 4] {
+    [0, 1, 2, 3].map(|i| if dst[i] < src[i] { dst[i] } else { src[i] })
+}
+
+/// `MAXPS dst, src` per lane: `dst` when it is greater than `src`, else `src`.
+fn max_lanes(dst: [f32; 4], src: [f32; 4]) -> [f32; 4] {
+    [0, 1, 2, 3].map(|i| if dst[i] > src[i] { dst[i] } else { src[i] })
+}
+
+/// `ANDPS` with the three-lane mask: the last lane becomes zero, the others are kept bit for
+/// bit.
+fn keep_three_lanes(e: &Engine, value: [f32; 4]) -> [f32; 4] {
+    [0, 1, 2, 3]
+        .map(|i| f32::from_bits(value[i].to_bits() & e.mem.u32(KEEP_THREE_LANES + 4 * i as u32)))
+}
+
+/// Writes the bounds of an empty set: the largest float in every lane of the minimum and the
+/// most negative in every lane of the maximum.
+fn store_empty_bounds(e: &mut Engine, out: u32) {
+    let low = e.mem.f32(BOUNDS_START_MIN);
+    let high = e.mem.f32(BOUNDS_START_MAX);
+    set_lanes(e, out, [low; 4]);
+    set_lanes(e, out + 0x10, [high; 4]);
+}
+
+/// The point of three floats at `at`, each copied through the x87 (`FLD` / `FSTP`, which makes
+/// a signalling NaN quiet); the last lane is zero here (the exe leaves it as whatever its stack
+/// slot held, and every use clears it).
+fn point_through_x87(e: &Engine, at: u32) -> [f32; 4] {
+    [
+        x87_quiet(e.mem.f32(at)),
+        x87_quiet(e.mem.f32(at + 4)),
+        x87_quiet(e.mem.f32(at + 8)),
+        0.0,
+    ]
+}
+
+// Translated from 00cbeaf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkAabbUtil::calcAabb` (Xbox PDB), cdecl `(points, count, stride, out)`: bounds of `count`
+/// points of three floats, `stride` bytes apart. Starts from the first point (even for a count
+/// below 1) and takes the lane-wise `MINPS` / `MAXPS` of the others in order; writes the
+/// minimum to `out` and the maximum to `out + 0x10`, four floats each with the last lane zero.
+pub fn hk_aabb_util_calc_aabb(e: &mut Engine, points: Ptr, count: i32, stride: i32, out: Ptr) {
+    let first = point_through_x87(e, points.addr());
+    let mut low = first;
+    let mut high = first;
+    if count > 1 {
+        // The exe walks a pointer at the third float of the next point.
+        let mut at = points.addr().wrapping_add(stride as u32).wrapping_add(8);
+        let mut remaining = count - 1;
+        loop {
+            let next = point_through_x87(e, at.wrapping_sub(8));
+            at = at.wrapping_add(stride as u32);
+            remaining -= 1;
+            low = min_lanes(low, next);
+            high = max_lanes(high, next);
+            if remaining == 0 {
+                break;
+            }
+        }
+    }
+    let low = keep_three_lanes(e, low);
+    let high = keep_three_lanes(e, high);
+    set_lanes(e, out.addr(), low);
+    set_lanes(e, out.addr() + 0x10, high);
+}
+
+// Translated from 00cbeb70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkAabbUtil::calcAabb_ov2` (Xbox PDB), cdecl `(vectors, count, out)`: bounds of `count`
+/// 16-byte vectors. A count of 0 gives the empty bounds in all four lanes; any other count
+/// starts from the first vector (so a negative count gives that one) and takes the lane-wise
+/// `MINPS` / `MAXPS` of the rest; the last lane of both results is cleared.
+pub fn hk_aabb_util_calc_aabb_ov2(e: &mut Engine, vectors: Ptr, count: i32, out: Ptr) {
+    if count == 0 {
+        store_empty_bounds(e, out.addr());
+        return;
+    }
+    let first = lanes(e, vectors.addr());
+    let mut low = first;
+    let mut high = first;
+    if count > 1 {
+        let mut at = vectors.addr().wrapping_add(0x10);
+        let mut remaining = count - 1;
+        loop {
+            let next = lanes(e, at);
+            at = at.wrapping_add(0x10);
+            remaining -= 1;
+            low = min_lanes(low, next);
+            high = max_lanes(high, next);
+            if remaining == 0 {
+                break;
+            }
+        }
+    }
+    let low = keep_three_lanes(e, low);
+    let high = keep_three_lanes(e, high);
+    set_lanes(e, out.addr(), low);
+    set_lanes(e, out.addr() + 0x10, high);
+}
+
+// Translated from 00cbebf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bounds of `count` vectors given as an array of pointers to 16-byte vectors (cdecl
+/// `(pointers, count, out)`): a count of 0 gives the empty bounds in all four lanes; otherwise
+/// `out` and `out + 0x10` start as the first vector and are updated in memory for every other
+/// one (`MINPS` / `MAXPS` with the new vector first, so a NaN in the new vector leaves the old
+/// bound), and at the end the last lane of both is set to 0.0.
+pub fn fn_00cbebf0(e: &mut Engine, pointers: Ptr, count: i32, out: Ptr) {
+    let out = out.addr();
+    if count == 0 {
+        store_empty_bounds(e, out);
+        return;
+    }
+    let first = e.mem.u32(pointers.addr());
+    let first_vector = lanes(e, first);
+    set_lanes(e, out, first_vector);
+    set_lanes(e, out + 0x10, first_vector);
+    if count > 1 {
+        let mut index = 1i32;
+        loop {
+            let pointer = e.mem.u32(pointers.addr().wrapping_add(4 * index as u32));
+            let new_low = lanes(e, pointer);
+            let current_low = lanes(e, out);
+            let low = min_lanes(new_low, current_low);
+            let current_high = lanes(e, out + 0x10);
+            set_lanes(e, out, low);
+            let pointer = e.mem.u32(pointers.addr().wrapping_add(4 * index as u32));
+            let new_high = lanes(e, pointer);
+            index += 1;
+            let high = max_lanes(new_high, current_high);
+            set_lanes(e, out + 0x10, high);
+            if index >= count {
+                break;
+            }
+        }
+    }
+    e.mem.set_f32(out + 0xc, 0.0);
+    e.mem.set_f32(out + 0x1c, 0.0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00cb_ec90,
-        hk_aabb_util_init_offset_aabb_input(Ptr, Ptr)
-    )]
+    vec![
+        entry!(0x00cb_ec90, hk_aabb_util_init_offset_aabb_input(Ptr, Ptr)),
+        entry!(0x00cb_eaf0, hk_aabb_util_calc_aabb(Ptr, i32, i32, Ptr)),
+        entry!(0x00cb_eb70, hk_aabb_util_calc_aabb_ov2(Ptr, i32, Ptr)),
+        entry!(0x00cb_ebf0, fn_00cbebf0(Ptr, i32, Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -347,5 +496,185 @@ mod movement_tests {
         assert_eq!(calls[3].1, o + 0x50);
         assert_eq!(e.mem.f32(o + 0x10 + 0x3c), 1.0824);
         assert_eq!(e.mem.f32(o + 0x50 + 0x3c), 1.0824);
+    }
+}
+
+#[cfg(test)]
+mod calc_aabb_tests {
+    use super::*;
+
+    const HIGHEST: f32 = f32::MAX;
+
+    fn setup() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.mem.set_f32(BOUNDS_START_MIN, HIGHEST);
+        e.mem.set_f32(BOUNDS_START_MAX, -HIGHEST);
+        for lane in 0..3u32 {
+            e.mem.set_u32(KEEP_THREE_LANES + 4 * lane, 0xffff_ffff);
+        }
+        e.mem.set_u32(KEEP_THREE_LANES + 12, 0);
+        e
+    }
+
+    /// Fills `count` records of `stride` bytes with the given points (three floats each) and a
+    /// marker in the padding.
+    fn points(e: &mut Engine, stride: u32, list: &[[f32; 3]]) -> u32 {
+        let at = e.mem.alloc(stride * list.len() as u32 + 16);
+        for (index, point) in list.iter().enumerate() {
+            for (lane, value) in point.iter().enumerate() {
+                e.mem
+                    .set_f32(at + stride * index as u32 + 4 * lane as u32, *value);
+            }
+        }
+        at
+    }
+
+    fn vectors(e: &mut Engine, list: &[[f32; 4]]) -> u32 {
+        let at = e.mem.alloc(16 * list.len() as u32 + 16);
+        for (index, vector) in list.iter().enumerate() {
+            set_lanes(e, at + 16 * index as u32, *vector);
+        }
+        at
+    }
+
+    fn out_block(e: &mut Engine) -> u32 {
+        let at = e.mem.alloc(0x20);
+        for word in 0..8u32 {
+            e.mem.set_u32(at + 4 * word, 0xaaaa_aaaa);
+        }
+        at
+    }
+
+    #[test]
+    fn calc_aabb_takes_the_bounds_of_strided_points() {
+        let mut e = setup();
+        let at = points(
+            &mut e,
+            16,
+            &[[1.0, 5.0, -2.0], [3.0, -1.0, 0.0], [-4.0, 2.0, 7.0]],
+        );
+        let out = out_block(&mut e);
+        hk_aabb_util_calc_aabb(&mut e, Ptr::new(at), 3, 16, Ptr::new(out));
+        assert_eq!(lanes(&e, out), [-4.0, -1.0, -2.0, 0.0]);
+        assert_eq!(lanes(&e, out + 0x10), [3.0, 5.0, 7.0, 0.0]);
+    }
+
+    #[test]
+    fn calc_aabb_starts_from_the_first_point_for_a_count_of_one_or_less() {
+        let mut e = setup();
+        let at = points(&mut e, 12, &[[1.0, 2.0, 3.0], [9.0, 9.0, 9.0]]);
+        for count in [1, 0, -5] {
+            let out = out_block(&mut e);
+            hk_aabb_util_calc_aabb(&mut e, Ptr::new(at), count, 12, Ptr::new(out));
+            assert_eq!(lanes(&e, out), [1.0, 2.0, 3.0, 0.0]);
+            assert_eq!(lanes(&e, out + 0x10), [1.0, 2.0, 3.0, 0.0]);
+        }
+    }
+
+    #[test]
+    fn calc_aabb_quiets_a_signalling_nan_and_keeps_a_nan_from_later_points() {
+        let mut e = setup();
+        let at = points(&mut e, 12, &[[0.0, 1.0, 2.0], [f32::NAN, 0.0, 0.0]]);
+        e.mem.set_u32(at, 0x7f80_0001);
+        let out = out_block(&mut e);
+        hk_aabb_util_calc_aabb(&mut e, Ptr::new(at), 1, 12, Ptr::new(out));
+        assert_eq!(e.mem.u32(out), 0x7fc0_0001);
+        // A NaN in a later point replaces the bound (the source operand wins when unordered).
+        hk_aabb_util_calc_aabb(&mut e, Ptr::new(at), 2, 12, Ptr::new(out));
+        assert!(e.mem.f32(out + 0x10).is_nan());
+        assert!(e.mem.f32(out).is_nan());
+    }
+
+    #[test]
+    fn calc_aabb_ov2_gives_the_empty_bounds_for_no_vectors() {
+        let mut e = setup();
+        let out = out_block(&mut e);
+        hk_aabb_util_calc_aabb_ov2(&mut e, Ptr::new(0), 0, Ptr::new(out));
+        assert_eq!(lanes(&e, out), [HIGHEST; 4]);
+        assert_eq!(lanes(&e, out + 0x10), [-HIGHEST; 4]);
+    }
+
+    #[test]
+    fn calc_aabb_ov2_takes_the_bounds_and_clears_the_last_lane() {
+        let mut e = setup();
+        let at = vectors(
+            &mut e,
+            &[
+                [1.0, 5.0, -2.0, 8.0],
+                [3.0, -1.0, 0.0, 9.0],
+                [-4.0, 2.0, 7.0, 6.0],
+            ],
+        );
+        let out = out_block(&mut e);
+        hk_aabb_util_calc_aabb_ov2(&mut e, Ptr::new(at), 3, Ptr::new(out));
+        assert_eq!(lanes(&e, out), [-4.0, -1.0, -2.0, 0.0]);
+        assert_eq!(lanes(&e, out + 0x10), [3.0, 5.0, 7.0, 0.0]);
+        // One vector, and a negative count: just the first vector.
+        for count in [1, -3] {
+            hk_aabb_util_calc_aabb_ov2(&mut e, Ptr::new(at), count, Ptr::new(out));
+            assert_eq!(lanes(&e, out), [1.0, 5.0, -2.0, 0.0]);
+            assert_eq!(lanes(&e, out + 0x10), [1.0, 5.0, -2.0, 0.0]);
+        }
+    }
+
+    #[test]
+    fn calc_aabb_ov2_lets_a_nan_replace_the_bound() {
+        let mut e = setup();
+        let at = vectors(&mut e, &[[0.0; 4], [f32::NAN, 0.0, 0.0, 0.0]]);
+        let out = out_block(&mut e);
+        hk_aabb_util_calc_aabb_ov2(&mut e, Ptr::new(at), 2, Ptr::new(out));
+        assert!(e.mem.f32(out).is_nan());
+        assert!(e.mem.f32(out + 0x10).is_nan());
+    }
+
+    fn pointer_array(e: &mut Engine, list: &[[f32; 4]]) -> u32 {
+        let at = e.mem.alloc(4 * list.len() as u32 + 4);
+        for (index, vector) in list.iter().enumerate() {
+            let vector_at = vectors(e, &[*vector]);
+            e.mem.set_u32(at + 4 * index as u32, vector_at);
+        }
+        at
+    }
+
+    #[test]
+    fn bounds_of_pointed_to_vectors_for_no_vectors() {
+        let mut e = setup();
+        let out = out_block(&mut e);
+        fn_00cbebf0(&mut e, Ptr::new(0), 0, Ptr::new(out));
+        assert_eq!(lanes(&e, out), [HIGHEST; 4]);
+        assert_eq!(lanes(&e, out + 0x10), [-HIGHEST; 4]);
+    }
+
+    #[test]
+    fn bounds_of_pointed_to_vectors_updates_the_output_and_zeroes_the_last_lane() {
+        let mut e = setup();
+        let at = pointer_array(
+            &mut e,
+            &[
+                [1.0, 5.0, -2.0, 8.0],
+                [3.0, -1.0, 0.0, 9.0],
+                [-4.0, 2.0, 7.0, 6.0],
+            ],
+        );
+        let out = out_block(&mut e);
+        fn_00cbebf0(&mut e, Ptr::new(at), 3, Ptr::new(out));
+        assert_eq!(lanes(&e, out), [-4.0, -1.0, -2.0, 0.0]);
+        assert_eq!(lanes(&e, out + 0x10), [3.0, 5.0, 7.0, 0.0]);
+        // A single vector: copied, last lane cleared.
+        fn_00cbebf0(&mut e, Ptr::new(at), 1, Ptr::new(out));
+        assert_eq!(lanes(&e, out), [1.0, 5.0, -2.0, 0.0]);
+        assert_eq!(lanes(&e, out + 0x10), [1.0, 5.0, -2.0, 0.0]);
+    }
+
+    #[test]
+    fn bounds_of_pointed_to_vectors_ignores_a_nan_in_a_later_vector() {
+        let mut e = setup();
+        let at = pointer_array(&mut e, &[[2.0; 4], [f32::NAN, 1.0, 3.0, 0.0]]);
+        let out = out_block(&mut e);
+        fn_00cbebf0(&mut e, Ptr::new(at), 2, Ptr::new(out));
+        // The NaN is the first operand of MINPS / MAXPS, so the old bound (the source) stays.
+        assert_eq!(lanes(&e, out), [2.0, 1.0, 2.0, 0.0]);
+        assert_eq!(lanes(&e, out + 0x10), [2.0, 2.0, 3.0, 0.0]);
     }
 }

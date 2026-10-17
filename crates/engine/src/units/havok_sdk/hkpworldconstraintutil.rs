@@ -391,6 +391,314 @@ pub fn hkp_world_constraint_util_add_constraint(e: &mut Engine, _unused_0: u32, 
     });
 }
 
+/// `hkpModifierConstraintAtom::addModifierDataToConstraintInfo` (Xbox PDB, `00d22090`,
+/// `this` = the atom, `RET 8`: `(info, flagByte)`).
+const ATOM_ADD_MODIFIER_DATA: u32 = 0x00d2_2090;
+/// `00cb7480` (`this` = the owner, `RET 8`: `(instance word, info)`): the call that follows
+/// the accounting of a removed modifier's data.
+const REMOVE_CONSTRAINT_INFO: u32 = 0x00cb_7480;
+/// The smallest atom type that still belongs to a constraint's modifier chain: a next atom
+/// of a smaller type ends the chain (the code compares the 16-bit type with `0x17`).
+const FIRST_MODIFIER_TYPE: u16 = 0x17;
+/// The modifier type the code links after the last atom (`0x1a`) and the one it keeps first
+/// (`0x1b`).
+const LAST_PLACED_TYPE: u16 = 0x1a;
+const FIRST_PLACED_TYPE: u16 = 0x1b;
+
+// Translated from 00d275a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorldConstraintUtil::updateFatherOfMovedAtom` (Xbox PDB), cdecl `(instance, old, new,
+/// size)`: a modifier atom of the constraint instance moved from `old` to `new`. The link
+/// that held `old` is rewritten: with no first atom (+0x10) only the record's (+0x30)
+/// first-modifier pointer (+0xC) and size (+0x10) are set to `new` and `size`; when the
+/// first atom is `old` the instance's first-atom pointer is set to `new` as well; otherwise
+/// the chain is walked (next pointer at +0x14) and the pointer (+0x14) and 16-bit size
+/// (+0x12) of the atom before `old` are set. Only the low 16 bits of the last word are read.
+pub fn hkp_world_constraint_util_update_father_of_moved_atom(
+    e: &mut Engine,
+    instance: Ptr,
+    old: u32,
+    new: u32,
+    size: u16,
+) {
+    let inst = instance.addr();
+    let first = e.mem.u32(inst + 0x10);
+    let record = e.mem.u32(inst + 0x30);
+    if first == 0 {
+        if record != 0 {
+            e.mem.set_u32(record + 0xc, new);
+            e.mem.set_u16(record + 0x10, size);
+        }
+    } else if first == old {
+        e.mem.set_u32(inst + 0x10, new);
+        if record != 0 {
+            e.mem.set_u32(record + 0xc, new);
+            e.mem.set_u16(record + 0x10, size);
+        }
+    } else {
+        let mut previous = first;
+        let mut current = e.mem.u32(first + 0x14);
+        while current != old {
+            previous = current;
+            current = e.mem.u32(current + 0x14);
+        }
+        e.mem.set_u32(previous + 0x14, new);
+        e.mem.set_u16(previous + 0x12, size);
+    }
+}
+
+// Translated from 00d27610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl `(bodyA, bodyB)`: finds the constraint record that joins the two bodies. For each
+/// body in turn (`bodyA`, then `bodyB`) the body's record array (+0xAC, 16-bit count at
+/// +0xB0, 0x30 bytes each) is searched for a record whose two words at +4 and +8 xor with
+/// the body itself to the other body. Answers the first word of the matching record (the
+/// instance), or 0.
+pub fn fn_00d27610(e: &mut Engine, body_a: u32, body_b: u32) -> u32 {
+    let bodies = [body_a, body_b];
+    for (side, &body) in bodies.iter().enumerate() {
+        let other = bodies[1 - side];
+        let count = u32::from(e.mem.u16(body + 0xb0));
+        let array = e.mem.u32(body + 0xac);
+        for index in 0..count {
+            let record = array.wrapping_add(index * 0x30);
+            let first = e.mem.u32(record + 4);
+            let second = e.mem.u32(record + 8);
+            if second ^ first ^ body == other {
+                return e.mem.u32(record);
+            }
+        }
+    }
+    0
+}
+
+// Translated from 00d27690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorldConstraintUtil::removeAndDeleteModifier` (Xbox PDB), cdecl `(instance, owner,
+/// type)`: runs the owner's virtual function at +0x18 (no arguments), then takes the
+/// modifier atom of `type` out of the instance's chain (+0x10, atoms linked through +0x14,
+/// 16-bit type at +0, the size of the next atom at +0x12; a next atom of a type below 0x17
+/// ends the chain, and the first atom is compared before that test) and frees it through
+/// the memory router's allocator (slot 8, the atom's 16-bit size at +0x10). When the atom
+/// was first, the instance's first pointer becomes its next atom, or 0 when that one's type
+/// is below 0x17. With a record at +0x30 the record's first-modifier pointer (+0xC) and
+/// size (+0x10) are also set from the removed first atom, and the atom's modifier data
+/// (`00d22090`) is accounted: the owner counter (+0xC) and the record's 16-bit +0x14 grow
+/// by the table entry (`010cb7a8`) selected by the flag byte anded with the two bodies'
+/// bytes at +0xD2, and `00cb7480` is called with the record's first word and the info.
+pub fn hkp_world_constraint_util_remove_and_delete_modifier(
+    e: &mut Engine,
+    instance: Ptr,
+    owner: Ptr,
+    modifier_type: u32,
+) {
+    let inst = instance.addr();
+    let owner_addr = owner.addr();
+    e.vcall(owner_addr, 0x18, &args![]);
+    let first = e.mem.u32(inst + 0x10);
+    if first == 0 {
+        return;
+    }
+    let record = e.mem.u32(inst + 0x30);
+    let removed = if u32::from(e.mem.u16(first)) == modifier_type {
+        let next = e.mem.u32(first + 0x14);
+        if record != 0 {
+            e.mem.set_u32(record + 0xc, next);
+            let size = e.mem.u16(first + 0x12);
+            e.mem.set_u16(record + 0x10, size);
+        }
+        // `SBB` / `NOT` / `AND`: zero when the next atom's type is below 0x17.
+        let kept = if e.mem.u16(next) < FIRST_MODIFIER_TYPE {
+            0
+        } else {
+            next
+        };
+        e.mem.set_u32(inst + 0x10, kept);
+        first
+    } else {
+        let mut previous = first;
+        let mut current = e.mem.u32(first + 0x14);
+        if e.mem.u16(current) < FIRST_MODIFIER_TYPE {
+            return;
+        }
+        loop {
+            if u32::from(e.mem.u16(current)) == modifier_type {
+                let after = e.mem.u32(current + 0x14);
+                e.mem.set_u32(previous + 0x14, after);
+                let size = e.mem.u16(current + 0x12);
+                e.mem.set_u16(previous + 0x12, size);
+                break current;
+            }
+            previous = current;
+            current = e.mem.u32(current + 0x14);
+            if e.mem.u16(current) < FIRST_MODIFIER_TYPE {
+                return;
+            }
+        }
+    };
+    if record != 0 {
+        e.with_stack(0x14, |e, buffer| {
+            // The 16-byte info (zeroed) and, after it, the flag byte (zero), as in the exe.
+            let info = buffer.addr();
+            let flag = info + 0x10;
+            e.call(ATOM_ADD_MODIFIER_DATA, &args![removed, info, flag]);
+            let body_b = e.mem.u32(inst + 0x18);
+            let body_a = e.mem.u32(inst + 0x14);
+            let bodies = e.mem.u8(body_b + 0xd2) | e.mem.u8(body_a + 0xd2);
+            let combined = e.mem.u8(flag) & bodies;
+            e.mem.set_u8(flag, combined);
+            let amount = e.mem.u16(SIZE_TABLE + u32::from(combined & 7) * 2);
+            let counter = e.mem.u32(owner_addr + 0xc);
+            e.mem
+                .set_u32(owner_addr + 0xc, counter.wrapping_add(u32::from(amount)));
+            let own = e.mem.u32(inst + 0x30);
+            let total = e.mem.u16(own + 0x14);
+            e.mem.set_u16(own + 0x14, total.wrapping_add(amount));
+            let first_word = e.mem.u32(record);
+            e.call(REMOVE_CONSTRAINT_INFO, &args![owner, first_word, info]);
+        });
+    }
+    let size = u32::from(e.mem.u16(removed + 0x10));
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    e.vcall(allocator, 8, &args![removed, size]);
+}
+
+// Translated from 00d277c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorldConstraintUtil::findModifier` (Xbox PDB), cdecl `(instance, type)`: the modifier
+/// atom with the 16-bit type `type` in the instance's chain (+0x10, next at +0x14), or 0.
+/// The first atom is compared before its type is looked at; every later atom ends the
+/// search when its type is below 0x17.
+pub fn hkp_world_constraint_util_find_modifier(
+    e: &mut Engine,
+    instance: Ptr,
+    modifier_type: u32,
+) -> u32 {
+    let mut atom = e.mem.u32(instance.addr() + 0x10);
+    if atom == 0 {
+        return 0;
+    }
+    if u32::from(e.mem.u16(atom)) == modifier_type {
+        return atom;
+    }
+    loop {
+        atom = e.mem.u32(atom + 0x14);
+        if e.mem.u16(atom) < FIRST_MODIFIER_TYPE {
+            return 0;
+        }
+        if u32::from(e.mem.u16(atom)) == modifier_type {
+            return atom;
+        }
+    }
+}
+
+// Translated from 00d277f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl `(instance)`: the last atom of the instance's modifier chain (+0x10, next at
+/// +0x14): the walk goes on while the next atom's type is at least 0x17. 0 for an instance
+/// with no atom.
+pub fn fn_00d277f0(e: &mut Engine, instance: Ptr) -> u32 {
+    let mut atom = e.mem.u32(instance.addr() + 0x10);
+    if atom == 0 {
+        return 0;
+    }
+    let mut next = e.mem.u32(atom + 0x14);
+    while e.mem.u16(next) >= FIRST_MODIFIER_TYPE {
+        atom = next;
+        next = e.mem.u32(next + 0x14);
+    }
+    atom
+}
+
+// Translated from 00d27960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorldConstraintUtil::addModifier` (Xbox PDB), cdecl `(instance, owner, atom)`: runs
+/// the owner's virtual function at +0x18, then links the modifier atom into the instance's
+/// chain (+0x10, next at +0x14, size of the next at +0x12). An atom of type 0x1a goes after
+/// the last atom (`00d277f0`) when there is one; any other goes after a first atom of type
+/// 0x1b, and otherwise becomes the first. As the first atom with a record at +0x30 it takes
+/// the record's first-modifier link (+0xC, size +0x10) and the record takes it; without a
+/// record the virtual function at +0x3C of the object at +0xC fills a 0x18-byte buffer whose
+/// word at +0x10 and half-word at +0x14 become the atom's next link and size, and the
+/// function ends. With a record the atom's modifier data (`00d22090`) is added to the info
+/// for `00cb74d0`, then the owner counter (+0xC) and the record's 16-bit +0x14 lose the
+/// table entry (`010cb7a8`) selected by the flag byte anded with the two bodies' bytes at
+/// +0xD2, and the record's byte at +0x12 gets the low byte `00d22090` answered or-ed in.
+pub fn hkp_world_constraint_util_add_modifier(
+    e: &mut Engine,
+    instance: Ptr,
+    owner: Ptr,
+    atom: Ptr,
+) {
+    let inst = instance.addr();
+    let owner_addr = owner.addr();
+    let new = atom.addr();
+    e.vcall(owner_addr, 0x18, &args![]);
+    let last = fn_00d277f0(e, instance);
+    let record = e.mem.u32(inst + 0x30);
+    let first = e.mem.u32(inst + 0x10);
+    let before = if e.mem.u16(new) == LAST_PLACED_TYPE && last != 0 {
+        Some(last)
+    } else if first != 0 && e.mem.u16(first) == FIRST_PLACED_TYPE {
+        Some(first)
+    } else {
+        None
+    };
+    if let Some(before) = before {
+        let next = e.mem.u32(before + 0x14);
+        e.mem.set_u32(new + 0x14, next);
+        let size = e.mem.u16(before + 0x12);
+        e.mem.set_u16(new + 0x12, size);
+        e.mem.set_u32(before + 0x14, new);
+        let own_size = e.mem.u16(new + 0x10);
+        e.mem.set_u16(before + 0x12, own_size);
+    } else {
+        e.mem.set_u32(inst + 0x10, new);
+        if record == 0 {
+            let data = e.mem.u32(inst + 0xc);
+            e.with_stack(0x18, |e, buffer| {
+                e.vcall(data, 0x3c, &args![buffer]);
+                let next = e.mem.u32(buffer.addr() + 0x10);
+                let size = e.mem.u16(buffer.addr() + 0x14);
+                e.mem.set_u32(new + 0x14, next);
+                e.mem.set_u16(new + 0x12, size);
+            });
+            return;
+        }
+        let next = e.mem.u32(record + 0xc);
+        e.mem.set_u32(new + 0x14, next);
+        let size = e.mem.u16(record + 0x10);
+        e.mem.set_u16(new + 0x12, size);
+        e.mem.set_u32(record + 0xc, new);
+        let own_size = e.mem.u16(new + 0x10);
+        e.mem.set_u16(record + 0x10, own_size);
+    }
+    if record != 0 {
+        e.with_stack(0x18, |e, info| {
+            // The flag byte is a stack slot of its own in the exe.
+            e.with_stack(4, |e, flag_slot| {
+                let flag = flag_slot.addr();
+                let answered = e
+                    .call(ATOM_ADD_MODIFIER_DATA, &args![new, info, flag])
+                    .u32();
+                e.call(ADD_CONSTRAINT_INFO, &args![owner, instance, info]);
+                let body_b = e.mem.u32(inst + 0x18);
+                let body_a = e.mem.u32(inst + 0x14);
+                let bodies = e.mem.u8(body_b + 0xd2) | e.mem.u8(body_a + 0xd2);
+                let combined = e.mem.u8(flag) & bodies;
+                e.mem.set_u8(flag, combined);
+                let amount = e.mem.u16(SIZE_TABLE + u32::from(combined & 7) * 2);
+                let counter = e.mem.u32(owner_addr + 0xc);
+                e.mem
+                    .set_u32(owner_addr + 0xc, counter.wrapping_sub(u32::from(amount)));
+                let own = e.mem.u32(inst + 0x30);
+                let total = e.mem.u16(own + 0x14);
+                e.mem.set_u16(own + 0x14, total.wrapping_sub(amount));
+                let own = e.mem.u32(inst + 0x30);
+                if own != 0 {
+                    let bits = e.mem.u8(own + 0x12);
+                    e.mem.set_u8(own + 0x12, bits | answered as u8);
+                }
+            });
+        });
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -403,6 +711,24 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             hkp_world_constraint_util_add_constraint(u32, Ptr)
         ),
         entry!(0x00d2_7f50, fn_00d27f50(Ptr, u32, Ptr)),
+        entry!(
+            0x00d2_75a0,
+            hkp_world_constraint_util_update_father_of_moved_atom(Ptr, u32, u32, u16)
+        ),
+        entry!(0x00d2_7610, fn_00d27610(u32, u32) -> u32),
+        entry!(
+            0x00d2_7690,
+            hkp_world_constraint_util_remove_and_delete_modifier(Ptr, Ptr, u32)
+        ),
+        entry!(
+            0x00d2_77c0,
+            hkp_world_constraint_util_find_modifier(Ptr, u32) -> u32
+        ),
+        entry!(0x00d2_77f0, fn_00d277f0(Ptr) -> u32),
+        entry!(
+            0x00d2_7960,
+            hkp_world_constraint_util_add_modifier(Ptr, Ptr, Ptr)
+        ),
     ]
 }
 
@@ -759,5 +1085,368 @@ mod movement_tests {
             calls(&rig.log, MERGE_ISLANDS),
             vec![vec![world, master, other]]
         );
+    }
+}
+
+#[cfg(test)]
+mod modifier_chain_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const OWNER_HOOK: u32 = 0x0900_0001;
+    const FREE_HOOK: u32 = 0x0900_0002;
+    const BUFFER_HOOK: u32 = 0x0900_0003;
+
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e
+    }
+
+    fn log_double(e: &mut Engine, log: &Log, address: u32, answer: u32) {
+        let log = Rc::clone(log);
+        e.register_double(address, move |_, a| {
+            log.borrow_mut().push((address, a.to_vec()));
+            Ret {
+                eax: answer,
+                ..Ret::default()
+            }
+        });
+    }
+
+    /// The calls of the allocator hook with the allocator itself (`this`) left out: the block
+    /// and its size.
+    fn freed(log: &Log) -> Vec<Vec<u32>> {
+        calls(log, FREE_HOOK)
+            .into_iter()
+            .map(|args| args[1..].to_vec())
+            .collect()
+    }
+
+    fn calls(log: &Log, address: u32) -> Vec<Vec<u32>> {
+        log.borrow()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, args)| args.clone())
+            .collect()
+    }
+
+    /// An atom of the given type and own size (+0x10).
+    fn atom(e: &mut Engine, kind: u16, size: u16) -> u32 {
+        let atom = e.mem.alloc(0x20);
+        e.mem.set_u16(atom, kind);
+        e.mem.set_u16(atom + 0x10, size);
+        atom
+    }
+
+    /// Links `atoms` through +0x14 and +0x12 (size of the next one) and ends with a plain
+    /// atom of type 0x10; the instance's first pointer (+0x10) is the first atom.
+    fn chain(e: &mut Engine, instance: u32, atoms: &[u32]) {
+        let end = atom(e, 0x10, 0);
+        for (i, &a) in atoms.iter().enumerate() {
+            let next = atoms.get(i + 1).copied().unwrap_or(end);
+            e.mem.set_u32(a + 0x14, next);
+            let next_size = e.mem.u16(next + 0x10);
+            e.mem.set_u16(a + 0x12, next_size);
+        }
+        e.mem.set_u32(instance + 0x10, atoms[0]);
+    }
+
+    #[test]
+    fn update_father_rewrites_the_link_that_held_the_moved_atom() {
+        let mut e = engine();
+        let instance = e.mem.alloc(0x40);
+        let record = e.mem.alloc(0x40);
+        // No first atom: only the record.
+        e.mem.set_u32(instance + 0x30, record);
+        e.call(
+            0x00d2_75a0,
+            &args![instance, 0x1000u32, 0x2000u32, 0xffff_0007u32],
+        );
+        assert_eq!(e.mem.u32(record + 0xc), 0x2000);
+        assert_eq!(e.mem.u16(record + 0x10), 7);
+        assert_eq!(e.mem.u32(instance + 0x10), 0);
+        // No first atom and no record: nothing happens.
+        let bare = e.mem.alloc(0x40);
+        e.call(0x00d2_75a0, &args![bare, 1u32, 2u32, 3u32]);
+        assert_eq!(e.mem.u32(bare + 0x10), 0);
+        // The first atom moved.
+        let first = atom(&mut e, 0x1a, 0);
+        e.mem.set_u32(instance + 0x10, first);
+        e.call(0x00d2_75a0, &args![instance, first, 0x3000u32, 9u32]);
+        assert_eq!(e.mem.u32(instance + 0x10), 0x3000);
+        assert_eq!(e.mem.u32(record + 0xc), 0x3000);
+        assert_eq!(e.mem.u16(record + 0x10), 9);
+        // The first atom moved and the instance has no record.
+        e.mem.set_u32(bare + 0x10, first);
+        e.call(0x00d2_75a0, &args![bare, first, 0x4000u32, 5u32]);
+        assert_eq!(e.mem.u32(bare + 0x10), 0x4000);
+        // A later atom moved: the atom before it is rewritten, the record is untouched.
+        let second = atom(&mut e, 0x1a, 0);
+        let third = atom(&mut e, 0x1a, 0);
+        e.mem.set_u32(first + 0x14, second);
+        e.mem.set_u32(second + 0x14, third);
+        e.mem.set_u32(instance + 0x10, first);
+        e.call(0x00d2_75a0, &args![instance, third, 0x5000u32, 6u32]);
+        assert_eq!(e.mem.u32(second + 0x14), 0x5000);
+        assert_eq!(e.mem.u16(second + 0x12), 6);
+        assert_eq!(e.mem.u32(record + 0xc), 0x3000);
+    }
+
+    #[test]
+    fn record_search_xors_the_body_words_with_the_body() {
+        let mut e = engine();
+        let (a, c) = (0x1000u32, 0x3000u32);
+        let body_a = e.mem.alloc(0x100);
+        let body_b = e.mem.alloc(0x100);
+        // Neither array matches yet.
+        assert_eq!(e.call(0x00d2_7610, &args![body_a, body_b]).u32(), 0);
+        let records = e.mem.alloc(0x60);
+        e.mem.set_u16(body_b + 0xb0, 2);
+        e.mem.set_u32(body_b + 0xac, records);
+        // Record 0 joins other bodies; record 1 is found from the second body: its words
+        // xor with `body_b` to `body_a`.
+        e.mem.set_u32(records, 0x77);
+        e.mem.set_u32(records + 4, a);
+        e.mem.set_u32(records + 8, c);
+        e.mem.set_u32(records + 0x30, 0x99);
+        e.mem.set_u32(records + 0x34, body_b);
+        e.mem.set_u32(records + 0x38, body_a);
+        assert_eq!(e.call(0x00d2_7610, &args![body_a, body_b]).u32(), 0x99);
+        // Asking from the other side finds it in the first search.
+        assert_eq!(e.call(0x00d2_7610, &args![body_b, body_a]).u32(), 0x99);
+        // An empty count finds nothing even with a record present.
+        e.mem.set_u16(body_b + 0xb0, 0);
+        assert_eq!(e.call(0x00d2_7610, &args![body_a, body_b]).u32(), 0);
+    }
+
+    #[test]
+    fn find_modifier_stops_at_the_end_of_the_chain() {
+        let mut e = engine();
+        let instance = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x00d2_77c0, &args![instance, 0x1au32]).u32(), 0);
+        let first = atom(&mut e, 0x19, 0);
+        let second = atom(&mut e, 0x1a, 0);
+        let third = atom(&mut e, 0x1b, 0);
+        chain(&mut e, instance, &[first, second, third]);
+        assert_eq!(e.call(0x00d2_77c0, &args![instance, 0x19u32]).u32(), first);
+        assert_eq!(e.call(0x00d2_77c0, &args![instance, 0x1au32]).u32(), second);
+        assert_eq!(e.call(0x00d2_77c0, &args![instance, 0x1bu32]).u32(), third);
+        // The end atom (type 0x10) is never compared.
+        assert_eq!(e.call(0x00d2_77c0, &args![instance, 0x10u32]).u32(), 0);
+        assert_eq!(e.call(0x00d2_77c0, &args![instance, 0x1cu32]).u32(), 0);
+    }
+
+    #[test]
+    fn last_modifier_is_the_one_before_the_end_atom() {
+        let mut e = engine();
+        let instance = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x00d2_77f0, &args![instance]).u32(), 0);
+        let first = atom(&mut e, 0x19, 0);
+        chain(&mut e, instance, &[first]);
+        assert_eq!(e.call(0x00d2_77f0, &args![instance]).u32(), first);
+        let second = atom(&mut e, 0x1a, 0);
+        let third = atom(&mut e, 0x1b, 0);
+        chain(&mut e, instance, &[first, second, third]);
+        assert_eq!(e.call(0x00d2_77f0, &args![instance]).u32(), third);
+    }
+
+    /// An object whose vtable has `hooks` at the given byte offsets.
+    fn object_with(e: &mut Engine, hooks: &[(u32, u32)]) -> u32 {
+        let table = e.mem.alloc(0x80);
+        for &(slot, target) in hooks {
+            e.mem.set_u32(table + slot, target);
+        }
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object, table);
+        object
+    }
+
+    /// The owner and the shared doubles: the owner's virtual function at +0x18, the memory
+    /// router and the allocator's free (slot 8), and the size table.
+    fn world(e: &mut Engine, log: &Log) -> u32 {
+        let owner = object_with(e, &[(0x18, OWNER_HOOK)]);
+        log_double(e, log, OWNER_HOOK, 0);
+        let allocator = object_with(e, &[(8, FREE_HOOK)]);
+        log_double(e, log, FREE_HOOK, 0);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        log_double(e, log, MEMORY_ROUTER, router);
+        for index in 0..8u32 {
+            e.mem.set_u16(SIZE_TABLE + 2 * index, 0x10 * index as u16);
+        }
+        owner
+    }
+
+    /// An instance with two bodies whose bytes at +0xD2 are `a` and `b`.
+    fn instance_with_bodies(e: &mut Engine, a: u8, b: u8) -> u32 {
+        let instance = e.mem.alloc(0x40);
+        let body_a = e.mem.alloc(0x100);
+        let body_b = e.mem.alloc(0x100);
+        e.mem.set_u8(body_a + 0xd2, a);
+        e.mem.set_u8(body_b + 0xd2, b);
+        e.mem.set_u32(instance + 0x14, body_a);
+        e.mem.set_u32(instance + 0x18, body_b);
+        instance
+    }
+
+    #[test]
+    fn remove_and_delete_unlinks_and_frees_the_atom() {
+        let mut e = engine();
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let owner = world(&mut e, &log);
+        let instance = instance_with_bodies(&mut e, 0, 0);
+        let first = atom(&mut e, 0x1a, 0x30);
+        let second = atom(&mut e, 0x1b, 0x40);
+        let third = atom(&mut e, 0x1c, 0x50);
+        chain(&mut e, instance, &[first, second, third]);
+        // Not in the chain: only the owner's function ran.
+        e.call(0x00d2_7690, &args![instance, owner, 0x1du32]);
+        assert_eq!(calls(&log, OWNER_HOOK).len(), 1);
+        assert!(calls(&log, FREE_HOOK).is_empty());
+        // A later atom of the chain is unlinked, its size is passed on.
+        let after_third = e.mem.u32(third + 0x14);
+        e.call(0x00d2_7690, &args![instance, owner, 0x1cu32]);
+        assert_eq!(freed(&log), vec![vec![third, 0x50]]);
+        assert_eq!(e.mem.u32(second + 0x14), after_third);
+        assert_eq!(e.mem.u16(second + 0x12), 0);
+        // The first atom, without a record: the instance points at the second one.
+        e.call(0x00d2_7690, &args![instance, owner, 0x1au32]);
+        assert_eq!(e.mem.u32(instance + 0x10), second);
+        assert_eq!(freed(&log).last().unwrap(), &vec![first, 0x30]);
+        // The last modifier, now first: the next atom is of a type below 0x17, so 0.
+        e.call(0x00d2_7690, &args![instance, owner, 0x1bu32]);
+        assert_eq!(e.mem.u32(instance + 0x10), 0);
+        // An empty instance only runs the owner's function.
+        let before = calls(&log, FREE_HOOK).len();
+        e.call(0x00d2_7690, &args![instance, owner, 0x1bu32]);
+        assert_eq!(calls(&log, FREE_HOOK).len(), before);
+        assert_eq!(calls(&log, OWNER_HOOK).len(), 5);
+        // A chain of one atom of another type is left alone.
+        let lone = atom(&mut e, 0x1d, 0x20);
+        chain(&mut e, instance, &[lone]);
+        e.call(0x00d2_7690, &args![instance, owner, 0x1eu32]);
+        assert_eq!(calls(&log, FREE_HOOK).len(), before);
+    }
+
+    #[test]
+    fn remove_and_delete_accounts_the_modifier_data_of_an_instance_with_a_record() {
+        let mut e = engine();
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let owner = world(&mut e, &log);
+        e.mem.set_u32(owner + 0xc, 100);
+        let instance = instance_with_bodies(&mut e, 0x05, 0x02);
+        let record = e.mem.alloc(0x40);
+        e.mem.set_u32(record, 0xabcd);
+        e.mem.set_u16(record + 0x14, 0x200);
+        e.mem.set_u32(instance + 0x30, record);
+        let first = atom(&mut e, 0x1a, 0x30);
+        let second = atom(&mut e, 0x1b, 0x40);
+        chain(&mut e, instance, &[first, second]);
+        // The data function leaves the flag byte 3; bodies 5 | 2 = 7; 3 & 7 = 3.
+        let flag_log = Rc::clone(&log);
+        e.register_double(ATOM_ADD_MODIFIER_DATA, move |e, a| {
+            flag_log
+                .borrow_mut()
+                .push((ATOM_ADD_MODIFIER_DATA, a.to_vec()));
+            assert_eq!(e.mem.u8(a[2]), 0);
+            e.mem.set_u8(a[2], 3);
+            Ret::default()
+        });
+        log_double(&mut e, &log, REMOVE_CONSTRAINT_INFO, 0);
+        e.call(0x00d2_7690, &args![instance, owner, 0x1au32]);
+        assert_eq!(e.mem.u32(instance + 0x10), second);
+        assert_eq!(e.mem.u32(record + 0xc), second);
+        assert_eq!(e.mem.u16(record + 0x10), 0x40);
+        // Table entry 3 is 0x30.
+        assert_eq!(e.mem.u32(owner + 0xc), 100 + 0x30);
+        assert_eq!(e.mem.u16(record + 0x14), 0x200 + 0x30);
+        let data = calls(&log, ATOM_ADD_MODIFIER_DATA);
+        assert_eq!(data.len(), 1);
+        assert_eq!(data[0][0], first);
+        let info = calls(&log, REMOVE_CONSTRAINT_INFO);
+        assert_eq!(info, vec![vec![owner, 0xabcd, data[0][1]]]);
+        assert_eq!(freed(&log), vec![vec![first, 0x30]]);
+    }
+
+    #[test]
+    fn add_modifier_places_the_atom_by_type() {
+        let mut e = engine();
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let owner = world(&mut e, &log);
+        e.mem.set_u32(owner + 0xc, 1000);
+        let instance = instance_with_bodies(&mut e, 0x06, 0x03);
+        let record = e.mem.alloc(0x40);
+        e.mem.set_u16(record + 0x14, 0x400);
+        e.mem.set_u32(instance + 0x30, record);
+        let first = atom(&mut e, 0x19, 0x30);
+        let last = atom(&mut e, 0x1c, 0x40);
+        chain(&mut e, instance, &[first, last]);
+        e.mem.set_u32(record + 0xc, first);
+        e.mem.set_u16(record + 0x10, 0x30);
+        e.register_double(ATOM_ADD_MODIFIER_DATA, |e, a| {
+            e.mem.set_u8(a[2], 0x0f);
+            Ret {
+                eax: 0x1234_5610,
+                ..Ret::default()
+            }
+        });
+        log_double(&mut e, &log, ADD_CONSTRAINT_INFO, 0);
+        // Type 0x1a goes after the last atom; bodies 6 | 3 = 7, flag 0x0f & 7 = 7: 0x70.
+        let new = atom(&mut e, 0x1a, 0x20);
+        e.call(0x00d2_7960, &args![instance, owner, new]);
+        assert_eq!(e.mem.u32(last + 0x14), new);
+        assert_eq!(e.mem.u16(last + 0x12), 0x20);
+        assert_eq!(e.mem.u16(new + 0x12), 0);
+        assert_eq!(e.mem.u32(owner + 0xc), 1000 - 0x70);
+        assert_eq!(e.mem.u16(record + 0x14), 0x400 - 0x70);
+        assert_eq!(e.mem.u8(record + 0x12), 0x10);
+        let added = calls(&log, ADD_CONSTRAINT_INFO);
+        assert_eq!(added.len(), 1);
+        assert_eq!(&added[0][..2], &[owner, instance]);
+        // Any other atom becomes the first one and takes the record's link.
+        let other = atom(&mut e, 0x1d, 0x50);
+        e.call(0x00d2_7960, &args![instance, owner, other]);
+        assert_eq!(e.mem.u32(instance + 0x10), other);
+        assert_eq!(e.mem.u32(other + 0x14), first);
+        assert_eq!(e.mem.u16(other + 0x12), 0x30);
+        assert_eq!(e.mem.u32(record + 0xc), other);
+        assert_eq!(e.mem.u16(record + 0x10), 0x50);
+        // A first atom of type 0x1b keeps its place: the new atom is linked after it.
+        let pinned = atom(&mut e, 0x1b, 0x60);
+        let tail = atom(&mut e, 0x1c, 0x70);
+        chain(&mut e, instance, &[pinned, tail]);
+        let after = atom(&mut e, 0x1e, 0x80);
+        e.call(0x00d2_7960, &args![instance, owner, after]);
+        assert_eq!(e.mem.u32(instance + 0x10), pinned);
+        assert_eq!(e.mem.u32(pinned + 0x14), after);
+        assert_eq!(e.mem.u32(after + 0x14), tail);
+        assert_eq!(e.mem.u16(pinned + 0x12), 0x80);
+        assert_eq!(e.mem.u16(after + 0x12), 0x70);
+        assert_eq!(calls(&log, OWNER_HOOK).len(), 3);
+    }
+
+    #[test]
+    fn add_modifier_without_a_record_asks_the_data_object_for_the_link() {
+        let mut e = engine();
+        let log: Log = Rc::new(RefCell::new(Vec::new()));
+        let owner = world(&mut e, &log);
+        let instance = instance_with_bodies(&mut e, 0, 0);
+        let data = object_with(&mut e, &[(0x3c, BUFFER_HOOK)]);
+        e.mem.set_u32(instance + 0xc, data);
+        e.register_double(BUFFER_HOOK, |e, a| {
+            e.mem.set_u32(a[1] + 0x10, 0x1234);
+            e.mem.set_u16(a[1] + 0x14, 0x56);
+            Ret::default()
+        });
+        let new = atom(&mut e, 0x1d, 0x50);
+        e.call(0x00d2_7960, &args![instance, owner, new]);
+        assert_eq!(e.mem.u32(instance + 0x10), new);
+        assert_eq!(e.mem.u32(new + 0x14), 0x1234);
+        assert_eq!(e.mem.u16(new + 0x12), 0x56);
+        assert!(calls(&log, ADD_CONSTRAINT_INFO).is_empty());
     }
 }
