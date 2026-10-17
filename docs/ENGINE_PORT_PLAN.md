@@ -116,14 +116,17 @@ Not all 63k functions should be translated. Each function gets one status:
 | --- | --- | --- |
 | `translated` | Rust translation, marked with its address (ADR-0003), with a test | Havok solver |
 | `traced` | Behaviour read from it and written in our own code | most current systems |
-| `platform` | Replaced by Rust/Bevy. Any behaviour the game shows is still traced (shader constants, audio falloff) | D3D9 renderer, shader passes, DirectInput, DirectSound, Win32 threads, allocator |
+| `platform` | Replaced by our own Rust layer under the translated code. Any behaviour the game shows is still traced (audio falloff) | Direct3D 9 itself (ADR-0007), DirectInput, DirectSound, Win32 threads, allocator; the renderer until its units are scaffolded |
 | `library` | Compiler or standard library code | CRT, STL templates, thunks |
 | `open` | Not looked at yet | |
 
 The layers to translate are Bethesda's game code (forms, references,
 process/AI, scripts, quests, menus' logic, save/load), Havok, Gamebryo's
-scene graph and animation controllers, and FaceGen. The renderer stays
-Bevy, driven by data traced from the game and its shaders.
+scene graph and animation controllers, FaceGen, and the renderer. The
+renderer is translated too and runs on our own Direct3D 9 layer on wgpu,
+with the game's shaders converted at load time
+([ADR-0007](adr/0007-renderer-translated-on-own-d3d9-layer.md)); Bevy stays
+the development viewer until that path matches.
 
 Inside the platform layers, the parts that are logic rather than drawing
 or OS calls are translated too (the ledger's `LOGIC_UNITS`): all of

@@ -59,11 +59,10 @@ batch is merged or listed below; the next account continues from here.
 - 229 irregular atexit destructors and 498 leftover start-up entries.
 
 **Open questions for the maintainer:**
-- **Renderer design.** Either keep the Bevy renderer redrawing the game's
-  look from traced data, or translate the game's own renderer (about 2,100
-  platform functions) and implement the DirectX 9 calls on wgpu in our own
-  layer, which matches the original exactly. No decision yet; the renderer
-  comes after the game logic.
+- **Renderer: decided (ADR-0007).** The game's renderer is translated and
+  runs on our own Direct3D 9 layer on wgpu, with the game's shaders
+  converted at load time. Settle the x87 question below first; Bevy stays
+  the development viewer until the new path matches.
 - **x87 precision.** The engine models x87 in 53-bit precision. Direct3D 9
   switches the FPU to 24-bit unless the device is created with
   `D3DCREATE_FPU_PRESERVE`. Check the exe's CreateDevice flags and the game
