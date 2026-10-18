@@ -133,7 +133,7 @@ translation yet.
 
 ### Phase D: the rest
 - **Saves**: through the game's own save code, so old saves work.
-- **Shut-down**: the 5,020 atexit destructors. 4,790 are rows of `crates/engine/data/atexit_destructors.tsv` (research/initgen `--atexit`, run by `engine::static_exit`), one is translated by hand, 229 are refused for hand translation. The CRT exit path is translated too: `_atexit` records its function and `units::crt::doexit` (`00eccd99`) runs the exit functions last first, then the pre-terminator and terminator tables. Not yet connected to the host's shut-down; the exit functions' own destructors run only as far as they are translated.
+- **Shut-down**: the 5,020 atexit destructors. 4,790 are rows of `crates/engine-core/data/atexit_destructors.tsv` (research/initgen `--atexit`, run by `engine::static_exit`), one is translated by hand, 229 are refused for hand translation. The CRT exit path is translated too: `_atexit` records its function and `units::crt::doexit` (`00eccd99`) runs the exit functions last first, then the pre-terminator and terminator tables. Not yet connected to the host's shut-down; the exit functions' own destructors run only as far as they are translated.
 - **Video**: intro and ending Bink videos (`BSMovie` plus `crates/bink`).
 - **Settings and INI files**, debug, diagnostics.
 - **Real threads**: swap the stepped-thread seam for real OS threads to replicate the original.

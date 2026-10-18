@@ -11,9 +11,16 @@
 //! ([`exe`]), so constants, strings, vtables and initial globals are the
 //! game's.
 //!
-//! Translations live in `units/<subsystem>/<unit>.rs`, one file per source
-//! unit of the Xbox 360 prototype (Xbox PDB, ADR-0002), as listed in
-//! `research/engine-map/engine_map.tsv`. Each is marked
+//! The engine is split into crates so a compile fits the machine
+//! (docs/ENGINE_CRATE.md, "The engine crates"): `engine-core` (the model,
+//! the CRT and platform units) and the part crates `engine-gamebryo`,
+//! `engine-bs`, `engine-havok`, `engine-speedtree` and `engine-fallout`. This
+//! crate assembles them: everything is reachable as `engine::...` as before
+//! the split, and [`Engine::new`] registers every translated function.
+//!
+//! Translations live in `units/<subsystem>/<unit>.rs` of their crate, one
+//! file per source unit of the Xbox 360 prototype (Xbox PDB, ADR-0002), as
+//! listed in `research/engine-map/engine_map.tsv`. Each is marked
 //! `// Translated from <addr> (decompiled, FalloutNV.exe 1.4.0.525)`
 //! (ADR-0003); `docs/LEDGER.md` counts them.
 
@@ -50,32 +57,9 @@
 // Tests build their expected call lists and buffers with `vec!`.
 #![cfg_attr(test, allow(clippy::useless_vec))]
 
-pub mod abi;
-mod engine;
-pub mod exe;
-pub mod extra_data;
-pub mod mem;
-pub mod ptr;
-pub mod reference;
-pub mod static_exit;
-pub mod static_init;
-pub mod types;
 pub mod units;
-pub mod x87;
 
-pub use abi::{AbiFn, Ret};
-pub use engine::Engine;
-pub use mem::Mem;
-pub use ptr::{Field, Inline, Layout, Ptr, Scalar};
-
-/// What every unit file imports.
-pub mod prelude {
-    pub use crate::abi::{AbiFn, Arg, Ret, RetVal};
-    pub use crate::ptr::{Field, Inline, Layout, Ptr, Scalar};
-    pub use crate::x87::{
-        x87_add, x87_div, x87_load32, x87_m32, x87_mul, x87_quiet, x87_quiet_bits, x87_store32,
-        x87_sub,
-    };
-    pub use crate::Engine;
-    pub use crate::{args, entry, layout};
-}
+pub use engine_core::{abi, exe, mem, prelude, ptr, static_exit, static_init, types, x87};
+pub use engine_core::{args, entry, layout};
+pub use engine_core::{AbiFn, Engine, Field, Inline, Layout, Mem, Ptr, Ret, Scalar};
+pub use engine_fallout::{extra_data, reference};

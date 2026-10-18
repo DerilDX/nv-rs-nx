@@ -197,11 +197,18 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Scans `<repo>/crates/engine/src`.
+/// Scans the `src` of every engine crate: `<repo>/crates/engine` (the
+/// facade) and `<repo>/crates/engine-*` (the core and the part crates).
 pub fn scan(repo: &Path) -> Source {
-    let root = repo.join("crates/engine/src");
     let mut files = Vec::new();
-    rust_files(&root, &mut files);
+    if let Ok(rd) = fs::read_dir(repo.join("crates")) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name == "engine" || name.starts_with("engine-") {
+                rust_files(&e.path().join("src"), &mut files);
+            }
+        }
+    }
     files.sort();
     let mut src = Source::default();
     for f in files {

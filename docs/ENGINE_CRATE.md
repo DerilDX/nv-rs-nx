@@ -1,7 +1,8 @@
-# The engine crate: translating FalloutNV.exe function by function
+# The engine crates: translating FalloutNV.exe function by function
 
-`crates/engine` holds FalloutNV.exe 1.4.0.525 translated into Rust, one
-function at a time, on a model of the game's own memory. Decision and
+The engine crates (`crates/engine` and `crates/engine-*`, see
+[below](#the-engine-crates)) hold FalloutNV.exe 1.4.0.525 translated into
+Rust, one function at a time, on a model of the game's own memory. Decision and
 alternatives: [ADR-0006](adr/0006-engine-crate-memory-model.md). The ledger
 ([LEDGER.md](LEDGER.md)) counts the translations; the engine map
 ([research/engine-map](../research/engine-map/README.md)) says which unit
@@ -32,11 +33,63 @@ each function belongs to.
   `// Platform: replaces <addr> (...)`; the ledger counts them as
   `platform`.
 
+## The engine crates
+
+The engine is split into crates so a compile fits the machine (one crate of
+2.4 million lines needed about 28 GB to test). Each crate below sees only the
+crates under it; the graph has no cycles:
+
+| Crate | Holds | Depends on |
+| --- | --- | --- |
+| `engine-core` | `Engine`, `Mem`, `abi`, `ptr`, `x87`, `types`, `exe`, the static initializer and `atexit` tables (`static_init`, `static_exit`, `data/`), the prelude and the `entry!`/`args!`/`layout!` macros; units `crt.rs` and `platform.rs` | - |
+| `engine-gamebryo` | `nimain`, `nianimation`, `nicollision`, `niparticle`, `nisystem`, `nixenonrenderer` | core |
+| `engine-bs` | `bsaudio`, `bscore`, `bsmain`, `bsmenu`, `bsmovie`, `bsshader`, `bssystem` | core, gamebryo |
+| `engine-havok` | `havok_sdk`, `bshavok` | core, gamebryo |
+| `engine-speedtree` | `speedtree` | core |
+| `engine-fallout` | every `fallout_*` subsystem, `unplaced`, `facegen`, `d3dx9`, `remotelog`; the `extra_data` and `reference` adapters | all of the above |
+| `engine` | nothing of its own: re-exports every crate (`engine::units::<subsystem>`, `engine::prelude`, ...) and registers every function | all |
+
+The grouping follows the code: Rust references between subsystems (layouts,
+shared helpers) only point down, and nearly every unit test only reaches
+functions of its own crate or below (measured on the full suite before the
+split: 7 of 34,679 tests reached further). Those 7 changed with the split:
+three integration tests moved to the unit whose crate links everything they
+run (`fabs_restores_the_control_word_through_ctrlfp` from `crt.rs` to
+`fallout_shared_magic/effectsetting.rs`, the scrap-heap buffer test from
+`platform.rs` to `bscore/scrapheap.rs`, the allocator start-up test from
+`nisystem/allocator_support.rs` to `unplaced/run_00aa1010.rs`), and four
+double a callee in `engine-fallout` (`__allshl` in two tests of
+`havok_sdk/hkbinarytagfilereader.rs`, `memmove_s` in
+`speedtree/run_00b23f10.rs`, four small helpers in
+`bshavok/bhkblendcontroller.rs`).
+
+- **Paths stay.** Each part crate re-exports the core (`crate::types`,
+  `crate::exe`, `crate::prelude`, ...) and its `units` module re-exports the
+  subsystems of the crates below it, so `crate::units::<subsystem>::...`
+  works as before for anything in the same crate or below. A layout in a
+  crate above is not reachable: read the field at its offset with a comment,
+  as for a class without a layout. Users of the engine keep `engine::...`.
+- **Registration.** `Engine::new()` registers the core's functions and those
+  the program assembles with `engine_core::assemble!` (one crate per
+  program defines it): the `engine` crate assembles every part crate, so
+  the full engine has every translated function. A part crate's own unit
+  tests assemble that crate and the crates below it (generated into its
+  `units/mod.rs` under `cfg(test)`), so a test there reaches exactly those
+  functions; a call into a crate above stops with `open function <addr>`
+  like an untranslated one, and the test doubles it. A program that links
+  `engine-core` without an `assemble!` does not link.
+- **Tests that need a crate above** (rare): double the callee in the test
+  (`e.register(addr, ...)`), as for an untranslated one.
+- `engine-core`'s `test-support` feature exposes the form-constructor
+  checker (`units::crt::ctor_test`) to the other crates' tests.
+
 ## One unit, one file, one owner
 
-Translations live in `crates/engine/src/units/<subsystem>/<unit>.rs`, one
+Translations live in `crates/<crate>/src/units/<subsystem>/<unit>.rs`, one
 file per source unit of the Xbox 360 prototype (Xbox PDB, ADR-0002): for
-example `fallout/ai/processlists.cpp` is `units/fallout_ai/processlists.rs`.
+example `fallout/ai/processlists.cpp` is
+`crates/engine-fallout/src/units/fallout_ai/processlists.rs`. `ledger queue`
+prints each unit's file and crate.
 The lead creates the files (`ledger scaffold <unit or subsystem>`); the
 `mod.rs` files are generated (`ledger units`) and never edited by hand.
 **A translator edits only the unit files assigned to them.**
@@ -114,7 +167,7 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
      emitted in your `.cpp`) are your functions; their layout is still the
      shared one.
    - Fields of other classes: use their `layout!` if it exists
-     (`crate::units::<sub>::<unit>::Class`); otherwise read at the offset
+     (`crate::units::<sub>::<unit>::Class`, in the same crate or below); otherwise read at the offset
      (`e.mem.u32(p.addr() + 0x20)`) with a comment naming the class and
      field (`// TESForm::iFormID (Xbox PDB) +0x0C`). Do not edit another
      unit's file.
@@ -138,8 +191,8 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
    logic, one case per branch that matters. Then:
 
    ```sh
-   cargo test -p engine units::<subsystem>::<unit>
-   cargo clippy -p engine --all-targets
+   cargo test -p <crate> --lib units::<subsystem>::<unit>
+   cargo clippy -p <crate> --all-targets
    cargo fmt --all
    ```
 
@@ -317,9 +370,9 @@ Most entries are a few instructions of one of three shapes. They are not
 one Rust function each: `research/initgen` reads every entry's code
 (Ghidra's disassembly, or its bytes for the ~1,400 entries Ghidra made no
 function of), checks it instruction by instruction against a shape, and
-writes one row per matching entry to `crates/engine/data/static_initializers.tsv`
+writes one row per matching entry to `crates/engine-core/data/static_initializers.tsv`
 (16,937 rows; 799 entries refused, left for hand translation). The engine
-has one translation per shape (`crates/engine/src/static_init.rs`):
+has one translation per shape (`crates/engine-core/src/static_init.rs`):
 
 - `reg f g`: `CALL f; MOV [g],EAX` (the 25 one-shot NiAnimation
   registrations, translated by initgen's `--rust` and checked by hand).
@@ -356,7 +409,7 @@ and their three collections hold their names, values and vtables.
 
 `research/initgen --atexit` does for shut-down what it does for start-up:
 4,790 of the 5,020 `atexit` destructor functions (`00fc7a70` onwards) are
-rows of `crates/engine/data/atexit_destructors.tsv` (shapes `call` and `tail`,
+rows of `crates/engine-core/data/atexit_destructors.tsv` (shapes `call` and `tail`,
 `engine::static_exit`; one more has a hand translation and the 229 others stay for hand translation). A row is
 callable at its own address: when no function is registered at an address,
 `Engine::call` and `Engine::is_translated` consult that table (a registered

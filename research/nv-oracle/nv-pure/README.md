@@ -13,7 +13,7 @@ prints that it skipped and exits 0.
 | Step | What | Output |
 | --- | --- | --- |
 | 1 | `research/ghidra/NvPurity.java` on your own analysed project (read-only): per function, stores outside its own frame, indirect and imported calls, FS use, direct calls, `RET n`, ECX/EDX read on entry, stack-argument bytes. | `purity.tsv`, private |
-| 2 | `nv-pure list --purity purity.tsv`: joins those facts with the `// Translated from` markers and `entry!` signatures of `crates/engine`. | `pure.tsv` (this folder): addresses, conventions, signatures |
+| 2 | `nv-pure list --purity purity.tsv`: joins those facts with the `// Translated from` markers and `entry!` signatures of the engine crates (`crates/engine`, `crates/engine-*`). | `pure.tsv` (this folder): addresses, conventions, signatures |
 | 3 | `nv-pure check`: generates inputs, runs them through `nv-call` and the engine, compares. | `%USERPROFILE%\nv-re\oracle\pure\` (vectors, results, `failures.tsv`), private |
 
 Only `pure.tsv` is committed: addresses and signatures, no exe bytes or outputs.

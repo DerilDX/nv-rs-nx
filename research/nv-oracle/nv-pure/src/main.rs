@@ -8,8 +8,8 @@
 //!
 //! `list` joins the exe's purity facts (research/ghidra/NvPurity.java, run on
 //! your own project) with the translation markers and `entry!` signatures
-//! of crates/engine and writes the checkable functions (addresses and
-//! signatures only).
+//! of the engine crates (crates/engine, crates/engine-*) and writes the
+//! checkable functions (addresses and signatures only).
 //!
 //! `check` runs each listed function on the real CPU through `nv-call` and in
 //! the engine with the same inputs and compares the results bit for bit. It

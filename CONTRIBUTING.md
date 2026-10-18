@@ -19,9 +19,9 @@ The short version:
 Since 2026-10-09 the project is porting `FalloutNV.exe` system by system
 ([docs/ENGINE_PORT_PLAN.md](docs/ENGINE_PORT_PLAN.md)). Every function of
 the executable is listed in [docs/LEDGER.md](docs/LEDGER.md) and is
-translated into Rust in the `engine` crate, marked with its address. The
-hand-written systems in `world` and the other game crates are being
-replaced by that translated code, one whole system at a time. The
+translated into Rust in the engine crates (`crates/engine*`), marked with
+its address. The hand-written systems in `world` and the other game
+crates are being replaced by that translated code, one whole system at a time. The
 translation itself is done by the maintainer's sessions, so new
 hand-written gameplay code is likely to be replaced, and translations
 from contributors can't be merged (they would collide with the
@@ -75,7 +75,8 @@ before anything else:
    the maintainer's working branches; pull requests built on them will be
    closed.
 3. **Check that your work isn't already in `main`**: search the code,
-   including `crates/engine` for the exe address you traced.
+   including the engine crates (`crates/engine*`) for the exe address you
+   traced.
 4. **Claim it.** Find the matching issue, or open one, and
    comment `Claiming this` with your branch name, even if you started
    before claiming. If someone else already claimed it, say what you have

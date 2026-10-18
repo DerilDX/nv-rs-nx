@@ -5,6 +5,59 @@ version = 4
 [[package]]
 name = "engine"
 version = "0.1.0"
+dependencies = [
+ "engine-bs",
+ "engine-core",
+ "engine-fallout",
+ "engine-gamebryo",
+ "engine-havok",
+ "engine-speedtree",
+]
+
+[[package]]
+name = "engine-bs"
+version = "0.1.0"
+dependencies = [
+ "engine-core",
+ "engine-gamebryo",
+]
+
+[[package]]
+name = "engine-core"
+version = "0.1.0"
+
+[[package]]
+name = "engine-fallout"
+version = "0.1.0"
+dependencies = [
+ "engine-bs",
+ "engine-core",
+ "engine-gamebryo",
+ "engine-havok",
+ "engine-speedtree",
+]
+
+[[package]]
+name = "engine-gamebryo"
+version = "0.1.0"
+dependencies = [
+ "engine-core",
+]
+
+[[package]]
+name = "engine-havok"
+version = "0.1.0"
+dependencies = [
+ "engine-core",
+ "engine-gamebryo",
+]
+
+[[package]]
+name = "engine-speedtree"
+version = "0.1.0"
+dependencies = [
+ "engine-core",
+]
 
 [[package]]
 name = "nv-pure"

@@ -13,8 +13,8 @@
 //!   (ADR-0003: `Translated from <addr>` or `(decompiled, FalloutNV.exe ...)`;
 //!   when the marker line itself holds no address, the line above counts).
 //! - `static init (table)`: a static initializer, or an `atexit` destructor,
-//!   run from a generated table (`crates/engine/data/static_initializers.tsv`,
-//!   `crates/engine/data/atexit_destructors.tsv`; research/initgen): engine
+//!   run from a generated table (`crates/engine-core/data/static_initializers.tsv`,
+//!   `crates/engine-core/data/atexit_destructors.tsv`; research/initgen): engine
 //!   coverage, but not a hand translation.
 //! - `traced`: an address in it is cited anywhere else in Rust.
 //! - `platform` / `library`: the platform layer stands in for it (operating
@@ -204,6 +204,12 @@ struct Func {
     incomplete: BTreeSet<String>,
 }
 
+/// Whether a Rust location (`crates/...:line`) is in one of the engine crates:
+/// `crates/engine` (the facade) or `crates/engine-*` (the core and the parts).
+fn in_engine_crate(loc: &str) -> bool {
+    loc.starts_with("crates/engine/") || loc.starts_with("crates/engine-")
+}
+
 impl Func {
     /// The status when no Rust cites the function ([`func_status`]).
     fn base(&self) -> &'static str {
@@ -211,7 +217,7 @@ impl Func {
     }
 
     /// Translated, run from the static-initializer table or replaced inside
-    /// `crates/engine`: the engine has it. A translation elsewhere (an older
+    /// the engine crates ([`in_engine_crate`]): the engine has it. A translation elsewhere (an older
     /// marker in `crates/world`) still needs its engine version.
     fn in_engine(&self) -> bool {
         !self.partial_in_engine()
@@ -220,13 +226,11 @@ impl Func {
                 .iter()
                 .chain(&self.table)
                 .chain(&self.replaced)
-                .any(|l| l.starts_with("crates/engine/"))
+                .any(|l| in_engine_crate(l))
     }
 
     fn partial_in_engine(&self) -> bool {
-        self.incomplete
-            .iter()
-            .any(|l| l.starts_with("crates/engine/"))
+        self.incomplete.iter().any(|l| in_engine_crate(l))
     }
 
     fn queue_status(&self) -> &'static str {
@@ -329,18 +333,18 @@ fn scan(text: &str) -> Vec<(u32, Cite, usize)> {
 }
 
 /// The generated table of the static initializers
-/// (`crates/engine/data/static_initializers.tsv`, research/initgen): each
+/// (`crates/engine-core/data/static_initializers.tsv`, research/initgen): each
 /// row runs the `__cinit` entry in its first column through the shape
-/// executors of `crates/engine/src/static_init.rs`. It counts toward
+/// executors of `crates/engine-core/src/static_init.rs`. It counts toward
 /// coverage under its own status ([`TABLE`]), not as a hand translation.
-const INITIALIZER_TABLE: &str = "crates/engine/data/static_initializers.tsv";
+const INITIALIZER_TABLE: &str = "crates/engine-core/data/static_initializers.tsv";
 
 /// The generated table of the `atexit` destructors
-/// (`crates/engine/data/atexit_destructors.tsv`, research/initgen `--atexit`):
+/// (`crates/engine-core/data/atexit_destructors.tsv`, research/initgen `--atexit`):
 /// each row is the translation of the function in its first column
-/// (`crates/engine/src/static_exit.rs`), counted exactly as the rows of
+/// (`crates/engine-core/src/static_exit.rs`), counted exactly as the rows of
 /// [`INITIALIZER_TABLE`].
-const EXIT_TABLE: &str = "crates/engine/data/atexit_destructors.tsv";
+const EXIT_TABLE: &str = "crates/engine-core/data/atexit_destructors.tsv";
 
 /// Every generated table whose rows count as [`TABLE`].
 const TABLES: [&str; 2] = [INITIALIZER_TABLE, EXIT_TABLE];
@@ -567,8 +571,8 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
         "| Status | Meaning |\n| --- | --- |\n\
          | translated | cited on a translation marker (ADR-0003) in Rust |\n\
          | static init (table) | a static initializer or an `atexit` destructor run \
-         from a generated table (`crates/engine/data/static_initializers.tsv`, \
-         `crates/engine/data/atexit_destructors.tsv`; research/initgen), not a hand \
+         from a generated table (`crates/engine-core/data/static_initializers.tsv`, \
+         `crates/engine-core/data/atexit_destructors.tsv`; research/initgen), not a hand \
          translation |\n\
          | traced | cited elsewhere in Rust |\n\
          | platform | the platform layer stands in for it: OS glue, the Direct3D 9 / D3DX \
@@ -870,7 +874,6 @@ fn main() {
             }
         }
     }
-    let units_dir = root.join("crates/engine/src/units");
     if let Some(a) = args.first() {
         if !matches!(
             a.as_str(),
@@ -882,7 +885,7 @@ fn main() {
     }
     match args.first().map(String::as_str) {
         Some("units") => {
-            match units::regenerate(&units_dir) {
+            match units::regenerate(&root) {
                 Ok(n) => println!("ledger: {n} unit modules"),
                 Err(e) => {
                     eprintln!("ledger: {e}");
@@ -904,7 +907,7 @@ fn main() {
                     continue;
                 }
                 if done.insert(f.unit.clone()) {
-                    match units::scaffold(&units_dir, &f.unit, &f.subsystem) {
+                    match units::scaffold(&root, &f.unit, &f.subsystem) {
                         Ok(rel) => println!("{}	{rel}", f.unit),
                         Err(e) => {
                             eprintln!("ledger: {e}");
@@ -913,14 +916,14 @@ fn main() {
                     }
                 }
             }
-            if let Err(e) = units::regenerate(&units_dir) {
+            if let Err(e) = units::regenerate(&root) {
                 eprintln!("ledger: {e}");
                 std::process::exit(2);
             }
             return;
         }
         Some("queue") => {
-            queue(&funcs, &args[1..]);
+            queue(&root, &funcs, &args[1..]);
             return;
         }
         _ => {}
@@ -984,10 +987,10 @@ fn main() {
     );
 }
 
-/// `queue`: functions the engine crate does not have yet, per unit
-/// (unit, subsystem, functions, bytes, file), largest first. `queue <unit>`: that unit's functions (address, size, status,
+/// `queue`: functions the engine crates do not have yet, per unit
+/// (unit, subsystem, functions, bytes, file, crate), largest first. `queue <unit>`: that unit's functions (address, size, status,
 /// name), the work list for one translator.
-fn queue(funcs: &[Func], args: &[String]) {
+fn queue(root: &Path, funcs: &[Func], args: &[String]) {
     if let Some(unit) = args.first() {
         // Optional address range [lo, hi): one part of a unit split between
         // several translators.
@@ -1020,8 +1023,8 @@ fn queue(funcs: &[Func], args: &[String]) {
     let mut rows: Vec<_> = per.into_iter().collect();
     rows.sort_by(|a, b| b.1 .1.cmp(&a.1 .1).then(a.0.cmp(&b.0)));
     for ((sub, unit), (n, bytes)) in rows {
-        let (d, s) = units::module_of(unit, sub);
-        println!("{unit}\t{sub}\t{n}\t{bytes}\tunits/{d}/{s}.rs");
+        let (file, krate) = units::unit_path(root, unit, sub);
+        println!("{unit}\t{sub}\t{n}\t{bytes}\t{file}\t{krate}");
     }
 }
 
@@ -1091,6 +1094,19 @@ mod tests {
         assert!(got
             .iter()
             .any(|&(a, t, _)| a == 0x00afe220 && t == Cite::Translated));
+    }
+
+    #[test]
+    fn every_engine_crate_counts_as_the_engine() {
+        assert!(in_engine_crate("crates/engine/src/lib.rs:1"));
+        assert!(in_engine_crate(
+            "crates/engine-havok/src/units/havok_sdk/hkaabb.rs:7"
+        ));
+        assert!(in_engine_crate(
+            "crates/engine-core/data/atexit_destructors.tsv:2"
+        ));
+        assert!(!in_engine_crate("crates/world/src/ai.rs:1"));
+        assert!(!in_engine_crate("crates/enginex/src/ai.rs:1"));
     }
 
     #[test]

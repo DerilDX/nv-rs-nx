@@ -1,15 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="800" height="96" viewBox="0 0 800 96" role="img" aria-label="Engine port progress: 39.2% translated by hand, 23.8% start-up table, 7.2% shut-down table, 70.2% covered in all">
-  <title>Engine port progress (2026-10-17)</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="96" viewBox="0 0 800 96" role="img" aria-label="Engine port progress: 41.6% translated by hand, 23.8% start-up table, 7.2% shut-down table, 72.6% covered in all">
+  <title>Engine port progress (2026-10-18)</title>
   <rect x="0" y="0" width="800" height="96" rx="10" fill="#14110b"/>
   <text x="20" y="30" font-family="Consolas, 'Courier New', monospace" font-size="15" fill="#f2c14e">ENGINE PORT · FalloutNV.exe 1.4.0.525</text>
-  <text x="780" y="30" text-anchor="end" font-family="Consolas, 'Courier New', monospace" font-size="15" fill="#f2c14e">70.2%</text>
+  <text x="780" y="30" text-anchor="end" font-family="Consolas, 'Courier New', monospace" font-size="15" fill="#f2c14e">72.6%</text>
   <rect x="20" y="42" width="760" height="18" rx="4" fill="#2b2418"/>
-  <rect x="20" y="42" width="298" height="18" rx="4" fill="#f2c14e"/>
-  <rect x="314" y="42" width="185" height="18" fill="#a77d2a"/>
-  <rect x="495" y="42" width="59" height="18" fill="#6e5420"/>
+  <rect x="20" y="42" width="316" height="18" rx="4" fill="#f2c14e"/>
+  <rect x="332" y="42" width="185" height="18" fill="#a77d2a"/>
+  <rect x="513" y="42" width="59" height="18" fill="#6e5420"/>
   <rect x="20" y="42" width="760" height="18" rx="4" fill="none" stroke="#5c4a26" stroke-width="1"/>
   <rect x="20" y="72" width="10" height="10" fill="#f2c14e"/>
-  <text x="36" y="81" font-family="Consolas, 'Courier New', monospace" font-size="12" fill="#d9c9a3">25,986 by hand (39.2%)</text>
+  <text x="36" y="81" font-family="Consolas, 'Courier New', monospace" font-size="12" fill="#d9c9a3">27,532 by hand (41.6%)</text>
   <rect x="220" y="72" width="10" height="10" fill="#a77d2a"/>
   <text x="236" y="81" font-family="Consolas, 'Courier New', monospace" font-size="12" fill="#d9c9a3">15,762 start-up table (23.8%)</text>
   <rect x="440" y="72" width="10" height="10" fill="#6e5420"/>
