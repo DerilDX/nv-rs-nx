@@ -30,11 +30,27 @@ pub fn fn_00c4fc50(e: &mut Engine, this: Ptr, stream: Ptr) {
     e.call(LINK_OBJECT_TARGET_00C4FA10, &args![this, stream]);
 }
 
+/// `BSMultiBoundShape::BSMultiBoundShape` (`00c4f980`, `thiscall`) and
+/// `BSMultiBoundSphere`'s vtable (`0101ea8c`).
+const SHAPE_CONSTRUCTOR: u32 = 0x00c4_f980;
+const SPHERE_VTABLE: u32 = 0x0101_ea8c;
+
+// Translated from 00c4fb10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundSphere::BSMultiBoundSphere` (Xbox PDB, the overload the
+/// engine map calls `_ov2`): the `BSMultiBoundShape` constructor, then the
+/// class's vtable. Answers `this`.
+pub fn bs_multi_bound_sphere_ov2(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(SHAPE_CONSTRUCTOR, &args![this]);
+    e.mem.set_u32(this.addr(), SPHERE_VTABLE);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00c3_8000, fn_00c38000(Ptr, Ptr)),
         entry!(0x00c4_fc50, fn_00c4fc50(Ptr, Ptr)),
+        entry!(0x00c4_fb10, bs_multi_bound_sphere_ov2(Ptr) -> Ptr),
     ]
 }
 
@@ -70,5 +86,22 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
+    }
+
+    #[test]
+    fn sphere_constructor_runs_the_shape_constructor_then_sets_the_vtable() {
+        let mut e = Engine::new();
+        e.register(SHAPE_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0], 0x1111);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x20);
+        assert_eq!(e.call(0x00c4_fb10, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), SPHERE_VTABLE);
+        let log = e.call_log.take().unwrap();
+        assert!(log
+            .iter()
+            .any(|call| call.0 == SHAPE_CONSTRUCTOR && call.1 == vec![this]));
     }
 }

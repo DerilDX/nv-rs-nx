@@ -20,11 +20,50 @@ pub fn fn_008d1550(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// The process list the two functions below walk and change (a global
+/// `BSSimpleList`-shaped list at `011dfe14`).
+const PROCESS_LIST: u32 = 0x011d_fe14;
+/// `008256d0` (`thiscall`, no stack words): whether the list is empty (`AL`).
+const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+/// `006815c0` (`thiscall`, no stack words): the list's first item address.
+const LIST_ITEM: u32 = 0x0068_15c0;
+/// `0063f7b0` (`thiscall`, no stack words): removes the list's head.
+const LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
+/// `00905330` (`thiscall`, `RET 4`): takes the address of an item word.
+const LIST_ADD: u32 = 0x0090_5330;
+
+// Translated from 008d1560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties the list at `011dfe14` (no parameters: `ECX` is not read, plain
+/// `RET`): while `008256d0` says it is not empty, calls the virtual slot
+/// +0x1c4 of the first item and removes the head (`0063f7b0`).
+pub fn fn_008d1560(e: &mut Engine) {
+    while !e.call(LIST_IS_EMPTY, &args![PROCESS_LIST]).bool() {
+        let item_address = e.call(LIST_ITEM, &args![PROCESS_LIST]).u32();
+        let item = e.mem.u32(item_address);
+        e.vcall(item, 0x1c4, &[]);
+        e.call(LIST_REMOVE_HEAD, &args![PROCESS_LIST]);
+    }
+}
+
+// Translated from 008d15b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl`, one word: when `item` is not null, hands the address of its
+/// stack word to `00905330` on the list at `011dfe14`.
+pub fn fn_008d15b0(e: &mut Engine, item: u32) {
+    if item != 0 {
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), item);
+            e.call(LIST_ADD, &args![PROCESS_LIST, slot]);
+        });
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x008d_1160, fn_008d1160(Ptr)),
         entry!(0x008d_1550, fn_008d1550(Ptr, u32) -> u32),
+        entry!(0x008d_1560, fn_008d1560()),
+        entry!(0x008d_15b0, fn_008d15b0(u32)),
     ]
 }
 
@@ -78,5 +117,76 @@ mod a07_thunk_tests {
     #[test]
     fn thunk_008d1550() {
         assert_eq!(check(0x008d_1550, 0x008d_1130, 0x410), 0xdead_beef);
+    }
+}
+
+#[cfg(test)]
+mod process_list_b039_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_008d1560_runs_slot_0x1c4_on_each_item_until_empty() {
+        let mut e = Engine::new();
+        let items = e.mem.alloc(0x10);
+        e.put_vtable(0x0300_0000, &[0; 0x72]);
+        e.mem.set_u32(0x0300_0000 + 0x1c4, 0x0300_1000);
+        e.mem.set_u32(items, 0x0300_0000);
+        e.mem.set_u32(items + 8, 0x0300_0000);
+        // A list of two items: the head index lives in a counter.
+        let slot = e.mem.alloc(8);
+        e.mem.set_u32(slot, items);
+        e.mem.set_u32(slot + 4, 2);
+        e.register_double(LIST_IS_EMPTY, move |e, _| Ret {
+            eax: u32::from(e.mem.u32(slot + 4) == 0),
+            ..Ret::default()
+        });
+        e.register_double(LIST_ITEM, move |_, _| Ret {
+            eax: slot,
+            ..Ret::default()
+        });
+        e.register_double(LIST_REMOVE_HEAD, move |e, _| {
+            let head = e.mem.u32(slot);
+            e.mem.set_u32(slot, head + 8);
+            let left = e.mem.u32(slot + 4);
+            e.mem.set_u32(slot + 4, left - 1);
+            Ret::default()
+        });
+        e.register(0x0300_1000, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x008d_1560, &[]);
+        assert_eq!(
+            calls_to(&e, 0x0300_1000),
+            vec![vec![items], vec![items + 8]]
+        );
+        assert_eq!(calls_to(&e, LIST_REMOVE_HEAD).len(), 2);
+        assert!(calls_to(&e, LIST_REMOVE_HEAD)
+            .iter()
+            .all(|w| w == &vec![PROCESS_LIST]));
+    }
+
+    #[test]
+    fn fn_008d15b0_adds_only_a_non_null_item() {
+        let mut e = Engine::new();
+        e.register_double(LIST_ADD, |e, a| Ret {
+            eax: e.mem.u32(a[1]),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x008d_15b0, &args![0u32]);
+        assert!(calls_to(&e, LIST_ADD).is_empty());
+        e.call(0x008d_15b0, &args![0x1234u32]);
+        let calls = calls_to(&e, LIST_ADD);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0][0], PROCESS_LIST);
     }
 }

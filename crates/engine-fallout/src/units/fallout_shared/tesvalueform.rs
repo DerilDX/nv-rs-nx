@@ -33,9 +33,52 @@ pub fn fn_0048e960(e: &mut Engine, this: Ptr, value: u32) {
     }
 }
 
+/// RTTI type descriptors `.?AVMagicItem@@` and `.?AVAlchemyItem@@`.
+const TYPE_MAGIC_ITEM: u32 = 0x0118_3140;
+const TYPE_ALCHEMY_ITEM: u32 = 0x0118_30cc;
+/// `00726070`: the value of a `TESValueForm` component (`thiscall`, a word).
+const VALUE_FORM_VALUE: u32 = 0x0072_6070;
+/// `_ftol2` (`00ec62c0`): truncates ST0 to an integer (a leading `f64`
+/// argument in the uniform form).
+const FTOL: u32 = 0x00ec_62c0;
+
+// Translated from 0048e8a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESValueForm::GetFormValue` (engine map), `cdecl`: a form's value. A
+/// `TESValueForm` gives its own (`00726070`); a `MagicItem` the float of
+/// the virtual at slot 8 of its component at `+0x0c` (argument 0), an
+/// `AlchemyItem` that of its component at `+0x3c`, each truncated by
+/// `_ftol2`; anything else -1.
+pub fn tes_value_form_get_form_value(e: &mut Engine, form: Ptr) -> i32 {
+    let value_form = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_VALUE_FORM, 0u32],
+        )
+        .u32();
+    if value_form != 0 {
+        return e.call(VALUE_FORM_VALUE, &args![value_form]).i32();
+    }
+    for (target, component) in [(TYPE_MAGIC_ITEM, 0x0cu32), (TYPE_ALCHEMY_ITEM, 0x3c)] {
+        let item = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, TYPE_TES_FORM, target, 0u32],
+            )
+            .u32();
+        if item != 0 {
+            let value = e.vcall(item + component, 8, &args![0u32]).f64();
+            return e.call(FTOL, &args![value]).i32();
+        }
+    }
+    -1
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0048e960, fn_0048e960(Ptr, u32))]
+    vec![
+        entry!(0x0048e960, fn_0048e960(Ptr, u32)),
+        entry!(0x0048_e8a0, tes_value_form_get_form_value(Ptr) -> i32),
+    ]
 }
 
 #[cfg(test)]
@@ -88,5 +131,54 @@ mod tests {
         e.call(0x0048_e960, &args![Ptr::<()>::new(component), 77u32]);
         assert_eq!(e.mem.u32(component + 4), 77);
         assert!(e.call_log.unwrap().iter().all(|c| c.0 != HOOK));
+    }
+}
+
+#[cfg(test)]
+mod b040_tests {
+    use super::*;
+
+    /// A cast double that answers `answer` for the target type `hit`.
+    fn get_value_engine(hit: u32, answer: u32) -> Engine {
+        let mut e = Engine::new();
+        e.register_double(RT_DYNAMIC_CAST, move |_, a| {
+            if a[3] == hit { answer } else { 0 }.into_ret()
+        });
+        e.register(VALUE_FORM_VALUE, |_, _| 42u32.into_ret());
+        e.register(0x7000_0008, |_, _| Ret {
+            st0: 7.75,
+            ..Ret::default()
+        });
+        e.register(FTOL, |_, a| {
+            (f64::from_bits(a[0] as u64 | (a[1] as u64) << 32) as i32).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn get_form_value_by_kind() {
+        let mut e = get_value_engine(TYPE_TES_VALUE_FORM, 0x5000);
+        assert_eq!(e.call(0x0048_e8a0, &args![0x4000u32]).i32(), 42);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(VALUE_FORM_VALUE, vec![0x5000])));
+        assert!(log.contains(&(
+            RT_DYNAMIC_CAST,
+            vec![0x4000, 0, TYPE_TES_FORM, TYPE_TES_VALUE_FORM, 0]
+        )));
+
+        for (kind, component) in [(TYPE_MAGIC_ITEM, 0x0cu32), (TYPE_ALCHEMY_ITEM, 0x3c)] {
+            let item = 0x0900_0000;
+            let mut e = get_value_engine(kind, item);
+            e.map(item, 0x100);
+            e.put_vtable(0x0800_0000, &[0, 0, 0x7000_0008]);
+            e.mem.set_u32(item + component, 0x0800_0000);
+            assert_eq!(e.call(0x0048_e8a0, &args![0x4000u32]).i32(), 7);
+            let log = e.call_log.take().unwrap();
+            assert!(log.contains(&(0x7000_0008, vec![item + component, 0])));
+        }
+
+        let mut e = get_value_engine(0, 0);
+        assert_eq!(e.call(0x0048_e8a0, &args![0x4000u32]).i32(), -1);
     }
 }

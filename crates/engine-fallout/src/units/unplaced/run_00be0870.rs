@@ -76,9 +76,22 @@ pub fn fn_00be08f0(e: &mut Engine, this: Ptr, program: u32) -> Ptr {
     this
 }
 
+/// `00e804d0` (`cdecl`, one word; unit `geometrydecalshader.cpp` in the engine map, which
+/// names it `GeometryDecalShader::LoadStagesAndPasses`, unconfirmed for this body).
+const PASS_STEP_00E804D0: u32 = 0x00e8_04d0;
+
+// Translated from 00be08e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; it sits in shader vtables, `thiscall`, no stack words):
+/// calls `00e804d0` with the address of `this + 0x5c` and answers true (only `AL` is set).
+pub fn fn_00be08e0(e: &mut Engine, this: Ptr) -> bool {
+    e.call(PASS_STEP_00E804D0, &args![this.addr().wrapping_add(0x5c)]);
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00be_08e0, fn_00be08e0(Ptr) -> bool),
         entry!(0x00be0870, fn_00be0870(Ptr) -> bool),
         entry!(0x00be08b0, fn_00be08b0(Ptr)),
         entry!(0x00be08c0, fn_00be08c0(Ptr, Ptr)),
@@ -172,5 +185,21 @@ mod tests {
         );
         assert_eq!(e.mem.u32(this.addr()), PIXEL_SHADER_VTABLE);
         assert_eq!(e.mem.u32(this.addr() + 0x2c), 0);
+    }
+}
+
+#[cfg(test)]
+mod batch_b011_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00be08e0_passes_this_plus_0x5c() {
+        let mut e = Engine::new();
+        e.register(PASS_STEP_00E804D0, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00be_08e0, &args![0x1000u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (PASS_STEP_00E804D0, vec![0x105c]));
+        assert_eq!(log.len(), 2);
     }
 }

@@ -4,7 +4,49 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+// Translated from 00a92660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the four floats at `this` equal the four at `other`, compared
+/// in order (x87 equality: a NaN is never equal); the engine map has no
+/// name. Answers 1 or 0 in `EAX`.
+pub fn fn_00a92660(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    for i in 0..4 {
+        let left = e.mem.f32(this.addr() + 4 * i);
+        let right = e.mem.f32(other.addr() + 4 * i);
+        if right != left {
+            return false;
+        }
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x00a9_2660, fn_00a92660(Ptr, Ptr) -> bool)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn four_floats_compare_equal_only_when_all_match() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        let other = e.mem.alloc(0x10);
+        for i in 0..4 {
+            e.mem.set_f32(this + 4 * i, i as f32);
+            e.mem.set_f32(other + 4 * i, i as f32);
+        }
+        assert_eq!(e.call(0x00a9_2660, &args![this, other]).u32(), 1);
+        e.mem.set_f32(other + 12, 9.0);
+        assert_eq!(e.call(0x00a9_2660, &args![this, other]).u32(), 0);
+        e.mem.set_f32(other + 12, 3.0);
+        e.mem.set_f32(this, f32::NAN);
+        e.mem.set_f32(other, f32::NAN);
+        assert_eq!(e.call(0x00a9_2660, &args![this, other]).u32(), 0);
+        // Signed zeros are equal.
+        e.mem.set_f32(this, -0.0);
+        e.mem.set_f32(other, 0.0);
+        assert_eq!(e.call(0x00a9_2660, &args![this, other]).u32(), 1);
+    }
 }

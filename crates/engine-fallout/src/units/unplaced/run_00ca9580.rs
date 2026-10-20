@@ -45,11 +45,32 @@ pub fn fn_00ca9600(e: &mut Engine, this: Ptr) -> u32 {
     e.mem.u32(this.addr() + 0x10)
 }
 
+/// `hkBaseObject`'s vtable (`0102e388`; RTTI `.?AVhkBaseObject@@`), which
+/// the destructor leaves in place.
+const VTABLE_HK_BASE_OBJECT: u32 = 0x0102_e388;
+/// `00c905b0`: `__thiscall` on the object at +0xC, no arguments (the
+/// counterpart of [`REFERENCED_OBJECT_ADD_REFERENCE`] in `hkreferencedobject.cpp`).
+const REFERENCED_OBJECT_REMOVE_REFERENCE: u32 = 0x00c9_05b0;
+
+// Translated from 00ca95e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name. The destructor of the object [`fn_00ca9580`] constructs
+/// (its vtable's RTTI is `.?AVhkpCharacterContext@@`): sets that vtable,
+/// calls `00c905b0` on the object at +0xC, then sets `hkBaseObject`'s
+/// vtable.
+pub fn fn_00ca95e0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let referenced = e.mem.u32(base + 0xc);
+    e.mem.set_u32(base, VTABLE);
+    e.call(REFERENCED_OBJECT_REMOVE_REFERENCE, &args![referenced]);
+    e.mem.set_u32(base, VTABLE_HK_BASE_OBJECT);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ca9580, fn_00ca9580(Ptr, u32, u32) -> Ptr),
         entry!(0x00ca9600, fn_00ca9600(Ptr) -> u32),
+        entry!(0x00ca_95e0, fn_00ca95e0(Ptr)),
     ]
 }
 
@@ -100,5 +121,34 @@ mod tests {
             e.call(0x00ca_9600, &args![Ptr::<()>::new(this)]).u32(),
             0xabcd_1234
         );
+    }
+}
+
+#[cfg(test)]
+mod b040_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00ca95e0_releases_the_owner_and_leaves_the_base_vtable() {
+        let mut e = Engine::new();
+        e.register(REFERENCED_OBJECT_REMOVE_REFERENCE, |e, _| {
+            // The class's own vtable is in place while the owner is released.
+            assert_eq!(e.mem.u32(e.mem.u32(0x7ff0)), VTABLE);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x28);
+        e.map(0x7000, 0x1000);
+        e.mem.set_u32(0x7ff0, this);
+        e.mem.set_u32(this + 0xc, 0x6000);
+        e.call_log = Some(vec![]);
+        e.call(0x00ca_95e0, &args![Ptr::<()>::new(this)]);
+        assert_eq!(e.mem.u32(this), VTABLE_HK_BASE_OBJECT);
+        let log = e.call_log.take().unwrap();
+        let inner: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == REFERENCED_OBJECT_REMOVE_REFERENCE)
+            .collect();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].1, vec![0x6000]);
     }
 }

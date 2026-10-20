@@ -88,11 +88,127 @@ pub fn ni_shader_factory_release_global_shader_constant(e: &mut Engine, name: Pt
     true
 }
 
+// Translated from 00a9fff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderFactory::GetInstance` (Xbox PDB), no arguments: the factory singleton word at
+/// `011f6044`.
+pub fn ni_shader_factory_get_instance(e: &mut Engine) -> u32 {
+    e.mem.u32(SHADER_FACTORY)
+}
+
+// Translated from 00aa0000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): when there is a factory
+/// (`011f6044`), jumps to its vtable slot `+0x20` (no arguments; the callers
+/// do not use a result).
+pub fn fn_00aa0000(e: &mut Engine) {
+    let factory = e.global::<u32>(SHADER_FACTORY);
+    if factory != 0 {
+        e.vcall(factory, 0x20, &args![]);
+    }
+}
+
+/// `NiShaderFactory`'s vtable (`010a2164`, RTTI `.?AVNiShaderFactory@@`).
+const NI_SHADER_FACTORY_VTABLE: u32 = 0x010a_2164;
+/// The vtables the map at `+8` gets while it is taken down: `010a2154`
+/// (RTTI `NiTFixedStringMap<NiGlobalConstantEntry *>`) and `010a2138` (RTTI
+/// `NiTFixedStringMapBase<..>`).
+const CONSTANT_MAP_VTABLE: u32 = 0x010a_2154;
+const CONSTANT_MAP_BASE_VTABLE: u32 = 0x010a_2138;
+/// `NiTFixedStringMapBase<..>::GetNext` (`00a8f770`, `thiscall` on the map,
+/// `RET 0xc`: the position, the key and the value, all by address).
+const MAP_GET_NEXT: u32 = 0x00a8_f770;
+/// `NiTFixedStringMapBase<..>::RemoveAll` (`00aa01f0`, `thiscall`, no stack
+/// words).
+const MAP_REMOVE_ALL: u32 = 0x00aa_01f0;
+/// The Gamebryo free (`00aa10f0`, `cdecl`, one word).
+const NI_FREE: u32 = 0x00aa_10f0;
+/// `NiRefObject`'s vtable (`0101dce4`) and its object count (`011f4400`).
+const NI_REF_OBJECT_VTABLE: u32 = 0x0101_dce4;
+const NI_REF_OBJECT_COUNT: u32 = 0x011f_4400;
+
+// Translated from 00aa05a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderFactory::~NiShaderFactory` (engine map name), `thiscall`, no stack
+/// words. Stores the factory's vtable; when there is a factory in `011f6044`
+/// its slot `+0x20` runs, then (when there still is one) its slot `+0x34`. The
+/// global-constant map at `+8` (hash size `+0xc`, buckets `+0x10`) is walked
+/// from its first item: for each `GetNext` (key starting as the empty name,
+/// value 0) with a value, the constant is released
+/// (`ReleaseGlobalShaderConstant` with the key's address), and the key gives
+/// up its reference (unless it is the empty name). When `011f6044` (as last
+/// read) is this factory it is cleared. Then the map is emptied under each of
+/// its two vtables (`RemoveAll`), its buckets freed, `NiRefObject`'s vtable
+/// stored and the object count decremented.
+pub fn ni_shader_factory_destructor(e: &mut Engine, this: Ptr) {
+    let t = this.addr();
+    e.mem.set_u32(t, NI_SHADER_FACTORY_VTABLE);
+    let mut factory = e.global::<u32>(SHADER_FACTORY);
+    if factory != 0 {
+        e.vcall(factory, 0x20, &args![]);
+        factory = e.global::<u32>(SHADER_FACTORY);
+        if factory != 0 {
+            e.vcall(factory, 0x34, &args![]);
+            factory = e.global::<u32>(SHADER_FACTORY);
+        }
+    }
+    let map = t + 8;
+    let size = e.mem.u32(map + 4);
+    let buckets = e.mem.u32(map + 8);
+    let mut first = 0;
+    let mut index = 0;
+    while index < size {
+        let item = e.mem.u32(buckets.wrapping_add(4 * index));
+        if item != 0 {
+            first = item;
+            break;
+        }
+        index += 1;
+    }
+    if first != 0 {
+        e.with_stack(12, |e, frame| {
+            // The frame: the key (+0), the value (+4), the position (+8).
+            let key = frame.addr();
+            let value = key + 4;
+            let position = key + 8;
+            e.mem.set_u32(position, first);
+            loop {
+                let empty = e.global::<u32>(FIXED_STRING_EMPTY);
+                e.mem.set_u32(key, empty);
+                e.mem.set_u32(value, 0);
+                e.call(MAP_GET_NEXT, &args![map, position, key, value]);
+                if e.mem.u32(value) != 0 {
+                    ni_shader_factory_release_global_shader_constant(e, Ptr::new(key));
+                }
+                let name = e.mem.u32(key);
+                if name != e.global::<u32>(FIXED_STRING_EMPTY) {
+                    e.call(INTERLOCKED_DECREMENT, &args![name.wrapping_sub(8)]);
+                }
+                if e.mem.u32(position) == 0 {
+                    break;
+                }
+            }
+        });
+        factory = e.global::<u32>(SHADER_FACTORY);
+    }
+    if factory == t {
+        e.set_global::<u32>(SHADER_FACTORY, 0);
+    }
+    e.mem.set_u32(map, CONSTANT_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![map]);
+    e.mem.set_u32(map, CONSTANT_MAP_BASE_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![map]);
+    let buckets = e.mem.u32(map + 8);
+    e.call(NI_FREE, &args![buckets]);
+    e.mem.set_u32(t, NI_REF_OBJECT_VTABLE);
+    e.call(INTERLOCKED_DECREMENT, &args![NI_REF_OBJECT_COUNT]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00aa06c0, ni_shader_factory_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00aa_04e0, ni_shader_factory_release_global_shader_constant(Ptr) -> bool),
+        entry!(0x00a9_fff0, ni_shader_factory_get_instance() -> u32),
+        entry!(0x00aa_0000, fn_00aa0000()),
+        entry!(0x00aa_05a0, ni_shader_factory_destructor(Ptr)),
     ]
 }
 
@@ -233,5 +349,142 @@ mod release_tests {
         assert!(calls(&e, INTERLOCKED_INCREMENT).is_empty());
         assert!(calls(&e, INTERLOCKED_DECREMENT).is_empty());
         assert_eq!(e.mem.u32(entry + 4), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_b008 {
+    use super::*;
+
+    #[test]
+    fn ni_shader_factory_get_instance_reads_the_global() {
+        let mut e = Engine::new();
+        e.map(SHADER_FACTORY, 4);
+        e.set_global::<u32>(SHADER_FACTORY, 0x4321);
+        assert_eq!(e.call(0x00a9_fff0, &args![]).u32(), 0x4321);
+    }
+
+    #[test]
+    fn fn_00aa0000_calls_the_factory_slot_when_there_is_one() {
+        const SLOT: u32 = 0x0124_0000;
+        let mut e = Engine::new();
+        e.map(SHADER_FACTORY, 4);
+        e.register(SLOT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_0000, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0x20, SLOT);
+        let factory = e.mem.alloc(8);
+        e.mem.set_u32(factory, vtable);
+        e.set_global::<u32>(SHADER_FACTORY, factory);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_0000, &args![]);
+        assert_eq!(e.call_log.take().unwrap()[1], (SLOT, vec![factory]));
+    }
+
+    const SLOT_20: u32 = 0x0124_1000;
+    const SLOT_34: u32 = 0x0124_1010;
+
+    /// A factory with the map buckets `buckets` (item addresses or 0); `GetNext`
+    /// hands out `entries` (key, value, next position) in turn.
+    fn factory(e: &mut Engine, buckets: &[u32], entries: Vec<(u32, u32, u32)>) -> u32 {
+        e.map(SHADER_FACTORY, 4);
+        e.map(FIXED_STRING_EMPTY, 4);
+        e.set_global::<u32>(FIXED_STRING_EMPTY, 0x4444);
+        for f in [
+            SLOT_20,
+            SLOT_34,
+            MAP_REMOVE_ALL,
+            NI_FREE,
+            INTERLOCKED_DECREMENT,
+        ] {
+            e.register(f, |_, _| Ret::default());
+        }
+        let mut entries = entries.into_iter();
+        e.register_double(MAP_GET_NEXT, move |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0x4444);
+            assert_eq!(e.mem.u32(a[3]), 0);
+            let (key, value, next) = entries.next().unwrap();
+            e.mem.set_u32(a[2], key);
+            e.mem.set_u32(a[3], value);
+            e.mem.set_u32(a[1], next);
+            Ret::default()
+        });
+        // The destructor stores the factory's own vtable before calling its slots.
+        e.map(NI_SHADER_FACTORY_VTABLE, 0x40);
+        e.mem.set_u32(NI_SHADER_FACTORY_VTABLE + 0x20, SLOT_20);
+        e.mem.set_u32(NI_SHADER_FACTORY_VTABLE + 0x34, SLOT_34);
+        let this = e.mem.alloc(0x20);
+        let table = e.mem.alloc(4 * buckets.len() as u32 + 4);
+        for (i, b) in buckets.iter().enumerate() {
+            e.mem.set_u32(table + 4 * i as u32, *b);
+        }
+        e.mem.set_u32(this + 0xc, buckets.len() as u32);
+        e.mem.set_u32(this + 0x10, table);
+        this
+    }
+
+    #[test]
+    fn ni_shader_factory_destructor_with_an_empty_map() {
+        let mut e = Engine::new();
+        let this = factory(&mut e, &[0, 0], vec![]);
+        e.set_global::<u32>(SHADER_FACTORY, this);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_05a0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let table = e.mem.u32(this + 0x10);
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (SLOT_20, vec![this]),
+                (SLOT_34, vec![this]),
+                (MAP_REMOVE_ALL, vec![this + 8]),
+                (MAP_REMOVE_ALL, vec![this + 8]),
+                (NI_FREE, vec![table]),
+                (INTERLOCKED_DECREMENT, vec![NI_REF_OBJECT_COUNT]),
+            ]
+        );
+        assert_eq!(e.global::<u32>(SHADER_FACTORY), 0);
+        assert_eq!(e.mem.u32(this), NI_REF_OBJECT_VTABLE);
+        assert_eq!(e.mem.u32(this + 8), CONSTANT_MAP_BASE_VTABLE);
+    }
+
+    #[test]
+    fn ni_shader_factory_destructor_releases_each_entry() {
+        let mut e = Engine::new();
+        let this = factory(
+            &mut e,
+            &[0, 0x9000],
+            vec![(0x8008, 1, 0x9100), (0x4444, 0, 0)],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_05a0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let next: Vec<_> = log.iter().filter(|c| c.0 == MAP_GET_NEXT).collect();
+        assert_eq!(next.len(), 2);
+        assert_eq!(next[0].1[0], this + 8);
+        let decrements: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == INTERLOCKED_DECREMENT)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(decrements, vec![0x8000, NI_REF_OBJECT_COUNT]);
+        // No factory in the global: neither slot runs and the global stays.
+        assert!(log.iter().all(|c| c.0 != SLOT_20 && c.0 != SLOT_34));
+        assert_eq!(e.global::<u32>(SHADER_FACTORY), 0);
+    }
+}
+
+#[cfg(test)]
+mod b000v_tests {
+    use super::*;
+
+    #[test]
+    fn get_instance_reads_the_singleton_word() {
+        let mut e = Engine::new();
+        e.map(SHADER_FACTORY, 4);
+        e.mem.set_u32(SHADER_FACTORY, 0x1234_5678);
+        assert_eq!(e.call(0x00a9_fff0, &args![]).u32(), 0x1234_5678);
     }
 }

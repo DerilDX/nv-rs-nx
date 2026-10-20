@@ -127,6 +127,29 @@ pub fn fn_0051b1d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The vtables `0051b200` stores (offset, vtable), in its order.
+const DESTRUCTOR_VTABLES_0051B200: [(u32, u32); 2] = [(0, 0x0102_ba2c), (0x30, 0x0102_ba04)];
+/// The member and base destructors `0051b200` runs (`thiscall`, no stack word), with the
+/// offset each is called on, in its order: `00483710` (unit `tesform.cpp`) on `this`,
+/// `0048a490` (unit `tesmodeltextureswap.cpp`) on +0x30, and the base `0050e9f0` (unit
+/// `tesobject.cpp`) on `this`.
+const DESTRUCTOR_STEPS_0051B200: [(u32, u32); 3] =
+    [(0x0048_3710, 0), (0x0048_a490, 0x30), (0x0050_e9f0, 0)];
+
+// Translated from 0051b200 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0051b200 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00ef35c3, state variable) is not translated
+/// Unnamed in the engine map (`thiscall`, no stack word): the destructor of the object
+/// `fn_0051b140` builds. Sets the vtables `0102ba2c` (+0) and `0102ba04` (+0x30), then runs
+/// `00483710` on `this`, `0048a490` on +0x30 and the base destructor `0050e9f0` on `this`.
+pub fn fn_0051b200(e: &mut Engine, this: Ptr) {
+    for (offset, vtable) in DESTRUCTOR_VTABLES_0051B200 {
+        e.mem.set_u32(this.addr() + offset, vtable);
+    }
+    for (destructor, offset) in DESTRUCTOR_STEPS_0051B200 {
+        e.call(destructor, &args![this.addr() + offset]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -134,6 +157,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_b130, fn_0051b130(Ptr, u32) -> u32),
         entry!(0x0051_b280, fn_0051b280(Ptr, Ptr) -> bool),
         entry!(0x0051_b1d0, fn_0051b1d0(Ptr, u32) -> Ptr),
+        entry!(0x0051_b200, fn_0051b200(Ptr)),
     ]
 }
 
@@ -319,5 +343,32 @@ mod movement_path_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn fn_0051b200_sets_the_vtables_and_destroys_the_members() {
+        let mut e = Engine::new();
+        for (destructor, _) in DESTRUCTOR_STEPS_0051B200 {
+            e.register(destructor, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_b200, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (0x0048_3710, vec![this]),
+                (0x0048_a490, vec![this + 0x30]),
+                (0x0050_e9f0, vec![this]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this), 0x0102_ba2c);
+        assert_eq!(e.mem.u32(this + 0x30), 0x0102_ba04);
     }
 }

@@ -23,9 +23,25 @@ pub fn fn_00a59c60(e: &mut Engine, this: Ptr, argument: u32) {
     }
 }
 
+// Translated from 00a59c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__thiscall`, one argument (`RET 4`), the twin of `fn_00a59c60` with the slot +0xa8:
+/// calls the virtual method at vtable `+0xa8` of `this` with (`argument`, 0), then, when the
+/// pointer at `+0x18` of `this` is not null, the virtual method at vtable `+0xfc` of that
+/// object. The slot names are not known.
+pub fn fn_00a59c90(e: &mut Engine, this: Ptr, argument: u32) {
+    e.vcall(this.addr(), 0xa8, &args![argument, 0u32]);
+    let child = e.mem.u32(this.addr() + 0x18);
+    if child != 0 {
+        e.vcall(child, SECOND_SLOT, &args![]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a59c60, fn_00a59c60(Ptr, u32))]
+    vec![
+        entry!(0x00a59c60, fn_00a59c60(Ptr, u32)),
+        entry!(0x00a59c90, fn_00a59c90(Ptr, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -81,6 +97,38 @@ mod tests {
         let this = object(&mut e, false);
         e.call_log = Some(vec![]);
         e.call(0x00a5_9c60, &args![this, 0x55u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn fn_00a59c90_calls_slot_a8_then_the_childs_slot() {
+        let mut e = Engine::new();
+        quiet_doubles(&mut e);
+        e.register(0x0070_0020, |_, _| Ret::default());
+        let this = object(&mut e, true);
+        let mut table = vec![0; 0xa8 / 4 + 1];
+        table[0xa8 / 4] = 0x0070_0020;
+        e.put_vtable(0x0300_2000, &table);
+        e.mem.set_u32(this.addr(), 0x0300_2000);
+        let child = e.mem.u32(this.addr() + 0x18);
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_9c90, &args![this, 0x66u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == 0x0070_0020 || c.0 == SECOND)
+            .cloned()
+            .collect();
+        assert_eq!(
+            hits,
+            vec![
+                (0x0070_0020, vec![this.addr(), 0x66, 0]),
+                (SECOND, vec![child])
+            ]
+        );
+        e.mem.set_u32(this.addr() + 0x18, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_9c90, &args![this, 0x66u32]);
         assert_eq!(e.call_log.take().unwrap().len(), 2);
     }
 }

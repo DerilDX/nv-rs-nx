@@ -20,9 +20,26 @@ pub fn fn_00ee88b0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `NiObject`'s destructor (`00a5d3d0`, unit `niobject.cpp`; `thiscall`, no
+/// stack words).
+const NI_OBJECT_DESTRUCT_00A5D3D0: u32 = 0x00a5_d3d0;
+
+// Translated from 00ee88d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `NiShaderDeclaration` destructor body
+/// (`thiscall`, no stack words): stores the vtable `011011ec`, then jumps to
+/// `NiObject`'s destructor `00a5d3d0` with the same `this`.
+pub fn fn_00ee88d0(e: &mut Engine, this: Ptr) {
+    e.mem
+        .set_u32(this.addr(), SHADER_DECLARATION_VTABLE_011011EC);
+    e.call(NI_OBJECT_DESTRUCT_00A5D3D0, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00ee_88b0, fn_00ee88b0(Ptr) -> Ptr)]
+    vec![
+        entry!(0x00ee_88b0, fn_00ee88b0(Ptr) -> Ptr),
+        entry!(0x00ee_88d0, fn_00ee88d0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -42,5 +59,27 @@ mod tests {
         assert_eq!(e.mem.u32(this), SHADER_DECLARATION_VTABLE_011011EC);
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1], (NI_OBJECT_CONSTRUCT_00A5D3A0, vec![this]));
+    }
+}
+
+#[cfg(test)]
+mod tests_b008 {
+    use super::*;
+
+    #[test]
+    fn fn_00ee88d0_stores_the_vtable_and_runs_the_base() {
+        let mut e = Engine::new();
+        e.register(NI_OBJECT_DESTRUCT_00A5D3D0, |_, _| Ret::default());
+        let this = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        e.call(0x00ee_88d0, &args![this]);
+        assert_eq!(e.mem.u32(this), SHADER_DECLARATION_VTABLE_011011EC);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == NI_OBJECT_DESTRUCT_00A5D3D0)
+            .collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![this]);
     }
 }

@@ -141,9 +141,17 @@ pub fn ni_t_pointer_map_delete_item(e: &mut Engine, _this: Ptr, item: Ptr) {
     }
 }
 
+// Translated from 00e91f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nid3dshaderfactory.cpp`), no arguments: the shader factory
+/// word at `0126fa0c`.
+pub fn fn_00e91f10(e: &mut Engine) -> u32 {
+    e.mem.u32(FACTORY_SLOT)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e9_1f10, fn_00e91f10() -> u32),
         entry!(0x00e6_e830, ni_t_pointer_map_delete_item(Ptr, Ptr)),
         entry!(0x00e9_2cf0, fn_00e92cf0(Ptr) -> Ptr),
         entry!(0x00e9_2e60, ni_d3d_shader_factory_sdm_init()),
@@ -310,5 +318,18 @@ mod delete_item_tests {
         e.call(0x00e6_e830, &args![0u32, item]);
         assert!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).is_empty());
         assert_eq!(e.global::<u32>(FREE_LIST_HEAD_011C5F58), item);
+    }
+}
+
+#[cfg(test)]
+mod b000w_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e91f10_reads_the_factory_word() {
+        let mut e = Engine::new();
+        e.map(FACTORY_SLOT, 4);
+        e.mem.set_u32(FACTORY_SLOT, 0x4321);
+        assert_eq!(e.call(0x00e9_1f10, &args![]).u32(), 0x4321);
     }
 }

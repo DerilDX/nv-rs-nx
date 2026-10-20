@@ -105,9 +105,106 @@ pub fn ni_d3d_shader_program_factory_register_shader_creator(
     true
 }
 
+/// The program factory's renderer globals (`0126fa1c` the renderer, `0126fa18` its device,
+/// counted with the device's `AddRef`/`Release`, slots 4 and 8, `0126fa20` its shader
+/// library word, the renderer's +0x8b8).
+const FACTORY_RENDERER_0126FA1C: u32 = 0x0126_fa1c;
+const FACTORY_DEVICE_0126FA18: u32 = 0x0126_fa18;
+const FACTORY_LIBRARY_0126FA20: u32 = 0x0126_fa20;
+
+// Translated from 00e92f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nid3dshaderprogramfactory.cpp`), `cdecl`, the renderer: keeps
+/// it at `0126fa1c`. With a renderer, the device held at `0126fa18` is released (slot 8) and
+/// replaced by the renderer's device (+0x288; counted, slot 4, when not null), and `0126fa20`
+/// gets the renderer's +0x8b8. Without one, `0126fa20` is cleared, the held device released
+/// and `0126fa18` cleared.
+pub fn fn_00e92f70(e: &mut Engine, renderer: u32) {
+    e.mem.set_u32(FACTORY_RENDERER_0126FA1C, renderer);
+    if renderer != 0 {
+        let device = e.mem.u32(renderer.wrapping_add(0x288));
+        let held = e.mem.u32(FACTORY_DEVICE_0126FA18);
+        if held != 0 {
+            e.vcall(held, 8, &args![]);
+        }
+        e.mem.set_u32(FACTORY_DEVICE_0126FA18, device);
+        if device != 0 {
+            e.vcall(device, 4, &args![]);
+        }
+        let renderer = e.mem.u32(FACTORY_RENDERER_0126FA1C);
+        let library = e.mem.u32(renderer.wrapping_add(0x8b8));
+        e.mem.set_u32(FACTORY_LIBRARY_0126FA20, library);
+    } else {
+        let held = e.mem.u32(FACTORY_DEVICE_0126FA18);
+        e.mem.set_u32(FACTORY_LIBRARY_0126FA20, 0);
+        if held != 0 {
+            e.vcall(held, 8, &args![]);
+        }
+        e.mem.set_u32(FACTORY_DEVICE_0126FA18, 0);
+    }
+}
+
+/// The `NiRefObject` table and the global object count (`011f4400`, counted up with
+/// `InterlockedIncrement`), the factory's table (`010f0f70`) and its two maps' base and
+/// final tables (`010f0df0` then `010f0f10`, `010f0e50` then `010f0f30`).
+const NI_REF_OBJECT_VTABLE: u32 = 0x0101_dce4;
+const OBJECT_COUNT_011F4400: u32 = 0x011f_4400;
+const IMPORT_INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+const PROGRAM_FACTORY_VTABLE: u32 = 0x010f_0f70;
+const FIRST_MAP_BASE_VTABLE: u32 = 0x010f_0df0;
+const FIRST_MAP_VTABLE: u32 = 0x010f_0f10;
+const SECOND_MAP_BASE_VTABLE: u32 = 0x010f_0e50;
+const SECOND_MAP_VTABLE: u32 = 0x010f_0f30;
+
+/// One of the factory's maps (0x14 bytes from the memory manager): base table, 0x3b buckets
+/// (0xec bytes of `00aa1070`, cleared), count 0, byte +0x10 cleared, final table; null when
+/// the allocation fails.
+fn program_map(e: &mut Engine, base_vtable: u32, vtable: u32) -> u32 {
+    let map = e
+        .call(
+            MEMORY_MANAGER_ALLOCATE,
+            &args![MEMORY_MANAGER_OBJECT, 0x14u32],
+        )
+        .u32();
+    if map == 0 {
+        return 0;
+    }
+    e.mem.set_u32(map, base_vtable);
+    e.mem.set_u32(map + 4, 0x3b);
+    e.mem.set_u32(map + 0xc, 0);
+    let buckets = e.call(ALLOCATE_BLOCK, &args![0xecu32]).u32();
+    e.mem.set_u32(map + 8, buckets);
+    let size = e.mem.u32(map + 4).wrapping_mul(4);
+    e.call(MEMSET, &args![buckets, 0u32, size]);
+    e.mem.set_u8(map + 0x10, 0);
+    e.mem.set_u32(map, vtable);
+    map
+}
+
+// Translated from 00e93ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nid3dshaderprogramfactory.cpp`): the shader program factory
+/// constructor, `thiscall`, no stack words. The `NiRefObject` start, the factory's table, +8,
+/// +0xc and +0x10 cleared, and its two maps at +0x14 and +0x18. Answers `this`.
+pub fn fn_00e93ad0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, NI_REF_OBJECT_VTABLE);
+    e.mem.set_u32(base + 4, 0);
+    e.call(IMPORT_INTERLOCKED_INCREMENT, &args![OBJECT_COUNT_011F4400]);
+    e.mem.set_u32(base, PROGRAM_FACTORY_VTABLE);
+    e.mem.set_u32(base + 0x10, 0);
+    e.mem.set_u32(base + 8, 0);
+    e.mem.set_u32(base + 0xc, 0);
+    let first = program_map(e, FIRST_MAP_BASE_VTABLE, FIRST_MAP_VTABLE);
+    e.mem.set_u32(base + 0x14, first);
+    let second = program_map(e, SECOND_MAP_BASE_VTABLE, SECOND_MAP_VTABLE);
+    e.mem.set_u32(base + 0x18, second);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e9_2f70, fn_00e92f70(u32)),
+        entry!(0x00e9_3ad0, fn_00e93ad0(Ptr) -> Ptr),
         entry!(
             0x00e9_3d80,
             ni_d3d_shader_program_factory_create_shader_creator_map()
@@ -326,5 +423,55 @@ mod start_up_tests {
     fn refuses_a_null_name() {
         let mut e = engine();
         assert!(!e.call(0x00e9_3e70, &args![0u32, 1u32]).bool());
+    }
+}
+
+#[cfg(test)]
+mod b000w_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e92f70_swaps_the_held_device() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.put_vtable(0x6000, &[0, 0x6104, 0x6108]);
+        e.register(0x6104, |_, _| Ret::default());
+        e.register(0x6108, |_, _| Ret::default());
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(device, 0x6000);
+        let renderer = e.mem.alloc(0x900);
+        e.mem.set_u32(renderer + 0x288, device);
+        e.mem.set_u32(renderer + 0x8b8, 0x66);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_2f70, &args![renderer]);
+        assert_eq!(e.mem.u32(FACTORY_DEVICE_0126FA18), device);
+        assert_eq!(e.mem.u32(FACTORY_LIBRARY_0126FA20), 0x66);
+        e.call(0x00e9_2f70, &args![0u32]);
+        assert_eq!(e.mem.u32(FACTORY_DEVICE_0126FA18), 0);
+        assert_eq!(e.mem.u32(FACTORY_LIBRARY_0126FA20), 0);
+        let log = e.call_log.clone().unwrap();
+        assert!(log.contains(&(0x6104, vec![device])));
+        assert!(log.contains(&(0x6108, vec![device])));
+    }
+
+    #[test]
+    fn fn_00e93ad0_makes_the_two_maps() {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |_, _| Ret::default());
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(ALLOCATE_BLOCK, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(MEMSET, |_, _| Ret::default());
+        let this = e.mem.alloc(0x1c);
+        assert_eq!(e.call(0x00e9_3ad0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), PROGRAM_FACTORY_VTABLE);
+        let first = e.mem.u32(this + 0x14);
+        let second = e.mem.u32(this + 0x18);
+        assert_eq!(e.mem.u32(first), FIRST_MAP_VTABLE);
+        assert_eq!(e.mem.u32(second), SECOND_MAP_VTABLE);
+        assert_eq!(e.mem.u32(first + 4), 0x3b);
+        e.register(MEMORY_MANAGER_ALLOCATE, |_, _| 0u32.into_ret());
+        e.call(0x00e9_3ad0, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        assert_eq!(e.mem.u32(this + 0x18), 0);
     }
 }

@@ -18,11 +18,45 @@ pub fn fn_00cabf40(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// `bhkCharacterProxy`'s vtable (`010c45cc`; RTTI `.?AVbhkCharacterProxy@@`).
+const VTABLE_BHK_CHARACTER_PROXY: u32 = 0x010c_45cc;
+/// The word the destructor calls through (`CALL dword ptr [010c4660]`, a
+/// slot of that vtable read at run time), `thiscall` on `this`.
+const CALL_SLOT_010C4660: u32 = 0x010c_4660;
+/// `bhkSerializable::Kill` (engine map), `thiscall`.
+const BHK_SERIALIZABLE_KILL: u32 = 0x00c8_76a0;
+/// The instance count the destructor decrements (a word).
+const INSTANCE_COUNT_01268340: u32 = 0x0126_8340;
+/// `bhkCharacterPointCollector::~bhkCharacterPointCollector` (engine map),
+/// on `this + 0x10`.
+const POINT_COLLECTOR_DESTRUCTOR: u32 = 0x00cd_3490;
+/// `bhkSerializable::~bhkSerializable` (engine map), `thiscall`.
+const BHK_SERIALIZABLE_DESTRUCTOR: u32 = 0x00c8_77b0;
+
+// Translated from 00cabf50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00cabf50 - the C++ exception frame (FS:[0]) is not translated
+/// The `bhkCharacterProxy` destructor body (named by the vtable it sets):
+/// calls the function in the word at `010c4660` on `this`, then
+/// `bhkSerializable::Kill`, decrements the count at `01268340`, destroys the
+/// point collector at +0x10 and runs `~bhkSerializable`.
+pub fn fn_00cabf50(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, VTABLE_BHK_CHARACTER_PROXY);
+    let target = e.global::<u32>(CALL_SLOT_010C4660);
+    e.call(target, &args![base]);
+    e.call(BHK_SERIALIZABLE_KILL, &args![base]);
+    let count = e.global::<u32>(INSTANCE_COUNT_01268340);
+    e.set_global(INSTANCE_COUNT_01268340, count.wrapping_sub(1));
+    e.call(POINT_COLLECTOR_DESTRUCTOR, &args![base + 0x10]);
+    e.call(BHK_SERIALIZABLE_DESTRUCTOR, &args![base]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ca_bf30, fn_00cabf30(Ptr, u32) -> u32),
         entry!(0x00ca_bf40, fn_00cabf40(Ptr, u32) -> u32),
+        entry!(0x00ca_bf50, fn_00cabf50(Ptr)),
     ]
 }
 
@@ -65,6 +99,43 @@ mod le81_thunk_tests {
         assert_eq!(
             check(0x00ca_bf40, 0x00ca_c120, 0xc, &[0x1]).u32(),
             0xdead_beef
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fn_00cabf50_tears_down_in_order() {
+        let mut e = Engine::new();
+        e.map(CALL_SLOT_010C4660, 4);
+        e.set_global(CALL_SLOT_010C4660, 0x7000_0094u32);
+        e.map(INSTANCE_COUNT_01268340, 4);
+        e.set_global(INSTANCE_COUNT_01268340, 3u32);
+        for addr in [
+            0x7000_0094,
+            BHK_SERIALIZABLE_KILL,
+            POINT_COLLECTOR_DESTRUCTOR,
+            BHK_SERIALIZABLE_DESTRUCTOR,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x00ca_bf50, &args![Ptr::<()>::new(this)]);
+        assert_eq!(e.mem.u32(this), VTABLE_BHK_CHARACTER_PROXY);
+        assert_eq!(e.global::<u32>(INSTANCE_COUNT_01268340), 2);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (0x7000_0094, vec![this]),
+                (BHK_SERIALIZABLE_KILL, vec![this]),
+                (POINT_COLLECTOR_DESTRUCTOR, vec![this + 0x10]),
+                (BHK_SERIALIZABLE_DESTRUCTOR, vec![this]),
+            ]
         );
     }
 }

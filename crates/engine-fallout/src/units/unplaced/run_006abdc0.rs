@@ -20,9 +20,27 @@ pub fn fn_006abdc0(e: &mut Engine, this: Ptr) {
     e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
 }
 
+/// The vtable of `BSScrapArray<NavMeshSearchLink, 1024>` (its class confirmed by the RTTI
+/// before it).
+const SCRAP_ARRAY_VTABLE_0106B8B4: u32 = 0x0106_b8b4;
+
+// Translated from 006abde0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `BSScrapArray<NavMeshSearchLink, 1024>` (unnamed in the map; `thiscall`):
+/// stores the instance's vtable, calls `008454f0(this, 1)`, then the base
+/// `BSSimpleArray` destructor `fn_006abdc0`.
+// Translation incomplete: 006abde0 - SEH exception unwinding is unsupported.
+pub fn fn_006abde0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), SCRAP_ARRAY_VTABLE_0106B8B4);
+    e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
+    fn_006abdc0(e, this);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x006a_bdc0, fn_006abdc0(Ptr))]
+    vec![
+        entry!(0x006a_bdc0, fn_006abdc0(Ptr)),
+        entry!(0x006abde0, fn_006abde0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -45,5 +63,27 @@ mod array_destructor_tests {
     #[test]
     fn fn_006abdc0_sets_the_vtable_then_releases_the_buffer() {
         check_array_destructor(0x006a_bdc0, ARRAY_VTABLE_0106B8C8, ARRAY_RELEASE_008454F0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fn_006abde0_releases_then_runs_the_base_destructor() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        e.register(ARRAY_RELEASE_008454F0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x006abde0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let releases: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == ARRAY_RELEASE_008454F0)
+            .collect();
+        assert_eq!(releases.len(), 2);
+        assert_eq!(releases[0].1, vec![this, 1]);
+        assert_eq!(e.mem.u32(this), ARRAY_VTABLE_0106B8C8);
     }
 }

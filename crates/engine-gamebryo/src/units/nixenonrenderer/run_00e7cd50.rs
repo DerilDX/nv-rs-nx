@@ -159,6 +159,112 @@ pub fn fn_00e7de30(e: &mut Engine, this: Ptr) {
     e.call(RELEASE_00E89670, &args![word]);
 }
 
+/// What `00e7d6b0` uses: the allocation `00aa13e0`, the `NiRefObject` table and global object
+/// count (`011f4400`), the class's table (RTTI `NiDX9ImplicitBufferData`), `memcpy`
+/// (`00ec44d0`), the format conversion `00e7c500` and name `00e7a9a0` (unnamed; `cdecl`, a
+/// format), the report `00a29680` and its message (`"NiDX9Renderer::Create> Using %s
+/// backbuffer format\n"`), the object at `011f4748` and the two globals filled from its slots
+/// 0xd8 and 0xdc (`0126f594`, the byte `0126f598`), and the render target group's maker
+/// `00a8f2c0` (unnamed; `cdecl`: buffer, width, height) and attacher `00a8f140` (unnamed;
+/// `thiscall`, the buffer).
+const NEW_BUFFER_OBJECT: u32 = 0x00aa_13e0;
+const NI_REF_OBJECT_VTABLE: u32 = 0x0101_dce4;
+const OBJECT_COUNT_011F4400: u32 = 0x011f_4400;
+const NI_DX9_IMPLICIT_BUFFER_DATA_VTABLE: u32 = 0x010e_f06c;
+const MEMCPY: u32 = 0x00ec_44d0;
+const CONVERT_FORMAT_00E7C500: u32 = 0x00e7_c500;
+const FORMAT_NAME_00E7A9A0: u32 = 0x00e7_a9a0;
+const REPORT_00A29680: u32 = 0x00a2_9680;
+const USING_FORMAT_010EF0D8: u32 = 0x010e_f0d8;
+const SOURCE_011F4748: u32 = 0x011f_4748;
+const SLOT_D8_0126F594: u32 = 0x0126_f594;
+const SLOT_DC_0126F598: u32 = 0x0126_f598;
+const MAKE_GROUP_00A8F2C0: u32 = 0x00a8_f2c0;
+const ATTACH_00A8F140: u32 = 0x00a8_f140;
+/// `IDirect3DDevice9::GetRenderTarget` (vtable slot 0x98) and `IDirect3DSurface9::GetDesc`
+/// (0x30), named by the interfaces' slot order; the arguments match.
+const GET_RENDER_TARGET: u32 = 0x98;
+const GET_DESC: u32 = 0x30;
+
+// Translated from 00e7d6b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7cd50`): makes the renderer's implicit back buffer data
+/// (an `NiDX9ImplicitBufferData`, 0x5c bytes; the RTTI of the table it stores), `cdecl`: the
+/// device, the present parameters and the word for the render target group. A made object
+/// gets the `NiRefObject` start, +8, +0xc, +0x14 and +0x58 cleared and the class's table; null
+/// when the allocation fails (the rest still uses it). The 0x38 bytes of the present
+/// parameters are copied to +0x20, the device kept at +0x58 (counted: its slot 4). The device's
+/// render target 0 goes to +0x14; when that or the surface's description fails the object is
+/// deleted (its slot 0 with 1) and null answered. Otherwise +0xc gets the converted format
+/// (`00e7c500`), the format's name is reported, the globals at `0126f594`/`0126f598` are
+/// filled once from the object at `011f4748`, and the group word gets a new group
+/// (`00a8f2c0` with the buffer, the description's width and height) or, when it holds one,
+/// the buffer attached to it (`00a8f140`); the group goes to +8. Answers the object.
+pub fn fn_00e7d6b0(e: &mut Engine, device: u32, present: Ptr, group_out: Ptr) -> u32 {
+    let block = e.call(NEW_BUFFER_OBJECT, &args![0x5cu32]).u32();
+    let data = if block != 0 {
+        e.mem.set_u32(block, NI_REF_OBJECT_VTABLE);
+        e.mem.set_u32(block + 4, 0);
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![OBJECT_COUNT_011F4400]);
+        e.mem.set_u32(block + 8, 0);
+        e.mem.set_u32(block + 0xc, 0);
+        e.mem.set_u32(block + 0x14, 0);
+        e.mem.set_u32(block, NI_DX9_IMPLICIT_BUFFER_DATA_VTABLE);
+        e.mem.set_u32(block + 0x58, 0);
+        block
+    } else {
+        0
+    };
+    e.call(MEMCPY, &args![data.wrapping_add(0x20), present, 0x38u32]);
+    e.mem.set_u32(data.wrapping_add(0x58), device);
+    e.vcall(device, 4, &args![]);
+    // The surface description (0x20 bytes: format first, width and height last).
+    e.with_stack(0x20, |e, desc| {
+        let fail = |e: &mut Engine| {
+            e.vcall(data, 0, &args![1u32]);
+            0
+        };
+        let target = data.wrapping_add(0x14);
+        if e.vcall(device, GET_RENDER_TARGET, &args![0u32, target])
+            .i32()
+            < 0
+        {
+            return fail(e);
+        }
+        let surface = e.mem.u32(target);
+        if e.vcall(surface, GET_DESC, &args![desc]).i32() < 0 {
+            return fail(e);
+        }
+        let format = e.mem.u32(desc.addr());
+        let converted = e.call(CONVERT_FORMAT_00E7C500, &args![format]).u32();
+        e.mem.set_u32(data.wrapping_add(0xc), converted);
+        let format = e.mem.u32(desc.addr());
+        let name = e.call(FORMAT_NAME_00E7A9A0, &args![format]).u32();
+        e.call(REPORT_00A29680, &args![USING_FORMAT_010EF0D8, name]);
+        if e.mem.u32(SLOT_D8_0126F594) == 0 {
+            let source = e.mem.u32(SOURCE_011F4748);
+            let value = e.vcall(source, 0xd8, &args![]).u32();
+            e.mem.set_u32(SLOT_D8_0126F594, value);
+            let flag = e.vcall(source, 0xdc, &args![]).u8();
+            e.mem.set_u8(SLOT_DC_0126F598, flag);
+        }
+        let held = e.mem.u32(group_out.addr());
+        if held == 0 {
+            let width = e.mem.u32(desc.addr() + 0x18);
+            let height = e.mem.u32(desc.addr() + 0x1c);
+            let group = e
+                .call(MAKE_GROUP_00A8F2C0, &args![data, width, height])
+                .u32();
+            e.mem.set_u32(group_out.addr(), group);
+            e.mem.set_u32(data.wrapping_add(8), group);
+        } else {
+            e.call(ATTACH_00A8F140, &args![held, data]);
+            let group = e.mem.u32(group_out.addr());
+            e.mem.set_u32(data.wrapping_add(8), group);
+        }
+        data
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -166,6 +272,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e7_ec90, fn_00e7ec90()),
         entry!(0x00e7_d5b0, fn_00e7d5b0(Ptr<NiTPointerList>) -> u32),
         entry!(0x00e7_de30, fn_00e7de30(Ptr)),
+        entry!(0x00e7_d6b0, fn_00e7d6b0(u32, Ptr, Ptr) -> u32),
     ]
 }
 
@@ -385,5 +492,112 @@ mod element_clean_up_tests {
         e.call(0x00e7_de30, &args![this]);
         assert_eq!(calls(&e, RELEASE_STRING_00AA04E0).len(), 1);
         assert_eq!(calls(&e, RELEASE_00E89670).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod b000v_tests {
+    use super::*;
+
+    const DEVICE_VTABLE: u32 = 0x6000;
+    const SURFACE_VTABLE: u32 = 0x6400;
+    const DATA_DELETE: u32 = 0x6800;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn rig(target_ok: bool) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.map(SOURCE_011F4748, 4);
+        let mut slots = vec![0u32; 0x40];
+        slots[1] = 0x6100;
+        slots[0x26] = 0x6198;
+        slots[0x36] = 0x61d8;
+        slots[0x37] = 0x61dc;
+        e.put_vtable(DEVICE_VTABLE, &slots);
+        let mut surface_slots = vec![0u32; 0x10];
+        surface_slots[0xc] = 0x6430;
+        e.put_vtable(SURFACE_VTABLE, &surface_slots);
+        let surface = e.mem.alloc(4);
+        e.mem.set_u32(surface, SURFACE_VTABLE);
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(device, DEVICE_VTABLE);
+        e.mem.set_u32(SOURCE_011F4748, device);
+        e.register(0x6100, |_, _| Ret::default());
+        e.register_double(0x6198, move |e, a| {
+            e.mem.set_u32(a[2], surface);
+            (if target_ok { 0u32 } else { 0x8876_086c }).into_ret()
+        });
+        e.register(0x61d8, |_, _| 0x55u32.into_ret());
+        e.register(0x61dc, |_, _| 1u32.into_ret());
+        e.register(0x6430, |e, a| {
+            e.mem.set_u32(a[1], 0x16);
+            e.mem.set_u32(a[1] + 0x18, 640);
+            e.mem.set_u32(a[1] + 0x1c, 480);
+            0u32.into_ret()
+        });
+        e.register(NEW_BUFFER_OBJECT, |e, a| e.mem.alloc(a[0]).into_ret());
+        for no_op in [
+            IMPORT_INTERLOCKED_INCREMENT,
+            MEMCPY,
+            REPORT_00A29680,
+            ATTACH_00A8F140,
+        ] {
+            e.register(no_op, |_, _| Ret::default());
+        }
+        e.register(CONVERT_FORMAT_00E7C500, |_, a| (a[0] + 0x100).into_ret());
+        e.register(FORMAT_NAME_00E7A9A0, |_, _| 0x9999u32.into_ret());
+        e.register(MAKE_GROUP_00A8F2C0, |_, _| 0x4444u32.into_ret());
+        e.register(DATA_DELETE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        (e, device, surface)
+    }
+
+    #[test]
+    fn fn_00e7d6b0_makes_the_buffer_data_and_its_group() {
+        let (mut e, device, surface) = rig(true);
+        let present = e.mem.alloc(0x38);
+        let group = e.mem.alloc(4);
+        let data = e.call(0x00e7_d6b0, &args![device, present, group]).u32();
+        assert_eq!(e.mem.u32(data), NI_DX9_IMPLICIT_BUFFER_DATA_VTABLE);
+        assert_eq!(e.mem.u32(data + 0x58), device);
+        assert_eq!(e.mem.u32(data + 0x14), surface);
+        assert_eq!(e.mem.u32(data + 0xc), 0x116);
+        assert_eq!(calls(&e, MEMCPY), vec![vec![data + 0x20, present, 0x38]]);
+        assert_eq!(
+            calls(&e, REPORT_00A29680),
+            vec![vec![USING_FORMAT_010EF0D8, 0x9999]]
+        );
+        assert_eq!(e.mem.u32(SLOT_D8_0126F594), 0x55);
+        assert_eq!(e.mem.u8(SLOT_DC_0126F598), 1);
+        assert_eq!(calls(&e, MAKE_GROUP_00A8F2C0), vec![vec![data, 640, 480]]);
+        assert_eq!(e.mem.u32(group), 0x4444);
+        assert_eq!(e.mem.u32(data + 8), 0x4444);
+        // A second buffer is attached to the group; the globals are not read again.
+        let data = e.call(0x00e7_d6b0, &args![device, present, group]).u32();
+        assert_eq!(calls(&e, ATTACH_00A8F140), vec![vec![0x4444, data]]);
+        assert_eq!(calls(&e, 0x61d8).len(), 1);
+    }
+
+    #[test]
+    fn fn_00e7d6b0_deletes_the_data_without_a_render_target() {
+        let (mut e, device, _) = rig(false);
+        let present = e.mem.alloc(0x38);
+        let group = e.mem.alloc(4);
+        // The class's table must reach the delete: map it with slot 0.
+        e.put_vtable(NI_DX9_IMPLICIT_BUFFER_DATA_VTABLE, &[DATA_DELETE]);
+        let result = e.call(0x00e7_d6b0, &args![device, present, group]).u32();
+        assert_eq!(result, 0);
+        assert_eq!(calls(&e, DATA_DELETE).len(), 1);
+        assert_eq!(calls(&e, DATA_DELETE)[0][1], 1);
+        assert!(calls(&e, MAKE_GROUP_00A8F2C0).is_empty());
     }
 }

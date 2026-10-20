@@ -20,10 +20,21 @@ pub fn pathing_request_optimal_location_scalar_deleting_destructor(
     this
 }
 
+// Translated from 006e5ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A float setter (unnamed in the map; `thiscall`, `(value)`): `value` stored at
+/// `this + 0xB4` (through the x87 stack, so a signalling NaN is stored quiet).
+pub fn fn_006e5ee0(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_u32(
+        this.addr().wrapping_add(0xb4),
+        x87_quiet_bits(value.to_bits()),
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x006e_5d70, pathing_request_optimal_location_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x006e5ee0, fn_006e5ee0(Ptr, f32)),
     ]
 }
 
@@ -57,5 +68,13 @@ mod tests {
     #[test]
     fn pathing_request_optimal_location_scalar_deleting_destructor_frees_only_with_flag_bit_zero() {
         check_deleting_destructor(0x006e_5d70, 0x006d_ad70, 0xc0);
+    }
+
+    #[test]
+    fn fn_006e5ee0_stores_the_float_at_0xb4() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xb8);
+        e.call(0x006e5ee0, &args![this, 12.0f32]);
+        assert_eq!(e.mem.f32(this + 0xb4), 12.0);
     }
 }

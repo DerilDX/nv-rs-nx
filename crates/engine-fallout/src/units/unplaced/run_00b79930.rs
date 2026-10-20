@@ -38,9 +38,32 @@ pub fn fn_00b79950(e: &mut Engine, this: Ptr, object: Ptr) {
     }
 }
 
+/// `00e80190` (`thiscall`, no stack words; unit `nid3dpass.cpp` in the engine map, unnamed):
+/// where `00b79930` ends when the count it lowers reaches zero.
+const RELEASE_TARGET_00E80190: u32 = 0x00e8_0190;
+
+// Translated from 00b79930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a pointer slot, no stack words): when the slot
+/// holds an object, lowers the object's count at +0x64 (a plain decrement) and, when it
+/// reaches zero, ends in `00e80190` on the object (a tail jump).
+pub fn fn_00b79930(e: &mut Engine, this: Ptr) {
+    let object = e.mem.u32(this.addr());
+    if object == 0 {
+        return;
+    }
+    let count = e.mem.u32(object + 0x64).wrapping_sub(1);
+    e.mem.set_u32(object + 0x64, count);
+    if count == 0 {
+        e.call(RELEASE_TARGET_00E80190, &args![object]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00b7_9950, fn_00b79950(Ptr, Ptr))]
+    vec![
+        entry!(0x00b7_9930, fn_00b79930(Ptr)),
+        entry!(0x00b7_9950, fn_00b79950(Ptr, Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -106,5 +129,34 @@ mod tests {
         assert_eq!(e.mem.u32(new + 4), 1);
         assert_eq!(calls(&e, DELETE).len(), 1);
         assert_eq!(calls(&e, IMPORT_INTERLOCKED_INCREMENT).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod batch_b011_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b79930_releases_at_zero() {
+        let mut e = Engine::new();
+        e.register(RELEASE_TARGET_00E80190, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let slot = e.mem.alloc(4);
+        // An empty slot: nothing.
+        e.call(0x00b7_9930, &args![slot]);
+        let object = e.mem.alloc(0x68);
+        e.mem.set_u32(object + 0x64, 2);
+        e.mem.set_u32(slot, object);
+        e.call(0x00b7_9930, &args![slot]);
+        assert_eq!(e.mem.u32(object + 0x64), 1);
+        e.call(0x00b7_9930, &args![slot]);
+        assert_eq!(e.mem.u32(object + 0x64), 0);
+        let log = e.call_log.take().unwrap();
+        let released: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == RELEASE_TARGET_00E80190)
+            .collect();
+        assert_eq!(released.len(), 1);
+        assert_eq!(released[0].1, vec![object]);
     }
 }

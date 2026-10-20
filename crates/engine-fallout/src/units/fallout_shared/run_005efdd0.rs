@@ -11,9 +11,53 @@ pub fn fn_005effb0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// `memmove` (`00ec7230`, `cdecl`: destination, source, size).
+const MEMMOVE: u32 = 0x00ec_7230;
+
+// Translated from 005efdd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 0xc`; `this` is stored but never read): moves
+/// `count` 16-bit elements from `source` to `destination` one element at a time (`memmove` of
+/// 2 bytes each): forwards from the first element when `destination` is below `source`,
+/// backwards from the last one when it is above, nothing when they are equal or `count` is 0.
+pub fn fn_005efdd0(e: &mut Engine, _this: Ptr, destination: u32, source: u32, count: u32) {
+    if count == 0 {
+        return;
+    }
+    if destination < source {
+        let mut index = 0u32;
+        while index < count {
+            e.call(
+                MEMMOVE,
+                &args![
+                    destination.wrapping_add(index.wrapping_mul(2)),
+                    source.wrapping_add(index.wrapping_mul(2)),
+                    2u32
+                ],
+            );
+            index = index.wrapping_add(1);
+        }
+    } else if destination > source {
+        let mut index = count.wrapping_sub(1);
+        while index as i32 >= 0 {
+            e.call(
+                MEMMOVE,
+                &args![
+                    destination.wrapping_add(index.wrapping_mul(2)),
+                    source.wrapping_add(index.wrapping_mul(2)),
+                    2u32
+                ],
+            );
+            index = index.wrapping_sub(1);
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005e_ffb0, fn_005effb0(Ptr, u32) -> u32)]
+    vec![
+        entry!(0x005e_ffb0, fn_005effb0(Ptr, u32) -> u32),
+        entry!(0x005e_fdd0, fn_005efdd0(Ptr, u32, u32, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -48,5 +92,38 @@ mod le81_thunk_tests {
             check(0x005e_ffb0, 0x005e_dac0, 0x18, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    fn moves(e: &mut Engine, destination: u32, source: u32, count: u32) -> Vec<Vec<u32>> {
+        e.register(MEMMOVE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005e_fdd0, &args![0u32, destination, source, count]);
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|call| call.0 == MEMMOVE)
+            .map(|call| call.1)
+            .collect()
+    }
+
+    #[test]
+    fn fn_005efdd0_moves_forwards_or_backwards() {
+        let mut e = Engine::new();
+        assert_eq!(
+            moves(&mut e, 0x100, 0x200, 2),
+            vec![vec![0x100, 0x200, 2], vec![0x102, 0x202, 2]]
+        );
+        assert_eq!(
+            moves(&mut e, 0x200, 0x100, 2),
+            vec![vec![0x202, 0x102, 2], vec![0x200, 0x100, 2]]
+        );
+        assert!(moves(&mut e, 0x100, 0x100, 2).is_empty());
+        assert!(moves(&mut e, 0x100, 0x200, 0).is_empty());
     }
 }

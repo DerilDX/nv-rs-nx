@@ -4284,6 +4284,779 @@ fn fprintf_entry(e: &mut Engine, words: &[u32]) -> Ret {
     fprintf(e, Ptr::new(words[0]), Ptr::new(words[1]), &words[2..]).into_ret()
 }
 
+/// `_malloc_crt` (`00ed0cdf`), the counter `_stbuf` counts up (`_cflush`, `0126fdf0`), and the
+/// two shared buffers' slots (`_stdbuf`, `012704a8`: stdout's, then stderr's).
+const MALLOC_CRT: u32 = 0x00ed_0cdf;
+const STDBUF: u32 = 0x0127_04a8;
+/// `_isatty` (`00ee2145`) and `__iob_func` (`00ecdf44`) (LIBCMT, engine map; cdecl).
+const ISATTY: u32 = 0x00ee_2145;
+const IOB_FUNC: u32 = 0x00ec_df44;
+
+// Translated from 00ed7d48 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_stbuf` (LIBCMT/_sftbuf.c, engine map), cdecl, the stream: gives `stdout` or `stderr` a
+/// temporary buffer when it writes to a terminal. Answers 0 when the stream's handle
+/// (`_fileno`) is not a terminal (`_isatty`), when it is neither `stdout` (`__iob_func() +
+/// 0x20`) nor `stderr` (`+ 0x40`), or when it already has a buffer (`_flag` +0xc & 0x10c; the
+/// `_cflush` counter at `0126fdf0` is counted up first). Otherwise the stream's shared buffer
+/// (`_stdbuf` slot 0 or 1 at `012704a8`, allocated with 0x1000 bytes by `_malloc_crt` on first
+/// use) becomes `_base` and `_ptr` with size and count 0x1000; when the allocation fails the
+/// stream's own `_charbuf` word (+0x14) is used with size and count 2. Then `_flag` gets
+/// 0x1102 and 1 is answered.
+pub fn stbuf(e: &mut Engine, stream: Ptr) -> u32 {
+    let stream = stream.addr();
+    let handle = e.call(FILENO, &args![stream]).u32();
+    if e.call(ISATTY, &args![handle]).u32() == 0 {
+        return 0;
+    }
+    let index = if stream == e.call(IOB_FUNC, &args![]).u32().wrapping_add(0x20) {
+        0u32
+    } else if stream == e.call(IOB_FUNC, &args![]).u32().wrapping_add(0x40) {
+        1
+    } else {
+        return 0;
+    };
+    let flushes = e.mem.u32(CFLUSH).wrapping_add(1);
+    e.mem.set_u32(CFLUSH, flushes);
+    if e.mem.u32(stream + 0xc) & 0x10c != 0 {
+        return 0;
+    }
+    let slot = STDBUF + 4 * index;
+    let (buffer, size) = if e.mem.u32(slot) == 0 {
+        let block = e.call(MALLOC_CRT, &args![0x1000u32]).u32();
+        e.mem.set_u32(slot, block);
+        if block == 0 {
+            (stream + 0x14, 2)
+        } else {
+            (block, 0x1000)
+        }
+    } else {
+        (e.mem.u32(slot), 0x1000)
+    };
+    e.mem.set_u32(stream + 8, buffer);
+    e.mem.set_u32(stream, buffer);
+    e.mem.set_u32(stream + 0x18, size);
+    e.mem.set_u32(stream + 4, size);
+    let flags = e.mem.u32(stream + 0xc) | 0x1102;
+    e.mem.set_u32(stream + 0xc, flags);
+    1
+}
+
+// Translated from 00ed7de4 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_ftbuf` (LIBCMT/_sftbuf.c, engine map), cdecl: the flag `_stbuf` answered, the stream.
+/// With the flag set and the stream's temporary-buffer bit (`_flag` +0xc & 0x1000), the stream
+/// is flushed (`_flush`), loses bits 0x1100, and its buffer size (+0x18), `_ptr` and `_base`
+/// are cleared.
+pub fn ftbuf(e: &mut Engine, flag: u32, stream: Ptr) {
+    if flag == 0 {
+        return;
+    }
+    let stream = stream.addr();
+    if e.mem.u32(stream + 0xc) & 0x1000 == 0 {
+        return;
+    }
+    e.call(FLUSH, &args![stream]);
+    let flags = e.mem.u32(stream + 0xc) & 0xffff_eeff;
+    e.mem.set_u32(stream + 0xc, flags);
+    e.mem.set_u32(stream + 0x18, 0);
+    e.mem.set_u32(stream, 0);
+    e.mem.set_u32(stream + 8, 0);
+}
+
+// Translated from 00ed2efb (decompiled, FalloutNV.exe 1.4.0.525)
+/// `write_multi_char` (LIBCMT/output.c, engine map), a helper of the `printf` core: cdecl
+/// character, repeat count and stream, with the characters-written counter in `EAX`. Writes
+/// the character ([`write_char`]) while the repeat count, counted down first, was positive,
+/// stopping when the counter becomes -1.
+pub fn write_multi_char(e: &mut Engine, character: u32, repeat: i32, stream: Ptr, count: Ptr) {
+    let mut left = repeat;
+    while left > 0 {
+        left -= 1;
+        write_char(e, character, stream, count);
+        if e.mem.i32(count.addr()) == -1 {
+            break;
+        }
+    }
+}
+
+// Translated from 00ecc4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__aulldvrm` (LIBCMT, engine map): unsigned 64-bit division with remainder, two 64-bit
+/// stack arguments (`RET 0x10`). A divisor below 2^32 divides in two 32-bit `DIV`s; a larger
+/// one shifts both until the divisor fits, divides, and corrects the estimate down by one when
+/// quotient times divisor overflows or exceeds the dividend: either way the exact quotient
+/// (answered in `EDX:EAX`) and remainder (`EBX:ECX`, which the uniform form does not carry:
+/// callers in this unit use the Rust function). A zero divisor faults (`DIV`), as here.
+pub fn aulldvrm(_e: &mut Engine, dividend: u64, divisor: u64) -> (u64, u64) {
+    (dividend / divisor, dividend % divisor)
+}
+
+/// The registry entry of [`aulldvrm`]: the quotient.
+fn aulldvrm_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    let dividend = u64::from(words[0]) | u64::from(words[1]) << 32;
+    let divisor = u64::from(words[2]) | u64::from(words[3]) << 32;
+    aulldvrm(e, dividend, divisor).0.into_ret()
+}
+
+/// `_wctomb_s_l` (`00ee21a9`, cdecl: size out, buffer, buffer size, character, locale).
+const WCTOMB_S_L: u32 = 0x00ee_21a9;
+
+// Translated from 00ee2315 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `wctomb_s` (LIBCMT/wctomb.c, Ghidra's function ID), cdecl: size out, buffer, buffer size,
+/// wide character: `_wctomb_s_l` with a null locale.
+pub fn wctomb_s(e: &mut Engine, size_out: Ptr, buffer: Ptr, size: u32, character: u32) -> i32 {
+    e.call(WCTOMB_S_L, &args![size_out, buffer, size, character, 0u32])
+        .i32()
+}
+
+/// The `printf` `%n` permission word (`0126fda8`) and the security cookie (`011c16bc`).
+const PRINTF_COUNT_OUTPUT: u32 = 0x0126_fda8;
+const SECURITY_COOKIE: u32 = 0x011c_16bc;
+
+// Translated from 00ec9df9 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_get_printf_count_output` (LIBCMT/printf.c, Ghidra's function ID), no arguments: 1 when
+/// the word at `0126fda8` equals the security cookie with bit 0 set (what
+/// `_set_printf_count_output(1)` stores), else 0.
+pub fn get_printf_count_output(e: &mut Engine) -> u32 {
+    let enabled = e.mem.u32(SECURITY_COOKIE) | 1;
+    u32::from(e.mem.u32(PRINTF_COUNT_OUTPUT) == enabled)
+}
+
+/// What `_output_l` reads: the character class and state table (`__lookuptable`, read with
+/// the character at `010f3080` and with class * 8 + state at `010f30a0`; one table, two
+/// views), the null-string texts (`011c1de8` narrow, `011c1dec` wide), the encoded floating
+/// point helpers (`_cfltcvt` `011c1cec`, `_forcdecpt` `011c1cf8`, `_cropzeros` `011c1cf4`),
+/// `_isleadbyte_l`, `free` (`00ecd291`), `_get_printf_count_output` and `wctomb_s`.
+const LOOKUP_CLASSES: u32 = 0x010f_3080;
+const LOOKUP_STATES: u32 = 0x010f_30a0;
+const NULL_STRING: u32 = 0x011c_1de8;
+const NULL_WIDE_STRING: u32 = 0x011c_1dec;
+const CFLTCVT: u32 = 0x011c_1cec;
+const FORCDECPT: u32 = 0x011c_1cf8;
+const CROPZEROS: u32 = 0x011c_1cf4;
+const ISLEADBYTE_L: u32 = 0x00ed_419c;
+const FREE_CRT: u32 = 0x00ec_d291;
+const GET_PRINTF_COUNT_OUTPUT: u32 = 0x00ec_9df9;
+const WCTOMB_S: u32 = 0x00ee_2315;
+
+/// `_output_l`'s frame below its frame pointer (`SUB ESP,0x278`) and the locals it passes by
+/// address, by their offset below it.
+const OUTPUT_FRAME: u32 = 0x278;
+const OUTPUT_LOCALE: u32 = 0x25c;
+const OUTPUT_COUNT: u32 = 0x228;
+const OUTPUT_TEXT_LENGTH: u32 = 0x220;
+const OUTPUT_BUFFER: u32 = 0x20c;
+const OUTPUT_BUFFER_SIZE: u32 = 0x200;
+const OUTPUT_DIGITS_END: u32 = 0xd;
+const OUTPUT_PREFIX: u32 = 0x22c;
+const OUTPUT_DOUBLE: u32 = 0x278;
+const OUTPUT_WIDE_SIZE: u32 = 0x268;
+const OUTPUT_MULTIBYTE: u32 = 0xc;
+
+/// `_output_l`'s flag bits (LIBCMT names): `FL_SIGN`, `FL_SIGNSP`, `FL_LEFT`, `FL_LEADZERO`,
+/// `FL_LONG`, `FL_SHORT`, `FL_SIGNED`, `FL_ALTERNATE`, `FL_NEGATIVE`, `FL_FORCEOCTAL`,
+/// `FL_WIDECHAR`, `FL_LONGLONG`, `FL_I64`.
+const FL_SIGN: u32 = 0x1;
+const FL_SIGNSP: u32 = 0x2;
+const FL_LEFT: u32 = 0x4;
+const FL_LEADZERO: u32 = 0x8;
+const FL_LONG: u32 = 0x10;
+const FL_SHORT: u32 = 0x20;
+const FL_SIGNED: u32 = 0x40;
+const FL_ALTERNATE: u32 = 0x80;
+const FL_NEGATIVE: u32 = 0x100;
+const FL_FORCEOCTAL: u32 = 0x200;
+const FL_WIDECHAR: u32 = 0x800;
+const FL_LONGLONG: u32 = 0x1000;
+const FL_I64: u32 = 0x8000;
+
+/// How `_output_l` goes on after a format character: integer conversion, then the output of
+/// the text, then the heap buffer's release; or straight to the next format character.
+#[derive(Clone, Copy, PartialEq)]
+enum OutputStep {
+    Integer,
+    Output,
+    Release,
+    Next,
+}
+
+// Translated from 00ed2f21 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_output_l` (LIBCMT/output.c, engine map), the stream form, cdecl: stream, format, locale,
+/// argument list. Answers the number of characters written, or -1.
+///
+/// Takes the locale (`_LocaleUpdate`). A null stream or format, or a stream that is not a
+/// string stream (`_flag` +0xc without 0x40) whose handle's `ioinfo` entry (`__badioinfo` for
+/// -1 and -2) has a text-mode bit (+0x24 & 0x7f) or the unicode bit (& 0x80), sets `errno` to
+/// `EINVAL`, calls the invalid-parameter handler and answers -1. Then each format character
+/// goes through the state machine of the lookup table (class from the character for 0x20 to
+/// 0x78, else 0; next state from class * 8 + state, high nibble; the states' jump table at
+/// `00ed3a99`): normal characters are written (a lead byte with the next one; a lead byte
+/// ending the format is an invalid parameter), `%` resets the conversion, flags (`' '` `#` `+`
+/// `-` `0`), width and precision (digits or `*`; a negative width is left alignment, a negative
+/// precision none), size prefixes (`h`, `l`, `ll`, `w`, `I`, `I32`, `I64`; an `I` before
+/// anything but those or `d i o u x X` is written as a normal character), and the conversion:
+/// `c`/`C` (wide through `wctomb_s` into the buffer), `s`/`S` (counted up to the precision;
+/// null gives `"(null)"`), `Z` (a counted string), `n` (only with `_get_printf_count_output`,
+/// else an invalid parameter; 16 or 32 bits), `d i u o x X p` (32, 16 or 64 bits, divided with
+/// `__aulldvrm`, digits from the end of the buffer, `#` prefixes `0`/`0x`/`0X`), and `a e f g`
+/// and capitals (the `double` through the decoded `_cfltcvt`, a heap buffer above 0xa3 digits
+/// of precision, `_forcdecpt` for `#` with precision 0, `_cropzeros` for `g` without `#`). Any
+/// other conversion character outputs the previous text again. Output: the sign prefix,
+/// blanks before (right alignment), the prefix, zeros (`0` without `-`), the text (wide text
+/// converted character by character with `wctomb_s`; a failure makes the count -1), and blanks
+/// after for left alignment while the count is not negative. The heap buffer is freed after
+/// each conversion. The loop ends at the format's end or when the count turns negative; the
+/// locale is released (bit 1 of the thread's `_ownlocale` cleared when the constructor set it).
+// Translation incomplete: 00ed2f21 - the /GS stack cookie check (00ec408c) is not translated.
+pub fn output_l(e: &mut Engine, stream: Ptr, format: Ptr, locale: u32, args: u32) -> i32 {
+    e.with_stack(OUTPUT_FRAME, |e, frame| {
+        let at = |offset: u32| frame.addr() + OUTPUT_FRAME - offset;
+        let stream = stream.addr();
+        let stream_ptr = Ptr::new(stream);
+        let count = Ptr::new(at(OUTPUT_COUNT));
+        let update = at(OUTPUT_LOCALE);
+        let text_length = at(OUTPUT_TEXT_LENGTH);
+        let mut argument = args;
+        let mut hex_add = 0u32;
+        let mut flags = 0u32;
+        let mut width = 0i32;
+        let mut precision = 0i32;
+        let mut prefix_length = 0i32;
+        let mut no_output = 0u32;
+        let mut text_is_wide = 0u32;
+        e.call(LOCALE_UPDATE, &args![update, locale]);
+        let fail = |e: &mut Engine| {
+            let error = errno(e);
+            e.mem.set_u32(error.addr(), 0x16);
+            fn_00ec7c30(e, 0, 0, 0, 0, 0);
+            locale_update_release(e, update);
+            -1
+        };
+        if stream == 0 {
+            return fail(e);
+        }
+        if e.mem.u8(stream + 0xc) & 0x40 == 0 {
+            let handle = e.call(FILENO, &args![stream]).u32();
+            let entry = |e: &Engine| {
+                if handle == 0xffff_ffff || handle == 0xffff_fffe {
+                    BAD_IOINFO
+                } else {
+                    ioinfo(e, handle)
+                }
+            };
+            if e.mem.u8(entry(e) + 0x24) & 0x7f != 0 || e.mem.u8(entry(e) + 0x24) & 0x80 != 0 {
+                return fail(e);
+            }
+        }
+        let mut cursor = format.addr();
+        if cursor == 0 {
+            return fail(e);
+        }
+        let mut ch = e.mem.u8(cursor);
+        e.mem.set_u32(count.addr(), 0);
+        e.mem.set_u32(text_length, 0);
+        let mut heap_buffer = 0u32;
+        let mut state = 0u32;
+        let mut cap_exponent = 0u32;
+        let mut text = 0u32;
+        while ch != 0 {
+            cursor = cursor.wrapping_add(1);
+            if e.mem.i32(count.addr()) < 0 {
+                break;
+            }
+            let class = if ch.wrapping_sub(0x20) <= 0x58 {
+                let entry = LOOKUP_CLASSES.wrapping_add(i32::from(ch as i8) as u32);
+                (i32::from(e.mem.u8(entry) as i8) as u32) & 0xf
+            } else {
+                0
+            };
+            let entry = LOOKUP_STATES.wrapping_add(class * 8 + state);
+            state = (i32::from(e.mem.u8(entry) as i8) >> 4) as u32;
+            let mut step = OutputStep::Next;
+            match state {
+                0 => {
+                    if output_normal_character(e, ch, &mut cursor, stream_ptr, count, update) {
+                        return fail(e);
+                    }
+                }
+                1 => {
+                    precision = -1;
+                    cap_exponent = 0;
+                    no_output = 0;
+                    width = 0;
+                    prefix_length = 0;
+                    flags = 0;
+                    text_is_wide = 0;
+                }
+                2 => match ch {
+                    0x20 => flags |= FL_SIGNSP,
+                    0x23 => flags |= FL_ALTERNATE,
+                    0x2b => flags |= FL_SIGN,
+                    0x2d => flags |= FL_LEFT,
+                    0x30 => flags |= FL_LEADZERO,
+                    _ => {}
+                },
+                3 => {
+                    if ch == b'*' {
+                        argument = argument.wrapping_add(4);
+                        width = e.mem.i32(argument.wrapping_sub(4));
+                        if width < 0 {
+                            flags |= FL_LEFT;
+                            width = width.wrapping_neg();
+                        }
+                    } else {
+                        width = width
+                            .wrapping_mul(10)
+                            .wrapping_add(i32::from(ch as i8))
+                            .wrapping_sub(0x30);
+                    }
+                }
+                4 => precision = 0,
+                5 => {
+                    if ch == b'*' {
+                        argument = argument.wrapping_add(4);
+                        precision = e.mem.i32(argument.wrapping_sub(4));
+                        if precision < 0 {
+                            precision = -1;
+                        }
+                    } else {
+                        precision = precision
+                            .wrapping_mul(10)
+                            .wrapping_add(i32::from(ch as i8))
+                            .wrapping_sub(0x30);
+                    }
+                }
+                6 => match ch {
+                    b'I' => {
+                        let next = e.mem.u8(cursor);
+                        if next == b'6' && e.mem.u8(cursor.wrapping_add(1)) == b'4' {
+                            cursor = cursor.wrapping_add(2);
+                            flags |= FL_I64;
+                        } else if next == b'3' && e.mem.u8(cursor.wrapping_add(1)) == b'2' {
+                            cursor = cursor.wrapping_add(2);
+                            flags &= !FL_I64;
+                        } else if !matches!(next, b'd' | b'i' | b'o' | b'u' | b'x' | b'X') {
+                            state = 0;
+                            let stop = output_normal_character(
+                                e,
+                                ch,
+                                &mut cursor,
+                                stream_ptr,
+                                count,
+                                update,
+                            );
+                            if stop {
+                                return fail(e);
+                            }
+                        }
+                    }
+                    b'h' => flags |= FL_SHORT,
+                    b'l' => {
+                        if e.mem.u8(cursor) == b'l' {
+                            cursor = cursor.wrapping_add(1);
+                            flags |= FL_LONGLONG;
+                        } else {
+                            flags |= FL_LONG;
+                        }
+                    }
+                    b'w' => flags |= FL_WIDECHAR,
+                    _ => {}
+                },
+                7 => match ch {
+                    b'A' | b'E' | b'G' | b'a' | b'e' | b'f' | b'g' => {
+                        if matches!(ch, b'A' | b'E' | b'G') {
+                            ch = ch.wrapping_add(0x20);
+                            cap_exponent = 1;
+                        }
+                        flags |= FL_SIGNED;
+                        let mut buffer = at(OUTPUT_BUFFER);
+                        text = buffer;
+                        let mut buffer_size = OUTPUT_BUFFER_SIZE;
+                        match precision.cmp(&0) {
+                            std::cmp::Ordering::Less => precision = 6,
+                            std::cmp::Ordering::Equal => {
+                                if ch == b'g' {
+                                    precision = 1;
+                                }
+                            }
+                            std::cmp::Ordering::Greater => {
+                                if precision > 0x200 {
+                                    precision = 0x200;
+                                }
+                                if precision > 0xa3 {
+                                    let size = (precision as u32).wrapping_add(0x15d);
+                                    heap_buffer = e.call(MALLOC_CRT, &args![size]).u32();
+                                    if heap_buffer != 0 {
+                                        text = heap_buffer;
+                                        buffer_size = size;
+                                        buffer = heap_buffer;
+                                    } else {
+                                        precision = 0xa3;
+                                    }
+                                }
+                            }
+                        }
+                        let value = at(OUTPUT_DOUBLE);
+                        let low = e.mem.u32(argument);
+                        e.mem.set_u32(value, low);
+                        let high = e.mem.u32(argument.wrapping_add(4));
+                        e.mem.set_u32(value + 4, high);
+                        argument = argument.wrapping_add(8);
+                        let encoded = e.mem.u32(CFLTCVT);
+                        let convert = e.call(DECODE_POINTER, &args![encoded]).u32();
+                        e.call(
+                            convert,
+                            &args![
+                                value,
+                                buffer,
+                                buffer_size,
+                                i32::from(ch as i8) as u32,
+                                precision,
+                                cap_exponent,
+                                update
+                            ],
+                        );
+                        let alternate = flags & FL_ALTERNATE;
+                        if alternate != 0 && precision == 0 {
+                            let encoded = e.mem.u32(FORCDECPT);
+                            let force = e.call(DECODE_POINTER, &args![encoded]).u32();
+                            e.call(force, &args![buffer, update]);
+                        }
+                        if ch == b'g' && alternate == 0 {
+                            let encoded = e.mem.u32(CROPZEROS);
+                            let crop = e.call(DECODE_POINTER, &args![encoded]).u32();
+                            e.call(crop, &args![buffer, update]);
+                        }
+                        if e.mem.u8(buffer) == b'-' {
+                            flags |= FL_NEGATIVE;
+                            buffer = buffer.wrapping_add(1);
+                            text = buffer;
+                        }
+                        let length = e.call(STRLEN_ADDR, &args![buffer]).u32();
+                        e.mem.set_u32(text_length, length);
+                        step = OutputStep::Output;
+                    }
+                    b'C' | b'c' => {
+                        if ch == b'C' && flags & 0x830 == 0 {
+                            flags |= FL_WIDECHAR;
+                        }
+                        argument = argument.wrapping_add(4);
+                        if flags & 0x810 != 0 {
+                            let character = u32::from(e.mem.u16(argument.wrapping_sub(4)));
+                            let failed = e
+                                .call(
+                                    WCTOMB_S,
+                                    &args![
+                                        text_length,
+                                        at(OUTPUT_BUFFER),
+                                        OUTPUT_BUFFER_SIZE,
+                                        character
+                                    ],
+                                )
+                                .u32();
+                            if failed != 0 {
+                                no_output = 1;
+                            }
+                        } else {
+                            let byte = e.mem.u8(argument.wrapping_sub(4));
+                            e.mem.set_u8(at(OUTPUT_BUFFER), byte);
+                            e.mem.set_u32(text_length, 1);
+                        }
+                        text = at(OUTPUT_BUFFER);
+                        step = OutputStep::Output;
+                    }
+                    b'S' | b's' => {
+                        if ch == b'S' && flags & 0x830 == 0 {
+                            flags |= FL_WIDECHAR;
+                        }
+                        let mut limit = precision as u32;
+                        if precision == -1 {
+                            limit = 0x7fff_ffff;
+                        }
+                        argument = argument.wrapping_add(4);
+                        let pointer = e.mem.u32(argument.wrapping_sub(4));
+                        text = pointer;
+                        if flags & 0x810 == 0 {
+                            if pointer == 0 {
+                                text = e.mem.u32(NULL_STRING);
+                            }
+                            let mut walk = text;
+                            while limit != 0 {
+                                limit -= 1;
+                                if e.mem.u8(walk) == 0 {
+                                    break;
+                                }
+                                walk = walk.wrapping_add(1);
+                            }
+                            e.mem.set_u32(text_length, walk.wrapping_sub(text));
+                        } else {
+                            if pointer == 0 {
+                                text = e.mem.u32(NULL_WIDE_STRING);
+                            }
+                            text_is_wide = 1;
+                            let mut walk = text;
+                            while limit != 0 {
+                                limit -= 1;
+                                if e.mem.u16(walk) == 0 {
+                                    break;
+                                }
+                                walk = walk.wrapping_add(2);
+                            }
+                            let length = (walk.wrapping_sub(text) as i32) >> 1;
+                            e.mem.set_i32(text_length, length);
+                        }
+                        step = OutputStep::Output;
+                    }
+                    b'Z' => {
+                        let counted = e.mem.u32(argument);
+                        argument = argument.wrapping_add(4);
+                        let buffer = if counted == 0 {
+                            0
+                        } else {
+                            e.mem.u32(counted.wrapping_add(4))
+                        };
+                        if buffer == 0 {
+                            text = e.mem.u32(NULL_STRING);
+                            let length = e.call(STRLEN_ADDR, &args![text]).u32();
+                            e.mem.set_u32(text_length, length);
+                        } else {
+                            let length = i32::from(e.mem.i16(counted));
+                            text = buffer;
+                            if flags & FL_WIDECHAR != 0 {
+                                e.mem.set_i32(text_length, length / 2);
+                                text_is_wide = 1;
+                            } else {
+                                text_is_wide = 0;
+                                e.mem.set_i32(text_length, length);
+                            }
+                        }
+                        step = OutputStep::Output;
+                    }
+                    b'n' => {
+                        let target = e.mem.u32(argument);
+                        argument = argument.wrapping_add(4);
+                        if e.call(GET_PRINTF_COUNT_OUTPUT, &args![]).u32() == 0 {
+                            return fail(e);
+                        }
+                        let written = e.mem.u32(count.addr());
+                        if flags & FL_SHORT != 0 {
+                            e.mem.set_u16(target, written as u16);
+                        } else {
+                            e.mem.set_u32(target, written);
+                        }
+                        no_output = 1;
+                        step = OutputStep::Release;
+                    }
+                    b'd' | b'i' | b'u' => {
+                        if ch != b'u' {
+                            flags |= FL_SIGNED;
+                        }
+                        e.mem.set_u32(text_length, 10);
+                        step = OutputStep::Integer;
+                    }
+                    b'o' => {
+                        e.mem.set_u32(text_length, 8);
+                        if flags & FL_ALTERNATE != 0 {
+                            flags |= FL_FORCEOCTAL;
+                        }
+                        step = OutputStep::Integer;
+                    }
+                    b'p' | b'X' | b'x' => {
+                        if ch == b'p' {
+                            precision = 8;
+                        }
+                        hex_add = if ch == b'x' { 0x27 } else { 7 };
+                        e.mem.set_u32(text_length, 0x10);
+                        if flags & FL_ALTERNATE != 0 {
+                            e.mem.set_u8(at(OUTPUT_PREFIX), b'0');
+                            let letter = (hex_add as u8).wrapping_add(0x51);
+                            e.mem.set_u8(at(OUTPUT_PREFIX) + 1, letter);
+                            prefix_length = 2;
+                        }
+                        step = OutputStep::Integer;
+                    }
+                    _ => step = OutputStep::Output,
+                },
+                _ => {}
+            }
+
+            if step == OutputStep::Integer {
+                let mut value: u64 = if flags & (FL_I64 | FL_LONGLONG) != 0 {
+                    let low = e.mem.u32(argument);
+                    let high = e.mem.u32(argument.wrapping_add(4));
+                    argument = argument.wrapping_add(8);
+                    u64::from(low) | u64::from(high) << 32
+                } else {
+                    argument = argument.wrapping_add(4);
+                    if flags & FL_SHORT != 0 {
+                        let word = e.mem.u16(argument.wrapping_sub(4));
+                        if flags & FL_SIGNED != 0 {
+                            i64::from(word as i16) as u64
+                        } else {
+                            u64::from(word)
+                        }
+                    } else {
+                        let word = e.mem.u32(argument.wrapping_sub(4));
+                        if flags & FL_SIGNED != 0 {
+                            i64::from(word as i32) as u64
+                        } else {
+                            u64::from(word)
+                        }
+                    }
+                };
+                if flags & FL_SIGNED != 0 && (value as i64) < 0 {
+                    value = value.wrapping_neg();
+                    flags |= FL_NEGATIVE;
+                }
+                if flags & (FL_I64 | FL_LONGLONG) == 0 {
+                    value &= 0xffff_ffff;
+                }
+                if precision < 0 {
+                    precision = 1;
+                } else {
+                    flags &= !FL_LEADZERO;
+                    if precision > 0x200 {
+                        precision = 0x200;
+                    }
+                }
+                if value == 0 {
+                    prefix_length = 0;
+                }
+                let radix = i64::from(e.mem.i32(text_length)) as u64;
+                let end = at(OUTPUT_DIGITS_END);
+                let mut digit_at = end;
+                loop {
+                    let before = precision;
+                    precision = precision.wrapping_sub(1);
+                    if before <= 0 && value == 0 {
+                        break;
+                    }
+                    let (quotient, remainder) = aulldvrm(e, value, radix);
+                    let mut digit = (remainder as u32).wrapping_add(0x30);
+                    value = quotient;
+                    if (digit as i32) > 0x39 {
+                        digit = digit.wrapping_add(hex_add);
+                    }
+                    e.mem.set_u8(digit_at, digit as u8);
+                    digit_at = digit_at.wrapping_sub(1);
+                }
+                let mut length = end.wrapping_sub(digit_at);
+                text = digit_at.wrapping_add(1);
+                e.mem.set_u32(text_length, length);
+                if flags & FL_FORCEOCTAL != 0 && (length == 0 || e.mem.u8(text) != b'0') {
+                    text = text.wrapping_sub(1);
+                    e.mem.set_u8(text, b'0');
+                    length = length.wrapping_add(1);
+                    e.mem.set_u32(text_length, length);
+                }
+                step = OutputStep::Output;
+            }
+
+            if step == OutputStep::Output {
+                if no_output == 0 {
+                    if flags & FL_SIGNED != 0 {
+                        let sign = if flags & FL_NEGATIVE != 0 {
+                            Some(b'-')
+                        } else if flags & FL_SIGN != 0 {
+                            Some(b'+')
+                        } else if flags & FL_SIGNSP != 0 {
+                            Some(b' ')
+                        } else {
+                            None
+                        };
+                        if let Some(sign) = sign {
+                            e.mem.set_u8(at(OUTPUT_PREFIX), sign);
+                            prefix_length = 1;
+                        }
+                    }
+                    let length = e.mem.i32(text_length);
+                    let padding = width.wrapping_sub(length).wrapping_sub(prefix_length);
+                    if flags & (FL_LEFT | FL_LEADZERO) == 0 {
+                        write_multi_char(e, 0x20, padding, stream_ptr, count);
+                    }
+                    let prefix = Ptr::new(at(OUTPUT_PREFIX));
+                    write_string(e, count, prefix, stream_ptr, prefix_length);
+                    if flags & FL_LEADZERO != 0 && flags & FL_LEFT == 0 {
+                        write_multi_char(e, 0x30, padding, stream_ptr, count);
+                    }
+                    let length = e.mem.i32(text_length);
+                    if text_is_wide != 0 && length > 0 {
+                        let mut walk = text;
+                        let mut remaining = length;
+                        loop {
+                            let character = u32::from(e.mem.u16(walk));
+                            remaining -= 1;
+                            walk = walk.wrapping_add(2);
+                            let size_out = at(OUTPUT_WIDE_SIZE);
+                            let multibyte = at(OUTPUT_MULTIBYTE);
+                            let failed = e
+                                .call(WCTOMB_S, &args![size_out, multibyte, 6u32, character])
+                                .u32();
+                            let size = e.mem.i32(size_out);
+                            if failed != 0 || size == 0 {
+                                e.mem.set_u32(count.addr(), 0xffff_ffff);
+                                break;
+                            }
+                            write_string(e, count, Ptr::new(multibyte), stream_ptr, size);
+                            if remaining == 0 {
+                                break;
+                            }
+                        }
+                    } else {
+                        write_string(e, count, Ptr::new(text), stream_ptr, length);
+                    }
+                    if e.mem.i32(count.addr()) >= 0 && flags & FL_LEFT != 0 {
+                        write_multi_char(e, 0x20, padding, stream_ptr, count);
+                    }
+                }
+                step = OutputStep::Release;
+            }
+
+            if step == OutputStep::Release && heap_buffer != 0 {
+                e.call(FREE_CRT, &args![heap_buffer]);
+                heap_buffer = 0;
+            }
+            ch = e.mem.u8(cursor);
+        }
+        locale_update_release(e, update);
+        e.mem.i32(count.addr())
+    })
+}
+
+/// The registry entry of [`output_l`]: stream, format, locale, argument list.
+fn output_l_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    output_l(
+        e,
+        Ptr::new(words[0]),
+        Ptr::new(words[1]),
+        words[2],
+        words[3],
+    )
+    .into_ret()
+}
+
+/// A normal character of `_output_l` (state 0): written with [`write_char`]; a lead byte
+/// (`_isleadbyte_l`) is written first and the next format byte with it. Answers true when that
+/// next byte is the format's end (the caller's invalid-parameter exit).
+fn output_normal_character(
+    e: &mut Engine,
+    ch: u8,
+    cursor: &mut u32,
+    stream: Ptr,
+    count: Ptr,
+    update: u32,
+) -> bool {
+    let mut character = ch;
+    if e.call(ISLEADBYTE_L, &args![u32::from(ch), update]).u32() != 0 {
+        write_char(e, u32::from(ch), stream, count);
+        character = e.mem.u8(*cursor);
+        *cursor = cursor.wrapping_add(1);
+        if character == 0 {
+            return true;
+        }
+    }
+    write_char(e, u32::from(character), stream, count);
+    false
+}
+
 /// The CRT's static stream table `_iob` (`011c1a08` to `011c1c68`, 0x20 bytes a stream): its
 /// streams are locked through `_lock` number `0x10 + index`, other streams through the critical
 /// section at their +0x20.
@@ -6146,6 +6919,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ed_ecf7, getbuf(Ptr)),
         entry!(0x00ed_2d64, flsbuf(u32, Ptr) -> i32),
         (0x00ec_9774, fprintf_entry as AbiFn),
+        entry!(0x00ed_7d48, stbuf(Ptr) -> u32),
+        entry!(0x00ed_7de4, ftbuf(u32, Ptr)),
+        entry!(0x00ed_2efb, write_multi_char(u32, i32, Ptr, Ptr)),
+        (0x00ec_c4f0, aulldvrm_entry as AbiFn),
+        entry!(0x00ee_2315, wctomb_s(Ptr, Ptr, u32, u32) -> i32),
+        entry!(0x00ec_9df9, get_printf_count_output() -> u32),
+        (0x00ed_2f21, output_l_entry as AbiFn),
     ]
 }
 
@@ -10003,5 +10783,314 @@ mod b000s_fprintf_tests {
         assert_eq!(calls(&e, HANDLER).len(), 2);
         assert!(calls(&e, LOCK_FILE).is_empty());
         assert!(calls(&e, UNLOCK_FILE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod b000t_output_tests {
+    use super::*;
+
+    const HANDLER: u32 = 0x0e30_0000;
+    const CONVERT: u32 = 0x0e31_0000;
+    const FORCE_POINT: u32 = 0x0e32_0000;
+    const CROP: u32 = 0x0e33_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// The format state machine's table as LIBCMT defines it: each character's class in the
+    /// low nibble of the byte at `010f3080 + character`, each (class, state)'s next state in
+    /// the high nibble of the byte at `010f30a0 + class * 8 + state` (one table, two views).
+    fn lookup_table(e: &mut Engine) {
+        e.map(LOOKUP_CLASSES, 0x100);
+        let classes: &[(&[u8], u8)] = &[
+            (b" #+-", 6),
+            (b"%", 1),
+            (b"*", 3),
+            (b".", 2),
+            (b"0", 4),
+            (b"123456789", 5),
+            (b"FILNhlw", 7),
+            (b"ACEGSXZacdefginopsux", 8),
+        ];
+        for (characters, class) in classes {
+            for c in characters.iter() {
+                let at = LOOKUP_CLASSES + u32::from(*c);
+                let byte = e.mem.u8(at) | class;
+                e.mem.set_u8(at, byte);
+            }
+        }
+        // Rows: classes 0 (other) to 8 (type); columns: states 0 (normal) to 7 (type).
+        let next: [[u8; 8]; 9] = [
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [0, 4, 4, 4, 0, 0, 0, 0],
+            [0, 3, 3, 0, 5, 0, 0, 0],
+            [0, 2, 2, 3, 5, 5, 0, 0],
+            [0, 3, 3, 3, 5, 5, 0, 0],
+            [0, 2, 2, 0, 0, 0, 0, 0],
+            [0, 6, 6, 6, 6, 6, 6, 0],
+            [0, 7, 7, 7, 7, 7, 7, 0],
+        ];
+        for (class, row) in next.iter().enumerate() {
+            for (state, value) in row.iter().enumerate() {
+                let at = LOOKUP_STATES + (class * 8 + state) as u32;
+                let byte = e.mem.u8(at) | (value << 4);
+                e.mem.set_u8(at, byte);
+            }
+        }
+    }
+
+    /// An engine for `_output_l`: thread block (errno), handler, identity pointer decoding,
+    /// the lookup table, the null strings, and doubles for the locale and the float helpers.
+    fn engine() -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x2000);
+        e.map(0x011c_1000, 0x2000);
+        e.map(SECURITY_COOKIE, 4);
+        let block = e.mem.alloc(0x80);
+        e.register_double(GETPTD_NOEXIT, move |_, _| block.into_ret());
+        e.register(DECODE_POINTER, |_, a| a[0].into_ret());
+        e.mem.set_u32(INVALID_PARAMETER_HANDLER, HANDLER);
+        e.register(HANDLER, |_, _| Ret::default());
+        e.register(LOCALE_UPDATE, |e, a| {
+            e.mem.set_u8(a[0] + 0xc, 0);
+            a[0].into_ret()
+        });
+        e.register(ISLEADBYTE_L, |_, _| 0u32.into_ret());
+        e.register(WCTOMB_S, |e, a| {
+            e.mem.set_u8(a[1], a[3] as u8);
+            e.mem.set_u32(a[0], 1);
+            0u32.into_ret()
+        });
+        e.register(GET_PRINTF_COUNT_OUTPUT, |_, _| 1u32.into_ret());
+        e.register(MALLOC_CRT, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(FREE_CRT, |_, _| Ret::default());
+        e.mem.set_u32(CFLTCVT, CONVERT);
+        e.mem.set_u32(FORCDECPT, FORCE_POINT);
+        e.mem.set_u32(CROPZEROS, CROP);
+        // `_cfltcvt` double: writes "-1.50" for 'f' and "2.5e+000" otherwise.
+        e.register(CONVERT, |e, a| {
+            let text: &[u8] = if a[3] == u32::from(b'f') {
+                b"-1.50"
+            } else {
+                b"2.5e+000"
+            };
+            e.mem.set_cstr(a[1], text);
+            Ret::default()
+        });
+        e.register(FORCE_POINT, |_, _| Ret::default());
+        e.register(CROP, |_, _| Ret::default());
+        let null = e.mem.alloc(8);
+        e.mem.set_cstr(null, b"(null)");
+        e.mem.set_u32(NULL_STRING, null);
+        lookup_table(&mut e);
+        e.call_log = Some(vec![]);
+        (e, block + 8)
+    }
+
+    /// A string stream writing into a buffer: `_ptr`, `_cnt`, `_base`, `_flag` 0x42.
+    fn string_stream(e: &mut Engine) -> (u32, u32) {
+        let buffer = e.mem.alloc(0x100);
+        let stream = e.mem.alloc(0x20);
+        e.mem.set_u32(stream, buffer);
+        e.mem.set_u32(stream + 4, 0x100);
+        e.mem.set_u32(stream + 8, buffer);
+        e.mem.set_u32(stream + 0xc, 0x42);
+        (stream, buffer)
+    }
+
+    /// Runs `_output_l` on `format` with `words` as the argument list; answers the result and
+    /// the text written.
+    fn run(e: &mut Engine, format: &[u8], words: &[u32]) -> (i32, Vec<u8>) {
+        let (stream, buffer) = string_stream(e);
+        let text = e.mem.alloc(format.len() as u32 + 1);
+        e.mem.set_cstr(text, format);
+        let list = e.mem.alloc(4 * words.len() as u32 + 4);
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(list + 4 * i as u32, *word);
+        }
+        let result = e.call(0x00ed_2f21, &args![stream, text, 0u32, list]).i32();
+        let written = e.mem.u32(stream).wrapping_sub(buffer);
+        (result, e.mem.bytes(buffer, written))
+    }
+
+    #[test]
+    fn output_l_formats_integers_strings_and_characters() {
+        let (mut e, _) = engine();
+        let hi = e.mem.alloc(4);
+        e.mem.set_cstr(hi, b"hi");
+        let (result, text) = run(
+            &mut e,
+            b"a%5d|%-4s|%#x|%c%%|%X",
+            &[42, hi, 255, u32::from(b'z'), 0xbeef],
+        );
+        assert_eq!(text, b"a   42|hi  |0xff|z%|BEEF".to_vec());
+        assert_eq!(result, text.len() as i32);
+    }
+
+    #[test]
+    fn output_l_signs_precision_sizes_and_octal() {
+        let (mut e, _) = engine();
+        let minus_five = (-5i64) as u64;
+        let (result, text) = run(
+            &mut e,
+            b"%+.3d %lld %05d %o %#o %hd %I64u",
+            &[
+                (-7i32) as u32,
+                minus_five as u32,
+                (minus_five >> 32) as u32,
+                12,
+                8,
+                8,
+                0x1_ffff,
+                0,
+                1,
+            ],
+        );
+        assert_eq!(text, b"-007 -5 00012 10 010 -1 4294967296".to_vec());
+        assert_eq!(result, text.len() as i32);
+    }
+
+    #[test]
+    fn output_l_converts_floats_through_cfltcvt() {
+        let (mut e, _) = engine();
+        let (result, text) = run(&mut e, b"%.2f|%E|%g", &[0, 0, 0, 0, 0, 0]);
+        assert_eq!(text, b"-1.50|2.5e+000|2.5e+000".to_vec());
+        assert_eq!(result, text.len() as i32);
+        let converts = calls(&e, CONVERT);
+        // (value, buffer, size, character, precision, capitals, locale)
+        assert_eq!(
+            (converts[0][2], converts[0][3], converts[0][4]),
+            (0x200, 0x66, 2)
+        );
+        assert_eq!(
+            (converts[1][3], converts[1][4], converts[1][5]),
+            (0x65, 6, 1)
+        );
+        assert_eq!((converts[2][3], converts[2][4]), (0x67, 6));
+        assert_eq!(calls(&e, CROP).len(), 1);
+        assert!(calls(&e, FORCE_POINT).is_empty());
+        // A large precision takes a heap buffer, freed afterwards.
+        run(&mut e, b"%.200f", &[0, 0]);
+        assert_eq!(calls(&e, MALLOC_CRT), vec![vec![200 + 0x15d]]);
+        assert_eq!(calls(&e, FREE_CRT).len(), 1);
+    }
+
+    #[test]
+    fn output_l_null_and_wide_strings_and_counts() {
+        let (mut e, _) = engine();
+        let wide = e.mem.alloc(8);
+        e.mem.set_u16(wide, u16::from(b'a'));
+        e.mem.set_u16(wide + 2, u16::from(b'b'));
+        let count = e.mem.alloc(4);
+        let (result, text) = run(&mut e, b"%s|%S|%.1s%n|%Iq", &[0, wide, wide, count]);
+        assert_eq!(text, b"(null)|ab|a|Iq".to_vec());
+        assert_eq!(result, 14);
+        assert_eq!(e.mem.u32(count), 11);
+        // %.1s on a narrow string stops after one character; the wide one converts both.
+        assert_eq!(calls(&e, WCTOMB_S).len(), 2);
+    }
+
+    #[test]
+    fn output_l_refuses_bad_streams_and_disabled_counts() {
+        let (mut e, error) = engine();
+        let text = e.mem.alloc(4);
+        e.mem.set_cstr(text, b"x");
+        assert_eq!(
+            e.call(0x00ed_2f21, &args![0u32, text, 0u32, 0u32]).i32(),
+            -1
+        );
+        assert_eq!(e.mem.u32(error), 0x16);
+        assert_eq!(calls(&e, HANDLER).len(), 1);
+        e.register(GET_PRINTF_COUNT_OUTPUT, |_, _| 0u32.into_ret());
+        let count = e.mem.alloc(4);
+        let (result, written) = run(&mut e, b"ab%n", &[count]);
+        assert_eq!(result, -1);
+        assert_eq!(written, b"ab".to_vec());
+        assert_eq!(calls(&e, HANDLER).len(), 2);
+    }
+
+    #[test]
+    fn stbuf_and_ftbuf_lend_stdout_a_buffer() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x2000);
+        e.map(0x011c_1a00, 0x300);
+        e.register(FILENO, |_, _| 1u32.into_ret());
+        e.register(ISATTY, |_, _| 1u32.into_ret());
+        e.register(MALLOC_CRT, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(FLUSH, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let stdout = IOB_FIRST + 0x20;
+        assert_eq!(e.call(0x00ed_7d48, &args![stdout]).u32(), 1);
+        let buffer = e.mem.u32(STDBUF);
+        assert_ne!(buffer, 0);
+        assert_eq!(e.mem.u32(stdout), buffer);
+        assert_eq!(e.mem.u32(stdout + 4), 0x1000);
+        assert_eq!(e.mem.u32(stdout + 0xc), 0x1102);
+        assert_eq!(e.mem.u32(CFLUSH), 1);
+        // Buffered already: 0 (the counter still counts).
+        assert_eq!(e.call(0x00ed_7d48, &args![stdout]).u32(), 0);
+        assert_eq!(e.mem.u32(CFLUSH), 2);
+        // Not stdout or stderr: 0 without counting.
+        assert_eq!(e.call(0x00ed_7d48, &args![IOB_FIRST]).u32(), 0);
+        assert_eq!(e.mem.u32(CFLUSH), 2);
+        e.call(0x00ed_7de4, &args![1u32, stdout]);
+        assert_eq!(calls(&e, FLUSH), vec![vec![stdout]]);
+        assert_eq!(e.mem.u32(stdout + 0xc), 0x2);
+        assert_eq!(e.mem.u32(stdout), 0);
+        e.call(0x00ed_7de4, &args![0u32, stdout]);
+        assert_eq!(calls(&e, FLUSH).len(), 1);
+        // stderr without memory: its own two-byte buffer.
+        e.register(MALLOC_CRT, |_, _| 0u32.into_ret());
+        let stderr = IOB_FIRST + 0x40;
+        assert_eq!(e.call(0x00ed_7d48, &args![stderr]).u32(), 1);
+        assert_eq!(e.mem.u32(stderr), stderr + 0x14);
+        assert_eq!(e.mem.u32(stderr + 0x18), 2);
+        // Not a terminal: 0.
+        e.register(ISATTY, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00ed_7d48, &args![stdout]).u32(), 0);
+    }
+
+    #[test]
+    fn small_helpers_of_the_printf_core() {
+        let mut e = Engine::new();
+        assert_eq!(
+            aulldvrm(&mut e, 1_000_000_000_007, 10),
+            (100_000_000_000, 7)
+        );
+        assert_eq!(
+            aulldvrm(&mut e, u64::MAX, 0x1_0000_0001),
+            (u64::MAX / 0x1_0000_0001, u64::MAX % 0x1_0000_0001)
+        );
+        let q = e.call(0x00ec_c4f0, &args![100u32, 0u32, 7u32, 0u32]).u64();
+        assert_eq!(q, 14);
+        e.map(PRINTF_COUNT_OUTPUT, 4);
+        e.map(SECURITY_COOKIE, 4);
+        e.mem.set_u32(SECURITY_COOKIE, 0x1234);
+        assert_eq!(e.call(0x00ec_9df9, &args![]).u32(), 0);
+        e.mem.set_u32(PRINTF_COUNT_OUTPUT, 0x1235);
+        assert_eq!(e.call(0x00ec_9df9, &args![]).u32(), 1);
+        e.register(WCTOMB_S_L, |_, a| (a[3] + a[4]).into_ret());
+        assert_eq!(
+            e.call(0x00ee_2315, &args![1u32, 2u32, 3u32, 0x41u32]).i32(),
+            0x41
+        );
+        // write_multi_char: three characters, or none for a count of 0.
+        let buffer = e.mem.alloc(8);
+        let stream = e.mem.alloc(0x20);
+        e.mem.set_u32(stream, buffer);
+        e.mem.set_u32(stream + 4, 8);
+        e.mem.set_u32(stream + 8, buffer);
+        let count = e.mem.alloc(4);
+        e.call(0x00ed_2efb, &args![0x2au32, 3u32, stream, count]);
+        e.call(0x00ed_2efb, &args![0x2bu32, 0u32, stream, count]);
+        assert_eq!(e.mem.bytes(buffer, 4), b"***\0".to_vec());
+        assert_eq!(e.mem.u32(count), 3);
     }
 }

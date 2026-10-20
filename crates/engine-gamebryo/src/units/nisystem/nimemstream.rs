@@ -164,6 +164,44 @@ pub fn fn_00aa2dd0(e: &mut Engine, this: Ptr<NiMemStream>, source: u32, count: u
     count
 }
 
+/// The byte-swapping read and write functions `SetEndianSwap` stores (`00aa2ec0`,
+/// `00aa2f20`; not translated here).
+const MEM_STREAM_SWAP_READ: u32 = 0x00aa_2ec0;
+const MEM_STREAM_SWAP_WRITE: u32 = 0x00aa_2f20;
+
+// Translated from 00aa2f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMemStream::SetEndianSwap` (Xbox PDB; `thiscall`, `RET 4`): with `swap` set the
+/// stream reads and writes through the byte-swapping functions (`00aa2ec0`, `00aa2f20`),
+/// else through the plain ones (`00aa2e60`, `00aa2ea0`).
+pub fn ni_mem_stream_set_endian_swap(e: &mut Engine, this: Ptr<NiMemStream>, swap: bool) {
+    if swap {
+        e.set(this, NiMemStream::m_pfnRead, MEM_STREAM_SWAP_READ);
+        e.set(this, NiMemStream::m_pfnWrite, MEM_STREAM_SWAP_WRITE);
+    } else {
+        e.set(this, NiMemStream::m_pfnRead, MEM_STREAM_READ);
+        e.set(this, NiMemStream::m_pfnWrite, MEM_STREAM_WRITE);
+    }
+}
+
+// Translated from 00aa2d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiMemStream::Seek` (Xbox PDB; `thiscall`, `RET 4`): moves the position by `offset`
+/// when the new position is not negative (sign of the 32-bit sum) and lies below the word
+/// at `+0x1C` (`m_uiAllocSize`, unsigned compare); the absolute position follows.
+/// Otherwise nothing changes.
+pub fn ni_mem_stream_seek(e: &mut Engine, this: Ptr<NiMemStream>, offset: i32) {
+    let position = e
+        .get(this, NiMemStream::m_uiPos)
+        .wrapping_add(offset as u32);
+    if (position as i32) < 0 {
+        return;
+    }
+    if position >= e.get(this, NiMemStream::m_uiAllocSize) {
+        return;
+    }
+    e.set(this, NiMemStream::m_uiPos, position);
+    e.set(this, NiMemStream::m_uiAbsoluteCurrentPos, position);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -178,6 +216,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00aa_2e60,
             ni_mem_stream_read(Ptr<NiMemStream>, u32, u32, u32, u32) -> u32
         ),
+        entry!(
+            0x00aa_2f80,
+            ni_mem_stream_set_endian_swap(Ptr<NiMemStream>, bool)
+        ),
+        entry!(0x00aa_2d70, ni_mem_stream_seek(Ptr<NiMemStream>, i32)),
     ]
 }
 
@@ -386,5 +429,43 @@ mod tests {
         assert_eq!(calls_to(&log, ALLOCATE), vec![vec![0x2c]]);
         assert_eq!(e.get(stream, NiMemStream::m_uiAllocSize), 0x2c);
         assert_eq!(e.get(stream, NiMemStream::m_uiPos), 0x2c);
+    }
+}
+
+#[cfg(test)]
+mod b037_tests {
+    use super::*;
+
+    #[test]
+    fn set_endian_swap_picks_the_function_pair() {
+        let mut e = Engine::new();
+        let this = e.new_object::<NiMemStream>();
+        e.call(0x00aa_2f80, &args![this, 1u32]);
+        assert_eq!(e.get(this, NiMemStream::m_pfnRead), MEM_STREAM_SWAP_READ);
+        assert_eq!(e.get(this, NiMemStream::m_pfnWrite), MEM_STREAM_SWAP_WRITE);
+        // Only the low byte counts.
+        e.call(0x00aa_2f80, &args![this, 0x100u32]);
+        assert_eq!(e.get(this, NiMemStream::m_pfnRead), MEM_STREAM_READ);
+        assert_eq!(e.get(this, NiMemStream::m_pfnWrite), MEM_STREAM_WRITE);
+    }
+
+    #[test]
+    fn seek_moves_inside_the_buffer_only() {
+        let mut e = Engine::new();
+        let this = e.new_object::<NiMemStream>();
+        e.set(this, NiMemStream::m_uiPos, 10);
+        e.set(this, NiMemStream::m_uiAbsoluteCurrentPos, 10);
+        e.set(this, NiMemStream::m_uiAllocSize, 20);
+        e.call(0x00aa_2d70, &args![this, 5u32]);
+        assert_eq!(e.get(this, NiMemStream::m_uiPos), 15);
+        assert_eq!(e.get(this, NiMemStream::m_uiAbsoluteCurrentPos), 15);
+        // Past the end, exactly the end, and below zero: nothing moves.
+        for offset in [10i32, 5, -16] {
+            e.call(0x00aa_2d70, &args![this, offset as u32]);
+            assert_eq!(e.get(this, NiMemStream::m_uiPos), 15);
+        }
+        e.call(0x00aa_2d70, &args![this, (-15i32) as u32]);
+        assert_eq!(e.get(this, NiMemStream::m_uiPos), 0);
+        assert_eq!(e.get(this, NiMemStream::m_uiAbsoluteCurrentPos), 0);
     }
 }

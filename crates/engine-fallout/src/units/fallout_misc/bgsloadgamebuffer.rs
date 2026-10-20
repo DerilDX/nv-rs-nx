@@ -134,6 +134,97 @@ pub fn load_variable(e: &mut Engine, this: Ptr<BGSLoadGameBuffer>) -> u32 {
     })
 }
 
+/// `LoadGameDataFromFileFunction` (engine map; `00845d20`), `cdecl`: file,
+/// destination, size.
+const LOAD_FROM_FILE: u32 = 0x0084_5d20;
+/// `BGSSaveLoadFile::Read` (engine map), `thiscall`: destination, size;
+/// the count read.
+const SAVE_LOAD_FILE_READ: u32 = 0x0084_6300;
+/// The game's allocator (`00401000`, `cdecl`, size).
+const ALLOCATE: u32 = 0x0040_1000;
+/// The game's `operator delete` (`00401030`, `cdecl`).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// `BGSLoadGameBuffer`'s vtable (`01082048`; RTTI `.?AVBGSLoadGameBuffer@@`).
+const VTABLE_LOAD_GAME_BUFFER: u32 = 0x0108_2048;
+
+// Translated from 008646f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BGSLoadGameBuffer` destructor (by the vtable it sets): frees the
+/// buffer.
+pub fn fn_008646f0(e: &mut Engine, this: Ptr<BGSLoadGameBuffer>) {
+    e.mem.set_u32(this.addr(), VTABLE_LOAD_GAME_BUFFER);
+    let buffer = e.get(this, BGSLoadGameBuffer::pBuffer);
+    e.call(OPERATOR_DELETE, &args![buffer]);
+}
+
+// Translated from 00864740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadGameBuffer::Load` (engine map): reads the size word from `file`
+/// into `iBufferSize`, then that many bytes ([`bgs_load_game_buffer_load_ov2`]).
+/// The count read, or -1 when it is not the size.
+pub fn bgs_load_game_buffer_load(e: &mut Engine, this: Ptr<BGSLoadGameBuffer>, file: u32) -> u32 {
+    e.call(LOAD_FROM_FILE, &args![file, this.addr() + 8, 4u32]);
+    let size = e.get(this, BGSLoadGameBuffer::iBufferSize);
+    let read = bgs_load_game_buffer_load_ov2(e, this, file, size);
+    if read == e.get(this, BGSLoadGameBuffer::iBufferSize) {
+        read
+    } else {
+        0xffff_ffff
+    }
+}
+
+// Translated from 00864790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadGameBuffer::Load_ov2` (engine map): allocates a buffer of
+/// `size` bytes and reads it from `file` (`BGSSaveLoadFile::Read`). The
+/// count read, or -1 when it is not the size.
+pub fn bgs_load_game_buffer_load_ov2(
+    e: &mut Engine,
+    this: Ptr<BGSLoadGameBuffer>,
+    file: u32,
+    size: u32,
+) -> u32 {
+    e.set(this, BGSLoadGameBuffer::iBufferSize, size);
+    let size = e.get(this, BGSLoadGameBuffer::iBufferSize);
+    let buffer = e.call(ALLOCATE, &args![size]).u32();
+    e.set(this, BGSLoadGameBuffer::pBuffer, Ptr::new(buffer));
+    let size = e.get(this, BGSLoadGameBuffer::iBufferSize);
+    let buffer = e.get(this, BGSLoadGameBuffer::pBuffer);
+    let read = e
+        .call(SAVE_LOAD_FILE_READ, &args![file, buffer, size])
+        .u32();
+    if read == e.get(this, BGSLoadGameBuffer::iBufferSize) {
+        read
+    } else {
+        0xffff_ffff
+    }
+}
+
+// Translated from 008649a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLoadGameBuffer::LoadString` (engine map): a 16-bit length, then that
+/// many characters into `output` (allocated `length + 1` bytes when null)
+/// and a 0 after them; an empty string writes just the 0 (when `output` is
+/// set). Returns `output`.
+pub fn bgs_load_game_buffer_load_string(
+    e: &mut Engine,
+    this: Ptr<BGSLoadGameBuffer>,
+    output: u32,
+) -> u32 {
+    let mut output = output;
+    e.with_stack(4, |e, length| {
+        e.mem.set_u16(length.addr(), 0);
+        read_data(e, this, length, 2);
+        let count = u32::from(e.mem.u16(length.addr()));
+        if count != 0 {
+            if output == 0 {
+                output = e.call(ALLOCATE, &args![count + 1]).u32();
+            }
+            read_data(e, this, Ptr::new(output), count);
+            e.mem.set_u8(output.wrapping_add(count), 0);
+        } else if output != 0 {
+            e.mem.set_u8(output, 0);
+        }
+    });
+    output
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -154,6 +245,19 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00864940, compact_id_is_zero(Ptr) -> bool),
         entry!(0x00864980, load_raw(Ptr<BGSLoadGameBuffer>, Ptr, u32)),
         entry!(0x00864a60, load_variable(Ptr<BGSLoadGameBuffer>) -> u32),
+        entry!(0x0086_46f0, fn_008646f0(Ptr<BGSLoadGameBuffer>)),
+        entry!(
+            0x0086_4740,
+            bgs_load_game_buffer_load(Ptr<BGSLoadGameBuffer>, u32) -> u32
+        ),
+        entry!(
+            0x0086_4790,
+            bgs_load_game_buffer_load_ov2(Ptr<BGSLoadGameBuffer>, u32, u32) -> u32
+        ),
+        entry!(
+            0x0086_49a0,
+            bgs_load_game_buffer_load_string(Ptr<BGSLoadGameBuffer>, u32) -> u32
+        ),
     ]
 }
 
@@ -327,5 +431,92 @@ mod tests {
         let (mut e, this, _) = fixture(&[0x81, 0x23, 0x45, b'|']);
         assert_eq!(e.call(0x008648a0, &args![this]).u32(), 0xff012345);
         assert_eq!(e.get(this, BGSLoadGameBuffer::iBufferPosition), 4);
+    }
+}
+
+#[cfg(test)]
+mod b040_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn destructor_frees_the_buffer() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let this = e.new_object::<BGSLoadGameBuffer>();
+        e.mem.set_u32(this.addr() + 4, 0x4400);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_46f0, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), VTABLE_LOAD_GAME_BUFFER);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![0x4400]]);
+    }
+
+    #[test]
+    fn load_reads_the_size_then_the_bytes() {
+        let mut e = Engine::new();
+        e.register(LOAD_FROM_FILE, |e, a| {
+            e.mem.set_u32(a[1], 0x20);
+            Ret::default()
+        });
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(SAVE_LOAD_FILE_READ, |_, a| a[2].into_ret());
+        let this = e.new_object::<BGSLoadGameBuffer>();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0086_4740, &args![this, 0x7700u32]).u32(), 0x20);
+        assert_eq!(
+            calls_to(&e, LOAD_FROM_FILE),
+            vec![vec![0x7700, this.addr() + 8, 4]]
+        );
+        let buffer = e.get(this, BGSLoadGameBuffer::pBuffer).addr();
+        assert_eq!(
+            calls_to(&e, SAVE_LOAD_FILE_READ),
+            vec![vec![0x7700, buffer, 0x20]]
+        );
+        // A short read: -1.
+        e.register(SAVE_LOAD_FILE_READ, |_, a| (a[2] - 1).into_ret());
+        assert_eq!(
+            e.call(0x0086_4740, &args![this, 0x7700u32]).u32(),
+            0xffff_ffff
+        );
+        assert_eq!(
+            e.call(0x0086_4790, &args![this, 0x7700u32, 8u32]).u32(),
+            0xffff_ffff
+        );
+        assert_eq!(e.get(this, BGSLoadGameBuffer::iBufferSize), 8);
+    }
+
+    #[test]
+    fn load_string_reads_length_and_text() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(0x0040_1460, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        let this = e.new_object::<BGSLoadGameBuffer>();
+        let data = e.mem.alloc(0x10);
+        e.mem.write(data, &[3, 0, b'|', b'a', b'b', b'c', b'|']);
+        e.set(this, BGSLoadGameBuffer::pBuffer, Ptr::new(data));
+        e.set(this, BGSLoadGameBuffer::iBufferSize, 7);
+        let out = e.call(0x0086_49a0, &args![this, 0u32]).u32();
+        assert_eq!(e.mem.cstr(out), b"abc");
+        // An empty string writes the terminator into the given buffer.
+        e.mem.write(data, &[0, 0, b'|']);
+        e.set(this, BGSLoadGameBuffer::iBufferPosition, 0);
+        let given = e.mem.alloc(4);
+        e.mem.set_u8(given, b'x');
+        let out = e.call(0x0086_49a0, &args![this, given]).u32();
+        assert_eq!(out, given);
+        assert_eq!(e.mem.u8(given), 0);
     }
 }

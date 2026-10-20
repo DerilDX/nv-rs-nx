@@ -57,11 +57,91 @@ pub fn ni_culling_process_ni_culling_process(e: &mut Engine, this: Ptr, visible_
     this
 }
 
+/// `NiFrustumPlanes::Set` (`00a74e10`, `thiscall` on the planes, `RET 8`: the
+/// frustum and the camera's world transform).
+const FRUSTUM_PLANES_SET: u32 = 0x00a7_4e10;
+
+// Translated from 00a694a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nicullingprocess.cpp`; `thiscall`, one
+/// stack word: a frustum of seven words). With a camera (`m_pkCamera`, +0xc):
+/// copies the frustum into `m_kFrustum` (+0x10, `REP MOVSD` of 7 words), sets
+/// the planes `m_kPlanes` (+0x2c) from it and the camera's `+0x68`
+/// (`NiFrustumPlanes::Set`) and makes all six active (`m_uiActivePlanes`
+/// +0x8c = 0x3f). Without a camera nothing changes.
+pub fn fn_00a694a0(e: &mut Engine, this: Ptr, frustum: Ptr) {
+    let t = this.addr();
+    let camera = e.mem.u32(t + 0xc);
+    if camera == 0 {
+        return;
+    }
+    for i in 0..7 {
+        let word = e.mem.u32(frustum.addr() + 4 * i);
+        e.mem.set_u32(t + 0x10 + 4 * i, word);
+    }
+    e.call(
+        FRUSTUM_PLANES_SET,
+        &args![t + 0x2c, t + 0x10, camera + 0x68],
+    );
+    e.mem.set_u32(t + 0x8c, 0x3f);
+}
+
+/// `NiAVObject::GetWorldBound` (`0043d450`, `thiscall`, no stack words).
+const AV_OBJECT_GET_WORLD_BOUND: u32 = 0x0043_d450;
+/// `NiBound::WhichSide` (`004b6100`, `thiscall` on the bound, `RET 4`: the plane).
+const BOUND_WHICH_SIDE: u32 = 0x004b_6100;
+
+// Translated from 00a694e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiCullingProcess::DoCulling` (Xbox PDB), `thiscall`, one stack word (the
+/// object). Only when the object has a bound (`object+0x20`) whose radius
+/// (`+0xc`) is not 0.0 (a NaN radius goes on, as `FCOMP` with `TEST AH,0x44`
+/// does): for each of the six planes (+0x2c, 0x10 bytes each) still active in
+/// `m_uiActivePlanes` (+0x8c, bit per plane), asks which side of it the
+/// object's world bound is (`GetWorldBound`, then `WhichSide`); side 2 stops
+/// (the object is culled), side 1 drops the plane for the children. When all
+/// six were looked at, the object's vtable slot `+0xd4` runs with this process.
+/// The active planes are restored afterwards.
+pub fn ni_culling_process_do_culling(e: &mut Engine, this: Ptr, object: Ptr) {
+    let t = this.addr();
+    let bound = e.mem.u32(object.addr() + 0x20);
+    if bound == 0 {
+        return;
+    }
+    if x87_m32(e.mem.u32(bound + 0xc)) == 0.0 {
+        return;
+    }
+    let saved = e.mem.u32(t + 0x8c);
+    let mut plane_index: u32 = 0;
+    let mut mask: u32 = 1;
+    let mut plane = t + 0x2c;
+    while plane_index < 6 {
+        if e.mem.u32(t + 0x8c) & mask != 0 {
+            let world_bound = e.call(AV_OBJECT_GET_WORLD_BOUND, &args![object]).u32();
+            let side = e.call(BOUND_WHICH_SIDE, &args![world_bound, plane]).u32();
+            if side == 2 {
+                break;
+            }
+            if side == 1 {
+                let active = e.mem.u32(t + 0x8c) & !mask;
+                e.mem.set_u32(t + 0x8c, active);
+            }
+        }
+        plane_index += 1;
+        plane += 0x10;
+        mask = mask.rotate_left(1);
+    }
+    if plane_index == 6 {
+        e.vcall(object.addr(), 0xd4, &args![this]);
+    }
+    e.mem.set_u32(t + 0x8c, saved);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a693f0, ni_culling_process_get_rtti() -> Ptr),
         entry!(0x00a6_9400, ni_culling_process_ni_culling_process(Ptr, u32) -> Ptr),
+        entry!(0x00a6_94a0, fn_00a694a0(Ptr, Ptr)),
+        entry!(0x00a6_94e0, ni_culling_process_do_culling(Ptr, Ptr)),
     ]
 }
 
@@ -111,5 +191,100 @@ mod b000o_tests {
         assert_eq!(e.mem.u32(this + 8), 0x5150);
         assert_eq!(e.mem.u32(this + 0xc), 0);
         assert_eq!(e.mem.u32(this + 0x8c), 0x3f);
+    }
+}
+
+#[cfg(test)]
+mod tests_b008 {
+    use super::*;
+
+    #[test]
+    fn fn_00a694a0_sets_the_frustum_only_with_a_camera() {
+        let mut e = Engine::new();
+        e.register(FRUSTUM_PLANES_SET, |_, _| Ret::default());
+        let this = e.mem.alloc(0x90);
+        let frustum = e.mem.alloc(0x1c);
+        for i in 0..7 {
+            e.mem.set_u32(frustum + 4 * i, 0x100 + i);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_94a0, &args![this, frustum]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        e.mem.set_u32(this + 0xc, 0x4000);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_94a0, &args![this, frustum]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1],
+            (FRUSTUM_PLANES_SET, vec![this + 0x2c, this + 0x10, 0x4068])
+        );
+        for i in 0..7 {
+            assert_eq!(e.mem.u32(this + 0x10 + 4 * i), 0x100 + i);
+        }
+        assert_eq!(e.mem.u32(this + 0x8c), 0x3f);
+    }
+
+    const ON_VISIBLE: u32 = 0x0123_7000;
+
+    /// Runs `DoCulling` with the planes `active` and the sides `sides` (one per
+    /// plane asked); answers the planes asked, whether the object's slot ran,
+    /// the active mask seen during that slot and the mask afterwards.
+    fn cull(radius: f32, active: u32, sides: Vec<u32>) -> (Vec<u32>, Option<u32>, u32) {
+        let mut e = Engine::new();
+        e.register(AV_OBJECT_GET_WORLD_BOUND, |_, _| 0x8888u32.into_ret());
+        let mut sides = sides.into_iter();
+        e.register_double(BOUND_WHICH_SIDE, move |_, _| {
+            sides.next().unwrap().into_ret()
+        });
+        e.register_double(ON_VISIBLE, |e, a| {
+            let mask = e.mem.u32(a[1] + 0x8c);
+            e.mem.set_u32(0x0123_8000, mask);
+            Ret::default()
+        });
+        e.map(0x0123_8000, 4);
+        e.mem.set_u32(0x0123_8000, 0xdead);
+        let vtable = e.mem.alloc(0xd8);
+        e.mem.set_u32(vtable + 0xd4, ON_VISIBLE);
+        let bound = e.mem.alloc(0x10);
+        e.mem.set_f32(bound + 0xc, radius);
+        let object = e.mem.alloc(0x24);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(object + 0x20, bound);
+        let this = e.mem.alloc(0x90);
+        e.mem.set_u32(this + 0x8c, active);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_94e0, &args![this, object]);
+        let planes = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 == BOUND_WHICH_SIDE)
+            .map(|c| (c.1[1] - this - 0x2c) / 0x10)
+            .collect();
+        let seen = e.mem.u32(0x0123_8000);
+        assert_eq!(e.mem.u32(this + 0x8c), active);
+        (planes, (seen != 0xdead).then_some(seen), active)
+    }
+
+    #[test]
+    fn ni_culling_process_do_culling_tests_the_active_planes() {
+        let (planes, seen, _) = cull(1.0, 0b10_0101, vec![0, 1, 0]);
+        assert_eq!(planes, vec![0, 2, 5]);
+        assert_eq!(seen, Some(0b10_0001));
+    }
+
+    #[test]
+    fn ni_culling_process_do_culling_stops_on_side_2_and_skips_flat_bounds() {
+        let (planes, seen, _) = cull(1.0, 0x3f, vec![0, 2]);
+        assert_eq!(planes, vec![0, 1]);
+        assert_eq!(seen, None);
+        let (planes, seen, _) = cull(0.0, 0x3f, vec![]);
+        assert!(planes.is_empty());
+        assert_eq!(seen, None);
+        let (planes, seen, _) = cull(f32::NAN, 0, vec![]);
+        assert!(planes.is_empty());
+        assert_eq!(seen, Some(0));
     }
 }

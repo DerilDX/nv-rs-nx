@@ -54,6 +54,12 @@ pub fn fn_004d91e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 004d8a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: the 16-bit word at `this + 0x3c` (`thiscall`, result in `AX`).
+pub fn fn_004d8a00(e: &mut Engine, this: Ptr) -> u16 {
+    e.mem.u16(this.addr() + 0x3c)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -62,6 +68,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004d_9130, fn_004d9130(Ptr, u32) -> Ptr),
         entry!(0x004d_9160, fn_004d9160(Ptr, u32) -> Ptr),
         entry!(0x004d_91e0, fn_004d91e0(Ptr, u32) -> Ptr),
+        entry!(0x004d_8a00, fn_004d8a00(Ptr) -> u16),
     ]
 }
 
@@ -191,5 +198,18 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod b040_tests {
+    use super::*;
+
+    #[test]
+    fn fn_004d8a00_reads_the_word_at_0x3c() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x3c, 0xffff_8123);
+        assert_eq!(e.call(0x004d_8a00, &args![this]).u16(), 0x8123);
     }
 }

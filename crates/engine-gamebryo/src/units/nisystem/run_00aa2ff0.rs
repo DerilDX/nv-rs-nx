@@ -39,6 +39,26 @@ pub fn fn_00aa3040(e: &mut Engine, this: Ptr) -> u32 {
     e.call(JUMP_TARGET_00AA3040, &args![this]).u32()
 }
 
+/// Byte `011f6229`: `00aa3070` runs only while it is set and clears it.
+const START_UP_DONE_FLAG: u32 = 0x011f_6229;
+/// The three calls (no arguments) `00aa3070` makes, in order; the last one is a `JMP`.
+/// `00aa81d0` is in unit `BSCore/oei_io_thread.cpp`.
+const SHUTDOWN_CALLS: [u32; 3] = [0x00aa_81d0, 0x00aa_1980, 0x00a2_9680];
+
+// Translated from 00aa3070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments; called by `00aa2170`): when the byte `011f6229`
+/// is set, clears it and calls `00aa81d0`, `00aa1980` and `00a29680` (the last through a
+/// `JMP`).
+pub fn fn_00aa3070(e: &mut Engine) {
+    if e.mem.u8(START_UP_DONE_FLAG) == 0 {
+        return;
+    }
+    e.mem.set_u8(START_UP_DONE_FLAG, 0);
+    for step in SHUTDOWN_CALLS {
+        e.call(step, &args![]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -47,6 +67,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_00aa2ff0(Ptr<NiMemStream>) -> Ptr<NiMemStream>
         ),
         entry!(0x00aa_3040, fn_00aa3040(Ptr) -> u32),
+        entry!(0x00aa_3070, fn_00aa3070()),
     ]
 }
 
@@ -99,5 +120,29 @@ mod tests {
         assert_eq!(e.mem.u32(at + 0x1c), 0x400);
         assert_eq!(e.mem.u8(at + 0x20), 0);
         assert_eq!(e.mem.u8(at + 0x21), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn fn_00aa3070_shuts_down_once() {
+        let mut e = Engine::new();
+        e.map(START_UP_DONE_FLAG & !0xfff, 0x1000);
+        for step in SHUTDOWN_CALLS {
+            e.register(step, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_3070, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.mem.set_u8(START_UP_DONE_FLAG, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_3070, &args![]);
+        let log = e.call_log.take().unwrap();
+        let expected: Vec<_> = SHUTDOWN_CALLS.iter().map(|&a| (a, vec![])).collect();
+        assert_eq!(log[1..], expected[..]);
+        assert_eq!(e.mem.u8(START_UP_DONE_FLAG), 0);
     }
 }

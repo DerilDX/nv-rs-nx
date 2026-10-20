@@ -75,9 +75,71 @@ pub fn fn_00e7ecd0(e: &mut Engine, this: Ptr) {
     });
 }
 
+/// `00e7e7c0` (`thiscall`, `RET 4`) and `00e7e7a0` (`thiscall`, `RET 4`):
+/// called with 3 and 1 on the parts of a node being taken down.
+const NODE_PART_00E7E7C0: u32 = 0x00e7_e7c0;
+const NODE_PART_00E7E7A0: u32 = 0x00e7_e7a0;
+/// The memory manager (`011f6238`) and its `Deallocate` (`00aa4060`,
+/// `thiscall`, `RET 4`: the block).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const DEALLOCATE: u32 = 0x00aa_4060;
+/// The Gamebryo free (`00aa10f0`, `cdecl`, one word).
+const NI_FREE: u32 = 0x00aa_10f0;
+
+// Translated from 00e7ec60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a node, no stack words): when the
+/// word at `+0` is set, runs `00e7e7c0` on it with 3; when there is a next
+/// node (`+8`), takes it down the same way (recursively) and gives its memory
+/// back to the memory manager.
+pub fn fn_00e7ec60(e: &mut Engine, this: Ptr) {
+    let first = e.mem.u32(this.addr());
+    if first != 0 {
+        e.call(NODE_PART_00E7E7C0, &args![first, 3u32]);
+    }
+    let next = e.mem.u32(this.addr() + 8);
+    if next != 0 {
+        fn_00e7ec60(e, Ptr::new(next));
+        e.call(DEALLOCATE, &args![MEMORY_MANAGER, next]);
+    }
+}
+
+// Translated from 00e7ed80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): takes down the object in
+/// `0126f6cc` when there is one: clears its `+8`; its node at `+0xc` (when
+/// set) gets `00e7e7c0` with 3 on its `+0` and `00e7e7a0` with 1 on its `+8`
+/// (each when set) and goes back to the memory manager; the block at `+0` is
+/// freed (`00aa10f0`) and the object goes back to the memory manager. The
+/// global is cleared either way.
+pub fn fn_00e7ed80(e: &mut Engine) {
+    let object = e.global::<u32>(OBJECT_0126F6CC);
+    if object != 0 {
+        let node = e.mem.u32(object + 0xc);
+        e.mem.set_u32(object + 8, 0);
+        if node != 0 {
+            let first = e.mem.u32(node);
+            if first != 0 {
+                e.call(NODE_PART_00E7E7C0, &args![first, 3u32]);
+            }
+            let second = e.mem.u32(node + 8);
+            if second != 0 {
+                e.call(NODE_PART_00E7E7A0, &args![second, 1u32]);
+            }
+            e.call(DEALLOCATE, &args![MEMORY_MANAGER, node]);
+        }
+        let block = e.mem.u32(object);
+        e.call(NI_FREE, &args![block]);
+        e.call(DEALLOCATE, &args![MEMORY_MANAGER, object]);
+    }
+    e.set_global::<u32>(OBJECT_0126F6CC, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e7_ecd0, fn_00e7ecd0(Ptr))]
+    vec![
+        entry!(0x00e7_ecd0, fn_00e7ecd0(Ptr)),
+        entry!(0x00e7_ec60, fn_00e7ec60(Ptr)),
+        entry!(0x00e7_ed80, fn_00e7ed80()),
+    ]
 }
 
 #[cfg(test)]
@@ -201,5 +263,73 @@ mod tests {
             calls(&e, IMPORT_INTERLOCKED_DECREMENT),
             vec![vec![0x0e73_0000]]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_b008 {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for f in [NODE_PART_00E7E7C0, NODE_PART_00E7E7A0, DEALLOCATE, NI_FREE] {
+            e.register(f, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00e7ec60_takes_the_chain_down() {
+        let mut e = engine();
+        let a = e.mem.alloc(12);
+        let b = e.mem.alloc(12);
+        let c = e.mem.alloc(12);
+        e.mem.set_u32(a, 0x100);
+        e.mem.set_u32(a + 8, b);
+        e.mem.set_u32(b + 8, c);
+        e.mem.set_u32(c, 0x300);
+        e.call(0x00e7_ec60, &args![a]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (NODE_PART_00E7E7C0, vec![0x100, 3]),
+                (NODE_PART_00E7E7C0, vec![0x300, 3]),
+                (DEALLOCATE, vec![MEMORY_MANAGER, c]),
+                (DEALLOCATE, vec![MEMORY_MANAGER, b]),
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00e7ed80_takes_the_object_down() {
+        let mut e = engine();
+        e.map(OBJECT_0126F6CC, 4);
+        e.call(0x00e7_ed80, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        let object = e.mem.alloc(0x10);
+        let node = e.mem.alloc(12);
+        e.mem.set_u32(object, 0x700);
+        e.mem.set_u32(object + 8, 9);
+        e.mem.set_u32(object + 0xc, node);
+        e.mem.set_u32(node, 0x100);
+        e.mem.set_u32(node + 8, 0x200);
+        e.set_global::<u32>(OBJECT_0126F6CC, object);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_ed80, &args![]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (NODE_PART_00E7E7C0, vec![0x100, 3]),
+                (NODE_PART_00E7E7A0, vec![0x200, 1]),
+                (DEALLOCATE, vec![MEMORY_MANAGER, node]),
+                (NI_FREE, vec![0x700]),
+                (DEALLOCATE, vec![MEMORY_MANAGER, object]),
+            ]
+        );
+        assert_eq!(e.mem.u32(object + 8), 0);
+        assert_eq!(e.global::<u32>(OBJECT_0126F6CC), 0);
     }
 }

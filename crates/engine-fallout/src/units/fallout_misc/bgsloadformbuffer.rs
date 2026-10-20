@@ -95,6 +95,14 @@ pub fn get_version(e: &mut Engine, this: Ptr<BGSLoadFormBuffer>) -> u8 {
     e.mem.u8(this.addr().wrapping_add(0x1c))
 }
 
+// Translated from 00864520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`thiscall`, no arguments; called by the header load and the save and
+/// load paths of this unit, on the FormInfo byte): the top two bits of the byte at `this`
+/// (`byte >> 6`, 0 to 3).
+pub fn fn_00864520(e: &mut Engine, this: Ptr) -> u32 {
+    u32::from(e.mem.u8(this.addr())) >> 6
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -109,6 +117,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00864610, get_reference(Ptr<BGSLoadFormBuffer>) -> Ptr),
         entry!(0x00864660, get_actor(Ptr<BGSLoadFormBuffer>) -> Ptr),
         entry!(0x008a81c0, get_version(Ptr<BGSLoadFormBuffer>) -> u8),
+        entry!(0x00864520, fn_00864520(Ptr) -> u32),
     ]
 }
 
@@ -203,5 +212,15 @@ mod tests {
         e.set(this, BGSLoadFormBuffer::pForm, Ptr::new(form));
         e.register_double(0x71000002, |_, _| 0xffffff01u32.into_ret());
         assert_eq!(e.call(0x00864660, &args![this]).u32(), form);
+    }
+
+    #[test]
+    fn fn_00864520_answers_the_top_two_bits() {
+        let mut e = Engine::new();
+        let info = e.mem.alloc(1);
+        e.mem.set_u8(info, 0xbf);
+        assert_eq!(e.call(0x00864520, &args![info]).u32(), 2);
+        e.mem.set_u8(info, 0x3f);
+        assert_eq!(e.call(0x00864520, &args![info]).u32(), 0);
     }
 }

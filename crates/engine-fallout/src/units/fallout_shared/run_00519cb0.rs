@@ -56,12 +56,58 @@ pub fn fn_00519e40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The vtables `00519e70` stores (offset, vtable), in its order.
+const DESTRUCTOR_VTABLES_00519E70: [(u32, u32); 11] = [
+    (0, 0x0102_b5ac),
+    (0x30, 0x0102_b594),
+    (0x3c, 0x0102_b570),
+    (0x5c, 0x0102_b550),
+    (0x68, 0x0102_b53c),
+    (0x74, 0x0102_b524),
+    (0x7c, 0x0102_b504),
+    (0x84, 0x0102_b4f0),
+    (0x8c, 0x0102_b4dc),
+    (0x94, 0x0102_b4c8),
+    (0xa4, 0x0102_b4b4),
+];
+/// The member and base destructors `00519e70` runs (`thiscall`, no stack word), with the
+/// offset each is called on, in its order.
+const DESTRUCTOR_STEPS_00519E70: [(u32, u32); 10] = [
+    (0x0048_3710, 0),
+    (0x0047_b520, 0xa4),
+    (0x0047_a1a0, 0x94),
+    (0x0047_5380, 0x8c),
+    (0x0048_eaf0, 0x84),
+    (0x0048_e7d0, 0x7c),
+    (0x0040_2c40, 0x5c),
+    (0x0048_a490, 0x3c),
+    (0x0059_1300, 0x30),
+    (0x0050_e9f0, 0),
+];
+
+// Translated from 00519e70 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00519e70 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00ef49bc, state variable) is not translated
+/// Unnamed in the engine map (`thiscall`, no stack word): the destructor of the object
+/// `fn_00519cc0` builds. Sets the eleven vtables of [`DESTRUCTOR_VTABLES_00519E70`], then runs
+/// `00483710` on `this`, the member destructors on +0xa4, +0x94, +0x8c, +0x84, +0x7c, +0x5c,
+/// +0x3c and +0x30, and the base destructor `0050e9f0` on `this`
+/// ([`DESTRUCTOR_STEPS_00519E70`]).
+pub fn fn_00519e70(e: &mut Engine, this: Ptr) {
+    for (offset, vtable) in DESTRUCTOR_VTABLES_00519E70 {
+        e.mem.set_u32(this.addr() + offset, vtable);
+    }
+    for (destructor, offset) in DESTRUCTOR_STEPS_00519E70 {
+        e.call(destructor, &args![this.addr() + offset]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_9cc0, fn_00519cc0(Ptr) -> Ptr),
         entry!(0x0051_9cb0, fn_00519cb0(Ptr, u32) -> u32),
         entry!(0x0051_9e40, fn_00519e40(Ptr, u32) -> Ptr),
+        entry!(0x0051_9e70, fn_00519e70(Ptr)),
     ]
 }
 
@@ -164,5 +210,29 @@ mod le81_thunk_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn fn_00519e70_sets_the_vtables_and_destroys_the_members() {
+        let mut e = Engine::new();
+        for (destructor, _) in DESTRUCTOR_STEPS_00519E70 {
+            e.register(destructor, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0xb0);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_9e70, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let expected: Vec<_> = DESTRUCTOR_STEPS_00519E70
+            .iter()
+            .map(|&(destructor, offset)| (destructor, vec![this + offset]))
+            .collect();
+        assert_eq!(log[1..], expected[..]);
+        assert_eq!(e.mem.u32(this + 0x74), 0x0102_b524);
+        assert_eq!(e.mem.u32(this + 0xa4), 0x0102_b4b4);
     }
 }

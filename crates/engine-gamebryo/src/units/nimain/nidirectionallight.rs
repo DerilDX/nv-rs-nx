@@ -60,12 +60,36 @@ pub fn ni_directional_light_ni_directional_light(e: &mut Engine, this: Ptr) -> P
     this
 }
 
+/// `NiAVObject::UpdateWorldData` (`00a68c60`, `thiscall`, one stack word).
+const NI_AV_OBJECT_UPDATE_WORLD_DATA: u32 = 0x00a6_8c60;
+
+// Translated from 00a75cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiDirectionalLight::UpdateWorldData` (Xbox PDB), `thiscall`, one stack
+/// word (passed on): `NiAVObject::UpdateWorldData`, then the world direction
+/// (+0xf0, +0xf4, +0xf8) from the first column of the world rotation (+0x68,
+/// +0x74, +0x80; `FLD`/`FSTP`, which quiets a signalling NaN), and the
+/// revision word at +0xa8 counts up.
+pub fn ni_directional_light_update_world_data(e: &mut Engine, this: Ptr, update: u32) {
+    let t = this.addr();
+    e.call(NI_AV_OBJECT_UPDATE_WORLD_DATA, &args![this, update]);
+    for (from, to) in [(0x68u32, 0xf0u32), (0x74, 0xf4), (0x80, 0xf8)] {
+        let bits = x87_quiet_bits(e.mem.u32(t + from));
+        e.mem.set_u32(t + to, bits);
+    }
+    let revision = e.mem.u32(t + 0xa8).wrapping_add(1);
+    e.mem.set_u32(t + 0xa8, revision);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a7_5c20, ni_directional_light_ni_directional_light(Ptr) -> Ptr),
         entry!(0x00a75c70, ni_directional_light_get_rtti() -> Ptr),
         entry!(0x00a75c80, ni_directional_light_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(
+            0x00a7_5cb0,
+            ni_directional_light_update_world_data(Ptr, u32)
+        ),
     ]
 }
 
@@ -132,5 +156,31 @@ mod tests {
         assert_eq!(e.mem.u8(this + 0x9d), 3);
         assert_eq!(e.mem.u8(this + 0x9c), 0xef);
         assert_eq!(e.mem.u8(this + 0x9e), 0xad);
+    }
+}
+
+#[cfg(test)]
+mod tests_b008 {
+    use super::*;
+
+    #[test]
+    fn ni_directional_light_update_world_data_copies_the_direction() {
+        let mut e = Engine::new();
+        e.register(NI_AV_OBJECT_UPDATE_WORLD_DATA, |_, _| Ret::default());
+        let this = e.mem.alloc(0xfc);
+        e.mem.set_f32(this + 0x68, 0.5);
+        e.mem.set_u32(this + 0x74, 0x7f80_0001);
+        e.mem.set_f32(this + 0x80, -2.0);
+        e.mem.set_u32(this + 0xa8, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_5cb0, &args![this, 9u32]);
+        assert_eq!(
+            e.call_log.take().unwrap()[1],
+            (NI_AV_OBJECT_UPDATE_WORLD_DATA, vec![this, 9])
+        );
+        assert_eq!(e.mem.f32(this + 0xf0), 0.5);
+        assert_eq!(e.mem.u32(this + 0xf4), 0x7fc0_0001);
+        assert_eq!(e.mem.f32(this + 0xf8), -2.0);
+        assert_eq!(e.mem.u32(this + 0xa8), 5);
     }
 }

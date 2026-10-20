@@ -58,6 +58,55 @@ pub fn ni_ambient_light_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool 
     e.call(JUMP_TARGET_00A9B380, &args![this, other]).bool()
 }
 
+/// `NiLight::~NiLight` (`00a72010`, engine map), the destructor body the scalar deleting
+/// destructor runs; `thiscall`, no stack word.
+const LIGHT_DESTRUCTOR: u32 = 0x00a7_2010;
+/// `00aa1460`: the sized delete (`cdecl`: block, size).
+const SIZED_DELETE: u32 = 0x00aa_1460;
+/// `00aa13e0`: `operator new` (`cdecl`: size).
+const OPERATOR_NEW: u32 = 0x00aa_13e0;
+/// `00a71f60`: the base light constructor `CreateClone` runs on the new object before it
+/// stores the `NiAmbientLight` virtual table (`thiscall`, no stack word).
+const LIGHT_CONSTRUCTOR: u32 = 0x00a7_1f60;
+/// `00a71ec0`: copies the light members into the clone (`thiscall` on the source:
+/// clone, cloning process).
+const LIGHT_COPY_MEMBERS: u32 = 0x00a7_1ec0;
+/// The `NiAmbientLight` virtual table (`010a12cc`).
+const AMBIENT_LIGHT_VTABLE: u32 = 0x010a_12cc;
+/// The size of an `NiAmbientLight` (0xF0 bytes, from the allocation and the sized delete).
+const AMBIENT_LIGHT_SIZE: u32 = 0xf0;
+
+// Translated from 00a9b3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAmbientLight`'s scalar deleting destructor (unnamed in the engine map; `thiscall`,
+/// `RET 4`): runs `NiLight::~NiLight` (`00a72010`) and, when bit 0 of `flags` is set,
+/// frees the 0xF0 bytes (`00aa1460`). Answers `this`.
+pub fn ni_ambient_light_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(LIGHT_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, AMBIENT_LIGHT_SIZE]);
+    }
+    this
+}
+
+// Translated from 00a9b3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAmbientLight::CreateClone` (Xbox PDB; `thiscall`, `RET 4`): allocates 0xF0 bytes;
+/// when that succeeds runs the base constructor (`00a71f60`), stores the `NiAmbientLight`
+/// virtual table (`010a12cc`) and clears the byte at `+0x9D`. Then the source's member copy
+/// (`00a71ec0`, on `this`) fills the clone (also called, with a null clone, when the
+/// allocation failed). Answers the clone (null on failure).
+pub fn ni_ambient_light_create_clone(e: &mut Engine, this: Ptr, cloning: Ptr) -> Ptr {
+    let clone = e.call(OPERATOR_NEW, &args![AMBIENT_LIGHT_SIZE]).u32();
+    if clone == 0 {
+        e.call(LIGHT_COPY_MEMBERS, &args![this, 0u32, cloning]);
+        return Ptr::new(0);
+    }
+    e.call(LIGHT_CONSTRUCTOR, &args![clone]);
+    e.mem.set_u32(clone, AMBIENT_LIGHT_VTABLE);
+    e.mem.set_u8(clone + 0x9d, 0);
+    e.call(LIGHT_COPY_MEMBERS, &args![this, clone, cloning]);
+    Ptr::new(clone)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -67,6 +116,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a9_b360, ni_ambient_light_link_object(Ptr, Ptr)),
         entry!(0x00a9_b370, ni_ambient_light_save_binary(Ptr, Ptr)),
         entry!(0x00a9_b380, ni_ambient_light_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a9_b3a0, ni_ambient_light_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x00a9_b3d0, ni_ambient_light_create_clone(Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -158,5 +209,70 @@ mod tests {
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
         e.register(TARGET, |_, _| Ret::default());
         assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod b037_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn scalar_deleting_destructor_frees_only_with_bit_zero() {
+        let mut e = Engine::new();
+        e.register(LIGHT_DESTRUCTOR, |_, _| Ret::default());
+        e.register(SIZED_DELETE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a9_b3a0, &args![0x5000u32, 2u32]).u32(), 0x5000);
+        assert!(calls(&e, SIZED_DELETE).is_empty());
+        assert_eq!(e.call(0x00a9_b3a0, &args![0x5000u32, 1u32]).u32(), 0x5000);
+        assert_eq!(calls(&e, SIZED_DELETE), vec![vec![0x5000, 0xf0]]);
+        assert_eq!(calls(&e, LIGHT_DESTRUCTOR), vec![vec![0x5000]; 2]);
+    }
+
+    #[test]
+    fn create_clone_builds_the_light_and_copies_the_members() {
+        let mut e = Engine::new();
+        let block = e.mem.alloc(0xf0);
+        e.mem.set_u8(block + 0x9d, 7);
+        e.register_double(OPERATOR_NEW, move |_, a| {
+            assert_eq!(a[0], 0xf0);
+            block.into_ret()
+        });
+        e.register(LIGHT_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(LIGHT_COPY_MEMBERS, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00a9_b3d0, &args![0x6000u32, 0x7000u32]).u32(),
+            block
+        );
+        assert_eq!(e.mem.u32(block), AMBIENT_LIGHT_VTABLE);
+        assert_eq!(e.mem.u8(block + 0x9d), 0);
+        assert_eq!(calls(&e, LIGHT_CONSTRUCTOR), vec![vec![block]]);
+        assert_eq!(
+            calls(&e, LIGHT_COPY_MEMBERS),
+            vec![vec![0x6000, block, 0x7000]]
+        );
+    }
+
+    #[test]
+    fn create_clone_still_copies_into_a_null_clone() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_NEW, |_, _| Ret::default());
+        e.register(LIGHT_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(LIGHT_COPY_MEMBERS, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a9_b3d0, &args![0x6000u32, 0x7000u32]).u32(), 0);
+        assert!(calls(&e, LIGHT_CONSTRUCTOR).is_empty());
+        assert_eq!(calls(&e, LIGHT_COPY_MEMBERS), vec![vec![0x6000, 0, 0x7000]]);
     }
 }

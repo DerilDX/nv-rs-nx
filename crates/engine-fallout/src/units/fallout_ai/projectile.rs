@@ -227,6 +227,376 @@ fn point_words(e: &Engine, point: u32) -> [u32; 3] {
     [e.mem.u32(point), e.mem.u32(point + 4), e.mem.u32(point + 8)]
 }
 
+/// `TESWorldSpace::GetParentWorldSimple` (`004fd380`, `thiscall`; here on
+/// the base object), `TESObjectLIGH::GenDynamic` (`0050d810`, `thiscall
+/// (light, reference, base, 0)`) and the light test `00440d80`
+/// (`thiscall`, `bool`).
+const BASE_LIGHT: u32 = 0x004f_d380;
+const GEN_DYNAMIC: u32 = 0x0050_d810;
+const LIGHT_TEST: u32 = 0x0044_0d80;
+/// The pointer getter (`00559450`, `thiscall`, answers the word at `this`).
+const POINTER_GET: u32 = 0x0055_9450;
+
+// Translated from 009c3d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Makes the projectile's light (the engine map has no name): when its
+/// light base (vtable +0x1D0) is set, the base object (`004181e0`) has a
+/// light (`004fd380`) and `00440d80` answers false, `spLight` is assigned
+/// the dynamic light that light makes (`0050d810` with the projectile, the
+/// light base and 0).
+pub fn fn_009c3d90(e: &mut Engine, this: Ptr<Projectile>) {
+    if e.vcall(this.addr(), 0x1d0, &args![]).u32() == 0 {
+        return;
+    }
+    let base = e.call(GET_BASE_OBJECT, &args![this]).u32();
+    if e.call(BASE_LIGHT, &args![base]).u32() == 0 {
+        return;
+    }
+    if e.call(LIGHT_TEST, &args![this]).bool() {
+        return;
+    }
+    let light_base = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+    let base = e.call(GET_BASE_OBJECT, &args![this]).u32();
+    let light = e.call(BASE_LIGHT, &args![base]).u32();
+    let dynamic = e
+        .call(GEN_DYNAMIC, &args![light, this, light_base, 0u32])
+        .u32();
+    e.call(ASSIGN_NI_POINTER, &args![this.addr() + LIGHT, dynamic]);
+}
+
+// Translated from 009c3e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the projectile's light (the engine map has no name): with
+/// `spLight` set, the scene node `00450b80(0)` loses it
+/// (`ShadowSceneNode::RemoveLight`, `00b5eed0`) and `spLight` is cleared.
+pub fn fn_009c3e10(e: &mut Engine, this: Ptr<Projectile>) {
+    let slot = this.addr() + LIGHT;
+    if e.call(POINTER_GET, &args![slot]).u32() == 0 {
+        return;
+    }
+    let light = e.call(POINTER_GET, &args![slot]).u32();
+    let scene = e.call(0x0045_0b80, &args![0u32]).u32();
+    e.call(0x00b5_eed0, &args![scene, light]);
+    e.call(ASSIGN_NI_POINTER, &args![slot, 0u32]);
+}
+
+// Translated from 009c3e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fades the projectile's light with its alpha (the engine map has no
+/// name): with `spLight` set and flag 0x20, the light gets (`0050dd20`)
+/// the alpha clamped to at most 1.0 (`0040ebd0`) and at least 0.0
+/// (`00404010`), each result stored as a `float`.
+pub fn fn_009c3e60(e: &mut Engine, this: Ptr<Projectile>) {
+    let slot = this.addr() + LIGHT;
+    if e.call(POINTER_GET, &args![slot]).u32() == 0 || !test_flags(e, this, 0x20) {
+        return;
+    }
+    let alpha = x87_quiet_bits(e.mem.u32(this.addr() + 0xe0));
+    let capped = e.call(0x0040_ebd0, &args![1.0f32, alpha]).f64();
+    let capped = x87_store32(capped);
+    let clamped = e.call(0x0040_4010, &args![0.0f32, capped]).f64();
+    let clamped = x87_store32(clamped);
+    let light = e.call(POINTER_GET, &args![slot]).u32();
+    e.call(0x0050_dd20, &args![light, clamped]);
+}
+
+/// The setting `009c3f50` scales by (`011ce1d0`).
+const SETTING_009C3F50: u32 = 0x011c_e1d0;
+
+// Translated from 009c3f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A blend of a value (the engine map has no name; `cdecl (value, mix,
+/// scale)`, the result in ST0): `(setting * (1 - mix) + value * mix) *
+/// scale` with the setting at `011ce1d0`, each partial kept in the x87
+/// order (the two products kept as `double`s), the result stored as a
+/// `float`.
+pub fn fn_009c3f50(e: &mut Engine, value: f32, mix: f32, scale: f32) -> f32 {
+    let mixed = x87_mul(x87_load32(value.to_bits()), x87_m32(mix.to_bits()));
+    let rest = x87_sub(1.0, x87_load32(mix.to_bits()));
+    let setting = e.call(SETTING_VALUE, &args![SETTING_009C3F50]).u32();
+    let setting = x87_load32(e.mem.u32(setting));
+    let blended = x87_add(x87_mul(setting, rest), mixed);
+    let result = x87_store32(x87_mul(blended, x87_m32(scale.to_bits())));
+    f32::from_bits(x87_quiet_bits(result))
+}
+
+// Translated from 009c4e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets `MovementDirection` (the engine map has no name; `thiscall (x, y,
+/// z, add distance)`, `RET 0x10`): the three words stored; with `add
+/// distance` it is unitized and its length (`NiPoint3::UnitizeGetLength`,
+/// ST0) added to `fDistanceMoved`; otherwise only unitized (`004a0c10`).
+pub fn fn_009c4e60(
+    e: &mut Engine,
+    this: Ptr<Projectile>,
+    x: u32,
+    y: u32,
+    z: u32,
+    add_distance: bool,
+) {
+    let direction = this.addr() + MOVEMENT_DIRECTION;
+    e.mem.set_u32(direction, x);
+    e.mem.set_u32(direction + 4, y);
+    e.mem.set_u32(direction + 8, z);
+    if add_distance {
+        let length = e.call(0x0045_7910, &args![direction]).f64();
+        let moved = this.addr() + 0x110;
+        let total = x87_add(length, x87_m32(e.mem.u32(moved)));
+        e.mem.set_u32(moved, x87_store32(total));
+    } else {
+        e.call(0x004a_0c10, &args![direction]);
+    }
+}
+
+// Translated from 009c4f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Projectile::StopCountdownSound` (Xbox PDB): a valid countdown sound
+/// (`BSSoundHandle::IsValid`) is stopped and, still valid, released.
+pub fn projectile_stop_countdown_sound(e: &mut Engine, this: Ptr<Projectile>) {
+    let handle = this.addr() + COUNTDOWN_SOUND;
+    if !e.call(0x00ad_8ce0, &args![handle]).bool() {
+        return;
+    }
+    e.call(0x00ad_88f0, &args![handle]);
+    if e.call(0x00ad_8ce0, &args![handle]).bool() {
+        e.call(0x00ad_8d10, &args![handle]);
+    }
+}
+
+// Translated from 009c4da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the projectile's impacts and owners (the engine map has no
+/// name): every impact on `ImpactList` is deleted (`009b3490` with 1) and
+/// taken off (`0063f7b0`) until the list is empty (`008256d0`);
+/// `spActorCause` is cleared; the object `008d8b80` answers, if any, is
+/// deleted (`009bc890` with 1), and `008126e0` runs with 0.
+pub fn fn_009c4da0(e: &mut Engine, this: Ptr<Projectile>) {
+    let list = this.addr() + IMPACT_LIST;
+    while !e.call(0x0082_56d0, &args![list]).bool() {
+        let head = e.call(0x0068_15c0, &args![list]).u32();
+        let impact = e.mem.u32(head);
+        if impact != 0 {
+            e.call(0x009b_3490, &args![impact, 1u32]);
+        }
+        e.call(0x0063_f7b0, &args![list]);
+    }
+    e.call(ASSIGN_ACTOR_CAUSE, &args![this.addr() + ACTOR_CAUSE, 0u32]);
+    if e.call(0x008d_8b80, &args![this]).u32() != 0 {
+        let target = e.call(0x008d_8b80, &args![this]).u32();
+        if target != 0 {
+            fn_009bc890(e, Ptr::new(target), 1);
+        }
+        e.call(0x0081_26e0, &args![this, 0u32]);
+    }
+}
+
+// Translated from 009c5af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Projectile::PickAutoWater` (Xbox PDB; `thiscall (pick, &fraction)`,
+/// `RET 8`): in a cell with water (`004518e0`), when the pick's start
+/// (`004585f0`) is above the water height (`TESObjectCELL::GetWaterHeight`,
+/// stored as a `float`) and its end (`004587f0`) at or below it, the
+/// fraction of the ray to the water, `(height - start z) / (end - start)
+/// z` (`00439ef0`), goes to `*fraction` and true is answered.
+pub fn projectile_pick_auto_water(
+    e: &mut Engine,
+    this: Ptr<Projectile>,
+    pick: Ptr,
+    fraction: Ptr,
+) -> bool {
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    if cell == 0 || !e.call(0x0045_18e0, &args![cell]).bool() {
+        return false;
+    }
+    let height = x87_store32(e.call(0x0054_71e0, &args![cell]).f64());
+    e.with_stack(0x24, |e, frame| {
+        let start = frame.addr();
+        let end = start + 0xc;
+        let difference = start + 0x18;
+        e.call(0x0068_15c0, &args![start]);
+        e.call(0x0045_85f0, &args![pick, start]);
+        e.call(0x0068_15c0, &args![end]);
+        e.call(0x0045_87f0, &args![pick, end]);
+        let level = x87_load32(height);
+        if !(level < x87_load32(e.mem.u32(start + 8))) {
+            return false;
+        }
+        let end_z = x87_load32(e.mem.u32(end + 8));
+        if !(level >= end_z) {
+            return false;
+        }
+        e.call(0x0043_9ef0, &args![end, difference, start]);
+        let drop = x87_store32(x87_sub(level, x87_m32(e.mem.u32(start + 8))));
+        let ratio = x87_div(x87_load32(drop), x87_m32(e.mem.u32(difference + 8)));
+        e.mem.set_u32(fraction.addr(), x87_store32(ratio));
+        true
+    })
+}
+
+// Translated from 009c40c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009c40c0 - its C++ exception frame (FS:[0], the hit collector's unwind) and the /GS cookie check (00ec408c) are not translated
+/// `Projectile::CheckShotBehindWall` (Xbox PDB): only for the player's
+/// shots. A pick (`004a3c20`) from the player's eye (position, vtable
+/// +0x1F4, raised by `0070c3b0` times the scale, both through the x87) to
+/// the projectile (the ray `00439ef0` of the two), with the collision
+/// filter of the player's character controller (`0070c440`) or of the
+/// player (`00931ed0`) given layer 6 (`004a39f0`), is cast into the
+/// player's cell's world (vtable +0xC8, `004a3fb0` attaching an
+/// `hkpAllRayHitCollector`); water on the way (`009c5af0`, its fraction
+/// starting at `FLT_MAX`) counts as a hit too. A hit is checked against
+/// the projectile (`009c0d80` with its base object, 0, 1 and the
+/// fraction); a confirmed hit stops the projectile (`009795c0` with 0.0)
+/// and is answered.
+pub fn projectile_check_shot_behind_wall(e: &mut Engine, this: Ptr<Projectile>) -> bool {
+    let player = e.global::<u32>(PLAYER);
+    if e.get(this, Projectile::pShooter) != player {
+        return false;
+    }
+    // The exe's locals from its aligned `EBP`: at(k) is `EBP - k`.
+    e.with_stack(0x450, |e, frame| {
+        let at = |k: u32| frame.addr() + 0x450 - k;
+        let pick = at(0xd0);
+        let eye = at(0xdc);
+        let position = at(0xe8);
+        let ray = at(0xf4);
+        let filter = at(0x114);
+        let collector = at(0x440);
+        let distance = at(0x44c);
+        e.call(0x004a_3c20, &args![pick]);
+        e.call(0x0068_15c0, &args![eye]);
+        e.call(0x0068_15c0, &args![position]);
+        e.call(0x0068_15c0, &args![ray]);
+        let own = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+        copy_point(e, position, own);
+        let player = e.global::<u32>(PLAYER);
+        let theirs = e.vcall(player, 0x1f4, &args![]).u32();
+        copy_point(e, eye, theirs);
+        let player = e.global::<u32>(PLAYER);
+        let height = e.call(0x0070_c3b0, &args![player]).f64();
+        let player = e.global::<u32>(PLAYER);
+        let scale = e.call(0x0056_7400, &args![player]).f64();
+        let raised = x87_add(x87_mul(scale, height), x87_m32(e.mem.u32(eye + 8)));
+        e.mem.set_u32(eye + 8, x87_store32(raised));
+        let difference = e.call(0x0043_9ef0, &args![position, at(0x10c), eye]).u32();
+        copy_point(e, ray, difference);
+        let controller = e.call(0x0093_06d0, &args![this]).u32();
+        e.call(0x008c_71b0, &args![filter, 0u32]);
+        let source = if controller != 0 {
+            e.call(0x0070_c440, &args![controller, at(0x118)]).u32()
+        } else {
+            let player = e.global::<u32>(PLAYER);
+            e.call(0x0093_1ed0, &args![player, at(0x11c)]).u32()
+        };
+        let value = e.mem.u32(source);
+        e.mem.set_u32(filter, value);
+        e.call(0x004a_39f0, &args![filter, 6u32]);
+        let filter_word = e.mem.u32(filter);
+        e.call(0x004a_3f70, &args![pick, filter_word]);
+        e.call(0x004a_3da0, &args![pick, eye]);
+        e.call(0x007f_68a0, &args![pick, ray]);
+        e.call(0x004a_3a70, &args![collector]);
+        e.call(0x004a_3fb0, &args![pick, collector]);
+        let player = e.global::<u32>(PLAYER);
+        let cell = e.call(0x008d_6f30, &args![player]).u32();
+        let world = e.call(0x0045_43c0, &args![cell]).u32();
+        let mut hit = e.vcall(world, 0xc8, &args![pick]).u8();
+        let far = x87_quiet_bits(e.global::<u32>(FLOAT_MAX));
+        e.mem.set_u32(distance, far);
+        let water = projectile_pick_auto_water(e, this, Ptr::new(pick), Ptr::new(distance));
+        hit |= u8::from(water);
+        if hit != 0 {
+            let base = e.call(GET_BASE_OBJECT, &args![this]).u32();
+            let fraction = x87_quiet_bits(e.mem.u32(distance));
+            let confirmed = fn_009c0d80(
+                e,
+                Ptr::new(pick),
+                this,
+                base,
+                0,
+                1,
+                f32::from_bits(fraction),
+            );
+            hit = u8::from(confirmed != 0);
+        }
+        if hit != 0 {
+            e.call(0x0097_95c0, &args![this, 0.0f32]);
+        }
+        e.call(0x004a_3bc0, &args![collector]);
+        hit != 0
+    })
+}
+
+// Translated from 009c45d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Projectile::ChangeProcessLevel` (Xbox PDB): the wanted level is high
+/// (0) when the projectile has a light base (vtable +0x1D0) or `00445750`
+/// on `011c3b3c` accepts it, and its cell is loaded (`TES::IsCellLoaded`
+/// with 1); middle-high (1) when vtable +0x324 says so and the cell is
+/// loaded with 0; else 3 (none). The current level is its process's
+/// (`0045cd60`), 3 without one. On a change: to 0 vtable +0x240, to 1
+/// vtable +0x24C; to none, a form the data handler (`00469860` on
+/// `011c3f2c`) marks is unloaded (with vtable +0x324, `UnloadForm` on
+/// `011ddf38`), deleted (vtable +0xC4 with 1) and false answered; any other
+/// loses its process under the lock at `011f11a0`
+/// (`ProcessLists::RemoveReference`, the process deleted, vtable 0 with
+/// 1), then vtable +0x2A0 and +0x2FC run. True otherwise.
+pub fn projectile_change_process_level(e: &mut Engine, this: Ptr<Projectile>) -> bool {
+    let object = this.addr();
+    let process = e.get(this, Projectile::pCurrentProcess);
+    let current = if process != 0 {
+        e.call(0x0045_cd60, &args![process]).u32()
+    } else {
+        3
+    };
+    let mut wanted = 3u32;
+    let middle = e.vcall(object, 0x324, &args![]).bool();
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    let wants_processing = e.vcall(object, 0x1d0, &args![]).u32() != 0 || {
+        let list = e.global::<u32>(0x011c_3b3c);
+        e.call(0x0044_5750, &args![list, this]).bool()
+    };
+    if wants_processing {
+        let tes = e.global::<u32>(TES);
+        if e.call(0x0045_11e0, &args![tes, cell, 1u32]).bool() {
+            wanted = 0;
+        } else if middle {
+            let tes = e.global::<u32>(TES);
+            if e.call(0x0045_11e0, &args![tes, cell, 0u32]).bool() {
+                wanted = 1;
+            }
+        }
+    }
+    if current == wanted {
+        return true;
+    }
+    match wanted {
+        0 => {
+            e.vcall(object, 0x240, &args![]);
+            true
+        }
+        1 => {
+            e.vcall(object, 0x24c, &args![]);
+            true
+        }
+        _ => {
+            let form_id = e.call(GET_FORM_ID, &args![this]).u32();
+            let handler = e.global::<u32>(0x011c_3f2c);
+            if e.call(0x0046_9860, &args![handler, form_id]).bool() {
+                if middle {
+                    let save_load = e.global::<u32>(0x011d_df38);
+                    e.call(0x0084_9730, &args![save_load, this, 0u32]);
+                }
+                e.vcall(object, 0xc4, &args![1u32]);
+                return false;
+            }
+            let process = e.get(this, Projectile::pCurrentProcess);
+            let level = e.call(0x0045_cd60, &args![process]).u32();
+            e.call(0x0040_fbf0, &args![0x011f_11a0u32, 0u32]);
+            e.call(0x0096_d470, &args![PROCESS_LISTS, this, level]);
+            let process = e.get(this, Projectile::pCurrentProcess);
+            if process != 0 {
+                e.vcall(process, 0, &args![1u32]);
+            }
+            e.set(this, Projectile::pCurrentProcess, 0);
+            e.call(0x0040_fba0, &args![0x011f_11a0u32]);
+            e.vcall(object, 0x2a0, &args![]);
+            e.vcall(object, 0x2fc, &args![]);
+            true
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -332,6 +702,31 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             projectile_get_mine_reacts_to_target(Ptr<Projectile>, u32, u32, u32) -> bool
         ),
         entry!(0x009c39e0, fn_009c39e0(Ptr<Projectile>) -> bool),
+        entry!(0x009c_3d90, fn_009c3d90(Ptr<Projectile>)),
+        entry!(0x009c_3e10, fn_009c3e10(Ptr<Projectile>)),
+        entry!(0x009c_3e60, fn_009c3e60(Ptr<Projectile>)),
+        entry!(0x009c_3f50, fn_009c3f50(f32, f32, f32) -> f32),
+        entry!(
+            0x009c_40c0,
+            projectile_check_shot_behind_wall(Ptr<Projectile>) -> bool
+        ),
+        entry!(
+            0x009c_45d0,
+            projectile_change_process_level(Ptr<Projectile>) -> bool
+        ),
+        entry!(0x009c_4da0, fn_009c4da0(Ptr<Projectile>)),
+        entry!(
+            0x009c_4e60,
+            fn_009c4e60(Ptr<Projectile>, u32, u32, u32, bool)
+        ),
+        entry!(
+            0x009c_4f90,
+            projectile_stop_countdown_sound(Ptr<Projectile>)
+        ),
+        entry!(
+            0x009c_5af0,
+            projectile_pick_auto_water(Ptr<Projectile>, Ptr, Ptr) -> bool
+        ),
     ]
 }
 
@@ -6172,5 +6567,307 @@ mod tests {
         stub_float(&mut e, 0x004a_7290, 200.0);
         e.set(this, Projectile::iFlags, 0x4000);
         assert!(!fn_009c39e0(&mut e, this));
+    }
+
+    // The functions below are doubled in `CALLEES` for the earlier tests, so
+    // these tests call the translations directly.
+
+    #[test]
+    fn light_is_made_from_the_base_light_unless_refused() {
+        let mut e = engine();
+        let this = projectile(&mut e);
+        // No light base: nothing.
+        fn_009c3d90(&mut e, this);
+        assert!(calls(&e, GEN_DYNAMIC).is_empty());
+        set_slot(&mut e, this.addr(), 0x1d0, RETURNS_TRUE);
+        stub(&mut e, BASE_LIGHT, 0x4400);
+        stub(&mut e, LIGHT_TEST, 0);
+        stub(&mut e, GEN_DYNAMIC, 0x5500);
+        e.register(ASSIGN_NI_POINTER, |_, _| Ret::default());
+        fn_009c3d90(&mut e, this);
+        assert_eq!(
+            calls(&e, GEN_DYNAMIC),
+            vec![vec![0x4400, this.addr(), 1, 0]]
+        );
+        assert_eq!(
+            calls(&e, ASSIGN_NI_POINTER),
+            vec![vec![this.addr() + LIGHT, 0x5500]]
+        );
+        // Refused by 00440d80.
+        stub(&mut e, LIGHT_TEST, 1);
+        e.call_log = Some(vec![]);
+        fn_009c3d90(&mut e, this);
+        assert!(calls(&e, GEN_DYNAMIC).is_empty());
+    }
+
+    #[test]
+    fn light_is_removed_from_the_scene_and_cleared() {
+        let mut e = engine();
+        let this = projectile(&mut e);
+        e.register(POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(ASSIGN_NI_POINTER, |_, _| Ret::default());
+        stub(&mut e, 0x0045_0b80, 0x6600);
+        e.register(0x00b5_eed0, |_, _| Ret::default());
+        fn_009c3e10(&mut e, this);
+        assert!(calls(&e, 0x00b5_eed0).is_empty());
+        e.mem.set_u32(this.addr() + LIGHT, 0x7700);
+        fn_009c3e10(&mut e, this);
+        assert_eq!(calls(&e, 0x0045_0b80), vec![vec![0]]);
+        assert_eq!(calls(&e, 0x00b5_eed0), vec![vec![0x6600, 0x7700]]);
+        assert_eq!(
+            calls(&e, ASSIGN_NI_POINTER),
+            vec![vec![this.addr() + LIGHT, 0]]
+        );
+    }
+
+    #[test]
+    fn light_fade_clamps_the_alpha() {
+        let mut e = engine();
+        let this = projectile(&mut e);
+        e.register(POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(0x0040_ebd0, |_, a| {
+            f64::from(f32::from_bits(a[0]).min(f32::from_bits(a[1]))).into_ret()
+        });
+        e.register(0x0040_4010, |_, a| {
+            f64::from(f32::from_bits(a[0]).max(f32::from_bits(a[1]))).into_ret()
+        });
+        e.register(0x0050_dd20, |_, _| Ret::default());
+        e.mem.set_u32(this.addr() + LIGHT, 0x7700);
+        e.mem.set_f32(this.addr() + 0xe0, 1.5);
+        // Without flag 0x20: nothing.
+        fn_009c3e60(&mut e, this);
+        assert!(calls(&e, 0x0050_dd20).is_empty());
+        e.mem.set_u32(this.addr() + 0xC8, 0x20);
+        fn_009c3e60(&mut e, this);
+        assert_eq!(
+            calls(&e, 0x0040_ebd0),
+            vec![vec![1.0f32.to_bits(), 1.5f32.to_bits()]]
+        );
+        assert_eq!(calls(&e, 0x0050_dd20), vec![vec![0x7700, 1.0f32.to_bits()]]);
+    }
+
+    #[test]
+    fn blend_mixes_the_setting_and_the_value() {
+        let mut e = engine();
+        e.map(SETTING_009C3F50, 8);
+        e.mem.set_f32(SETTING_009C3F50 + 4, 10.0);
+        // (10 * 0.75 + 2 * 0.25) * 2.
+        assert_eq!(fn_009c3f50(&mut e, 2.0, 0.25, 2.0), 16.0);
+    }
+
+    #[test]
+    fn movement_direction_is_set_and_unitized() {
+        let mut e = engine();
+        let this = projectile(&mut e);
+        stub_float(&mut e, 0x0045_7910, 3.0);
+        e.mem.set_f32(this.addr() + 0x110, 1.5);
+        fn_009c4e60(&mut e, this, 1, 2, 3, true);
+        assert_eq!(e.mem.u32(this.addr() + MOVEMENT_DIRECTION + 8), 3);
+        assert_eq!(e.mem.f32(this.addr() + 0x110), 4.5);
+        e.register(0x004a_0c10, |_, _| Ret::default());
+        fn_009c4e60(&mut e, this, 4, 5, 6, false);
+        assert_eq!(e.mem.f32(this.addr() + 0x110), 4.5);
+        assert_eq!(
+            calls(&e, 0x004a_0c10),
+            vec![vec![this.addr() + MOVEMENT_DIRECTION]]
+        );
+    }
+
+    #[test]
+    fn countdown_sound_is_stopped_and_released() {
+        let mut e = engine();
+        let this = projectile(&mut e);
+        for address in [0x00ad_88f0, 0x00ad_8d10] {
+            e.register(address, |_, _| Ret::default());
+        }
+        stub(&mut e, 0x00ad_8ce0, 0);
+        projectile_stop_countdown_sound(&mut e, this);
+        assert!(calls(&e, 0x00ad_88f0).is_empty());
+        sequence(&mut e, 0x00ad_8ce0, vec![1, 1]);
+        projectile_stop_countdown_sound(&mut e, this);
+        let handle = this.addr() + COUNTDOWN_SOUND;
+        assert_eq!(calls(&e, 0x00ad_88f0), vec![vec![handle]]);
+        assert_eq!(calls(&e, 0x00ad_8d10), vec![vec![handle]]);
+    }
+
+    #[test]
+    fn impacts_owners_and_target_are_cleared() {
+        let mut e = engine();
+        let this = projectile(&mut e);
+        // Two impacts, then empty.
+        sequence(&mut e, 0x0082_56d0, vec![0, 0, 1]);
+        let head = e.mem.alloc(4);
+        e.mem.set_u32(head, 0x6100);
+        stub(&mut e, 0x0068_15c0, head);
+        for address in [0x009b_3490, 0x0063_f7b0, 0x0081_26e0, 0x0080_0190] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let target = e.mem.alloc(0x10);
+        stub(&mut e, 0x008d_8b80, target);
+        fn_009c4da0(&mut e, this);
+        assert_eq!(calls(&e, 0x009b_3490), vec![vec![0x6100, 1]; 2]);
+        assert_eq!(calls(&e, 0x0063_f7b0).len(), 2);
+        assert_eq!(
+            calls(&e, ASSIGN_ACTOR_CAUSE),
+            vec![vec![this.addr() + ACTOR_CAUSE, 0]]
+        );
+        assert_eq!(calls(&e, 0x0080_0190), vec![vec![target]]);
+        assert_eq!(calls(&e, 0x0081_26e0), vec![vec![this.addr(), 0]]);
+    }
+
+    /// A pick from (0, 0, 10) to (0, 0, -10) over water at `height`.
+    fn water_engine(height: f64) -> (Engine, Ptr<Projectile>, u32) {
+        let mut e = engine();
+        let this = projectile(&mut e);
+        stub(&mut e, 0x008d_6f30, 0x4000);
+        stub(&mut e, 0x0045_18e0, 1);
+        stub_float(&mut e, 0x0054_71e0, height);
+        e.register(0x0068_15c0, |_, a| a[0].into_ret());
+        e.register(0x0045_85f0, |e, a| {
+            e.mem.set_f32(a[1] + 8, 10.0);
+            Ret::default()
+        });
+        e.register(0x0045_87f0, |e, a| {
+            e.mem.set_f32(a[1] + 8, -10.0);
+            Ret::default()
+        });
+        point_subtract(&mut e);
+        let fraction = e.mem.alloc(4);
+        (e, this, fraction)
+    }
+
+    #[test]
+    fn auto_water_answers_the_fraction_to_the_surface() {
+        let (mut e, this, fraction) = water_engine(5.0);
+        assert!(projectile_pick_auto_water(
+            &mut e,
+            this,
+            Ptr::new(0x9000),
+            Ptr::new(fraction)
+        ));
+        // (5 - 10) / (-20).
+        assert_eq!(e.mem.f32(fraction), 0.25);
+        // Water above the start or below the end: no hit.
+        let (mut e, this, fraction) = water_engine(12.0);
+        assert!(!projectile_pick_auto_water(
+            &mut e,
+            this,
+            Ptr::new(0x9000),
+            Ptr::new(fraction)
+        ));
+        let (mut e, this, fraction) = water_engine(-12.0);
+        assert!(!projectile_pick_auto_water(
+            &mut e,
+            this,
+            Ptr::new(0x9000),
+            Ptr::new(fraction)
+        ));
+        // No water in the cell.
+        let (mut e, this, fraction) = water_engine(5.0);
+        stub(&mut e, 0x0045_18e0, 0);
+        assert!(!projectile_pick_auto_water(
+            &mut e,
+            this,
+            Ptr::new(0x9000),
+            Ptr::new(fraction)
+        ));
+    }
+
+    #[test]
+    fn shot_behind_wall_checks_player_shots_only() {
+        let (mut e, this, _) = water_engine(5.0);
+        let player = actor(&mut e);
+        e.map(PLAYER, 4);
+        e.set_global(PLAYER, player);
+        // Not the player's: false at once.
+        assert!(!projectile_check_shot_behind_wall(&mut e, this));
+        assert!(calls(&e, 0x004a_3c20).is_empty());
+        e.set(this, Projectile::pShooter, player);
+        for address in [
+            0x004a_3c20,
+            0x008c_71b0,
+            0x004a_39f0,
+            0x004a_3f70,
+            0x004a_3da0,
+            0x007f_68a0,
+            0x004a_3a70,
+            0x004a_3fb0,
+            0x004a_3bc0,
+            0x0097_95c0,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let point = e.mem.alloc(0xc);
+        set_slot(&mut e, this.addr(), 0x1f4, 0x7D00_0000);
+        set_slot(&mut e, player, 0x1f4, 0x7D00_0000);
+        stub(&mut e, 0x7D00_0000, point);
+        stub_float(&mut e, 0x0070_c3b0, 0.0);
+        stub_float(&mut e, 0x0056_7400, 1.0);
+        let filter = e.mem.alloc(4);
+        stub(&mut e, 0x0093_06d0, 0);
+        stub(&mut e, 0x0093_1ed0, filter);
+        let world = object(&mut e, 0x10);
+        stub(&mut e, 0x0045_43c0, world);
+        // The world's cast misses, the water hits (fraction 0.25); 009c0d80
+        // (this file's, run for real) finds no hits in the pick (008cdd90
+        // answers 0), so the hit is not confirmed and nothing stops.
+        stub(&mut e, 0x008c_dd90, 0);
+        assert!(!projectile_check_shot_behind_wall(&mut e, this));
+        assert_eq!(calls(&e, 0x004a_39f0)[0][1], 6);
+        assert_eq!(calls(&e, 0x0093_1ed0)[0][0], player);
+        assert_eq!(calls(&e, 0x008c_dd90).len(), 1);
+        assert!(calls(&e, 0x0097_95c0).is_empty());
+        assert_eq!(calls(&e, 0x004a_3bc0).len(), 1);
+    }
+
+    #[test]
+    fn process_level_changes_by_cell_state() {
+        let mut e = engine();
+        let this = projectile(&mut e);
+        e.map(TES, 4);
+        e.set_global(TES, 0x4100u32);
+        e.map(0x011c_3b3c, 4);
+        e.map(0x011c_3f2c, 4);
+        e.map(0x011d_df38, 4);
+        stub(&mut e, 0x008d_6f30, 0x4000);
+        stub(&mut e, 0x0045_cd60, 3);
+        for address in [0x0040_fbf0, 0x0040_fba0, 0x0096_d470, 0x0084_9730] {
+            e.register(address, |_, _| Ret::default());
+        }
+        // A light base and a loaded cell: high level (vtable +0x240).
+        set_slot(&mut e, this.addr(), 0x1d0, RETURNS_TRUE);
+        stub(&mut e, 0x0045_11e0, 1);
+        assert!(projectile_change_process_level(&mut e, this));
+        assert_eq!(calls(&e, SLOT_BASE + 0x240), vec![vec![this.addr()]]);
+        // Not loaded but middle-high possible: vtable +0x24C.
+        set_slot(&mut e, this.addr(), 0x324, RETURNS_TRUE);
+        sequence(&mut e, 0x0045_11e0, vec![0, 1]);
+        assert!(projectile_change_process_level(&mut e, this));
+        assert_eq!(calls(&e, SLOT_BASE + 0x24C), vec![vec![this.addr()]]);
+        // Already at none: nothing more.
+        stub(&mut e, 0x0045_11e0, 0);
+        e.call_log = Some(vec![]);
+        assert!(projectile_change_process_level(&mut e, this));
+        assert!(calls(&e, 0x0096_d470).is_empty());
+        // From high to none: the process removed and deleted.
+        let process = object(&mut e, 0x10);
+        e.set(this, Projectile::pCurrentProcess, process);
+        stub(&mut e, 0x0045_cd60, 0);
+        stub(&mut e, 0x0046_9860, 0);
+        assert!(projectile_change_process_level(&mut e, this));
+        assert_eq!(
+            calls(&e, 0x0096_d470),
+            vec![vec![PROCESS_LISTS, this.addr(), 0]]
+        );
+        assert_eq!(calls(&e, SLOT_BASE), vec![vec![process, 1]]);
+        assert_eq!(e.get(this, Projectile::pCurrentProcess), 0);
+        assert_eq!(calls(&e, SLOT_BASE + 0x2FC), vec![vec![this.addr()]]);
+        // A form the data handler marks is unloaded and deleted instead.
+        e.set(this, Projectile::pCurrentProcess, process);
+        stub(&mut e, 0x0046_9860, 1);
+        e.call_log = Some(vec![]);
+        assert!(!projectile_change_process_level(&mut e, this));
+        assert_eq!(calls(&e, 0x0084_9730).len(), 1);
+        assert_eq!(calls(&e, SLOT_BASE + 0xC4), vec![vec![this.addr(), 1]]);
     }
 }

@@ -278,6 +278,55 @@ pub fn fn_006811e0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `006815d0` (`thiscall`, `RET 4`): whether two condition items differ
+/// (`AL`), item and other item.
+const ITEMS_DIFFER: u32 = 0x0068_15d0;
+
+// Translated from 00680b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether two condition lists differ (no name in the engine map): walks
+/// both lists (`006815c0` on each list gives its first node) in step; true
+/// as soon as `this` ends before `other`, or a pair of items differs
+/// (`006815d0`); when `other` ends, true only when `this` still has an
+/// item.
+pub fn fn_00680b70(e: &mut Engine, this: Ptr, other: u32) -> bool {
+    let mut mine = e.call(LIST_NODE_ITEM_SLOT, &args![this]).u32();
+    let mut theirs = e.call(LIST_NODE_ITEM_SLOT, &args![other]).u32();
+    loop {
+        if theirs == 0 || e.call(NODE_IS_END, &args![theirs]).bool() {
+            return mine != 0 && !e.call(NODE_IS_END, &args![mine]).bool();
+        }
+        if mine == 0 || e.call(NODE_IS_END, &args![mine]).bool() {
+            return true;
+        }
+        let mine_slot = e.call(LIST_NODE_ITEM_SLOT, &args![mine]).u32();
+        let mine_item = e.mem.u32(mine_slot);
+        let theirs_slot = e.call(LIST_NODE_ITEM_SLOT, &args![theirs]).u32();
+        let theirs_item = e.mem.u32(theirs_slot);
+        if e.call(ITEMS_DIFFER, &args![mine_item, theirs_item]).bool() {
+            return true;
+        }
+        mine = e.call(NODE_NEXT, &args![mine]).u32();
+        theirs = e.call(NODE_NEXT, &args![theirs]).u32();
+    }
+}
+
+// Translated from 00680f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESCondition::GetConditionItem` (Xbox PDB): the item at `index` of the
+/// list (counting nodes until the list ends), or null.
+pub fn tes_condition_get_condition_item(e: &mut Engine, this: Ptr, index: i32) -> u32 {
+    let mut position = 0i32;
+    let mut node = e.call(LIST_NODE_ITEM_SLOT, &args![this]).u32();
+    while node != 0 && !e.call(NODE_IS_END, &args![node]).bool() {
+        if position == index {
+            let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+            return e.mem.u32(slot);
+        }
+        position = position.wrapping_add(1);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -291,6 +340,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00680c30, tes_condition_is_true(Ptr, u32, u32) -> bool),
         entry!(0x00680c60, tes_condition_is_true_ov2(Ptr, u32, u32, Ptr, u8) -> bool),
         entry!(0x006811e0, fn_006811e0(Ptr) -> Ptr),
+        entry!(0x0068_0b70, fn_00680b70(Ptr, u32) -> bool),
+        entry!(0x0068_0f70, tes_condition_get_condition_item(Ptr, i32) -> u32),
     ]
 }
 
@@ -628,5 +679,73 @@ mod tests {
         e.call_log = Some(vec![]);
         assert_eq!(run(&mut e, &[f], 0), (false, 0));
         assert_eq!(evaluations(&e).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod b039_tests {
+    use super::*;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    /// Lists of nodes [item, next]; a node with item 0 is the end marker
+    /// (`008256d0` answers true for it).
+    fn list(e: &mut Engine, items: &[u32]) -> u32 {
+        let nodes = e.mem.alloc(8 * items.len() as u32 + 8);
+        for (i, item) in items.iter().enumerate() {
+            let node = nodes + 8 * i as u32;
+            e.mem.set_u32(node, *item);
+            e.mem.set_u32(node + 4, node + 8);
+        }
+        let last = nodes + 8 * items.len() as u32;
+        e.mem.set_u32(last, 0);
+        e.mem.set_u32(last + 4, 0);
+        nodes
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(LIST_NODE_ITEM_SLOT, |_, a| word(a[0]));
+        e.register(NODE_IS_END, |e, a| word(u32::from(e.mem.u32(a[0]) == 0)));
+        e.register(NODE_NEXT, |e, a| word(e.mem.u32(a[0] + 4)));
+        e.register(ITEMS_DIFFER, |_, a| word(u32::from(a[0] != a[1])));
+        e
+    }
+
+    #[test]
+    fn fn_00680b70_compares_the_lists_item_by_item() {
+        let mut e = engine();
+        let a = list(&mut e, &[1, 2]);
+        let b = list(&mut e, &[1, 2]);
+        let c = list(&mut e, &[1, 3]);
+        let shorter = list(&mut e, &[1]);
+        assert!(!e.call(0x0068_0b70, &args![a, b]).bool());
+        assert!(e.call(0x0068_0b70, &args![a, c]).bool());
+        // `this` has more items: true; `this` has fewer: true.
+        assert!(e.call(0x0068_0b70, &args![a, shorter]).bool());
+        assert!(e.call(0x0068_0b70, &args![shorter, a]).bool());
+        // A null first node.
+        let empty = list(&mut e, &[]);
+        assert!(!e.call(0x0068_0b70, &args![empty, empty]).bool());
+        e.register(LIST_NODE_ITEM_SLOT, |_, a| {
+            word(if a[0] == 0x10 { 0 } else { a[0] })
+        });
+        assert!(e.call(0x0068_0b70, &args![0x10u32, a]).bool());
+        assert!(!e.call(0x0068_0b70, &args![0x10u32, 0x10u32]).bool());
+    }
+
+    #[test]
+    fn get_condition_item_counts_nodes() {
+        let mut e = engine();
+        let a = list(&mut e, &[0x71, 0x72, 0x73]);
+        assert_eq!(e.call(0x0068_0f70, &args![a, 0i32]).u32(), 0x71);
+        assert_eq!(e.call(0x0068_0f70, &args![a, 2i32]).u32(), 0x73);
+        assert_eq!(e.call(0x0068_0f70, &args![a, 3i32]).u32(), 0);
+        assert_eq!(e.call(0x0068_0f70, &args![a, -1i32]).u32(), 0);
     }
 }

@@ -48,11 +48,31 @@ pub fn fn_00cbc4e0(e: &mut Engine, this: Ptr, object: Ptr, index: u32) {
     e.mem.set_u32(slot, object.addr());
 }
 
+// Translated from 00cbc4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack word): the destructor of the manager
+/// [`fn_00cbc460`] builds. Sets the vtable `010c9194`, drops the reference of each of the 11
+/// state objects at +8.. (`00c905b0`, skipping null slots, each slot then cleared), and sets
+/// the base vtable `0102e388`.
+pub fn fn_00cbc4a0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, CHARACTER_STATE_MANAGER_VTABLE);
+    for index in 0..11u32 {
+        let slot = base + 8 + 4 * index;
+        let object = e.mem.u32(slot);
+        if object != 0 {
+            e.call(REFERENCED_OBJECT_REMOVE_REFERENCE, &args![object]);
+            e.mem.set_u32(slot, 0);
+        }
+    }
+    e.mem.set_u32(base, 0x0102_e388);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00cb_c460, fn_00cbc460(Ptr) -> Ptr),
         entry!(0x00cb_c4e0, fn_00cbc4e0(Ptr, Ptr, u32)),
+        entry!(0x00cb_c4a0, fn_00cbc4a0(Ptr)),
     ]
 }
 
@@ -140,5 +160,32 @@ mod physics_work_ahead_tests {
             ]
         );
         assert_eq!(e.mem.u32(this + 8), 0x7000);
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn fn_00cbc4a0_drops_every_state_and_sets_the_base_vtable() {
+        let mut e = Engine::new();
+        e.register(REFERENCED_OBJECT_REMOVE_REFERENCE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x34);
+        e.mem.set_u32(this + 8, 0x7000);
+        e.mem.set_u32(this + 8 + 4 * 10, 0x7a00);
+        e.call_log = Some(vec![]);
+        e.call(0x00cb_c4a0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (REFERENCED_OBJECT_REMOVE_REFERENCE, vec![0x7000]),
+                (REFERENCED_OBJECT_REMOVE_REFERENCE, vec![0x7a00]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0x30), 0);
+        assert_eq!(e.mem.u32(this), 0x0102_e388);
     }
 }

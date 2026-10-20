@@ -254,6 +254,46 @@ pub fn fn_00aa2200(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `00aa4060` (`thiscall` on the memory manager, one stack word): deallocate.
+const DEALLOCATE: u32 = 0x00aa_4060;
+/// `00aa3070` (no arguments): the shutdown step `00aa2170` makes after the hooks.
+const SHUTDOWN_STEP: u32 = 0x00aa_3070;
+/// `00aa21e0` (`thiscall`, no stack word): run on the holder before it is freed.
+const HOLDER_TEAR_DOWN: u32 = 0x00aa_21e0;
+
+// Translated from 00aa2170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): the counterpart of the start-up. Calls each
+/// registered hook's second word (`011f6088`, as many as `011f6108` counts, read again after
+/// each call), then the word at `011f6114` when it is set, then `00aa3070`; when the holder
+/// was created (`011f610d`) and `011f6118` holds it, runs `00aa21e0` on it and gives it back
+/// to the memory manager (the pointer is not cleared). Last, clears the byte `011f610c`.
+pub fn fn_00aa2170(e: &mut Engine) {
+    let mut index = 0u32;
+    if e.mem.u32(STARTUP_COUNT) > index {
+        loop {
+            let function = e.mem.u32(STARTUP_SECOND_WORDS + 4 * index);
+            e.call(function, &args![]);
+            index = index.wrapping_add(1);
+            if index >= e.mem.u32(STARTUP_COUNT) {
+                break;
+            }
+        }
+    }
+    let last_hook = e.mem.u32(START_HOOK_DATA);
+    if last_hook != 0 {
+        e.call(last_hook, &args![]);
+    }
+    e.call(SHUTDOWN_STEP, &args![]);
+    if e.mem.u8(HOLDER_CREATED) != 0 {
+        let holder = e.mem.u32(HOLDER);
+        if holder != 0 {
+            e.call(HOLDER_TEAR_DOWN, &args![holder]);
+            e.call(DEALLOCATE, &args![MEMORY_MANAGER, holder]);
+        }
+    }
+    e.mem.set_u8(STARTUP_FINISHED, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -267,6 +307,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00aa_20b0, fn_00aa20b0(u32)),
         entry!(0x00aa_3050, fn_00aa3050()),
         entry!(0x00aa_2200, fn_00aa2200(Ptr) -> Ptr),
+        entry!(0x00aa_2170, fn_00aa2170()),
     ]
 }
 
@@ -609,5 +650,60 @@ mod holder_tests {
         assert_eq!(e.call(0x00aa_2200, &args![this]).u32(), this);
         assert_eq!(e.mem.u32(this), 0);
         assert_eq!(e.mem.u8(this + 4), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    fn calls(e: &mut Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|call| call.0 != 0x00aa_2170)
+            .collect()
+    }
+
+    #[test]
+    fn fn_00aa2170_runs_the_second_words_then_frees_the_holder() {
+        let mut e = Engine::new();
+        e.map(0x011f_6000, 0x1000);
+        for function in [0x0150_0000u32, 0x0150_0010, 0x0150_0020, SHUTDOWN_STEP] {
+            e.register(function, |_, _| Ret::default());
+        }
+        e.register(HOLDER_TEAR_DOWN, |_, _| Ret::default());
+        e.register(DEALLOCATE, |_, _| Ret::default());
+        e.mem.set_u32(STARTUP_COUNT, 2);
+        e.mem.set_u32(STARTUP_SECOND_WORDS, 0x0150_0000);
+        e.mem.set_u32(STARTUP_SECOND_WORDS + 4, 0x0150_0010);
+        e.mem.set_u32(START_HOOK_DATA, 0x0150_0020);
+        e.mem.set_u8(HOLDER_CREATED, 1);
+        e.mem.set_u32(HOLDER, 0x7000);
+        e.mem.set_u8(STARTUP_FINISHED, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_2170, &args![]);
+        assert_eq!(
+            calls(&mut e),
+            vec![
+                (0x0150_0000, vec![]),
+                (0x0150_0010, vec![]),
+                (0x0150_0020, vec![]),
+                (SHUTDOWN_STEP, vec![]),
+                (HOLDER_TEAR_DOWN, vec![0x7000]),
+                (DEALLOCATE, vec![MEMORY_MANAGER, 0x7000]),
+            ]
+        );
+        assert_eq!(e.mem.u8(STARTUP_FINISHED), 0);
+        assert_eq!(e.mem.u32(HOLDER), 0x7000);
+
+        // Nothing registered, no last hook, holder not created.
+        e.mem.set_u32(STARTUP_COUNT, 0);
+        e.mem.set_u32(START_HOOK_DATA, 0);
+        e.mem.set_u8(HOLDER_CREATED, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_2170, &args![]);
+        assert_eq!(calls(&mut e), vec![(SHUTDOWN_STEP, vec![])]);
     }
 }

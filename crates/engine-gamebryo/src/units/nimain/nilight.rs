@@ -58,6 +58,58 @@ pub fn fn_00a71f60(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The global object `NiLight::~NiLight` notifies (`011f4748`; called through
+/// its vtable slot `+0xf8` with the light).
+const LIGHT_LISTENER: u32 = 0x011f_4748;
+/// `00a69030` (`nidynamiceffect.cpp`, `thiscall`, no stack words): the
+/// `NiDynamicEffect` destructor body.
+const NI_DYNAMIC_EFFECT_DESTRUCT: u32 = 0x00a6_9030;
+
+// Translated from 00a72010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiLight::~NiLight` (Xbox PDB), `thiscall`, no stack words: stores
+/// `NiLight`'s vtable, tells the object in `011f4748` (when there is one)
+/// through its vtable slot `+0xf8` with the light, then jumps to the
+/// `NiDynamicEffect` destructor body `00a69030`.
+pub fn ni_light_destructor(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), NI_LIGHT_VTABLE);
+    let listener = e.global::<u32>(LIGHT_LISTENER);
+    if listener != 0 {
+        e.vcall(listener, 0xf8, &args![this]);
+    }
+    e.call(NI_DYNAMIC_EFFECT_DESTRUCT, &args![this]);
+}
+
+/// `NiDynamicEffect::LoadBinary` (`00a68ea0`, `thiscall`, the stream).
+const NI_DYNAMIC_EFFECT_LOAD_BINARY: u32 = 0x00a6_8ea0;
+/// `NiColor::LoadBinary` (`00a59be0`, `thiscall` on the colour, the stream).
+const NI_COLOR_LOAD_BINARY: u32 = 0x00a5_9be0;
+
+// Translated from 00a72080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiLight::LoadBinary` (Xbox PDB), `thiscall`, one stack word (the stream):
+/// `NiDynamicEffect::LoadBinary`, then one 4-byte item into the dimmer at
+/// `+0xc4` through the stream's binary reader (the object at `stream+0x24c`:
+/// its function at `+8` is called `cdecl` with the reader, the destination, 4,
+/// the address of a word holding 4 (the argument's own stack slot) and 1, and
+/// its result is added to the reader's `+4`), then the three colours at
+/// `+0xc8`, `+0xd4` and `+0xe0` (`NiColor::LoadBinary`).
+pub fn ni_light_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    let t = this.addr();
+    e.call(NI_DYNAMIC_EFFECT_LOAD_BINARY, &args![this, stream]);
+    // NiStream +0x24c: the binary reader.
+    let reader = e.mem.u32(stream.addr() + 0x24c);
+    let read = e.mem.u32(reader + 8);
+    let done = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), 4);
+        e.call(read, &args![reader, t + 0xc4, 4u32, slot, 1u32])
+            .u32()
+    });
+    let total = e.mem.u32(reader + 4).wrapping_add(done);
+    e.mem.set_u32(reader + 4, total);
+    for colour in [0xc8u32, 0xd4, 0xe0] {
+        e.call(NI_COLOR_LOAD_BINARY, &args![t + colour, stream]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -65,6 +117,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a72000, ni_light_get_rtti() -> Ptr),
         entry!(0x00a7_1f50, ni_light_link_object(Ptr, Ptr)),
         entry!(0x00a9_0010, ni_light_register_streamables(Ptr, Ptr) -> bool),
+        entry!(0x00a7_2010, ni_light_destructor(Ptr)),
+        entry!(0x00a7_2080, ni_light_load_binary(Ptr, Ptr)),
     ]
 }
 
@@ -134,5 +188,80 @@ mod tests {
             assert_eq!(e.mem.f32(this + offset).to_bits(), 1.0f32.to_bits());
         }
         assert_eq!(e.mem.u32(this + 0xec), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_b008 {
+    use super::*;
+
+    #[test]
+    fn ni_light_destructor_notifies_the_listener_when_there_is_one() {
+        const NOTIFY: u32 = 0x0123_4000;
+        let mut e = Engine::new();
+        e.map(LIGHT_LISTENER, 4);
+        e.register(NOTIFY, |_, _| Ret::default());
+        e.register(NI_DYNAMIC_EFFECT_DESTRUCT, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0xf8, NOTIFY);
+        let listener = e.mem.alloc(4);
+        e.mem.set_u32(listener, vtable);
+        let this = e.mem.alloc(0xfc);
+        let run = |e: &mut Engine| -> Vec<(u32, Vec<u32>)> {
+            e.call_log = Some(vec![]);
+            e.call(0x00a7_2010, &args![this]);
+            e.call_log.take().unwrap()[1..].to_vec()
+        };
+        assert_eq!(run(&mut e), vec![(NI_DYNAMIC_EFFECT_DESTRUCT, vec![this])]);
+        assert_eq!(e.mem.u32(this), NI_LIGHT_VTABLE);
+        e.set_global::<u32>(LIGHT_LISTENER, listener);
+        assert_eq!(
+            run(&mut e),
+            vec![
+                (NOTIFY, vec![listener, this]),
+                (NI_DYNAMIC_EFFECT_DESTRUCT, vec![this])
+            ]
+        );
+    }
+
+    #[test]
+    fn ni_light_load_binary_reads_the_dimmer_and_three_colours() {
+        const READ: u32 = 0x0123_5000;
+        let mut e = Engine::new();
+        e.register(NI_DYNAMIC_EFFECT_LOAD_BINARY, |_, _| Ret::default());
+        e.register(NI_COLOR_LOAD_BINARY, |_, _| Ret::default());
+        e.register(READ, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), 4);
+            e.mem.set_u32(a[1], 0x3f00_0000);
+            4u32.into_ret()
+        });
+        let reader = e.mem.alloc(0x10);
+        e.mem.set_u32(reader + 8, READ);
+        e.mem.set_u32(reader + 4, 100);
+        let stream = e.mem.alloc(0x250);
+        e.mem.set_u32(stream + 0x24c, reader);
+        let this = e.mem.alloc(0xfc);
+        e.call_log = Some(vec![]);
+        e.call(0x00a7_2080, &args![this, stream]);
+        assert_eq!(e.mem.u32(this + 0xc4), 0x3f00_0000);
+        assert_eq!(e.mem.u32(reader + 4), 104);
+        let log: Vec<u32> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .map(|c| c.0)
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                0x00a7_2080,
+                NI_DYNAMIC_EFFECT_LOAD_BINARY,
+                READ,
+                NI_COLOR_LOAD_BINARY,
+                NI_COLOR_LOAD_BINARY,
+                NI_COLOR_LOAD_BINARY
+            ]
+        );
     }
 }

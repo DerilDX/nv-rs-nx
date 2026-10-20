@@ -22,11 +22,18 @@ pub fn bs_anim_notes_get_viewer_strings(e: &mut Engine, this: Ptr, arg: Ptr) {
     e.call(JUMP_TARGET_00A44910, &args![this, arg]);
 }
 
+// Translated from 00a44840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`thiscall`, one stack word it never reads, `RET 4`): answers `this`.
+pub fn fn_00a44840(_e: &mut Engine, this: Ptr, _unused_1: u32) -> Ptr {
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a44920, bs_anim_notes_get_rtti() -> Ptr),
         entry!(0x00a4_4910, bs_anim_notes_get_viewer_strings(Ptr, Ptr)),
+        entry!(0x00a44840, fn_00a44840(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -52,5 +59,11 @@ mod tests {
         let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+    }
+
+    #[test]
+    fn fn_00a44840_answers_this() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00a44840, &args![0x1234u32, 7u32]).u32(), 0x1234);
     }
 }

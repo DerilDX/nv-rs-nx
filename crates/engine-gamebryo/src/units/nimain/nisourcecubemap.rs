@@ -420,6 +420,200 @@ pub fn ni_source_cube_map_load_from_pixel_data(
     });
 }
 
+/// The `NiPointer` release expanded inline on the pointer at `slot`: when an
+/// object is there, `InterlockedDecrement` of its count (`+4`), its vtable
+/// slot `+4` (delete) at zero, and the pointer cleared.
+fn release_ni_pointer(e: &mut Engine, slot: u32) {
+    let object = e.mem.u32(slot);
+    if object != 0 {
+        let left = e
+            .call(IMPORT_INTERLOCKED_DECREMENT, &args![object.wrapping_add(4)])
+            .u32();
+        if left == 0 {
+            e.vcall(object, 4, &args![]);
+        }
+        e.mem.set_u32(slot, 0);
+    }
+}
+
+// Translated from 00a60910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceCubeMap::DestroyAppPixelData` (engine map name), `thiscall`, no
+/// stack words: releases the source pixel data (`+0x3c`) and clears it.
+pub fn ni_source_cube_map_destroy_app_pixel_data(e: &mut Engine, this: Ptr) {
+    release_ni_pointer(e, this.addr() + SOURCE_PIXEL_DATA);
+}
+
+/// `NiSourceTexture::~NiSourceTexture`'s body (`00a5fca0`, `thiscall`, no
+/// stack words) and the sized delete (`00aa1460`, `cdecl`: block, size).
+const NI_SOURCE_TEXTURE_DESTRUCT: u32 = 0x00a5_fca0;
+const SIZED_DELETE: u32 = 0x00aa_1460;
+
+// Translated from 00a61250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceCubeMap::_scalar_deleting_destructor_` (engine map name),
+/// `thiscall`, `RET 4` (the flags): stores the vtable `0109babc`, releases the
+/// source pixel data (`+0x3c`), runs `NiSourceTexture`'s destructor body
+/// (`00a5fca0`) and, when bit 0 of the flags is set, frees the 0x4c bytes
+/// (`00aa1460`). Answers `this`.
+pub fn ni_source_cube_map_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), NI_SOURCE_CUBE_MAP_VTABLE);
+    release_ni_pointer(e, this.addr() + SOURCE_PIXEL_DATA);
+    e.call(NI_SOURCE_TEXTURE_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 0x4cu32]);
+    }
+    this
+}
+
+/// `00a5f860` (`thiscall` on an `NiPointer`, `RET 4`: the object): assigns it.
+const NI_POINTER_ASSIGN_00A5F860: u32 = 0x00a5_f860;
+
+// Translated from 00a608c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceCubeMap::LoadPixelDataFromFile` (engine map name), `thiscall`, no
+/// stack words. Only without source pixel data (`+0x3c`) and with a platform
+/// file name (`+0x34`, not the empty name `0109b220`): asks the image
+/// converter (`GetImageConverter`) through its vtable slot `+0xc` with the
+/// name, 0 and the word at `+0x44`, assigns the answer to `+0x3c`
+/// (`00a5f860`) and clears `+0x44`.
+pub fn ni_source_cube_map_load_pixel_data_from_file(e: &mut Engine, this: Ptr) {
+    let t = this.addr();
+    if e.mem.u32(t + SOURCE_PIXEL_DATA) != 0 {
+        return;
+    }
+    if e.mem.u32(t + 0x34) == e.global::<u32>(NULL_NAME_0109B220) {
+        return;
+    }
+    let converter = e.call(GET_IMAGE_CONVERTER, &args![]).u32();
+    let extra = e.mem.u32(t + 0x44);
+    let name = e.mem.u32(t + 0x34);
+    let data = e.vcall(converter, 0xc, &args![name, 0u32, extra]).u32();
+    e.call(
+        NI_POINTER_ASSIGN_00A5F860,
+        &args![t + SOURCE_PIXEL_DATA, data],
+    );
+    e.mem.set_u32(t + 0x44, 0);
+}
+
+/// `00a5b690` (`cdecl`, the text): a new `NiFixedString` handle for it (with
+/// one reference).
+const FIXED_STRING_CREATE: u32 = 0x00a5_b690;
+
+// Translated from 00a5fe30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSourceCubeMap::Create` (engine map name; the object it makes is an
+/// `NiSourceTexture` of 0x48 bytes), `cdecl`, four words: a word for `+0x44`,
+/// a file name (text), the address of three words of format preferences and a
+/// byte for `+0x41`. Allocates 0x48 bytes (`00aa13e0`) and runs
+/// `NiSourceTexture::NiSourceTexture` on them (a null allocation is used as
+/// it is). Copies the preferences to `+0x18..+0x20`, stores the byte and the
+/// word. With a name: makes it an `NiFixedString` (`00a5b690`), assigns it to
+/// `+0x30` (new one counted, old one released, each unless it is the empty
+/// name `0109b220`), standardizes it (`00a57500`), converts it into `+0x34`
+/// (`00a76960`) and releases the temporary handle. When the byte at
+/// `011a9594` is set and the texture's vtable slot `+0xac` answers false, the
+/// texture is deleted (slot 0 with 1) and 0 answered. Answers the texture.
+pub fn ni_source_cube_map_create(
+    e: &mut Engine,
+    extra: u32,
+    name: Ptr,
+    preferences: Ptr,
+    flag: u8,
+) -> Ptr {
+    let block = e.call(NI_ALLOCATE, &args![0x48u32]).u32();
+    let texture = if block != 0 {
+        e.call(NI_SOURCE_TEXTURE_CONSTRUCT, &args![block]).u32()
+    } else {
+        0
+    };
+    for word in 0..3u32 {
+        let value = e.mem.u32(preferences.addr().wrapping_add(4 * word));
+        e.mem.set_u32(texture.wrapping_add(0x18 + 4 * word), value);
+    }
+    e.mem.set_u8(texture.wrapping_add(0x41), flag);
+    e.mem.set_u32(texture.wrapping_add(0x44), extra);
+    if !name.is_null() {
+        let handle = e.call(FIXED_STRING_CREATE, &args![name]).u32();
+        let file = texture.wrapping_add(0x30);
+        if e.mem.u32(file) != handle {
+            if handle != e.global::<u32>(NULL_NAME_0109B220) {
+                e.call(IMPORT_INTERLOCKED_INCREMENT, &args![handle.wrapping_sub(8)]);
+            }
+            let old = e.mem.u32(file);
+            if old != e.global::<u32>(NULL_NAME_0109B220) {
+                e.call(IMPORT_INTERLOCKED_DECREMENT, &args![old.wrapping_sub(8)]);
+            }
+            e.mem.set_u32(file, handle);
+        }
+        e.call(STANDARDIZE_FILE_PATH, &args![file]);
+        e.call(CONVERT_FILE_NAME, &args![file, texture.wrapping_add(0x34)]);
+        if handle != e.global::<u32>(NULL_NAME_0109B220) {
+            e.call(IMPORT_INTERLOCKED_DECREMENT, &args![handle.wrapping_sub(8)]);
+        }
+    }
+    if e.global::<u8>(LOAD_AT_ONCE_011A9594) != 0 && !e.vcall(texture, 0xac, &args![]).bool() {
+        e.vcall(texture, 0, &args![1u32]);
+        return Ptr::NULL;
+    }
+    Ptr::new(texture)
+}
+
+// Translated from 00a61040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nisourcecubemap.cpp`): makes an
+/// `NiSourceCubeMap` from a name, like `00a60f60` with one more word.
+/// `cdecl`, four words: the address of the name (an `NiFixedString`), a word
+/// for `+0x44`, the renderer and the address of three words of format
+/// preferences. Allocates 0x4c bytes (`00aa13e0`); when that succeeds runs
+/// `NiSourceTexture::NiSourceTexture`, sets the vtable `0109babc` and clears
+/// `+0x48` (a null allocation is used as it is). Copies the preferences to
+/// `+0x18..+0x20`, assigns the name to `+0x30` (counted as in `00a60f60`),
+/// standardizes and converts it into `+0x34`, clears `+0x48` when set, stores
+/// the word at `+0x44` and runs the map's vtable slot `+0xa4`. With a
+/// renderer whose slot `+0x144` answers false for the map, the map is deleted
+/// (slot 0 with 1) and 0 answered. Answers the map.
+pub fn fn_00a61040(e: &mut Engine, name: Ptr, extra: u32, renderer: Ptr, preferences: Ptr) -> Ptr {
+    let block = e.call(NI_ALLOCATE, &args![0x4cu32]).u32();
+    let map = if block != 0 {
+        e.call(NI_SOURCE_TEXTURE_CONSTRUCT, &args![block]);
+        e.mem.set_u32(block, NI_SOURCE_CUBE_MAP_VTABLE);
+        e.mem.set_u32(block.wrapping_add(0x48), 0);
+        block
+    } else {
+        0
+    };
+    for word in 0..3u32 {
+        let value = e.mem.u32(preferences.addr().wrapping_add(4 * word));
+        e.mem.set_u32(map.wrapping_add(0x18 + 4 * word), value);
+    }
+    let new_name = e.mem.u32(name.addr());
+    let file = map.wrapping_add(0x30);
+    if e.mem.u32(file) != new_name {
+        if new_name != e.global::<u32>(NULL_NAME_0109B220) {
+            e.call(
+                IMPORT_INTERLOCKED_INCREMENT,
+                &args![new_name.wrapping_sub(8)],
+            );
+        }
+        let old_name = e.mem.u32(file);
+        if old_name != e.global::<u32>(NULL_NAME_0109B220) {
+            e.call(
+                IMPORT_INTERLOCKED_DECREMENT,
+                &args![old_name.wrapping_sub(8)],
+            );
+        }
+        e.mem.set_u32(file, new_name);
+    }
+    e.call(STANDARDIZE_FILE_PATH, &args![file]);
+    e.call(CONVERT_FILE_NAME, &args![file, map.wrapping_add(0x34)]);
+    if e.mem.u32(map.wrapping_add(0x48)) != 0 {
+        e.mem.set_u32(map.wrapping_add(0x48), 0);
+    }
+    e.mem.set_u32(map.wrapping_add(0x44), extra);
+    e.vcall(map, 0xa4, &args![]);
+    if !renderer.is_null() && !e.vcall(renderer.addr(), 0x144, &args![map]).bool() {
+        e.vcall(map, 0, &args![1u32]);
+        return Ptr::NULL;
+    }
+    Ptr::new(map)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -446,6 +640,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 Ptr<NiPixelData>,
             )
         ),
+        entry!(0x00a6_0910, ni_source_cube_map_destroy_app_pixel_data(Ptr)),
+        entry!(0x00a6_1250, ni_source_cube_map_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(
+            0x00a6_08c0,
+            ni_source_cube_map_load_pixel_data_from_file(Ptr)
+        ),
+        entry!(0x00a5_fe30, ni_source_cube_map_create(u32, Ptr, Ptr, u8) -> Ptr),
+        entry!(0x00a6_1040, fn_00a61040(Ptr, u32, Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -984,5 +1186,263 @@ mod load_from_pixel_data_tests {
         let source = e.mem.u32(faces[2] + 0x50);
         assert_eq!(copies[0], vec![0, source, 0x40]);
         assert!(calls(&e, DELETE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_b008 {
+    use super::*;
+
+    const DELETE_SLOT: u32 = 0x0125_0000;
+
+    /// An object with a count at `+4` whose vtable slot `+4` is `DELETE_SLOT`.
+    fn counted(e: &mut Engine, count: u32) -> u32 {
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, DELETE_SLOT);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(object + 4, count);
+        object
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let left = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], left);
+            left.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |_, _| Ret::default());
+        e.register(DELETE_SLOT, |_, _| Ret::default());
+        e
+    }
+
+    fn deletes(e: &mut Engine) -> usize {
+        e.call_log
+            .take()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == DELETE_SLOT)
+            .count()
+    }
+
+    #[test]
+    fn ni_source_cube_map_destroy_app_pixel_data_releases_the_data() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x4c);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_0910, &args![this]);
+        assert_eq!(deletes(&mut e), 0);
+        let data = counted(&mut e, 2);
+        e.mem.set_u32(this + 0x3c, data);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_0910, &args![this]);
+        assert_eq!(deletes(&mut e), 0);
+        assert_eq!(e.mem.u32(this + 0x3c), 0);
+        e.mem.set_u32(this + 0x3c, data);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_0910, &args![this]);
+        assert_eq!(deletes(&mut e), 1);
+    }
+
+    #[test]
+    fn ni_source_cube_map_scalar_deleting_destructor_frees_on_bit_0() {
+        let mut e = engine();
+        e.register(NI_SOURCE_TEXTURE_DESTRUCT, |_, _| Ret::default());
+        e.register(SIZED_DELETE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x4c);
+        let data = counted(&mut e, 1);
+        e.mem.set_u32(this + 0x3c, data);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a6_1250, &args![this, 1u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        let names: Vec<u32> = log.iter().map(|c| c.0).collect();
+        assert_eq!(
+            names,
+            vec![
+                0x00a6_1250,
+                IMPORT_INTERLOCKED_DECREMENT,
+                DELETE_SLOT,
+                NI_SOURCE_TEXTURE_DESTRUCT,
+                SIZED_DELETE
+            ]
+        );
+        assert_eq!(log[4].1, vec![this, 0x4c]);
+        assert_eq!(e.mem.u32(this), NI_SOURCE_CUBE_MAP_VTABLE);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_1250, &args![this, 2u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != SIZED_DELETE));
+    }
+
+    #[test]
+    fn ni_source_cube_map_load_pixel_data_from_file_only_when_needed() {
+        const CONVERT_SLOT: u32 = 0x0125_1000;
+        let mut e = engine();
+        e.map(NULL_NAME_0109B220, 4);
+        e.set_global::<u32>(NULL_NAME_0109B220, 0x4444);
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 0xc, CONVERT_SLOT);
+        let converter = e.mem.alloc(4);
+        e.mem.set_u32(converter, vtable);
+        e.register_double(GET_IMAGE_CONVERTER, move |_, _| converter.into_ret());
+        e.register(CONVERT_SLOT, |_, _| 0x7777u32.into_ret());
+        e.register(NI_POINTER_ASSIGN_00A5F860, |_, _| Ret::default());
+        let this = e.mem.alloc(0x4c);
+        e.mem.set_u32(this + 0x34, 0x4444);
+        e.mem.set_u32(this + 0x44, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_08c0, &args![this]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.mem.set_u32(this + 0x34, 0x8008);
+        e.mem.set_u32(this + 0x3c, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_08c0, &args![this]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.mem.set_u32(this + 0x3c, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00a6_08c0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (GET_IMAGE_CONVERTER, vec![]),
+                (CONVERT_SLOT, vec![converter, 0x8008, 0, 5]),
+                (NI_POINTER_ASSIGN_00A5F860, vec![this + 0x3c, 0x7777]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x44), 0);
+    }
+
+    const KEEP_SLOT: u32 = 0x0125_2000;
+    const LOAD_SLOT: u32 = 0x0125_2010;
+
+    /// A texture block whose vtable has `+0xac` = `KEEP_SLOT`, `+0xa4` =
+    /// `LOAD_SLOT` and `+0` = `DELETE_SLOT`.
+    fn texture_engine(keep: u32) -> (Engine, u32) {
+        let mut e = engine();
+        e.map(NULL_NAME_0109B220, 4);
+        e.set_global::<u32>(NULL_NAME_0109B220, 0x4444);
+        e.map(LOAD_AT_ONCE_011A9594, 4);
+        let vtable = e.mem.alloc(0x150);
+        e.mem.set_u32(vtable, DELETE_SLOT);
+        e.mem.set_u32(vtable + 0xac, KEEP_SLOT);
+        e.mem.set_u32(vtable + 0xa4, LOAD_SLOT);
+        // The cube map gets its class's own vtable: give it the same slots.
+        e.map(NI_SOURCE_CUBE_MAP_VTABLE, 0x150);
+        e.mem.set_u32(NI_SOURCE_CUBE_MAP_VTABLE, DELETE_SLOT);
+        e.mem.set_u32(NI_SOURCE_CUBE_MAP_VTABLE + 0xac, KEEP_SLOT);
+        e.mem.set_u32(NI_SOURCE_CUBE_MAP_VTABLE + 0xa4, LOAD_SLOT);
+        let block = e.mem.alloc(0x4c);
+        e.register_double(NI_ALLOCATE, move |_, _| block.into_ret());
+        e.register_double(NI_SOURCE_TEXTURE_CONSTRUCT, move |e, a| {
+            e.mem.set_u32(a[0], vtable);
+            a[0].into_ret()
+        });
+        e.register_double(KEEP_SLOT, move |_, _| keep.into_ret());
+        e.register(LOAD_SLOT, |_, _| Ret::default());
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |_, _| 1u32.into_ret());
+        e.register(FIXED_STRING_CREATE, |_, _| 0x8008u32.into_ret());
+        e.register(STANDARDIZE_FILE_PATH, |_, _| Ret::default());
+        e.register(CONVERT_FILE_NAME, |_, _| Ret::default());
+        (e, block)
+    }
+
+    #[test]
+    fn ni_source_cube_map_create_names_and_keeps_the_texture() {
+        let (mut e, block) = texture_engine(0);
+        let preferences = e.mem.alloc(12);
+        for i in 0..3 {
+            e.mem.set_u32(preferences + 4 * i, 0x10 + i);
+        }
+        let name = e.mem.alloc(8);
+        e.mem.set_u32(block + 0x30, 0x6008);
+        e.call_log = Some(vec![]);
+        let made = e
+            .call(0x00a5_fe30, &args![0x55u32, name, preferences, 1u32])
+            .u32();
+        assert_eq!(made, block);
+        assert_eq!(e.mem.u32(block + 0x18), 0x10);
+        assert_eq!(e.mem.u32(block + 0x20), 0x12);
+        assert_eq!(e.mem.u8(block + 0x41), 1);
+        assert_eq!(e.mem.u32(block + 0x44), 0x55);
+        assert_eq!(e.mem.u32(block + 0x30), 0x8008);
+        let log = e.call_log.take().unwrap();
+        let counts: Vec<(u32, u32)> = log
+            .iter()
+            .filter(|c| c.0 == IMPORT_INTERLOCKED_INCREMENT || c.0 == IMPORT_INTERLOCKED_DECREMENT)
+            .map(|c| (c.0, c.1[0]))
+            .collect();
+        assert_eq!(
+            counts,
+            vec![
+                (IMPORT_INTERLOCKED_INCREMENT, 0x8000),
+                (IMPORT_INTERLOCKED_DECREMENT, 0x6000),
+                (IMPORT_INTERLOCKED_DECREMENT, 0x8000),
+            ]
+        );
+        assert!(log.iter().all(|c| c.0 != KEEP_SLOT));
+    }
+
+    #[test]
+    fn ni_source_cube_map_create_deletes_a_refused_texture() {
+        let (mut e, block) = texture_engine(0);
+        e.set_global::<u8>(LOAD_AT_ONCE_011A9594, 1);
+        let preferences = e.mem.alloc(12);
+        e.call_log = Some(vec![]);
+        let made = e
+            .call(0x00a5_fe30, &args![0u32, 0u32, preferences, 0u32])
+            .u32();
+        assert_eq!(made, 0);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != FIXED_STRING_CREATE));
+        assert!(log.contains(&(DELETE_SLOT, vec![block, 1])));
+        let (mut e, block) = texture_engine(1);
+        e.set_global::<u8>(LOAD_AT_ONCE_011A9594, 1);
+        let preferences = e.mem.alloc(12);
+        let made = e
+            .call(0x00a5_fe30, &args![0u32, 0u32, preferences, 0u32])
+            .u32();
+        assert_eq!(made, block);
+    }
+
+    #[test]
+    fn fn_00a61040_makes_and_checks_the_map() {
+        const CHECK_SLOT: u32 = 0x0125_3000;
+        let (mut e, block) = texture_engine(1);
+        let preferences = e.mem.alloc(12);
+        let name = e.mem.alloc(4);
+        e.mem.set_u32(name, 0x4444);
+        e.mem.set_u32(block + 0x30, 0x4444);
+        e.call_log = Some(vec![]);
+        let made = e
+            .call(0x00a6_1040, &args![name, 0x66u32, 0u32, preferences])
+            .u32();
+        assert_eq!(made, block);
+        assert_eq!(e.mem.u32(block), NI_SOURCE_CUBE_MAP_VTABLE);
+        assert_eq!(e.mem.u32(block + 0x44), 0x66);
+        let log = e.call_log.take().unwrap();
+        assert!(log
+            .iter()
+            .all(|c| c.0 != IMPORT_INTERLOCKED_INCREMENT && c.0 != IMPORT_INTERLOCKED_DECREMENT));
+
+        let (mut e, block) = texture_engine(1);
+        e.register(CHECK_SLOT, |_, _| Ret::default());
+        let renderer_vtable = e.mem.alloc(0x150);
+        e.mem.set_u32(renderer_vtable + 0x144, CHECK_SLOT);
+        let renderer = e.mem.alloc(4);
+        e.mem.set_u32(renderer, renderer_vtable);
+        let preferences = e.mem.alloc(12);
+        let name = e.mem.alloc(4);
+        e.mem.set_u32(name, 0x8008);
+        e.call_log = Some(vec![]);
+        let made = e
+            .call(0x00a6_1040, &args![name, 0u32, renderer, preferences])
+            .u32();
+        assert_eq!(made, 0);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(CHECK_SLOT, vec![renderer, block])));
+        assert!(log.contains(&(DELETE_SLOT, vec![block, 1])));
+        assert!(log.contains(&(IMPORT_INTERLOCKED_INCREMENT, vec![0x8000])));
     }
 }

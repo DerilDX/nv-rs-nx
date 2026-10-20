@@ -14,9 +14,27 @@ pub fn fn_00449d10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `0044c480` (`thiscall`, `RET 4`): run with 1 first.
+const CLEAR_ENTRIES: u32 = 0x0044_c480;
+/// `0044c1e0` (`thiscall`, no stack word): the base destructor.
+const BASE_DESTRUCTOR_0044C1E0: u32 = 0x0044_c1e0;
+
+// Translated from 00449c50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00449c50 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00eecdf8, state variable) is not translated
+/// Unnamed in the engine map (`thiscall`, no stack word): a destructor. Sets the vtable
+/// `010172dc`, calls `0044c480(1)` on `this`, then the base destructor `0044c1e0`.
+pub fn fn_00449c50(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_72dc);
+    e.call(CLEAR_ENTRIES, &args![this, 1u32]);
+    e.call(BASE_DESTRUCTOR_0044C1E0, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0044_9d10, fn_00449d10(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x0044_9d10, fn_00449d10(Ptr, u32) -> Ptr),
+        entry!(0x0044_9c50, fn_00449c50(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -46,5 +64,29 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn fn_00449c50_clears_then_runs_the_base() {
+        let mut e = Engine::new();
+        e.register(CLEAR_ENTRIES, |_, _| Ret::default());
+        e.register(BASE_DESTRUCTOR_0044C1E0, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_9c50, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (CLEAR_ENTRIES, vec![this, 1]),
+                (BASE_DESTRUCTOR_0044C1E0, vec![this])
+            ]
+        );
+        assert_eq!(e.mem.u32(this), 0x0101_72dc);
     }
 }

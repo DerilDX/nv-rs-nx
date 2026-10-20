@@ -25,12 +25,30 @@ pub fn fn_0060ff70(e: &mut Engine, this: Ptr<TESQuestTarget>) -> Ptr<TESQuestTar
     this
 }
 
+/// `TeleportPath::~TeleportPath` (`006f4930`, `thiscall`).
+const TELEPORT_PATH_DESTRUCT: u32 = 0x006f_4930;
+/// The `TESCondition` destructor (`006808b0`, `thiscall`).
+const CONDITION_DESTRUCT: u32 = 0x0068_08b0;
+
+// Translated from 0060ffe0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0060ffe0 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00efb33b, state variable) is not translated
+/// Destructor of a `TESQuestTarget` (`thiscall`, no stack word; the counterpart of
+/// [`fn_0060ff70`]; Ghidra matches the body to a library destructor pattern): destroys the
+/// target path (+0x10, `006f4930`) and then the conditions (+4, `006808b0`).
+pub fn fn_0060ffe0(e: &mut Engine, this: Ptr<TESQuestTarget>) {
+    e.call(TELEPORT_PATH_DESTRUCT, &args![this.addr() + 0x10]);
+    e.call(CONDITION_DESTRUCT, &args![this.addr() + 4]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x0060ff70,
-        fn_0060ff70(Ptr<TESQuestTarget>) -> Ptr<TESQuestTarget>
-    )]
+    vec![
+        entry!(
+            0x0060ff70,
+            fn_0060ff70(Ptr<TESQuestTarget>) -> Ptr<TESQuestTarget>
+        ),
+        entry!(0x0060_ffe0, fn_0060ffe0(Ptr<TESQuestTarget>)),
+    ]
 }
 
 #[cfg(test)]
@@ -66,6 +84,29 @@ mod tests {
             vec![
                 (CONDITION_CONSTRUCT, vec![target.addr() + 4]),
                 (TELEPORT_PATH_CONSTRUCT, vec![target.addr() + 0x10]),
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn target_destructor_destroys_the_path_then_the_conditions() {
+        let mut e = Engine::new();
+        e.register(TELEPORT_PATH_DESTRUCT, |_, _| Ret::default());
+        e.register(CONDITION_DESTRUCT, |_, _| Ret::default());
+        let this = e.mem.alloc(0x48);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_ffe0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (TELEPORT_PATH_DESTRUCT, vec![this + 0x10]),
+                (CONDITION_DESTRUCT, vec![this + 4]),
             ]
         );
     }

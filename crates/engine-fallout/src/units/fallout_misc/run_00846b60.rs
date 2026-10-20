@@ -26,12 +26,33 @@ pub fn construct(
     this
 }
 
+/// `00438af0` (`thiscall`, no stack word): empties a map.
+const EMPTY_MAP: u32 = 0x0043_8af0;
+/// `006e2150` (`thiscall`, no stack word; unit `fallout shared/pathfinding/pathinglosmap.cpp`):
+/// a map's destructor.
+const MAP_DESTRUCTOR: u32 = 0x006e_2150;
+
+// Translated from 00846be0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00846be0 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f12a63, state variable) is not translated
+/// Unnamed in the engine map (`thiscall`, no stack word): the destructor of the two-map
+/// registry `construct` builds. Empties the maps at +0 and +0x10 (`00438af0`), then destroys
+/// the one at +0x10 and the one at +0 (`006e2150`).
+pub fn fn_00846be0(e: &mut Engine, this: Ptr) {
+    e.call(EMPTY_MAP, &args![this]);
+    e.call(EMPTY_MAP, &args![this.addr() + 0x10]);
+    e.call(MAP_DESTRUCTOR, &args![this.addr() + 0x10]);
+    e.call(MAP_DESTRUCTOR, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00846b60,
-        construct(Ptr<BGSSaveLoadFormIDMap>, u32) -> Ptr<BGSSaveLoadFormIDMap>
-    )]
+    vec![
+        entry!(
+            0x00846b60,
+            construct(Ptr<BGSSaveLoadFormIDMap>, u32) -> Ptr<BGSSaveLoadFormIDMap>
+        ),
+        entry!(0x0084_6be0, fn_00846be0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -121,5 +142,30 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains(&(0x006b8310, vec![map + 12, node])));
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn fn_00846be0_empties_both_maps_then_destroys_them() {
+        let mut e = Engine::new();
+        e.register(EMPTY_MAP, |_, _| Ret::default());
+        e.register(MAP_DESTRUCTOR, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(0x0084_6be0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (EMPTY_MAP, vec![this]),
+                (EMPTY_MAP, vec![this + 0x10]),
+                (MAP_DESTRUCTOR, vec![this + 0x10]),
+                (MAP_DESTRUCTOR, vec![this]),
+            ]
+        );
     }
 }

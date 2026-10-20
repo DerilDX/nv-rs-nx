@@ -4711,6 +4711,32 @@ pub fn fn_004353d0(e: &mut Engine, this: Ptr<ExtraXTarget>) {
     e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
 }
 
+/// `00435c10` (`thiscall`, no stack word; engine map `ExtraSavedAnimation::DeleteBuffer`):
+/// releases the buffer of the extra data.
+const SAVED_DATA_DELETE_BUFFER: u32 = 0x0043_5c10;
+
+// Translated from 00435ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00435ac0 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00eeb968, state variable) is not translated
+/// The `ExtraSavedAnimation` destructor (no Ghidra function; `thiscall`, no stack word; called
+/// by its scalar deleting destructor `00435a90`): sets the vtable `01015ea0`, releases the
+/// buffer (`00435c10`) and ends with the `BSExtraData` destructor (`0040ecb0`).
+pub fn fn_00435ac0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_5ea0);
+    e.call(SAVED_DATA_DELETE_BUFFER, &args![this]);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00435bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00435bb0 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00eeb968, state variable) is not translated
+/// The `ExtraSavedHavokData` destructor (no Ghidra function; `thiscall`, no stack word;
+/// called by its scalar deleting destructor `00435b80`): sets the vtable `01015eac`, releases
+/// the buffer (`00435c10`) and ends with the `BSExtraData` destructor (`0040ecb0`).
+pub fn fn_00435bb0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_5eac);
+    e.call(SAVED_DATA_DELETE_BUFFER, &args![this]);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -5421,6 +5447,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_004353a0(Ptr<ExtraXTarget>, u32) -> Ptr<ExtraXTarget>
         ),
         entry!(0x004353d0, fn_004353d0(Ptr<ExtraXTarget>)),
+        entry!(0x0043_5ac0, fn_00435ac0(Ptr)),
+        entry!(0x0043_5bb0, fn_00435bb0(Ptr)),
     ]
 }
 
@@ -9865,5 +9893,31 @@ mod tests {
         assert_eq!(vtable_of(&e, other), EXTRA_X_TARGET_VTABLE);
         assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![other]]);
         assert!(calls(&e, OPERATOR_DELETE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn saved_data_destructors_release_the_buffer_then_the_base() {
+        let mut e = Engine::new();
+        e.register(SAVED_DATA_DELETE_BUFFER, |_, _| Ret::default());
+        e.register(BS_EXTRA_DATA_DESTRUCT, |_, _| Ret::default());
+        for (address, vtable) in [(0x0043_5ac0u32, 0x0101_5ea0u32), (0x0043_5bb0, 0x0101_5eac)] {
+            let this = e.mem.alloc(0x10);
+            e.call_log = Some(vec![]);
+            e.call(address, &args![this]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(
+                log[1..],
+                [
+                    (SAVED_DATA_DELETE_BUFFER, vec![this]),
+                    (BS_EXTRA_DATA_DESTRUCT, vec![this]),
+                ]
+            );
+            assert_eq!(e.mem.u32(this), vtable);
+        }
     }
 }

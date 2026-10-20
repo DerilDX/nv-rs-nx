@@ -36,12 +36,93 @@ pub fn fn_00682510(e: &mut Engine, this: Ptr, argument: u32) -> Ptr {
     this
 }
 
+// Translated from 00682530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: a constructor body (thiscall, one word, `RET 4`): runs [`fn_00682570`] with 0,
+/// stores 0 at `+0xc` and the argument at `+0x10` and `+0x14`. Returns `this`.
+pub fn fn_00682530(e: &mut Engine, this: Ptr, value: u32) -> Ptr {
+    fn_00682570(e, this, 0);
+    let base = this.addr();
+    e.mem.set_u32(base + 0xc, 0);
+    e.mem.set_u32(base + 0x10, value);
+    e.mem.set_u32(base + 0x14, value);
+    this
+}
+
+// Translated from 00682570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: a forwarder (thiscall, one word, `RET 4`) to [`fn_00682590`]. Returns `this`.
+pub fn fn_00682570(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    fn_00682590(e, this, count);
+    this
+}
+
+// Translated from 00682590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: a block constructor (thiscall, one word, `RET 4`): with a count other than 0 the
+/// block at `+0` is `0096afc0(count)` (cdecl), otherwise 0; the count goes to `+4` and 0 to
+/// `+8`. Returns `this`.
+pub fn fn_00682590(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    let base = this.addr();
+    if count > 0 {
+        let block = e.call(0x0096_afc0, &args![count]).u32();
+        e.mem.set_u32(base, block);
+    } else {
+        e.mem.set_u32(base, 0);
+    }
+    e.mem.set_u32(base + 4, count);
+    e.mem.set_u32(base + 8, 0);
+    this
+}
+
+// Translated from 00682600 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00682600 - the compiler's exception frame (FS:[0] chain, cookie 011c16bc) is not translated
+/// Unnamed: a destructor (thiscall): `00528820` (thiscall) on `this`; when the object at `+0xc`
+/// is set, its `006826a0` (thiscall) with 1; then [`fn_00682680`].
+pub fn fn_00682600(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0052_8820, &args![base]);
+    let owned = e.mem.u32(base + 0xc);
+    if owned != 0 {
+        e.call(0x0068_26a0, &args![owned, 1u32]);
+    }
+    fn_00682680(e, this);
+}
+
+// Translated from 006826d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: frees the block at `+0` through `004ede70` (cdecl, one word).
+pub fn fn_006826d0(e: &mut Engine, this: Ptr) {
+    let block = e.mem.u32(this.addr());
+    e.call(0x004e_de70, &args![block]);
+}
+
+/// The vtable `006827b0` stores (RTTI `BSTempEffect`).
+const VTABLE_BSTEMPEFFECT_01069754: u32 = 0x0106_9754;
+
+// Translated from 006827b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the `BSTempEffect` constructor (by its vtable `01069754`; thiscall, two words, `RET
+/// 8`): the base constructor `00a5d3a0` (thiscall), then the vtable, the first word at `+0xc`,
+/// the float at `+8` (`FLD`/`FSTP`), 0.0 at `+0x10` and the byte 0 at `+0x14`. Returns `this`.
+pub fn fn_006827b0(e: &mut Engine, this: Ptr, cell: u32, lifetime: f32) -> Ptr {
+    let base = this.addr();
+    e.call(0x00a5_d3a0, &args![base]);
+    e.mem.set_u32(base, VTABLE_BSTEMPEFFECT_01069754);
+    e.mem.set_u32(base + 0xc, cell);
+    e.mem.set_u32(base + 8, x87_quiet_bits(lifetime.to_bits()));
+    e.mem.set_u32(base + 0x10, 0.0f32.to_bits());
+    e.mem.set_u8(base + 0x14, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0068_25e0, fn_006825e0(Ptr)),
         entry!(0x0068_2680, fn_00682680(Ptr)),
         entry!(0x0068_2510, fn_00682510(Ptr, u32) -> Ptr),
+        entry!(0x0068_2530, fn_00682530(Ptr, u32) -> Ptr),
+        entry!(0x0068_2570, fn_00682570(Ptr, u32) -> Ptr),
+        entry!(0x0068_2590, fn_00682590(Ptr, u32) -> Ptr),
+        entry!(0x0068_2600, fn_00682600(Ptr)),
+        entry!(0x0068_26d0, fn_006826d0(Ptr)),
+        entry!(0x0068_27b0, fn_006827b0(Ptr, u32, f32) -> Ptr),
     ]
 }
 
@@ -108,5 +189,92 @@ mod static_init_callee_tests {
             calls_to(&mut e, CONSTRUCTOR_BODY_00682530),
             vec![vec![0x2000, 0x33]]
         );
+    }
+}
+
+#[cfg(test)]
+mod b046_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn quiet(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    #[test]
+    fn b046_00682530_00682570_and_00682590_build_the_block() {
+        let mut e = Engine::new();
+        e.register(0x0096_afc0, |_, a| (a[0] + 0x1000).into_ret());
+        let this = e.mem.alloc(0x18);
+        e.mem.write(this, &[0xcc; 0x18]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0068_2530, &args![this, 0x33u32]).u32(), this);
+        assert!(calls_to(&e, 0x0096_afc0).is_empty());
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 0x33);
+        assert_eq!(e.mem.u32(this + 0x14), 0x33);
+        assert_eq!(e.call(0x0068_2570, &args![this, 4u32]).u32(), this);
+        assert_eq!(calls_to(&e, 0x0096_afc0), vec![vec![4]]);
+        assert_eq!(e.mem.u32(this), 0x1004);
+        assert_eq!(e.mem.u32(this + 4), 4);
+        assert_eq!(e.call(0x0068_2590, &args![this, 0u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0);
+    }
+
+    #[test]
+    fn b046_00682600_and_006826d0_release_the_parts() {
+        let mut e = Engine::new();
+        for address in [0x0052_8820, 0x0068_26a0, 0x004e_de70] {
+            e.register(address, quiet);
+        }
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, 0x7000);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_2600, &args![this]);
+        assert_eq!(calls_to(&e, 0x0052_8820), vec![vec![this]]);
+        assert!(calls_to(&e, 0x0068_26a0).is_empty());
+        assert_eq!(calls_to(&e, 0x004e_de70), vec![vec![0x7000]]);
+        e.mem.set_u32(this + 0xc, 0x8000);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_2600, &args![this]);
+        assert_eq!(calls_to(&e, 0x0068_26a0), vec![vec![0x8000, 1]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_26d0, &args![this]);
+        assert_eq!(calls_to(&e, 0x004e_de70), vec![vec![0x7000]]);
+    }
+
+    #[test]
+    fn b046_006827b0_constructs_the_temp_effect() {
+        let mut e = Engine::new();
+        e.register(0x00a5_d3a0, |e, a| {
+            e.mem.set_u32(a[0], 0x1111);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x18);
+        e.mem.write(this, &[0xcc; 0x18]);
+        let lifetime = f32::from_bits(0x7f80_0001);
+        assert_eq!(
+            e.call(0x0068_27b0, &args![this, 0x44u32, lifetime]).u32(),
+            this
+        );
+        assert_eq!(e.mem.u32(this), VTABLE_BSTEMPEFFECT_01069754);
+        assert_eq!(e.mem.u32(this + 0xc), 0x44);
+        assert_eq!(e.mem.u32(this + 8), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        assert_eq!(e.mem.u8(this + 0x14), 0);
+        e.call(0x0068_27b0, &args![this, 0x44u32, 2.5f32]);
+        assert_eq!(e.mem.u32(this + 8), 2.5f32.to_bits());
     }
 }

@@ -140,12 +140,32 @@ pub fn fn_00e7a860(e: &mut Engine) -> bool {
     fn_00e7a760(e)
 }
 
+// Translated from 00e7a8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7a640`), `cdecl` with three words: a Direct3D
+/// depth/stencil format and the addresses of its depth and stencil bit counts, which it stores
+/// (the jump table at `00e7a970`, read in Ghidra): 0x46 and 0x50 give 16 and 0, 0x47 32 and 0,
+/// 0x49 15 and 1, 0x4b 24 and 8, 0x4d 24 and 0, 0x4f 24 and 4, every other format 0 and 0.
+pub fn fn_00e7a8b0(e: &mut Engine, format: u32, depth: Ptr, stencil: Ptr) {
+    let (depth_bits, stencil_bits) = match format {
+        0x46 | 0x50 => (0x10, 0),
+        0x47 => (0x20, 0),
+        0x49 => (0xf, 1),
+        0x4b => (0x18, 8),
+        0x4d => (0x18, 0),
+        0x4f => (0x18, 4),
+        _ => (0, 0),
+    };
+    e.mem.set_u32(depth.addr(), depth_bits);
+    e.mem.set_u32(stencil.addr(), stencil_bits);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e7_a640, fn_00e7a640(Ptr) -> Ptr),
         entry!(0x00e7_a760, fn_00e7a760() -> bool),
         entry!(0x00e7_a860, fn_00e7a860() -> bool),
+        entry!(0x00e7_a8b0, fn_00e7a8b0(u32, Ptr, Ptr)),
     ]
 }
 
@@ -256,5 +276,40 @@ mod start_up_tests {
         assert_eq!(growth[0].1, 1);
         assert_eq!(growth[0x11].1, 0x12);
         assert_eq!(stores.borrow().len(), 0x12);
+    }
+}
+
+#[cfg(test)]
+mod b000y_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e7a8b0_stores_the_depth_and_stencil_bits() {
+        let mut e = Engine::new();
+        let depth = e.mem.alloc(4);
+        let stencil = e.mem.alloc(4);
+        let cases: [(u32, u32, u32); 12] = [
+            (0x46, 16, 0),
+            (0x47, 32, 0),
+            (0x48, 0, 0),
+            (0x49, 15, 1),
+            (0x4a, 0, 0),
+            (0x4b, 24, 8),
+            (0x4c, 0, 0),
+            (0x4d, 24, 0),
+            (0x4e, 0, 0),
+            (0x4f, 24, 4),
+            (0x50, 16, 0),
+            (0x45, 0, 0),
+        ];
+        for (format, want_depth, want_stencil) in cases {
+            e.mem.set_u32(depth, 0xaaaa_aaaa);
+            e.mem.set_u32(stencil, 0xaaaa_aaaa);
+            e.call(0x00e7_a8b0, &args![format, depth, stencil]);
+            assert_eq!(e.mem.u32(depth), want_depth, "{format:#x}");
+            assert_eq!(e.mem.u32(stencil), want_stencil, "{format:#x}");
+        }
+        e.call(0x00e7_a8b0, &args![0x51u32, depth, stencil]);
+        assert_eq!((e.mem.u32(depth), e.mem.u32(stencil)), (0, 0));
     }
 }

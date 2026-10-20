@@ -40,6 +40,40 @@ pub fn bs_resizable_tri_shape_is_equal(e: &mut Engine, this: Ptr, other: Ptr) ->
     e.call(JUMP_TARGET_00A877F0, &args![this, other]).bool()
 }
 
+/// The `MemoryManager` singleton and its `Allocate` (`thiscall` on it, `(size)`),
+/// `NiBound::Update` (`thiscall` on the bound, `(&local bound, &transform)`) and the
+/// default bound's centre (`011f426c`, three floats).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
+const BOUND_UPDATE: u32 = 0x00a7_fdd0;
+const DEFAULT_BOUND_CENTER: u32 = 0x011f_426c;
+
+// Translated from 00c1a4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSResizableTriShape::UpdateWorldBound` (Xbox PDB): without a world bound (+0x20), a
+/// 0x10-byte block (`MemoryManager::Allocate`) is given to the object's vtable slot +0x78
+/// and the bound it then holds gets the centre at `011f426c` and radius 0. Then the world
+/// bound is updated (`NiBound::Update`) from the local bound (`LocalBound`, +0xC8) and the
+/// world transform (+0x68).
+pub fn bs_resizable_tri_shape_update_world_bound(e: &mut Engine, this: Ptr) {
+    if e.mem.u32(this.addr() + 0x20) == 0 {
+        let block = e
+            .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x10u32])
+            .u32();
+        e.vcall(this.addr(), 0x78, &args![block]);
+        let bound = e.mem.u32(this.addr() + 0x20);
+        for word in 0..3u32 {
+            let value = e.global::<u32>(DEFAULT_BOUND_CENTER + 4 * word);
+            e.mem.set_u32(bound + 4 * word, value);
+        }
+        e.mem.set_u32(bound + 0xc, x87_store32(0.0));
+    }
+    let bound = e.mem.u32(this.addr() + 0x20);
+    e.call(
+        BOUND_UPDATE,
+        &args![bound, this.addr() + 0xc8, this.addr() + 0x68],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -47,6 +81,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a8_6d40, bs_resizable_tri_shape_link_object(Ptr, Ptr)),
         entry!(0x00a8_7190, bs_resizable_tri_shape_register_streamables(Ptr, Ptr) -> bool),
         entry!(0x00a8_77f0, bs_resizable_tri_shape_is_equal(Ptr, Ptr) -> bool),
+        entry!(0x00c1a4a0, bs_resizable_tri_shape_update_world_bound(Ptr)),
     ]
 }
 
@@ -113,5 +148,54 @@ mod tests {
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
         e.register(TARGET, |_, _| Ret::default());
         assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
+
+    #[test]
+    fn update_world_bound_makes_a_bound_when_missing() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.register(MEMORY_ALLOCATE, |e, a| Ret {
+            eax: e.mem.alloc(a[1]),
+            ..Ret::default()
+        });
+        e.register(BOUND_UPDATE, |_, _| Ret::default());
+        e.register(0x0090_0078, |e, a| {
+            e.mem.set_u32(a[0] + 0x20, a[1]);
+            Ret::default()
+        });
+        let mut slots = vec![0u32; 0x1f];
+        slots[0x1e] = 0x0090_0078;
+        e.put_vtable(0x0090_1000, &slots);
+        e.map(DEFAULT_BOUND_CENTER, 12);
+        e.set_global::<f32>(DEFAULT_BOUND_CENTER + 4, 2.5);
+        let this = e.mem.alloc(0xd8);
+        e.mem.set_u32(this, 0x0090_1000);
+        e.mem.set_f32(this + 0x20, 0.0);
+        e.call(0x00c1a4a0, &args![this]);
+        let bound = e.mem.u32(this + 0x20);
+        assert_ne!(bound, 0);
+        assert_eq!(e.mem.f32(bound + 4), 2.5);
+        assert_eq!(e.mem.f32(bound + 0xc), 0.0);
+        let updates: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == BOUND_UPDATE)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(updates, vec![vec![bound, this + 0xc8, this + 0x68]]);
+        // With a bound: only the update.
+        e.mem.set_f32(bound + 4, 7.0);
+        e.call(0x00c1a4a0, &args![this]);
+        assert_eq!(e.mem.f32(bound + 4), 7.0);
+        let allocations = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == MEMORY_ALLOCATE)
+            .count();
+        assert_eq!(allocations, 1);
     }
 }

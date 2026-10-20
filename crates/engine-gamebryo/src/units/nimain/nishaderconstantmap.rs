@@ -377,9 +377,138 @@ pub fn fn_00a9bdf0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// CRT functions `ParseKeyName` calls (`cdecl`): `_strcpy_s` (`00ec65a6`), `strchr`
+/// (`00ec7690`), `isdigit` (`00ec8860`), `strtok_s` (`00ecc5f8`) and `atol` (`00eca6d3`),
+/// and the bounded copy `00404d80` (destination, size, source; engine map unit
+/// `effectitem.cpp`, unnamed). `NiStricmp` (engine map, `00aa1360`, `cdecl`).
+const STRCPY_S: u32 = 0x00ec_65a6;
+const STRCHR: u32 = 0x00ec_7690;
+const ISDIGIT: u32 = 0x00ec_8860;
+const STRTOK_S: u32 = 0x00ec_c5f8;
+const ATOL: u32 = 0x00ec_a6d3;
+const BOUNDED_COPY_00404D80: u32 = 0x0040_4d80;
+const NI_STRICMP: u32 = 0x00aa_1360;
+/// The delimiter string `"_"` (`01063a04`).
+const UNDERSCORE: u32 = 0x0106_3a04;
+
+// Translated from 00a9bbf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderConstantMap::LookUpPredefinedMappingType` (Xbox PDB; `cdecl`: mapping, object
+/// type): the register count of a predefined mapping, from the compiler's switch (a byte
+/// table of the mapping less one, then six cases): 8 or 9 (9 unless the second word is 3)
+/// for mappings 1 to 24, 37 to 68 and 88 to 95; 9 for 25 to 32, 34, 36 and 96 to 99; 8 for
+/// 33 and 35; 7 for 69 to 87 and 100 to 103; 5 for 104 and 106 to 115; 4 for 105; 0
+/// otherwise.
+pub fn ni_shader_constant_map_look_up_predefined_mapping_type(
+    _e: &mut Engine,
+    mapping: u32,
+    object_type: u32,
+) -> u32 {
+    match mapping {
+        1..=24 | 37..=68 | 88..=95 => u32::from(object_type != 3) + 8,
+        25..=32 | 34 | 36 | 96..=99 => 9,
+        33 | 35 => 8,
+        69..=87 | 100..=103 => 7,
+        104 | 106..=115 => 5,
+        105 => 4,
+        _ => 0,
+    }
+}
+
+// Translated from 00a9bee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderConstantMap::ParseKeyName` (Xbox PDB; `cdecl`: key, buffer, buffer size, index
+/// out). False when `size + 1` is below 0x104. Otherwise copies the key into a local and into
+/// `buffer` (`_strcpy_s` with 0x104 each); when the key's first `_` is followed by one digit
+/// and the end, splits the local at `_` (`strtok_s`) and, when a second token exists, stores
+/// its value (`atol`) at `index` and copies the first token into `buffer` (`00404d80` with
+/// `size`). True.
+// Translation incomplete: 00a9bee0 - the /GS stack cookie check (00ec408c) is not translated.
+pub fn ni_shader_constant_map_parse_key_name(
+    e: &mut Engine,
+    key: u32,
+    buffer: u32,
+    size: u32,
+    index: Ptr,
+) -> bool {
+    if size.wrapping_add(1) < 0x104 {
+        return false;
+    }
+    // Locals: +0 the strtok context, +4 the 0x104-byte copy.
+    e.with_stack(0x108, |e, locals| {
+        let context = locals.addr();
+        let copy = context + 4;
+        e.call(STRCPY_S, &args![copy, 0x104u32, key]);
+        e.call(STRCPY_S, &args![buffer, 0x104u32, key]);
+        let underscore = e.call(STRCHR, &args![copy, 0x5fu32]).u32();
+        if underscore == 0 {
+            return;
+        }
+        let digit = e.mem.i8(underscore + 1) as i32 as u32;
+        if e.call(ISDIGIT, &args![digit]).u32() == 0 {
+            return;
+        }
+        if e.mem.u8(underscore + 2) != 0 {
+            return;
+        }
+        let first = e.call(STRTOK_S, &args![copy, UNDERSCORE, context]).u32();
+        let second = e.call(STRTOK_S, &args![0u32, UNDERSCORE, context]).u32();
+        if second == 0 {
+            return;
+        }
+        let value = e.call(ATOL, &args![second]).u32();
+        e.mem.set_u32(index.addr(), value);
+        e.call(BOUNDED_COPY_00404D80, &args![buffer, size, first]);
+    });
+    true
+}
+
+// Translated from 00a9bfd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiShaderConstantMap::LookUpPredefinedMapping` (Xbox PDB; `cdecl`: key, mapping out,
+/// index out): parses the key into a 0x104-byte local (`ParseKeyName`; false when that
+/// fails), then finds the first entry of the first table (`011f6024`, count `011f6028`)
+/// whose name (+4) matches it (`NiStricmp`), stores that entry's number (+0) at `mapping`
+/// and answers true; false when none matches.
+// Translation incomplete: 00a9bfd0 - the /GS stack cookie check (00ec408c) is not translated.
+pub fn ni_shader_constant_map_look_up_predefined_mapping(
+    e: &mut Engine,
+    key: u32,
+    mapping: Ptr,
+    index: Ptr,
+) -> bool {
+    e.with_stack(0x104, |e, name| {
+        if !ni_shader_constant_map_parse_key_name(e, key, name.addr(), 0x104, index) {
+            return false;
+        }
+        let mut entry = 0u32;
+        while entry < e.mem.u32(FIRST_TABLE_COUNT) {
+            let table = e.mem.u32(FIRST_TABLE);
+            let slot = table.wrapping_add(entry * 8);
+            let entry_name = e.mem.u32(table.wrapping_add(entry * 8 + 4));
+            if e.call(NI_STRICMP, &args![entry_name, name.addr()]).u32() == 0 {
+                let number = e.mem.u32(slot);
+                e.mem.set_u32(mapping.addr(), number);
+                return true;
+            }
+            entry += 1;
+        }
+        false
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a9_bbf0,
+            ni_shader_constant_map_look_up_predefined_mapping_type(u32, u32) -> u32
+        ),
+        entry!(
+            0x00a9_bee0,
+            ni_shader_constant_map_parse_key_name(u32, u32, u32, Ptr) -> bool
+        ),
+        entry!(
+            0x00a9_bfd0,
+            ni_shader_constant_map_look_up_predefined_mapping(u32, Ptr, Ptr) -> bool
+        ),
         entry!(0x00a9_c2a0, ni_shader_constant_map_sdm_init()),
         entry!(0x00a9_bda0, fn_00a9bda0(Ptr, u32, Ptr) -> Ptr),
         entry!(0x00a9_bdf0, fn_00a9bdf0(Ptr) -> Ptr),
@@ -559,5 +688,163 @@ mod entry_tests {
         assert_eq!(e.call(0x00a9_bdf0, &args![entry]).u32(), entry);
         assert_eq!(e.mem.u32(entry), 0);
         assert_eq!(e.mem.u32(entry + 4), handle);
+    }
+}
+
+#[cfg(test)]
+mod batch_b011_tests {
+    use super::*;
+
+    /// CRT doubles that work on the test memory (`strcpy_s`, `strchr`, `isdigit`,
+    /// `strtok_s`, `atol`, the bounded copy and a case-insensitive compare).
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_6000, 0x1000);
+        e.map(0x0106_3000, 0x1000);
+        e.mem.set_cstr(UNDERSCORE, b"_");
+        e.register(STRCPY_S, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            0u32.into_ret()
+        });
+        e.register(BOUNDED_COPY_00404D80, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e.register(STRCHR, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            match text.iter().position(|&c| u32::from(c) == a[1]) {
+                Some(at) => (a[0] + at as u32).into_ret(),
+                None => 0u32.into_ret(),
+            }
+        });
+        e.register(ISDIGIT, |_, a| {
+            u32::from((a[0] as u8).is_ascii_digit()).into_ret()
+        });
+        e.register(STRTOK_S, |e, a| {
+            // Splits at '_' only, keeping the rest pointer in the context.
+            let start = if a[0] != 0 { a[0] } else { e.mem.u32(a[2]) };
+            if start == 0 || e.mem.u8(start) == 0 {
+                return 0u32.into_ret();
+            }
+            let text = e.mem.cstr(start);
+            match text.iter().position(|&c| c == b'_') {
+                Some(at) => {
+                    e.mem.set_u8(start + at as u32, 0);
+                    e.mem.set_u32(a[2], start + at as u32 + 1);
+                }
+                None => e.mem.set_u32(a[2], start + text.len() as u32),
+            }
+            start.into_ret()
+        });
+        e.register(ATOL, |e, a| {
+            let text = String::from_utf8(e.mem.cstr(a[0])).unwrap();
+            text.parse::<u32>().unwrap().into_ret()
+        });
+        e.register(NI_STRICMP, |e, a| {
+            let x = e.mem.cstr(a[0]).to_ascii_lowercase();
+            let y = e.mem.cstr(a[1]).to_ascii_lowercase();
+            u32::from(x != y).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn string(e: &mut Engine, text: &[u8]) -> u32 {
+        let at = e.mem.alloc(text.len() as u32 + 1);
+        e.mem.set_cstr(at, text);
+        at
+    }
+
+    #[test]
+    fn mapping_type_follows_the_switch() {
+        let mut e = Engine::new();
+        let expect = |mapping: u32, kind: u32| -> u32 {
+            match mapping {
+                1..=24 | 37..=68 | 88..=95 => {
+                    if kind == 3 {
+                        8
+                    } else {
+                        9
+                    }
+                }
+                25..=32 | 34 | 36 | 96..=99 => 9,
+                33 | 35 => 8,
+                69..=87 | 100..=103 => 7,
+                104 | 106..=115 => 5,
+                105 => 4,
+                _ => 0,
+            }
+        };
+        for mapping in [
+            0u32, 1, 24, 25, 32, 33, 34, 35, 36, 37, 68, 69, 87, 88, 95, 96, 99,
+        ]
+        .into_iter()
+        .chain([100, 103, 104, 105, 106, 115, 116, 0xffff_ffff])
+        {
+            for kind in [3u32, 4] {
+                assert_eq!(
+                    e.call(0x00a9_bbf0, &args![mapping, kind]).u32(),
+                    expect(mapping, kind),
+                    "{mapping} {kind}"
+                );
+            }
+        }
+        assert_eq!(e.call(0x00a9_bbf0, &args![10u32, 3u32]).u32(), 8);
+        assert_eq!(e.call(0x00a9_bbf0, &args![10u32, 0u32]).u32(), 9);
+    }
+
+    #[test]
+    fn parse_key_name_splits_a_digit_suffix() {
+        let mut e = engine();
+        let buffer = e.mem.alloc(0x104);
+        let index = e.mem.alloc(4);
+        e.mem.set_u32(index, 0xeeee);
+        let key = string(&mut e, b"LightPos_3");
+        assert!(e
+            .call(0x00a9_bee0, &args![key, buffer, 0x104u32, index])
+            .bool());
+        assert_eq!(e.mem.cstr(buffer), b"LightPos".to_vec());
+        assert_eq!(e.mem.u32(index), 3);
+        // Two digits, no digit, no underscore: the whole key, the index untouched.
+        for text in [&b"Light_12"[..], b"Light_x", b"Light"] {
+            let key = string(&mut e, text);
+            e.mem.set_u32(index, 0xeeee);
+            assert!(e
+                .call(0x00a9_bee0, &args![key, buffer, 0x200u32, index])
+                .bool());
+            assert_eq!(e.mem.cstr(buffer), text.to_vec());
+            assert_eq!(e.mem.u32(index), 0xeeee);
+        }
+        // A buffer size below 0x103: false, nothing copied.
+        let calls_before = e.call_log.as_ref().unwrap().len();
+        assert!(!e
+            .call(0x00a9_bee0, &args![key, buffer, 0x102u32, index])
+            .bool());
+        assert_eq!(e.call_log.as_ref().unwrap().len(), calls_before + 1);
+    }
+
+    #[test]
+    fn look_up_predefined_mapping_finds_the_entry() {
+        let mut e = engine();
+        let table = e.mem.alloc(0x18);
+        let names = [&b"World"[..], b"LightPos", b"Fog"];
+        for (i, name) in names.iter().enumerate() {
+            let text = string(&mut e, name);
+            e.mem.set_u32(table + 8 * i as u32, 100 + i as u32);
+            e.mem.set_u32(table + 8 * i as u32 + 4, text);
+        }
+        e.mem.set_u32(FIRST_TABLE, table);
+        e.mem.set_u32(FIRST_TABLE_COUNT, 3);
+        let mapping = e.mem.alloc(4);
+        let index = e.mem.alloc(4);
+        let key = string(&mut e, b"lightpos_2");
+        assert!(e.call(0x00a9_bfd0, &args![key, mapping, index]).bool());
+        assert_eq!((e.mem.u32(mapping), e.mem.u32(index)), (101, 2));
+        let key = string(&mut e, b"Missing");
+        e.mem.set_u32(mapping, 0);
+        assert!(!e.call(0x00a9_bfd0, &args![key, mapping, index]).bool());
+        assert_eq!(e.mem.u32(mapping), 0);
     }
 }

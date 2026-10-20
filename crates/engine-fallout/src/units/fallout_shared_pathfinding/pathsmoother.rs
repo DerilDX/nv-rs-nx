@@ -20,9 +20,24 @@ pub fn fn_006f2e00(e: &mut Engine, this: Ptr) {
     e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
 }
 
+/// `0042f5d0` (cdecl, two words: the buffer and its new size in bytes; it
+/// runs `00401020` then `00aa4150` on them, the heap's reallocation).
+const BUFFER_REALLOCATE_0042F5D0: u32 = 0x0042_f5d0;
+
+// Translated from 006f2e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSSimpleArray<PathSmoother::AvoidNode,1024>` instance's buffer
+/// reallocation (thiscall, `RET 8`; `this` unused): `0042f5d0(buffer,
+/// count * 16)`, the elements being 16 bytes. Returns nothing.
+pub fn fn_006f2e20(e: &mut Engine, _this: Ptr, buffer: u32, count: u32) {
+    e.call(BUFFER_REALLOCATE_0042F5D0, &args![buffer, count << 4]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x006f_2e00, fn_006f2e00(Ptr))]
+    vec![
+        entry!(0x006f_2e00, fn_006f2e00(Ptr)),
+        entry!(0x006f_2e20, fn_006f2e20(Ptr, u32, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -45,5 +60,20 @@ mod array_destructor_tests {
     #[test]
     fn fn_006f2e00_sets_the_vtable_then_releases_the_buffer() {
         check_array_destructor(0x006f_2e00, ARRAY_VTABLE_0106D88C, ARRAY_RELEASE_008454F0);
+    }
+
+    #[test]
+    fn fn_006f2e20_reallocates_sixteen_bytes_per_element() {
+        let mut e = Engine::new();
+        e.register(BUFFER_REALLOCATE_0042F5D0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x006f_2e20, &args![0x1234u32, 0x0abc_0000u32, 5u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == BUFFER_REALLOCATE_0042F5D0)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![0x0abc_0000, 0x50]);
     }
 }

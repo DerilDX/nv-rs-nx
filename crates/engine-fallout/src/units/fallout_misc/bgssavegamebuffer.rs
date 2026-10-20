@@ -174,9 +174,126 @@ pub fn save_form_id(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>, form: Ptr, _un
     });
 }
 
+/// The vtable `BGSSaveGameBuffer`'s constructor and destructor store.
+const SAVE_GAME_BUFFER_VTABLE: u32 = 0x0108_2324;
+/// The game's `free` (`00401030`, cdecl, one word).
+const FREE: u32 = 0x0040_1030;
+/// The append wrapper (`00865570`, thiscall: source, size, a byte flag).
+const APPEND: u32 = 0x0086_5570;
+/// The save-load mode object the code asks (`011de134`) and its query
+/// (`00424940`, thiscall, a `bool` in AL; non-zero while only sizing).
+const SAVE_LOAD_MODE: u32 = 0x011d_e134;
+const MODE_SIZING_ONLY: u32 = 0x0042_4940;
+/// `SaveGameDataToFileFunction` (`00845d00`, cdecl: file, source, size).
+const SAVE_DATA_TO_FILE: u32 = 0x0084_5d00;
+/// `BGSSaveLoadFile::Write` (`00846330`, thiscall on the file: source,
+/// size).
+const SAVE_LOAD_FILE_WRITE: u32 = 0x0084_6330;
+/// `strlen` (`00ec6130`, cdecl).
+const STRLEN: u32 = 0x00ec_6130;
+/// `SaveGameWarning` (`00845cc0`, cdecl, a format and its words).
+const SAVE_GAME_WARNING: u32 = 0x0084_5cc0;
+/// `"SAVELOAD: Variable-sized value %08X is too large to be stored."`
+const VALUE_TOO_LARGE_FORMAT: u32 = 0x0107_ee00;
+
+// Translated from 00865c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveGameBuffer::~BGSSaveGameBuffer` (Xbox PDB): the class's vtable,
+/// then frees the buffer (`00401030(pBuffer)`, also when null).
+pub fn destruct(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>) {
+    e.mem.set_u32(this.addr(), SAVE_GAME_BUFFER_VTABLE);
+    let buffer = e.get(this, BGSSaveGameBuffer::pBuffer);
+    e.call(FREE, &args![buffer]);
+}
+
+// Translated from 00865c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveGameBuffer::Save` (Xbox PDB): writes the buffer's position
+/// (the 4 bytes of `iBufferPosition`) to `file` through
+/// `SaveGameDataToFileFunction`, then the buffer's first `iBufferPosition`
+/// bytes (`Save_ov2`).
+pub fn save(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>, file: Ptr) {
+    e.call(SAVE_DATA_TO_FILE, &args![file, this.addr() + 0x0c, 4u32]);
+    let size = e.get(this, BGSSaveGameBuffer::iBufferPosition);
+    save_ov2(e, this, file, size);
+}
+
+// Translated from 00865c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveGameBuffer::Save_ov2` (Xbox PDB): writes `size` bytes of the
+/// buffer to `file` (`BGSSaveLoadFile::Write`). While the save-load mode
+/// says sizing only (`00424940` on `011de134`) the source is null and only
+/// a non-zero size is written; otherwise both the buffer and the size must
+/// be non-zero.
+pub fn save_ov2(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>, file: Ptr, size: u32) {
+    let mode = e.global::<u32>(SAVE_LOAD_MODE);
+    if e.call(MODE_SIZING_ONLY, &args![mode]).u32() & 0xff != 0 {
+        if size != 0 {
+            e.call(SAVE_LOAD_FILE_WRITE, &args![file, 0u32, size]);
+        }
+    } else {
+        let buffer = e.get(this, BGSSaveGameBuffer::pBuffer);
+        if !buffer.is_null() && size != 0 {
+            e.call(SAVE_LOAD_FILE_WRITE, &args![file, buffer, size]);
+        }
+    }
+}
+
+// Translated from 00865e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveGameBuffer::SaveString` (Xbox PDB; `RET 8`, the second word
+/// unused): the string's length (`strlen`, 0 for null) as a 16-bit count,
+/// then, when that count is non-zero, that many bytes of the string, each
+/// through the append wrapper (`00865570`, flag 0).
+pub fn save_string(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>, text: Ptr, _unused_2: u32) {
+    let length = if text.is_null() {
+        0
+    } else {
+        e.call(STRLEN, &args![text]).u32()
+    };
+    let count = length as u16;
+    e.with_stack(4, |e, local| {
+        e.mem.set_u16(local.addr(), count);
+        e.call(APPEND, &args![this, local, 2u32, 0u8]);
+    });
+    if count != 0 {
+        e.call(APPEND, &args![this, text, u32::from(count), 0u8]);
+    }
+}
+
+// Translated from 00865f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSSaveGameBuffer::SaveVariableSizedValue` (Xbox PDB): appends `value`
+/// tagged in its two low bits: one byte (`value << 2`) below 0x40, two
+/// bytes (`value << 2 | 1`) below 0x4000, four bytes (`value << 2 | 2`)
+/// below 0x40000000; larger values only give the save-game warning.
+pub fn save_variable_sized_value(e: &mut Engine, this: Ptr<BGSSaveGameBuffer>, value: u32) {
+    if value < 0x40 {
+        e.with_stack(4, |e, local| {
+            e.mem.set_u8(local.addr(), (value << 2) as u8);
+            e.call(APPEND, &args![this, local, 1u32, 0u8]);
+        });
+    } else if value < 0x4000 {
+        e.with_stack(4, |e, local| {
+            e.mem.set_u16(local.addr(), ((value << 2) | 1) as u16);
+            e.call(APPEND, &args![this, local, 2u32, 0u8]);
+        });
+    } else if value < 0x4000_0000 {
+        e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), (value << 2) | 2);
+            e.call(APPEND, &args![this, local, 4u32, 0u8]);
+        });
+    } else {
+        e.call(SAVE_GAME_WARNING, &args![VALUE_TOO_LARGE_FORMAT, value]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0086_5c10, destruct(Ptr<BGSSaveGameBuffer>)),
+        entry!(0x0086_5c40, save(Ptr<BGSSaveGameBuffer>, Ptr)),
+        entry!(0x0086_5c80, save_ov2(Ptr<BGSSaveGameBuffer>, Ptr, u32)),
+        entry!(0x0086_5e70, save_string(Ptr<BGSSaveGameBuffer>, Ptr, u32)),
+        entry!(
+            0x0086_5f60,
+            save_variable_sized_value(Ptr<BGSSaveGameBuffer>, u32)
+        ),
         entry!(
             0x00865db0,
             save_numeric_form_id(Ptr<BGSSaveGameBuffer>, u32, u32)
@@ -499,5 +616,187 @@ mod tests {
         });
         e.call(0x00866140, &args![this, 2u32, 3u32]);
         assert_eq!(e.get(this, BGSSaveGameBuffer::iBufferPosition), 9);
+    }
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .iter()
+            .flatten()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Where the append double records what it is given: a length word,
+    /// then the appended bytes.
+    const APPENDED: u32 = 0x0310_0000;
+
+    fn record_appends(e: &mut Engine) {
+        e.map(APPENDED, 0x100);
+        e.register(APPEND, |e, a| {
+            assert_eq!(a[3], 0);
+            let used = e.mem.u32(APPENDED);
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(APPENDED + 4 + used, &bytes);
+            e.mem.set_u32(APPENDED, used + a[2]);
+            Ret::default()
+        });
+    }
+
+    fn appended(e: &Engine) -> Vec<u8> {
+        e.mem.bytes(APPENDED + 4, e.mem.u32(APPENDED))
+    }
+
+    #[test]
+    fn destructor_sets_the_vtable_and_frees_the_buffer() {
+        let mut e = Engine::new();
+        e.register(FREE, |_, _| Ret::default());
+        let this = e.new_object::<BGSSaveGameBuffer>();
+        e.set(this, BGSSaveGameBuffer::pBuffer, Ptr::new(0x0abc_0000));
+        e.call_log = Some(vec![]);
+        e.call(0x0086_5c10, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), SAVE_GAME_BUFFER_VTABLE);
+        assert_eq!(calls_to(&e, FREE), vec![vec![0x0abc_0000]]);
+    }
+
+    fn mode(e: &mut Engine, sizing_only: bool) {
+        e.map(SAVE_LOAD_MODE, 4);
+        e.mem.set_u32(SAVE_LOAD_MODE, 0x0123_0000);
+        if sizing_only {
+            e.register(MODE_SIZING_ONLY, |_, a| {
+                assert_eq!(a[0], 0x0123_0000);
+                Ret {
+                    eax: 0xffff_ff01,
+                    ..Ret::default()
+                }
+            });
+        } else {
+            e.register(MODE_SIZING_ONLY, |_, _| Ret {
+                eax: 0xffff_ff00,
+                ..Ret::default()
+            });
+        }
+        e.register(SAVE_LOAD_FILE_WRITE, |_, _| Ret::default());
+        e.register(SAVE_DATA_TO_FILE, |_, _| Ret::default());
+    }
+
+    #[test]
+    fn save_writes_the_position_then_that_many_buffer_bytes() {
+        let mut e = Engine::new();
+        mode(&mut e, false);
+        let this = e.new_object::<BGSSaveGameBuffer>();
+        e.set(this, BGSSaveGameBuffer::pBuffer, Ptr::new(0x0abc_0000));
+        e.set(this, BGSSaveGameBuffer::iBufferPosition, 0x30);
+        e.call_log = Some(vec![]);
+        e.call(0x0086_5c40, &args![this, 0x0777_0000u32]);
+        assert_eq!(
+            calls_to(&e, SAVE_DATA_TO_FILE),
+            vec![vec![0x0777_0000, this.addr() + 0x0c, 4]]
+        );
+        assert_eq!(
+            calls_to(&e, SAVE_LOAD_FILE_WRITE),
+            vec![vec![0x0777_0000, 0x0abc_0000, 0x30]]
+        );
+    }
+
+    #[test]
+    fn save_ov2_writes_only_with_a_buffer_and_a_size_or_null_while_sizing() {
+        let mut e = Engine::new();
+        mode(&mut e, false);
+        let this = e.new_object::<BGSSaveGameBuffer>();
+        e.call_log = Some(vec![]);
+        // No buffer: nothing written.
+        e.call(0x0086_5c80, &args![this, 0x0777_0000u32, 8u32]);
+        // A buffer but no size: nothing written.
+        e.set(this, BGSSaveGameBuffer::pBuffer, Ptr::new(0x0abc_0000));
+        e.call(0x0086_5c80, &args![this, 0x0777_0000u32, 0u32]);
+        assert!(calls_to(&e, SAVE_LOAD_FILE_WRITE).is_empty());
+        e.call(0x0086_5c80, &args![this, 0x0777_0000u32, 8u32]);
+        assert_eq!(
+            calls_to(&e, SAVE_LOAD_FILE_WRITE),
+            vec![vec![0x0777_0000, 0x0abc_0000, 8]]
+        );
+
+        // Sizing only: a null source, a zero size writes nothing.
+        let mut e = Engine::new();
+        mode(&mut e, true);
+        let this = e.new_object::<BGSSaveGameBuffer>();
+        e.set(this, BGSSaveGameBuffer::pBuffer, Ptr::new(0x0abc_0000));
+        e.call_log = Some(vec![]);
+        e.call(0x0086_5c80, &args![this, 0x0777_0000u32, 0u32]);
+        assert!(calls_to(&e, SAVE_LOAD_FILE_WRITE).is_empty());
+        e.call(0x0086_5c80, &args![this, 0x0777_0000u32, 8u32]);
+        assert_eq!(
+            calls_to(&e, SAVE_LOAD_FILE_WRITE),
+            vec![vec![0x0777_0000, 0, 8]]
+        );
+    }
+
+    #[test]
+    fn save_string_appends_the_16_bit_length_then_the_text() {
+        let mut e = Engine::new();
+        record_appends(&mut e);
+        e.register(STRLEN, |e, a| Ret {
+            eax: e.mem.cstr(a[0]).len() as u32,
+            ..Ret::default()
+        });
+        let this = e.new_object::<BGSSaveGameBuffer>();
+        let text = e.mem.alloc(8);
+        e.mem.set_cstr(text, b"abc");
+        e.call(0x0086_5e70, &args![this, text, 0xdead_beefu32]);
+        assert_eq!(appended(&e), b"\x03\x00abc");
+
+        // Null and empty strings give the zero count only.
+        let mut e = Engine::new();
+        record_appends(&mut e);
+        e.register(STRLEN, |_, _| Ret::default());
+        let this = e.new_object::<BGSSaveGameBuffer>();
+        e.call_log = Some(vec![]);
+        e.call(0x0086_5e70, &args![this, 0u32, 0u32]);
+        assert!(calls_to(&e, STRLEN).is_empty());
+        let empty = e.mem.alloc(4);
+        e.call(0x0086_5e70, &args![this, empty, 0u32]);
+        assert_eq!(appended(&e), [0, 0, 0, 0]);
+        assert_eq!(calls_to(&e, APPEND).len(), 2);
+
+        // A length of 0x10000 truncates to a zero count: no text follows.
+        let mut e = Engine::new();
+        record_appends(&mut e);
+        e.register(STRLEN, |_, _| Ret {
+            eax: 0x0001_0000,
+            ..Ret::default()
+        });
+        let this = e.new_object::<BGSSaveGameBuffer>();
+        e.call(0x0086_5e70, &args![this, text, 0u32]);
+        assert_eq!(appended(&e), [0, 0]);
+    }
+
+    #[test]
+    fn variable_sized_value_uses_one_two_or_four_tagged_bytes() {
+        for (value, bytes) in [
+            (0u32, vec![0u8]),
+            (0x3f, vec![0xfc]),
+            (0x40, vec![0x01, 0x01]),
+            (0x3fff, vec![0xfd, 0xff]),
+            (0x4000, vec![0x02, 0x00, 0x01, 0x00]),
+            (0x3fff_ffff, vec![0xfe, 0xff, 0xff, 0xff]),
+        ] {
+            let mut e = Engine::new();
+            record_appends(&mut e);
+            let this = e.new_object::<BGSSaveGameBuffer>();
+            e.call(0x0086_5f60, &args![this, value]);
+            assert_eq!(appended(&e), bytes, "{value:#x}");
+        }
+        let mut e = Engine::new();
+        record_appends(&mut e);
+        e.register(SAVE_GAME_WARNING, |_, _| Ret::default());
+        let this = e.new_object::<BGSSaveGameBuffer>();
+        e.call_log = Some(vec![]);
+        e.call(0x0086_5f60, &args![this, 0x4000_0000u32]);
+        assert!(appended(&e).is_empty());
+        assert_eq!(
+            calls_to(&e, SAVE_GAME_WARNING),
+            vec![vec![VALUE_TOO_LARGE_FORMAT, 0x4000_0000]]
+        );
     }
 }

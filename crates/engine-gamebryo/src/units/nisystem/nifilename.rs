@@ -198,12 +198,39 @@ fn split(e: &mut Engine, path: &mut u32, drive: Part, dir: Part, fname: Part, ex
     true
 }
 
+// Translated from 00aa27d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiFilename::NiFilename` (Xbox PDB), `thiscall`, one stack word (the path):
+/// clears the first byte of `m_acSubDir` (+0x303) and splits the path with
+/// `_splitpath_s` (`00ec7f1e`, this unit) into `m_acDrive` (+0x100, size 3),
+/// `m_acDir` (+0, size 0x100), `m_acFname` (+0x203, size 0x100) and `m_acExt`
+/// (+0x103, size 0x100); the split's result is not used. Answers `this`.
+pub fn ni_filename_ni_filename(e: &mut Engine, this: Ptr, path: Ptr) -> Ptr {
+    let t = this.addr();
+    e.mem.set_u8(t + 0x303, 0);
+    fn_00ec7f1e(
+        e,
+        path.addr(),
+        t + 0x100,
+        3,
+        t,
+        0x100,
+        t + 0x203,
+        0x100,
+        t + 0x103,
+        0x100,
+    );
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00ec_7f1e,
-        fn_00ec7f1e(u32, u32, u32, u32, u32, u32, u32, u32, u32) -> i32
-    )]
+    vec![
+        entry!(
+            0x00ec_7f1e,
+            fn_00ec7f1e(u32, u32, u32, u32, u32, u32, u32, u32, u32) -> i32
+        ),
+        entry!(0x00aa_27d0, ni_filename_ni_filename(Ptr, Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -383,5 +410,34 @@ mod tests {
         let path = text(&mut e, b"name");
         let (result, _) = split_with(&mut e, path, [32, 32, 4, 32]);
         assert_eq!(result, ERANGE);
+    }
+}
+
+#[cfg(test)]
+mod tests_b008 {
+    use super::*;
+
+    #[test]
+    fn ni_filename_ni_filename_splits_into_the_four_parts() {
+        let mut e = Engine::new();
+        e.register(STRNCPY_S, |_, _| Ret::default());
+        e.register(ISMBBLEAD, |_, _| Ret::default());
+        let this = e.mem.alloc(0x404);
+        e.mem.set_u8(this + 0x303, b'x');
+        let path = e.mem.alloc(8);
+        e.mem.set_cstr(path, b"ab");
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_27d0, &args![this, path]).u32(), this);
+        assert_eq!(e.mem.u8(this + 0x303), 0);
+        let copies: Vec<Vec<u32>> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 == STRNCPY_S)
+            .map(|c| c.1)
+            .collect();
+        // "ab" has no drive, no directory and no extension: only the name is copied.
+        assert_eq!(copies, vec![vec![this + 0x203, 0x100, path, 2]]);
     }
 }

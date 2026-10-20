@@ -191,6 +191,403 @@ pub fn fn_0060c4a0(e: &mut Engine, this: Ptr, argument: u32) {
     );
 }
 
+/// The iterator helpers of the copy and fill templates: `0065e750` (`cdecl`,
+/// two iterator addresses; a byte tag), `0065fe40` (`cdecl`, one iterator
+/// address; the iterator's pointer) and `0065fd70` (`cdecl`, two words: a
+/// byte's address and an iterator's; answers the byte's address).
+const ITERATOR_CATEGORY_0065E750: u32 = 0x0065_e750;
+const ITERATOR_BASE_0065FE40: u32 = 0x0065_fe40;
+const ITERATOR_TAG_0065FD70: u32 = 0x0065_fd70;
+/// CRT `memmove_s` (`00ec7ce3`, `cdecl`: destination, its size, source,
+/// count).
+const MEMMOVE_S: u32 = 0x00ec_7ce3;
+
+// Translated from 0060c3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the word-copy step of a copy template (`cdecl`,
+/// six words as its caller `0060c320` pushes them: first, last, destination
+/// and three tag words, not read). Moves `(last - first) >> 2` words
+/// (arithmetic shift) with `memmove_s` when there are any, and answers the
+/// destination past them.
+#[allow(clippy::too_many_arguments)] // the caller's six stack words
+pub fn fn_0060c3c0(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    let count = ((last.wrapping_sub(first) as i32) >> 2) as u32;
+    let end = destination.wrapping_add(count.wrapping_mul(4));
+    if count != 0 {
+        let bytes = count.wrapping_shl(2);
+        e.call(MEMMOVE_S, &args![destination, bytes, first, bytes]);
+    }
+    end
+}
+
+// Translated from 0060c320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a copy template (`cdecl`, four words: first,
+/// last, destination, a fourth word). Asks the category of the first and
+/// destination iterators (`0065e750` with their addresses), unwraps last and
+/// first (`0065fe40` with their addresses, last first) and copies through
+/// `0060c3c0(first, last, destination, fourth, category, 0)`.
+pub fn fn_0060c320(e: &mut Engine, first: u32, last: u32, destination: u32, fourth: u32) {
+    e.with_stack(0x10, |e, frame| {
+        // The argument slots the exe passes by address: first (+0), last
+        // (+4), destination (+8).
+        let slots = frame.addr();
+        e.mem.set_u32(slots, first);
+        e.mem.set_u32(slots + 4, last);
+        e.mem.set_u32(slots + 8, destination);
+        let category = e
+            .call(ITERATOR_CATEGORY_0065E750, &args![slots, slots + 8])
+            .u32() as u8;
+        let last_base = e.call(ITERATOR_BASE_0065FE40, &args![slots + 4]).u32();
+        let first_base = e.call(ITERATOR_BASE_0065FE40, &args![slots]).u32();
+        let destination = e.mem.u32(slots + 8);
+        fn_0060c3c0(
+            e,
+            first_base,
+            last_base,
+            destination,
+            fourth,
+            u32::from(category),
+            0,
+        );
+    });
+}
+
+// Translated from 0060c270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: forwards its first four words to `0060c320`
+/// (`cdecl`; its callers push six words, the last two not read).
+#[allow(clippy::too_many_arguments)] // the callers' six stack words
+pub fn fn_0060c270(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination: u32,
+    fourth: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) {
+    fn_0060c320(e, first, last, destination, fourth);
+}
+
+// Translated from 0060c410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a float fill (`cdecl`, four words: the
+/// destination, the count, the address of the float, a tag word not read):
+/// `count` floats copied through `FLD`/`FSTP` (a signalling NaN is quieted).
+pub fn fn_0060c410(e: &mut Engine, destination: u32, count: u32, value: u32, _unused_3: u32) {
+    let mut at = destination;
+    let mut left = count;
+    while left != 0 {
+        let bits = x87_quiet_bits(e.mem.u32(value));
+        e.mem.set_u32(at, bits);
+        left -= 1;
+        at = at.wrapping_add(4);
+    }
+}
+
+// Translated from 0060c380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a fill template (`cdecl`, five words: the
+/// destination, the count, the value's address and two tag words not read):
+/// unwraps the destination (`0065fe40` with its address) and fills through
+/// `0060c410(destination, count, value, 0)`.
+pub fn fn_0060c380(
+    e: &mut Engine,
+    destination: u32,
+    count: u32,
+    value: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+) {
+    let base = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), destination);
+        e.call(ITERATOR_BASE_0065FE40, &args![slot]).u32()
+    });
+    fn_0060c410(e, base, count, value, 0);
+}
+
+// Translated from 0060c2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a fill entry (`cdecl`, three words: the
+/// destination, the count and the value's address). Gets a tag byte
+/// (`0065fd70` with a stack byte and the destination's address) and fills
+/// through `0060c380(destination, count, value, tag, 0)`.
+pub fn fn_0060c2e0(e: &mut Engine, destination: u32, count: u32, value: u32) {
+    let (tag, destination) = e.with_stack(8, |e, frame| {
+        let slot = frame.addr();
+        e.mem.set_u32(slot, destination);
+        let at = e.call(ITERATOR_TAG_0065FD70, &args![slot + 4, slot]).u32();
+        (e.mem.u8(at), e.mem.u32(slot))
+    });
+    fn_0060c380(e, destination, count, value, u32::from(tag), 0);
+}
+
+/// The quest-objective list helpers: `005d43c0` and `005d43e0` (`thiscall` on
+/// the quest; the address of a list), `008256d0` (`thiscall` on the list;
+/// whether it is empty), `006815c0` (`thiscall`; the address of the head's
+/// item), `0063f7b0` (`thiscall`; removes the head) and `00726070`
+/// (`thiscall`; a node's or item's second word).
+const QUEST_LIST_005D43C0: u32 = 0x005d_43c0;
+const QUEST_LIST_005D43E0: u32 = 0x005d_43e0;
+const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+const LIST_HEAD_ITEM: u32 = 0x0068_15c0;
+const LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
+const LINK_00726070: u32 = 0x0072_6070;
+/// `0060f260` (`thiscall`, no stack words): the stage's destructor body, and
+/// the free `00401030` (`cdecl`, one word).
+const STAGE_DESTRUCT: u32 = 0x0060_f260;
+const FREE_00401030: u32 = 0x0040_1030;
+
+// Translated from 0060c840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a scalar deleting destructor (`thiscall`,
+/// `RET 4`: the flags): the body `0060f260`, then the free `00401030` with
+/// bit 0. Answers `this`.
+pub fn fn_0060c840(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(STAGE_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(FREE_00401030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0060c7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a quest): empties the list from
+/// `005d43c0` when there is one: each head item (when not null) is deleted
+/// through `0060c840` with 1 and the head removed (`0063f7b0`), until the list
+/// is empty (`008256d0`).
+pub fn fn_0060c7d0(e: &mut Engine, this: Ptr) {
+    let list = e.call(QUEST_LIST_005D43C0, &args![this]).u32();
+    if list != 0 {
+        while !e.call(LIST_IS_EMPTY, &args![list]).bool() {
+            let at = e.call(LIST_HEAD_ITEM, &args![list]).u32();
+            let item = e.mem.u32(at);
+            if item != 0 {
+                fn_0060c840(e, Ptr::new(item), 1);
+            }
+            e.call(LIST_REMOVE_HEAD, &args![list]);
+        }
+    }
+}
+
+// Translated from 0060c870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a quest): empties the list from
+/// `005d43e0` when there is one: each head item (when not null) is deleted
+/// through its vtable slot 0 with 1 and the head removed, until the list is
+/// empty.
+pub fn fn_0060c870(e: &mut Engine, this: Ptr) {
+    let list = e.call(QUEST_LIST_005D43E0, &args![this]).u32();
+    if list != 0 {
+        while !e.call(LIST_IS_EMPTY, &args![list]).bool() {
+            let at = e.call(LIST_HEAD_ITEM, &args![list]).u32();
+            let item = e.mem.u32(at);
+            if item != 0 {
+                e.vcall(item, 0, &args![1u32]);
+            }
+            e.call(LIST_REMOVE_HEAD, &args![list]);
+        }
+    }
+}
+
+// Translated from 0060c8e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a quest, `RET 4`: a key): walks
+/// the list from `005d43e0` (stopping at a null node or an empty list) and
+/// answers the first item whose `00726070` word equals the key; the next node
+/// is the node's `00726070` word. 0 when none.
+pub fn fn_0060c8e0(e: &mut Engine, this: Ptr, key: u32) -> u32 {
+    let mut node = e.call(QUEST_LIST_005D43E0, &args![this]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let at = e.call(LIST_HEAD_ITEM, &args![node]).u32();
+        let item = e.mem.u32(at);
+        if item != 0 && e.call(LINK_00726070, &args![item]).u32() == key {
+            return item;
+        }
+        node = e.call(LINK_00726070, &args![node]).u32();
+    }
+    0
+}
+
+/// `005f5760` (`thiscall` on the quest; the condition list's address),
+/// `00680fe0` (`thiscall` on that list; empties it) and `0041af70`
+/// (`thiscall`, `RET 4`: the script locals' scalar deleting destructor).
+const QUEST_CONDITIONS: u32 = 0x005f_5760;
+const CONDITIONS_CLEAR: u32 = 0x0068_0fe0;
+const SCRIPT_LOCALS_DELETE: u32 = 0x0041_af70;
+
+// Translated from 0060c760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a quest): empties the quest's
+/// conditions (`005f5760`, `00680fe0`), its two lists (`0060c7d0`,
+/// `0060c870`) and deletes its script locals (`pScriptLocals` +0x5c, through
+/// `0041af70` with 1), clearing the pointer.
+pub fn fn_0060c760(e: &mut Engine, this: Ptr) {
+    let conditions = e.call(QUEST_CONDITIONS, &args![this]).u32();
+    e.call(CONDITIONS_CLEAR, &args![conditions]);
+    fn_0060c7d0(e, this);
+    fn_0060c870(e, this);
+    let locals = e.mem.u32(this.addr() + 0x5c);
+    if locals != 0 {
+        e.call(SCRIPT_LOCALS_DELETE, &args![locals, 1u32]);
+        e.mem.set_u32(this.addr() + 0x5c, 0);
+    }
+}
+
+/// The destructors `TESQuest`'s takes down: the editor ID string
+/// (`004037d0`), the condition list (`006808b0`), the two lists (`0046ffb0`),
+/// `TESFullName` (`00591300`), `TESIcon` (`00402c40`) and `TESForm`
+/// (`00483630`), all `thiscall` with no stack words.
+const STRING_DESTRUCT: u32 = 0x0040_37d0;
+const CONDITION_LIST_DESTRUCT: u32 = 0x0068_08b0;
+const LIST_DESTRUCT: u32 = 0x0046_ffb0;
+const FULL_NAME_DESTRUCT: u32 = 0x0059_1300;
+const ICON_DESTRUCT: u32 = 0x0040_2c40;
+const TES_FORM_DESTRUCT: u32 = 0x0048_3630;
+
+// Translated from 0060c660 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0060c660 - the C++ exception-unwinding frame (FS:[0] chain, handler 00efb0fa, state variable) and its stack cookie word are not translated
+/// Unnamed in the engine map: `TESQuest`'s destructor body (`thiscall`, no
+/// stack words): the four vtables, `0060c760`, then the members and bases
+/// from the last: the editor ID (+0x64), the conditions (+0x54), the
+/// objective and stage lists (+0x4c, +0x44), `TESFullName` (+0x30),
+/// `TESIcon` (+0x24) and `TESForm`.
+pub fn fn_0060c660(e: &mut Engine, this: Ptr) {
+    let t = this.addr();
+    e.mem.set_u32(t, TES_QUEST_VTABLE);
+    e.mem.set_u32(t + 0x18, SCRIPTABLE_FORM_VTABLE);
+    e.mem.set_u32(t + 0x24, ICON_VTABLE);
+    e.mem.set_u32(t + 0x30, FULL_NAME_VTABLE);
+    fn_0060c760(e, this);
+    e.call(STRING_DESTRUCT, &args![t + EDITOR_ID]);
+    e.call(CONDITION_LIST_DESTRUCT, &args![t + CONDITIONS]);
+    e.call(LIST_DESTRUCT, &args![t + LIST_OBJECTIVES]);
+    e.call(LIST_DESTRUCT, &args![t + LIST_STAGES]);
+    e.call(FULL_NAME_DESTRUCT, &args![t + 0x30]);
+    e.call(ICON_DESTRUCT, &args![t + 0x24]);
+    e.call(TES_FORM_DESTRUCT, &args![this]);
+}
+
+// Translated from 0060c630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `TESQuest`'s scalar deleting destructor
+/// (`thiscall`, `RET 4`: the flags): `0060c660`, then the free `00401030`
+/// with bit 0. Answers `this`.
+pub fn fn_0060c630(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0060c660(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_00401030, &args![this]);
+    }
+    this
+}
+
+/// `00559450` (`thiscall` on a `BSStringT`; its text or 0) and `""` in
+/// `.rdata` (`01011584`).
+const STRING_TEXT: u32 = 0x0055_9450;
+const EMPTY_TEXT: u32 = 0x0101_1584;
+
+// Translated from 0060c5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a quest): the editor ID's text
+/// (+0x64, asked twice), or `""` when it has none.
+pub fn fn_0060c5f0(e: &mut Engine, this: Ptr) -> u32 {
+    let id = this.addr() + EDITOR_ID;
+    if e.call(STRING_TEXT, &args![id]).u32() != 0 {
+        e.call(STRING_TEXT, &args![id]).u32()
+    } else {
+        EMPTY_TEXT
+    }
+}
+
+/// `MiscStatManager::Increment` (`004d5c60`, `cdecl`: the statistic),
+/// `HUDMainMenu::ShowQuestName` (`0077a480`, `cdecl`: the quest) and
+/// `0060cad0` (`cdecl`, one word).
+const MISC_STAT_INCREMENT: u32 = 0x004d_5c60;
+const SHOW_QUEST_NAME: u32 = 0x0077_a480;
+const QUEST_DONE_0060CAD0: u32 = 0x0060_cad0;
+
+// Translated from 0060ca30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a quest, `RET 4`: a byte). A set
+/// byte on a quest without bit 1 of the flags (+0x3c) sets it, flags the
+/// change (vtable slot `+0x48` with 2), counts statistic 0 and shows the
+/// quest's name; a clear byte on a quest with it clears it, flags the change
+/// and runs `0060cad0(0)`.
+pub fn fn_0060ca30(e: &mut Engine, this: Ptr, on: u8) {
+    let at = this.addr() + DATA;
+    if on != 0 && e.mem.u8(at) & 2 == 0 {
+        let flags = e.mem.u8(at) | 2;
+        e.mem.set_u8(at, flags);
+        e.vcall(this.addr(), ADD_CHANGE_SLOT, &args![CHANGE_QUEST_FLAGS]);
+        e.call(MISC_STAT_INCREMENT, &args![0u32]);
+        e.call(SHOW_QUEST_NAME, &args![this]);
+    } else if on == 0 && e.mem.u8(at) & 2 != 0 {
+        let flags = e.mem.u8(at) & 0xfd;
+        e.mem.set_u8(at, flags);
+        e.vcall(this.addr(), ADD_CHANGE_SLOT, &args![CHANGE_QUEST_FLAGS]);
+        e.call(QUEST_DONE_0060CAD0, &args![0u32]);
+    }
+}
+
+/// The function-static null `NiPointer` `0060c120` compares with
+/// (`011cb7dc`), its guard word (`011cb7e0`, bit 0) and its `atexit`
+/// destructor (`00fcb330`); CRT `_atexit` (`00ec658f`).
+const STATIC_NULL_POINTER: u32 = 0x011c_b7dc;
+const STATIC_GUARD: u32 = 0x011c_b7e0;
+const STATIC_NULL_DESTRUCT: u32 = 0x00fc_b330;
+const ATEXIT: u32 = 0x00ec_658f;
+/// `004b0460` (`thiscall` on an `NiPointer`, `RET 4`: another's address; a
+/// byte: whether they are equal).
+const NI_POINTER_EQUAL: u32 = 0x004b_0460;
+
+// Translated from 0060c120 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0060c120 - the C++ exception-unwinding frame (FS:[0] chain, handler 00efb08e, state variable) and its stack cookie word are not translated
+/// Unnamed in the engine map: an `NiTArray<NiPointer<..>>` store at an index
+/// (`thiscall`, `RET 8`: the index and the address of the `NiPointer` to
+/// store). On first use it makes the static null pointer (`011cb7dc`, guard
+/// bit 0 of `011cb7e0`, `00633c90` with 0, its destructor given to
+/// `_atexit`). Past the used size (+0xa) the size becomes `index + 1` and a
+/// non-null new pointer counts one more (+0xc); within it a non-null new
+/// pointer over a null old one counts one more, a null new one over a
+/// non-null old one one less. Then the slot (`+4` block) is assigned
+/// (`006e5cc0`).
+pub fn fn_0060c120(e: &mut Engine, this: Ptr, index: u32, pointer: u32) {
+    let t = this.addr();
+    let guard = e.global::<u32>(STATIC_GUARD);
+    if guard & 1 == 0 {
+        e.set_global::<u32>(STATIC_GUARD, guard | 1);
+        e.call(NI_POINTER_FROM_RAW, &args![STATIC_NULL_POINTER, 0u32]);
+        e.call(ATEXIT, &args![STATIC_NULL_DESTRUCT]);
+    }
+    let slot = |e: &Engine| e.mem.u32(t + 4).wrapping_add(index.wrapping_mul(4));
+    if index >= u32::from(e.mem.u16(t + 0xa)) {
+        e.mem.set_u16(t + 0xa, index.wrapping_add(1) as u16);
+        if e.call(NI_POINTER_NOT_EQUAL, &args![pointer, STATIC_NULL_POINTER])
+            .bool()
+        {
+            let count = e.mem.u16(t + 0xc).wrapping_add(1);
+            e.mem.set_u16(t + 0xc, count);
+        }
+    } else if e
+        .call(NI_POINTER_NOT_EQUAL, &args![pointer, STATIC_NULL_POINTER])
+        .bool()
+    {
+        let at = slot(e);
+        if e.call(NI_POINTER_EQUAL, &args![at, STATIC_NULL_POINTER])
+            .bool()
+        {
+            let count = e.mem.u16(t + 0xc).wrapping_add(1);
+            e.mem.set_u16(t + 0xc, count);
+        }
+    } else {
+        let at = slot(e);
+        if e.call(NI_POINTER_NOT_EQUAL, &args![at, STATIC_NULL_POINTER])
+            .bool()
+        {
+            let count = e.mem.u16(t + 0xc).wrapping_sub(1);
+            e.mem.set_u16(t + 0xc, count);
+        }
+    }
+    let at = slot(e);
+    e.call(NI_POINTER_ASSIGN, &args![at, pointer]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -206,6 +603,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0060_c490, fn_0060c490(Ptr, u32) -> u16),
         entry!(0x0060_c4a0, fn_0060c4a0(Ptr, u32)),
         entry!(0x0060_bef0, fn_0060bef0(Ptr<crate::types::NiTArray>, u32)),
+        entry!(0x0060_c3c0, fn_0060c3c0(u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x0060_c320, fn_0060c320(u32, u32, u32, u32)),
+        entry!(0x0060_c270, fn_0060c270(u32, u32, u32, u32, u32, u32)),
+        entry!(0x0060_c410, fn_0060c410(u32, u32, u32, u32)),
+        entry!(0x0060_c380, fn_0060c380(u32, u32, u32, u32, u32)),
+        entry!(0x0060_c2e0, fn_0060c2e0(u32, u32, u32)),
+        entry!(0x0060_c840, fn_0060c840(Ptr, u32) -> Ptr),
+        entry!(0x0060_c7d0, fn_0060c7d0(Ptr)),
+        entry!(0x0060_c870, fn_0060c870(Ptr)),
+        entry!(0x0060_c8e0, fn_0060c8e0(Ptr, u32) -> u32),
+        entry!(0x0060_c760, fn_0060c760(Ptr)),
+        entry!(0x0060_c660, fn_0060c660(Ptr)),
+        entry!(0x0060_c630, fn_0060c630(Ptr, u32) -> Ptr),
+        entry!(0x0060_c5f0, fn_0060c5f0(Ptr) -> u32),
+        entry!(0x0060_ca30, fn_0060ca30(Ptr, u8)),
+        entry!(0x0060_c120, fn_0060c120(Ptr, u32, u32)),
     ]
 }
 
@@ -612,5 +1025,276 @@ mod b025_tests {
         assert_eq!(e.get(a, NiTArray::m_pBase), 0);
         assert_eq!(e.get(a, NiTArray::m_usSize), 0);
         assert_eq!(frees(&e).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod b008_tests {
+    use super::*;
+
+    fn calls(e: &mut Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log.take().unwrap()[1..].to_vec()
+    }
+
+    #[test]
+    fn fn_0060c3c0_moves_whole_words() {
+        let mut e = Engine::new();
+        e.register(MEMMOVE_S, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(
+                0x0060_c3c0,
+                &args![0x100u32, 0x10cu32, 0x200u32, 0u32, 0u32, 0u32]
+            )
+            .u32(),
+            0x20c
+        );
+        assert_eq!(calls(&mut e), vec![(MEMMOVE_S, vec![0x200, 12, 0x100, 12])]);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(
+                0x0060_c3c0,
+                &args![0x100u32, 0x100u32, 0x200u32, 0u32, 0u32, 0u32]
+            )
+            .u32(),
+            0x200
+        );
+        assert!(calls(&mut e).is_empty());
+    }
+
+    #[test]
+    fn fn_0060c270_copies_through_the_templates() {
+        let mut e = Engine::new();
+        e.register(MEMMOVE_S, |_, _| Ret::default());
+        e.register(ITERATOR_CATEGORY_0065E750, |_, _| 7u32.into_ret());
+        e.register(ITERATOR_BASE_0065FE40, |e, a| e.mem.u32(a[0]).into_ret());
+        e.call_log = Some(vec![]);
+        e.call(
+            0x0060_c270,
+            &args![0x100u32, 0x108u32, 0x300u32, 9u32, 0u32, 0u32],
+        );
+        let log = calls(&mut e);
+        assert_eq!(log.last().unwrap(), &(MEMMOVE_S, vec![0x300, 8, 0x100, 8]));
+        assert_eq!(
+            log.iter().filter(|c| c.0 == ITERATOR_BASE_0065FE40).count(),
+            2
+        );
+    }
+
+    #[test]
+    fn fn_0060c2e0_fills_quieted_floats() {
+        let mut e = Engine::new();
+        e.register(ITERATOR_TAG_0065FD70, |_, a| a[0].into_ret());
+        e.register(ITERATOR_BASE_0065FE40, |e, a| e.mem.u32(a[0]).into_ret());
+        let value = e.mem.alloc(4);
+        e.mem.set_u32(value, 0x7f80_0001);
+        let out = e.mem.alloc(16);
+        e.call(0x0060_c2e0, &args![out, 3u32, value]);
+        for i in 0..3 {
+            assert_eq!(e.mem.u32(out + 4 * i), 0x7fc0_0001);
+        }
+        assert_eq!(e.mem.u32(out + 12), 0);
+    }
+
+    fn list_engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0137_0000, 0x100);
+        // A list at 0x01370000 whose item count is the word there.
+        e.register(QUEST_LIST_005D43C0, |_, _| 0x0137_0000u32.into_ret());
+        e.register(QUEST_LIST_005D43E0, |_, _| 0x0137_0000u32.into_ret());
+        e.register(LIST_IS_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0).into_ret()
+        });
+        e.register(LIST_HEAD_ITEM, |e, a| {
+            let n = e.mem.u32(a[0]);
+            (a[0] + 4 * n).into_ret()
+        });
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            let n = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], n - 1);
+            Ret::default()
+        });
+        e
+    }
+
+    #[test]
+    fn fn_0060c7d0_and_0060c870_empty_the_lists() {
+        let mut e = list_engine();
+        e.register(STAGE_DESTRUCT, |_, _| Ret::default());
+        e.register(FREE_00401030, |_, _| Ret::default());
+        e.mem.set_u32(0x0137_0000, 2);
+        e.mem.set_u32(0x0137_0004, 0);
+        e.mem.set_u32(0x0137_0008, 0x5000);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_c7d0, &args![0x10u32]);
+        let log = calls(&mut e);
+        assert!(log.contains(&(STAGE_DESTRUCT, vec![0x5000])));
+        assert!(log.contains(&(FREE_00401030, vec![0x5000])));
+        assert_eq!(log.iter().filter(|c| c.0 == LIST_REMOVE_HEAD).count(), 2);
+
+        const DELETE: u32 = 0x0137_1000;
+        e.register(DELETE, |_, _| Ret::default());
+        let table = e.mem.alloc(4);
+        e.mem.set_u32(table, DELETE);
+        let item = e.mem.alloc(4);
+        e.mem.set_u32(item, table);
+        e.mem.set_u32(0x0137_0000, 1);
+        e.mem.set_u32(0x0137_0004, item);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_c870, &args![0x10u32]);
+        assert!(calls(&mut e).contains(&(DELETE, vec![item, 1])));
+    }
+
+    #[test]
+    fn fn_0060c8e0_finds_by_key() {
+        let mut e = Engine::new();
+        let item = e.mem.alloc(8);
+        e.mem.set_u32(item + 4, 0x33);
+        let second = e.mem.alloc(8);
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(first, 0);
+        e.mem.set_u32(first + 4, second);
+        e.mem.set_u32(second, item);
+        e.register_double(QUEST_LIST_005D43E0, move |_, _| first.into_ret());
+        e.register(LIST_IS_EMPTY, |_, _| Ret::default());
+        e.register(LIST_HEAD_ITEM, |_, a| a[0].into_ret());
+        e.register(LINK_00726070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        assert_eq!(e.call(0x0060_c8e0, &args![0x10u32, 0x33u32]).u32(), item);
+        assert_eq!(e.call(0x0060_c8e0, &args![0x10u32, 0x34u32]).u32(), 0);
+    }
+
+    fn quest_engine() -> Engine {
+        let mut e = list_engine();
+        for f in [
+            QUEST_CONDITIONS,
+            CONDITIONS_CLEAR,
+            SCRIPT_LOCALS_DELETE,
+            STRING_DESTRUCT,
+            CONDITION_LIST_DESTRUCT,
+            LIST_DESTRUCT,
+            FULL_NAME_DESTRUCT,
+            ICON_DESTRUCT,
+            TES_FORM_DESTRUCT,
+            FREE_00401030,
+        ] {
+            e.register(f, |_, _| Ret::default());
+        }
+        e
+    }
+
+    #[test]
+    fn fn_0060c760_clears_the_quest() {
+        let mut e = quest_engine();
+        let quest = e.mem.alloc(0x6c);
+        e.mem.set_u32(quest + 0x5c, 0x7700);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_c760, &args![quest]);
+        assert!(calls(&mut e).contains(&(SCRIPT_LOCALS_DELETE, vec![0x7700, 1])));
+        assert_eq!(e.mem.u32(quest + 0x5c), 0);
+    }
+
+    #[test]
+    fn fn_0060c630_destroys_and_frees() {
+        let mut e = quest_engine();
+        let quest = e.mem.alloc(0x6c);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0060_c630, &args![quest, 1u32]).u32(), quest);
+        let log = calls(&mut e);
+        let tail: Vec<u32> = log.iter().rev().take(3).map(|c| c.0).collect();
+        assert_eq!(tail, vec![FREE_00401030, TES_FORM_DESTRUCT, ICON_DESTRUCT]);
+        assert_eq!(e.mem.u32(quest), TES_QUEST_VTABLE);
+        assert!(log.contains(&(STRING_DESTRUCT, vec![quest + EDITOR_ID])));
+        e.call_log = Some(vec![]);
+        e.call(0x0060_c630, &args![quest, 0u32]);
+        assert!(calls(&mut e).iter().all(|c| c.0 != FREE_00401030));
+    }
+
+    #[test]
+    fn fn_0060c5f0_answers_the_editor_id() {
+        let mut e = Engine::new();
+        e.register(STRING_TEXT, |_, _| 0x4400u32.into_ret());
+        assert_eq!(e.call(0x0060_c5f0, &args![0x1000u32]).u32(), 0x4400);
+        e.register(STRING_TEXT, |_, _| Ret::default());
+        assert_eq!(e.call(0x0060_c5f0, &args![0x1000u32]).u32(), EMPTY_TEXT);
+    }
+
+    #[test]
+    fn fn_0060ca30_turns_bit_1_on_and_off() {
+        const CHANGE: u32 = 0x0137_2000;
+        let mut e = Engine::new();
+        for f in [
+            CHANGE,
+            MISC_STAT_INCREMENT,
+            SHOW_QUEST_NAME,
+            QUEST_DONE_0060CAD0,
+        ] {
+            e.register(f, |_, _| Ret::default());
+        }
+        let table = e.mem.alloc(0x50);
+        e.mem.set_u32(table + ADD_CHANGE_SLOT, CHANGE);
+        let quest = e.mem.alloc(0x6c);
+        e.mem.set_u32(quest, table);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_ca30, &args![quest, 1u32]);
+        assert_eq!(e.mem.u8(quest + DATA), 2);
+        assert_eq!(
+            calls(&mut e),
+            vec![
+                (CHANGE, vec![quest, 2]),
+                (MISC_STAT_INCREMENT, vec![0]),
+                (SHOW_QUEST_NAME, vec![quest]),
+            ]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0060_ca30, &args![quest, 1u32]);
+        assert!(calls(&mut e).is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x0060_ca30, &args![quest, 0u32]);
+        assert_eq!(e.mem.u8(quest + DATA), 0);
+        assert_eq!(
+            calls(&mut e),
+            vec![(CHANGE, vec![quest, 2]), (QUEST_DONE_0060CAD0, vec![0])]
+        );
+    }
+
+    #[test]
+    fn fn_0060c120_counts_the_pointers() {
+        let mut e = Engine::new();
+        e.map(STATIC_GUARD, 4);
+        e.map(STATIC_NULL_POINTER, 4);
+        for f in [NI_POINTER_FROM_RAW, ATEXIT, NI_POINTER_ASSIGN] {
+            e.register(f, |_, _| Ret::default());
+        }
+        // A pointer slot is "not null" when the word it holds is not 0.
+        e.register(NI_POINTER_NOT_EQUAL, |e, a| {
+            u32::from(e.mem.u32(a[0]) != 0).into_ret()
+        });
+        e.register(NI_POINTER_EQUAL, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0).into_ret()
+        });
+        let array = e.mem.alloc(0x10);
+        let block = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 4, block);
+        let full = e.mem.alloc(4);
+        e.mem.set_u32(full, 0x9999);
+        let empty = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_c120, &args![array, 2u32, full]);
+        assert_eq!((e.mem.u16(array + 0xa), e.mem.u16(array + 0xc)), (3, 1));
+        let log = calls(&mut e);
+        assert_eq!(log[0], (NI_POINTER_FROM_RAW, vec![STATIC_NULL_POINTER, 0]));
+        assert_eq!(
+            log.last().unwrap(),
+            &(NI_POINTER_ASSIGN, vec![block + 8, full])
+        );
+        // Within the size: a pointer over an empty slot counts up, an empty
+        // one over a full slot counts down.
+        e.call(0x0060_c120, &args![array, 1u32, full]);
+        assert_eq!(e.mem.u16(array + 0xc), 2);
+        e.mem.set_u32(block + 4, 0x55);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_c120, &args![array, 1u32, empty]);
+        assert_eq!(e.mem.u16(array + 0xc), 1);
+        assert!(calls(&mut e).iter().all(|c| c.0 != NI_POINTER_FROM_RAW));
     }
 }

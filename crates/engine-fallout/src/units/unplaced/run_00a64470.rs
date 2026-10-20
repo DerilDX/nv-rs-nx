@@ -44,9 +44,29 @@ pub fn fn_00a644a0(e: &mut Engine, elements: Ptr) {
     );
 }
 
+/// `00aa10f0` (`cdecl`, one word): frees a block.
+const FREE_BLOCK: u32 = 0x00aa_10f0;
+
+// Translated from 00a64470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): a scalar deleting destructor. Sets the
+/// vtable `0109bce4`, frees the block at +4 (`00aa10f0`), and for bit 0 of `flags` gives
+/// `this` back to the memory manager (`00aa4060`). Returns `this`.
+pub fn fn_00a64470(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let block = e.mem.u32(this.addr() + 4);
+    e.mem.set_u32(this.addr(), 0x0109_bce4);
+    e.call(FREE_BLOCK, &args![block]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a6_44a0, fn_00a644a0(Ptr))]
+    vec![
+        entry!(0x00a6_44a0, fn_00a644a0(Ptr)),
+        entry!(0x00a6_4470, fn_00a64470(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -113,5 +133,30 @@ mod tests {
                 .count(),
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn fn_00a64470_frees_the_block_and_this_on_bit_0() {
+        let mut e = Engine::new();
+        e.register(FREE_BLOCK, |_, _| Ret::default());
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0x6000);
+        for flags in [1u32, 0] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x00a6_4470, &args![this, flags]).u32(), this);
+            let log = e.call_log.take().unwrap();
+            let mut expected = vec![(FREE_BLOCK, vec![0x6000])];
+            if flags == 1 {
+                expected.push((MEMORY_MANAGER_DEALLOCATE, vec![MEMORY_MANAGER, this]));
+            }
+            assert_eq!(log[1..], expected[..]);
+            assert_eq!(e.mem.u32(this), 0x0109_bce4);
+        }
     }
 }

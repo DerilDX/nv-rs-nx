@@ -43,6 +43,165 @@ pub fn ni_b_spline_comp_point3_interpolator_get_viewer_strings(
     });
 }
 
+/// `NiBSplineCompPoint3Interpolator`'s vtable (`01099a24`) and size, and
+/// the `float` its offset and half range start as (`01099a1c`).
+const COMP_POINT3_VTABLE: u32 = 0x0109_9a24;
+const COMP_POINT3_SIZE: u32 = 0x34;
+const COMP_POINT3_DEFAULT: u32 = 0x0109_9a1c;
+/// `operator new` (`00aa13e0`, `cdecl (size)`).
+const OPERATOR_NEW: u32 = 0x00aa_13e0;
+/// The `NiBSplinePoint3Interpolator` constructor (`00a506c0`, `thiscall
+/// (this, data, handle, basis data)`), `CopyMembers` (`00a50680`,
+/// `thiscall (this, dest, cloning process)`) and `LoadBinary` (`00a50910`,
+/// `thiscall (this, stream)`).
+const POINT3_INTERPOLATOR_CONSTRUCTOR: u32 = 0x00a5_06c0;
+const POINT3_INTERPOLATOR_COPY_MEMBERS: u32 = 0x00a5_0680;
+const POINT3_INTERPOLATOR_LOAD_BINARY: u32 = 0x00a5_0910;
+/// `NiBSplineData::GetCompactedValueDegree3` (`00a526b0`, `thiscall
+/// (data, t, &result, dimension, basis data, handle, offset, half range)`,
+/// `RET 0x1C`).
+const GET_COMPACTED_VALUE_DEGREE3: u32 = 0x00a5_26b0;
+/// `NiBSplinePoint3Interpolator` fields (Xbox PDB, PC offsets):
+/// `m_fLastTime` +8, `m_fStartTime` +0xC, `m_fEndTime` +0x10, `m_spData`
+/// +0x14, `m_spBasisData` +0x18, `m_kPoint3Value` +0x1C, the control-point
+/// handle +0x28; this class's `m_afCompScalars`: offset +0x2C, half range
+/// +0x30.
+const LAST_TIME: u32 = 0x8;
+const START_TIME: u32 = 0xc;
+const END_TIME: u32 = 0x10;
+const SPLINE_DATA: u32 = 0x14;
+const BASIS_DATA: u32 = 0x18;
+const POINT3_VALUE: u32 = 0x1c;
+const POINT3_HANDLE: u32 = 0x28;
+const COMP_OFFSET: u32 = 0x2c;
+const COMP_HALF_RANGE: u32 = 0x30;
+/// The handle that means "no control points".
+const INVALID_HANDLE: u32 = 0xffff;
+
+/// Builds a new `NiBSplineCompPoint3Interpolator` in a block from
+/// `operator new`: the point3 interpolator constructor with no data, the
+/// handle 0xFFFF and no basis data, the class's vtable, both scalars the
+/// default (one `FLD` stored twice). Null when the allocation fails.
+fn new_comp_point3(e: &mut Engine) -> u32 {
+    let object = e.call(OPERATOR_NEW, &args![COMP_POINT3_SIZE]).u32();
+    if object == 0 {
+        return 0;
+    }
+    e.call(
+        POINT3_INTERPOLATOR_CONSTRUCTOR,
+        &args![object, 0u32, INVALID_HANDLE, 0u32],
+    );
+    let default = x87_quiet_bits(e.global::<u32>(COMP_POINT3_DEFAULT));
+    e.mem.set_u32(object, COMP_POINT3_VTABLE);
+    e.mem.set_u32(object + COMP_OFFSET, default);
+    e.mem.set_u32(object + COMP_HALF_RANGE, default);
+    object
+}
+
+// Translated from 00a513c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The class factory (no Ghidra function; the engine map has no name): a
+/// new `NiBSplineCompPoint3Interpolator` (no data, handle 0xFFFF, both
+/// scalars the default `01099a1c`), null when the allocation fails.
+pub fn fn_00a513c0(e: &mut Engine) -> Ptr {
+    Ptr::new(new_comp_point3(e))
+}
+
+// Translated from 00a51400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineCompPoint3Interpolator::LoadBinary` (Xbox PDB): the point3
+/// interpolator's `LoadBinary`, then the two scalars read in one call to
+/// the stream reader's function at its +8 (`cdecl (reader, this + 0x2c, 8,
+/// &4, 1)`), the answer added to the reader's +4.
+pub fn ni_b_spline_comp_point3_interpolator_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(POINT3_INTERPOLATOR_LOAD_BINARY, &args![this, stream]);
+    let reader = e.mem.u32(stream.addr() + 0x24c);
+    let read_function = e.mem.u32(reader.wrapping_add(8));
+    let destination = this.addr() + COMP_OFFSET;
+    let read = e.with_stack(4, |e, size| {
+        e.mem.set_u32(size.addr(), 4);
+        e.call(read_function, &args![reader, destination, 8u32, size, 1u32])
+            .u32()
+    });
+    let position = e.mem.u32(reader.wrapping_add(4)).wrapping_add(read);
+    e.mem.set_u32(reader.wrapping_add(4), position);
+}
+
+// Translated from 00a51360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineCompPoint3Interpolator::CreateClone` (Xbox PDB): a new object
+/// as the factory builds it, the point3 interpolator's members copied into
+/// it (`00a50680`), then both scalars (through the FPU); into address 0
+/// when the allocation failed, as the exe does. Answers the new object.
+pub fn ni_b_spline_comp_point3_interpolator_create_clone(
+    e: &mut Engine,
+    this: Ptr,
+    cloning: Ptr,
+) -> Ptr {
+    let object = new_comp_point3(e);
+    e.call(
+        POINT3_INTERPOLATOR_COPY_MEMBERS,
+        &args![this, object, cloning],
+    );
+    let offset = x87_quiet_bits(e.mem.u32(this.addr() + COMP_OFFSET));
+    e.mem.set_u32(object.wrapping_add(COMP_OFFSET), offset);
+    let half_range = x87_quiet_bits(e.mem.u32(this.addr() + COMP_HALF_RANGE));
+    e.mem
+        .set_u32(object.wrapping_add(COMP_HALF_RANGE), half_range);
+    Ptr::new(object)
+}
+
+// Translated from 00a51280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineCompPoint3Interpolator::Update` (Xbox PDB; `thiscall (time,
+/// target, &point)`, `RET 0xC`): at the last time the current value is
+/// copied out. Otherwise, unless the handle is 0xFFFF, the value becomes
+/// the spline data's compacted degree-3 value (dimension 3) at the
+/// normalized time `(time - start) / (end - start)` (x87, stored as a
+/// `float`), its three floats copied in through the FPU; then the value is
+/// copied out and the last time set. Always true.
+pub fn ni_b_spline_comp_point3_interpolator_update(
+    e: &mut Engine,
+    this: Ptr,
+    time: f32,
+    _target: Ptr,
+    point: Ptr,
+) -> bool {
+    let object = this.addr();
+    let point = point.addr();
+    let copy_out = |e: &mut Engine| {
+        for i in 0..3 {
+            let value = e.mem.u32(object + POINT3_VALUE + 4 * i);
+            e.mem.set_u32(point.wrapping_add(4 * i), value);
+        }
+    };
+    if time == e.mem.f32(object + LAST_TIME) {
+        copy_out(e);
+        return true;
+    }
+    let handle = e.mem.u32(object + POINT3_HANDLE);
+    if handle != INVALID_HANDLE {
+        let half_range = x87_quiet_bits(e.mem.u32(object + COMP_HALF_RANGE));
+        let offset = x87_quiet_bits(e.mem.u32(object + COMP_OFFSET));
+        let basis = e.mem.u32(object + BASIS_DATA);
+        let start = e.mem.u32(object + START_TIME);
+        let from_start = x87_sub(x87_load32(time.to_bits()), x87_m32(start));
+        let span = x87_sub(x87_load32(e.mem.u32(object + END_TIME)), x87_m32(start));
+        let normalized = x87_store32(x87_div(from_start, span));
+        let data = e.mem.u32(object + SPLINE_DATA);
+        e.with_stack(0xc, |e, result| {
+            e.call(
+                GET_COMPACTED_VALUE_DEGREE3,
+                &args![data, normalized, result, 3u32, basis, handle, offset, half_range],
+            );
+            for i in 0..3 {
+                let value = x87_quiet_bits(e.mem.u32(result.addr() + 4 * i));
+                e.mem.set_u32(object + POINT3_VALUE + 4 * i, value);
+            }
+        });
+    }
+    copy_out(e);
+    e.mem
+        .set_u32(object + LAST_TIME, x87_quiet_bits(time.to_bits()));
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -51,6 +210,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00a51480,
             ni_b_spline_comp_point3_interpolator_get_viewer_strings(Ptr, Ptr)
         ),
+        entry!(0x00a5_13c0, fn_00a513c0() -> Ptr),
+        entry!(
+            0x00a5_1400,
+            ni_b_spline_comp_point3_interpolator_load_binary(Ptr, Ptr)
+        ),
+        entry!(0x00a5_1360, ni_b_spline_comp_point3_interpolator_create_clone(Ptr, Ptr) -> Ptr),
+        entry!(0x00a5_1280, ni_b_spline_comp_point3_interpolator_update(Ptr, f32, Ptr, Ptr) -> bool),
     ]
 }
 
@@ -123,5 +289,139 @@ mod tests {
             assert_eq!(&set.1[..2], [strings, size]);
             assert_eq!(stored.get(), 0x7777_0001);
         }
+    }
+
+    fn cp_calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|call| call.0 == addr)
+            .map(|call| call.1.clone())
+            .collect()
+    }
+
+    fn cp_engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(COMP_POINT3_DEFAULT, 4);
+        e.set_global(COMP_POINT3_DEFAULT, 0.5f32);
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        for addr in [
+            POINT3_INTERPOLATOR_CONSTRUCTOR,
+            POINT3_INTERPOLATOR_COPY_MEMBERS,
+            POINT3_INTERPOLATOR_LOAD_BINARY,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(GET_COMPACTED_VALUE_DEGREE3, |e, a| {
+            for i in 0..3 {
+                e.mem.set_f32(a[2] + 4 * i, 1.0 + i as f32);
+            }
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn comp_point3_factory_builds_with_the_default_scalars() {
+        let mut e = cp_engine();
+        let object = e.call(0x00a5_13c0, &args![]).u32();
+        assert_eq!(
+            cp_calls_to(&e, POINT3_INTERPOLATOR_CONSTRUCTOR),
+            vec![vec![object, 0, 0xffff, 0]]
+        );
+        assert_eq!(e.mem.u32(object), COMP_POINT3_VTABLE);
+        assert_eq!(e.mem.f32(object + COMP_OFFSET), 0.5);
+        assert_eq!(e.mem.f32(object + COMP_HALF_RANGE), 0.5);
+        e.register(OPERATOR_NEW, |_, _| Ret::default());
+        assert_eq!(e.call(0x00a5_13c0, &args![]).u32(), 0);
+    }
+
+    #[test]
+    fn comp_point3_load_binary_reads_both_scalars_at_once() {
+        const READ: u32 = 0x0300_0000;
+        let mut e = cp_engine();
+        e.register(READ, |_, _| 8u32.into_ret());
+        let reader = e.mem.alloc(0xc);
+        e.mem.set_u32(reader + 8, READ);
+        let stream = e.mem.alloc(0x250);
+        e.mem.set_u32(stream + 0x24c, reader);
+        let this = e.mem.alloc(0x34);
+        e.call(0x00a5_1400, &args![this, stream]);
+        assert_eq!(
+            cp_calls_to(&e, POINT3_INTERPOLATOR_LOAD_BINARY),
+            vec![vec![this, stream]]
+        );
+        let reads = cp_calls_to(&e, READ);
+        assert_eq!(
+            (reads[0][0], reads[0][1], reads[0][2], reads[0][4]),
+            (reader, this + 0x2c, 8, 1)
+        );
+        assert_eq!(e.mem.u32(reader + 4), 8);
+    }
+
+    #[test]
+    fn comp_point3_create_clone_copies_the_scalars() {
+        let mut e = cp_engine();
+        let this = e.mem.alloc(0x34);
+        e.mem.set_f32(this + COMP_OFFSET, 1.5);
+        e.mem.set_f32(this + COMP_HALF_RANGE, 2.5);
+        let clone = e.call(0x00a5_1360, &args![this, 0x7000u32]).u32();
+        assert_eq!(
+            cp_calls_to(&e, POINT3_INTERPOLATOR_COPY_MEMBERS),
+            vec![vec![this, clone, 0x7000]]
+        );
+        assert_eq!(e.mem.f32(clone + COMP_OFFSET), 1.5);
+        assert_eq!(e.mem.f32(clone + COMP_HALF_RANGE), 2.5);
+        e.map(0, 0x40);
+        e.register(OPERATOR_NEW, |_, _| Ret::default());
+        assert_eq!(e.call(0x00a5_1360, &args![this, 0x7000u32]).u32(), 0);
+        assert_eq!(e.mem.f32(COMP_HALF_RANGE), 2.5);
+    }
+
+    #[test]
+    fn comp_point3_update_evaluates_the_spline_at_the_normalized_time() {
+        let mut e = cp_engine();
+        let this = e.mem.alloc(0x34);
+        let point = e.mem.alloc(0xc);
+        e.mem.set_f32(this + START_TIME, 1.0);
+        e.mem.set_f32(this + END_TIME, 3.0);
+        e.mem.set_u32(this + SPLINE_DATA, 0x4000);
+        e.mem.set_u32(this + BASIS_DATA, 0x5000);
+        e.mem.set_u32(this + POINT3_HANDLE, 6);
+        e.mem.set_f32(this + COMP_OFFSET, 0.25);
+        e.mem.set_f32(this + COMP_HALF_RANGE, 0.75);
+        assert!(e
+            .call(0x00a5_1280, &args![this, 2.0f32, 0u32, point])
+            .bool());
+        let calls = cp_calls_to(&e, GET_COMPACTED_VALUE_DEGREE3);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0][0], 0x4000);
+        assert_eq!(calls[0][1], 0.5f32.to_bits());
+        assert_eq!(
+            &calls[0][3..],
+            &[3, 0x5000, 6, 0.25f32.to_bits(), 0.75f32.to_bits()]
+        );
+        for i in 0..3 {
+            assert_eq!(e.mem.f32(this + POINT3_VALUE + 4 * i), 1.0 + i as f32);
+            assert_eq!(e.mem.f32(point + 4 * i), 1.0 + i as f32);
+        }
+        assert_eq!(e.mem.f32(this + LAST_TIME), 2.0);
+        // At the last time only the copy.
+        e.mem.set_f32(this + POINT3_VALUE, 9.0);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x00a5_1280, &args![this, 2.0f32, 0u32, point])
+            .bool());
+        assert!(cp_calls_to(&e, GET_COMPACTED_VALUE_DEGREE3).is_empty());
+        assert_eq!(e.mem.f32(point), 9.0);
+        // Handle 0xFFFF: no evaluation, the time still recorded.
+        e.mem.set_u32(this + POINT3_HANDLE, 0xffff);
+        assert!(e
+            .call(0x00a5_1280, &args![this, 2.5f32, 0u32, point])
+            .bool());
+        assert!(cp_calls_to(&e, GET_COMPACTED_VALUE_DEGREE3).is_empty());
+        assert_eq!(e.mem.f32(this + LAST_TIME), 2.5);
     }
 }

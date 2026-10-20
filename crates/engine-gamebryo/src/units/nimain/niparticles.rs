@@ -39,11 +39,52 @@ pub fn ni_particles_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) 
     });
 }
 
+/// `00a96910` (`thiscall`, `RET 4`; engine map `NiParticlesData::SortParticles`).
+const SORT_PARTICLES: u32 = 0x00a9_6910;
+/// `00a7fd90` (`thiscall`, one stack word; engine map `NiGeometry::OnVisible`).
+const GEOMETRY_ON_VISIBLE: u32 = 0x00a7_fd90;
+/// `00a80610` (`thiscall`, `RET 4`; engine map `NiGeometry::RenderImmediate`).
+const GEOMETRY_RENDER_IMMEDIATE: u32 = 0x00a8_0610;
+
+// Translated from 00a9b2a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticles::OnVisible` (Xbox PDB; `thiscall`, `RET 4`): when the object at +0x9c is set,
+/// has bit 0 of its flags word at +0x18 set and any of bits 5 to 8 (`0x1e0`) of that word,
+/// sorts the particles of the data at +0xb8 (`00a96910`) with the word at +0xc of `culler`;
+/// then `NiGeometry::OnVisible` (`00a7fd90`) with `culler`.
+pub fn ni_particles_on_visible(e: &mut Engine, this: Ptr, culler: Ptr) {
+    let base = this.addr();
+    let property = e.mem.u32(base + 0x9c);
+    if property != 0
+        && e.mem.u8(property + 0x18) & 1 != 0
+        && e.mem.u16(property + 0x18) & 0x1e0 != 0
+    {
+        let data = e.mem.u32(base + 0xb8);
+        let camera = e.mem.u32(culler.addr() + 0xc);
+        e.call(SORT_PARTICLES, &args![data, camera]);
+    }
+    e.call(GEOMETRY_ON_VISIBLE, &args![this, culler]);
+}
+
+// Translated from 00a9b1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiParticles::RenderImmediate` (Xbox PDB; `thiscall`, `RET 4`): `NiGeometry::RenderImmediate`
+/// (`00a80610`) with `renderer`; then, when the renderer's word at +0x200 is 1 or 2 and its
+/// byte at +0x208 is 1, the renderer's vtable slot +0x1bc with `this`.
+pub fn ni_particles_render_immediate(e: &mut Engine, this: Ptr, renderer: Ptr) {
+    e.call(GEOMETRY_RENDER_IMMEDIATE, &args![this, renderer]);
+    let at = renderer.addr();
+    let mode = e.mem.u32(at + 0x200);
+    if (mode == 1 || mode == 2) && e.mem.u8(at + 0x208) == 1 {
+        e.vcall(at, 0x1bc, &args![this]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a9b1b0, ni_particles_get_rtti() -> Ptr),
         entry!(0x00a9b2e0, ni_particles_get_viewer_strings(Ptr, Ptr)),
+        entry!(0x00a9_b2a0, ni_particles_on_visible(Ptr, Ptr)),
+        entry!(0x00a9_b1f0, ni_particles_render_immediate(Ptr, Ptr)),
     ]
 }
 
@@ -107,6 +148,71 @@ mod tests {
             let set = log.iter().find(|c| c.0 == SET_AT).unwrap();
             assert_eq!(&set.1[..2], [strings, size]);
             assert_eq!(stored.get(), 0x7777_0001);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn on_visible_sorts_only_with_the_flag_bits_set() {
+        let mut e = Engine::new();
+        e.register(SORT_PARTICLES, |_, _| Ret::default());
+        e.register(GEOMETRY_ON_VISIBLE, |_, _| Ret::default());
+        let this = e.mem.alloc(0xc0);
+        let property = e.mem.alloc(0x20);
+        let culler = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xb8, 0x6000);
+        e.mem.set_u32(culler + 0xc, 0x5000);
+        for (pointer, flags, sorts) in [
+            (0, 0x1e1u16, false),
+            (property, 0x1e0, false),
+            (property, 0x001, false),
+            (property, 0x021, true),
+            (property, 0x101, true),
+        ] {
+            e.mem.set_u32(this + 0x9c, pointer);
+            e.mem.set_u16(property + 0x18, flags);
+            e.call_log = Some(vec![]);
+            e.call(0x00a9_b2a0, &args![this, culler]);
+            let log = e.call_log.take().unwrap();
+            let mut expected = vec![];
+            if sorts {
+                expected.push((SORT_PARTICLES, vec![0x6000, 0x5000]));
+            }
+            expected.push((GEOMETRY_ON_VISIBLE, vec![this, culler]));
+            assert_eq!(log[1..], expected[..], "flags {flags:#x}");
+        }
+    }
+
+    #[test]
+    fn render_immediate_calls_the_renderer_in_modes_1_and_2() {
+        let mut e = Engine::new();
+        e.register(GEOMETRY_RENDER_IMMEDIATE, |_, _| Ret::default());
+        e.put_vtable(0x0150_0000, &[0; 0x70]);
+        e.mem.set_u32(0x0150_01bc, 0x0150_1000);
+        e.register(0x0150_1000, |_, _| Ret::default());
+        let this = e.mem.alloc(0xc0);
+        let renderer = e.mem.alloc(0x210);
+        e.mem.set_u32(renderer, 0x0150_0000);
+        for (mode, byte, calls) in [
+            (1u32, 1u8, true),
+            (2, 1, true),
+            (3, 1, false),
+            (1, 2, false),
+        ] {
+            e.mem.set_u32(renderer + 0x200, mode);
+            e.mem.set_u8(renderer + 0x208, byte);
+            e.call_log = Some(vec![]);
+            e.call(0x00a9_b1f0, &args![this, renderer]);
+            let log = e.call_log.take().unwrap();
+            let mut expected = vec![(GEOMETRY_RENDER_IMMEDIATE, vec![this, renderer])];
+            if calls {
+                expected.push((0x0150_1000, vec![renderer, this]));
+            }
+            assert_eq!(log[1..], expected[..]);
         }
     }
 }

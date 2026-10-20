@@ -37,12 +37,33 @@ pub fn fn_004fe2e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The member and base destructors `004fe310` runs (`thiscall`, no stack word), with the
+/// offset each is called on, in its order: `0052d240` (unit `tesimagespacemodifier.cpp`) on
+/// `this`, `0048a490` (unit `tesmodeltextureswap.cpp`) on +0x30, and the base `0050e9f0`
+/// (unit `tesobject.cpp`) on `this`.
+const DESTRUCTOR_STEPS_004FE310: [(u32, u32); 3] =
+    [(0x0052_d240, 0), (0x0048_a490, 0x30), (0x0050_e9f0, 0)];
+
+// Translated from 004fe310 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004fe310 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00ef35c3, state variable) is not translated
+/// Unnamed in the engine map (`thiscall`, no stack word): a destructor. Sets the vtables
+/// `0102535c` (+0) and `01025334` (+0x30), then runs `0052d240` on `this`, `0048a490` on
+/// +0x30 and the base destructor `0050e9f0` on `this`.
+pub fn fn_004fe310(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0102_535c);
+    e.mem.set_u32(this.addr() + 0x30, 0x0102_5334);
+    for (destructor, offset) in DESTRUCTOR_STEPS_004FE310 {
+        e.call(destructor, &args![this.addr() + offset]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x004f_e260, fn_004fe260(Ptr) -> Ptr),
         entry!(0x004f_e250, fn_004fe250(Ptr, u32) -> u32),
         entry!(0x004f_e2e0, fn_004fe2e0(Ptr, u32) -> Ptr),
+        entry!(0x004f_e310, fn_004fe310(Ptr)),
     ]
 }
 
@@ -123,5 +144,32 @@ mod le81_thunk_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn fn_004fe310_sets_the_vtables_and_destroys_the_members() {
+        let mut e = Engine::new();
+        for (destructor, _) in DESTRUCTOR_STEPS_004FE310 {
+            e.register(destructor, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_e310, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (0x0052_d240, vec![this]),
+                (0x0048_a490, vec![this + 0x30]),
+                (0x0050_e9f0, vec![this]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this), 0x0102_535c);
+        assert_eq!(e.mem.u32(this + 0x30), 0x0102_5334);
     }
 }

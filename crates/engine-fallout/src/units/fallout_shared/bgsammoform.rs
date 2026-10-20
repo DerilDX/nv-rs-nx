@@ -85,12 +85,50 @@ pub fn bgs_ammo_form_init_item(e: &mut Engine, this: Ptr<BGSAmmoForm>, owner: Pt
     }
 }
 
+/// `00474a40` (`thiscall`, no stack word): the ammo form (the word at +4 when its form type
+/// is 0x55), or null.
+const GET_AMMO_FORM: u32 = 0x0047_4a40;
+/// `00500940` (`thiscall`, no stack word; unit `fallout shared/bgsterminal.cpp`).
+const AMMO_ENTRY_LIST: u32 = 0x0050_0940;
+/// `006815c0` (`thiscall`, no stack word): the address of the list's first entry word.
+const FIRST_ENTRY: u32 = 0x0068_15c0;
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// The type descriptors of the cast: from `TESForm` (`01183028`) to `TESAmmo` (`011840c4`).
+const TES_FORM_TYPE: u32 = 0x0118_3028;
+const TES_AMMO_TYPE: u32 = 0x0118_40c4;
+
+// Translated from 00474a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSAmmoForm::IsRockItLauncher` (Xbox PDB; `thiscall`, no stack word): true when the
+/// ammo form (`00474a40`) is set and the first entry of its list (`00500940`, then
+/// `006815c0`) is set and is not a `TESAmmo` (`__RTDynamicCast` from `TESForm` gives null);
+/// false otherwise.
+pub fn bgs_ammo_form_is_rock_it_launcher(e: &mut Engine, this: Ptr) -> bool {
+    if e.call(GET_AMMO_FORM, &args![this]).u32() == 0 {
+        return false;
+    }
+    let ammo = e.call(GET_AMMO_FORM, &args![this]).u32();
+    let list = e.call(AMMO_ENTRY_LIST, &args![ammo]).u32();
+    let holder = e.call(FIRST_ENTRY, &args![list]).u32();
+    let entry = e.mem.u32(holder);
+    if entry == 0 {
+        return false;
+    }
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![entry, 0u32, TES_FORM_TYPE, TES_AMMO_TYPE, 0u32],
+        )
+        .u32();
+    cast == 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00474bc0,
-        bgs_ammo_form_init_item(Ptr<BGSAmmoForm>, Ptr)
-    )]
+    vec![
+        entry!(0x00474bc0, bgs_ammo_form_init_item(Ptr<BGSAmmoForm>, Ptr)),
+        entry!(0x0047_4a80, bgs_ammo_form_is_rock_it_launcher(Ptr) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -232,5 +270,39 @@ mod tests {
             calls_to(&e, PRINT),
             vec![vec![MESSAGE_OWNER_NAME, 0x0100_0042, 0x0400_0000]]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    fn run(form: u32, entry: u32, cast: u32) -> (bool, Vec<(u32, Vec<u32>)>) {
+        let mut e = Engine::new();
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, entry);
+        e.register_double(GET_AMMO_FORM, move |_, _| form.into_ret());
+        e.register(AMMO_ENTRY_LIST, |_, _| 0x6100u32.into_ret());
+        e.register_double(FIRST_ENTRY, move |_, _| holder.into_ret());
+        e.register_double(DYNAMIC_CAST, move |_, _| cast.into_ret());
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0047_4a80, &args![0x7000u32]).bool();
+        (result, e.call_log.take().unwrap())
+    }
+
+    #[test]
+    fn is_rock_it_launcher_when_the_entry_is_not_ammo() {
+        let (result, log) = run(0x6000, 0x6200, 0);
+        assert!(result);
+        assert!(log.contains(&(AMMO_ENTRY_LIST, vec![0x6000])));
+        assert!(log.contains(&(
+            DYNAMIC_CAST,
+            vec![0x6200, 0, TES_FORM_TYPE, TES_AMMO_TYPE, 0]
+        )));
+        assert!(!run(0x6000, 0x6200, 0x6200).0);
+        assert!(!run(0x6000, 0, 0).0);
+        let (result, log) = run(0, 0x6200, 0);
+        assert!(!result);
+        assert_eq!(log.len(), 2);
     }
 }

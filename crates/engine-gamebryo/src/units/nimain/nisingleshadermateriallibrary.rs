@@ -79,11 +79,57 @@ pub fn fn_00a8fe70(e: &mut Engine, this: Ptr, name: Ptr) -> Ptr {
     this
 }
 
+/// `00a8fdb0` (`thiscall`, no stack word): the material-library base destructor.
+const LIBRARY_BASE_DESTRUCTOR: u32 = 0x00a8_fdb0;
+/// `00aa1460` (`cdecl`, two words: the block and its size): frees a sized block.
+const FREE_SIZED: u32 = 0x00aa_1460;
+
+// Translated from 00a8fd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiSingleShaderMaterialLibrary::scalar deleting destructor` (Xbox PDB name in the engine
+/// map; `thiscall`, `RET 4`): sets the vtable `0109f7b4`, clears the words at +0xc and
+/// +0x10, runs the base destructor `00a8fdb0`, and for bit 0 of `flags` frees the 0x14 bytes
+/// (`00aa1460`). Returns `this`.
+pub fn ni_single_shader_material_library_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0109_f7b4);
+    e.mem.set_u32(base + 0xc, 0);
+    e.mem.set_u32(base + 0x10, 0);
+    e.call(LIBRARY_BASE_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(FREE_SIZED, &args![this, 0x14u32]);
+    }
+    this
+}
+
+// Translated from 00a8fcc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nisingleshadermateriallibrary.cpp`, no arguments; one of
+/// the `NiMain` shutdown steps of `00a8a280`): when `011f5e40` holds the library `00a8fd80`
+/// constructed, calls its vtable slot 0 with 1 (`thiscall`); then clears the pointer.
+pub fn fn_00a8fcc0(e: &mut Engine) {
+    let object = e.mem.u32(LIBRARY_SLOT);
+    if object != 0 {
+        e.vcall(object, 0, &args![1u32]);
+    }
+    e.mem.set_u32(LIBRARY_SLOT, 0);
+}
+
+/// `011f5e40`: where `00a8fd80` keeps the library it constructs.
+const LIBRARY_SLOT: u32 = 0x011f_5e40;
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a8_fce0, ni_single_shader_material_library_ni_single_shader_material_library(Ptr) -> Ptr),
         entry!(0x00a8_fe70, fn_00a8fe70(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00a8_fd30,
+            ni_single_shader_material_library_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00a8_fcc0, fn_00a8fcc0()),
     ]
 }
 
@@ -180,5 +226,54 @@ mod tests {
         assert_eq!(e.mem.u32(this), 0x0109_f7b4);
         let data = e.mem.u32(LIBRARY_LIST);
         assert_eq!(e.mem.u32(data), this);
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn library_destructor_clears_runs_the_base_and_frees_on_bit_0() {
+        let mut e = Engine::new();
+        e.register(LIBRARY_BASE_DESTRUCTOR, |e, a| {
+            assert_eq!(e.mem.u32(a[0]), 0x0109_f7b4);
+            Ret::default()
+        });
+        e.register(FREE_SIZED, |_, _| Ret::default());
+        let this = e.mem.alloc(0x14);
+        for flags in [1u32, 2] {
+            e.mem.set_u32(this + 0xc, 5);
+            e.mem.set_u32(this + 0x10, 6);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x00a8_fd30, &args![this, flags]).u32(), this);
+            let log = e.call_log.take().unwrap();
+            let mut expected = vec![(LIBRARY_BASE_DESTRUCTOR, vec![this])];
+            if flags & 1 != 0 {
+                expected.push((FREE_SIZED, vec![this, 0x14]));
+            }
+            assert_eq!(log[1..], expected[..]);
+            assert_eq!(e.mem.u32(this + 0xc), 0);
+            assert_eq!(e.mem.u32(this + 0x10), 0);
+        }
+    }
+
+    #[test]
+    fn fn_00a8fcc0_destroys_the_library_and_clears_the_pointer() {
+        let mut e = Engine::new();
+        e.map(LIBRARY_SLOT & !0xfff, 0x1000);
+        e.put_vtable(0x0150_0000, &[0x0150_1000]);
+        e.register(0x0150_1000, |_, _| Ret::default());
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0150_0000);
+        e.mem.set_u32(LIBRARY_SLOT, object);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_fcc0, &args![]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1..], [(0x0150_1000, vec![object, 1])]);
+        assert_eq!(e.mem.u32(LIBRARY_SLOT), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_fcc0, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

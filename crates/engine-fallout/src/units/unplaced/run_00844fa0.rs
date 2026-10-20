@@ -20,9 +20,19 @@ pub fn fn_00844fa0(e: &mut Engine, this: Ptr) {
     e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
 }
 
+// Translated from 00844fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a vtable slot, `RET 4`): allocates `count` 8-byte items through
+/// `00401000(count * 8)` and returns the block. `this` is not read.
+pub fn fn_00844fc0(e: &mut Engine, _this: Ptr, count: u32) -> u32 {
+    e.call(0x0040_1000, &args![count.wrapping_shl(3)]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0084_4fa0, fn_00844fa0(Ptr))]
+    vec![
+        entry!(0x0084_4fa0, fn_00844fa0(Ptr)),
+        entry!(0x0084_4fc0, fn_00844fc0(Ptr, u32) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -45,5 +55,25 @@ mod array_destructor_tests {
     #[test]
     fn fn_00844fa0_sets_the_vtable_then_releases_the_buffer() {
         check_array_destructor(0x0084_4fa0, ARRAY_VTABLE_0107ED50, ARRAY_RELEASE_008454F0);
+    }
+}
+
+#[cfg(test)]
+mod b035_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00844fc0_allocates_eight_bytes_per_item() {
+        let mut e = Engine::new();
+        e.register(0x0040_1000, |_, a| (a[0] + 0x5000).into_ret());
+        assert_eq!(
+            e.call(0x0084_4fc0, &args![0x10u32, 6u32]).u32(),
+            0x5000 + 48
+        );
+        // The count is shifted as a word.
+        assert_eq!(
+            e.call(0x0084_4fc0, &args![0x10u32, 0x2000_0001u32]).u32(),
+            0x5008
+        );
     }
 }

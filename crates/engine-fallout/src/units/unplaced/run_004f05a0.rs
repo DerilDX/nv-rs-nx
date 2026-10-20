@@ -67,6 +67,105 @@ pub fn fn_004f0a10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 004f05a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `004f0360` on `this` with 8 (the engine map has no name; files
+/// `004f0360` under `bsbipnode.cpp`); its `EAX` is answered as it is.
+pub fn fn_004f05a0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x004f_0360, &args![this, 8u32]).u32()
+}
+
+/// `DynamicCast` (`00653270`, `cdecl (rtti, object)`) and the two `NiRTTI`
+/// records `004f05c0` tries (`011f36bc`, `011f36e4`).
+const DYNAMIC_CAST: u32 = 0x0065_3270;
+const FIRST_CAST_RTTI: u32 = 0x011f_36bc;
+const SECOND_CAST_RTTI: u32 = 0x011f_36e4;
+
+// Translated from 004f05c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks a list from its first entry (`0043b230`) to the end (each next
+/// from `004a8a90`), the engine map has no name: an entry of the class
+/// `011f36bc` gets `004f0640` with `value`, one of the class `011f36e4`
+/// gets `004f06d0` with `value` (both tried on every entry).
+pub fn fn_004f05c0(e: &mut Engine, this: Ptr, value: u32) {
+    let mut entry = e.call(0x0043_b230, &args![this]).u32();
+    while entry != 0 {
+        let first = e.call(DYNAMIC_CAST, &args![FIRST_CAST_RTTI, entry]).u32();
+        let second = e.call(DYNAMIC_CAST, &args![SECOND_CAST_RTTI, entry]).u32();
+        if first != 0 {
+            fn_004f0640(e, Ptr::new(first), value);
+        }
+        if second != 0 {
+            e.call(0x004f_06d0, &args![second, value]);
+        }
+        entry = e.call(0x004a_8a90, &args![entry]).u32();
+    }
+}
+
+/// The "no index" 16-bit value (`01096320`).
+const INVALID_INDEX: u32 = 0x0109_6320;
+
+// Translated from 004f0640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Visits `object` and, when it is a node, its children, recursively (the
+/// engine map has no name): a non-null object found in this collection
+/// (`0043b3b0` answers its 16-bit index, not `01096320`) is handed to
+/// `0043b320` with that index and 0. Then the object's vtable +0xC (asked
+/// even for a null object, as the exe does) answers the node; each of its
+/// children (`0043b480` the count, `0043b4a0` the child) is visited.
+pub fn fn_004f0640(e: &mut Engine, this: Ptr, object: u32) {
+    if object != 0 {
+        let index = e.call(0x0043_b3b0, &args![this, object]).u16();
+        if index != e.global::<u16>(INVALID_INDEX) {
+            e.call(0x0043_b320, &args![this, u32::from(index), 0u32]);
+        }
+    }
+    let node = e.vcall(object, 0xc, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let mut child = 0u32;
+    while child < e.call(0x0043_b480, &args![node]).u32() {
+        let item = e.call(0x0043_b4a0, &args![node, child]).u32();
+        fn_004f0640(e, this, item);
+        child = child.wrapping_add(1);
+    }
+}
+
+// Translated from 004f08c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004f08c0 - its C++ exception frame (FS:[0]) is not translated
+/// The `TESRegion` destructor body (the engine map has no name; the
+/// vtable is the one `004f0770` gives `TESRegion`): the vtable, the object
+/// at +0x18 deleted (`004f09e0` with 1), every element taken off the list
+/// at +0x1C (`006815c0` answers the first slot, `0063f7b0` removes it) and
+/// deleted (`004f0a10` with 1), the list itself deleted (`004702f0` with
+/// 1), then `TESForm::~TESForm`.
+pub fn fn_004f08c0(e: &mut Engine, this: Ptr) {
+    let object = this.addr();
+    e.mem.set_u32(object, 0x0102_397c);
+    let first = e.mem.u32(object + 0x18);
+    if first != 0 {
+        fn_004f09e0(e, Ptr::new(first), 1);
+    }
+    if e.mem.u32(object + 0x1c) == 0 {
+        e.call(0x0048_3630, &args![this]);
+        return;
+    }
+    loop {
+        let list = e.mem.u32(object + 0x1c);
+        let slot = e.call(0x0068_15c0, &args![list]).u32();
+        let element = e.mem.u32(slot);
+        if element == 0 {
+            break;
+        }
+        let list = e.mem.u32(object + 0x1c);
+        e.call(0x0063_f7b0, &args![list]);
+        fn_004f0a10(e, Ptr::new(element), 1);
+    }
+    let list = e.mem.u32(object + 0x1c);
+    if list != 0 {
+        e.call(0x0047_02f0, &args![list, 1u32]);
+    }
+    e.call(0x0048_3630, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -74,6 +173,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004f_0890, fn_004f0890(Ptr, u32) -> Ptr),
         entry!(0x004f_09e0, fn_004f09e0(Ptr, u32) -> Ptr),
         entry!(0x004f_0a10, fn_004f0a10(Ptr, u32) -> Ptr),
+        entry!(0x004f_05a0, fn_004f05a0(Ptr) -> u32),
+        entry!(0x004f_05c0, fn_004f05c0(Ptr, u32)),
+        entry!(0x004f_0640, fn_004f0640(Ptr, u32)),
+        entry!(0x004f_08c0, fn_004f08c0(Ptr)),
     ]
 }
 
@@ -210,5 +313,126 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+
+    use super::*;
+
+    fn region_calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|call| call.0 == addr)
+            .map(|call| call.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_004f05a0_passes_eight() {
+        let mut e = Engine::new();
+        e.register(0x004f_0360, |_, a| (a[0] + a[1]).into_ret());
+        assert_eq!(e.call(0x004f_05a0, &args![0x1000u32]).u32(), 0x1008);
+    }
+
+    #[test]
+    fn list_walk_casts_each_entry_both_ways() {
+        let mut e = Engine::new();
+        // Entries 0x10 and 0x20; 0x10 is of the first class, 0x20 of both.
+        e.register(0x0043_b230, |_, _| 0x10u32.into_ret());
+        e.register(0x004a_8a90, |_, a| {
+            (if a[0] == 0x10 { 0x20u32 } else { 0 }).into_ret()
+        });
+        e.register(DYNAMIC_CAST, |_, a| {
+            match (a[0], a[1]) {
+                (FIRST_CAST_RTTI, entry) => entry + 1,
+                (SECOND_CAST_RTTI, 0x20) => 0x22,
+                _ => 0,
+            }
+            .into_ret()
+        });
+        e.register(0x004f_06d0, |_, _| Ret::default());
+        // The first-class handler is this file's 004f0640: its callees.
+        e.register(0x0043_b3b0, |_, _| 0xffffu32.into_ret());
+        e.map(INVALID_INDEX, 4);
+        e.set_global(INVALID_INDEX, 0xffffu16);
+        // The value handed on is an object that is no node.
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 0xc, 0x0300_0000);
+        e.register(0x0300_0000, |_, _| Ret::default());
+        let value = e.mem.alloc(4);
+        e.mem.set_u32(value, vtable);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_05c0, &args![0x9000u32, value]);
+        assert_eq!(region_calls_to(&e, 0x004f_06d0), vec![vec![0x22, value]]);
+        assert_eq!(
+            region_calls_to(&e, 0x0043_b3b0),
+            vec![vec![0x11, value], vec![0x21, value]]
+        );
+    }
+
+    #[test]
+    fn node_visit_handles_found_objects_and_recurses_into_children() {
+        const IS_NODE: u32 = 0x0300_0000;
+        let mut e = Engine::new();
+        e.map(INVALID_INDEX, 4);
+        e.set_global(INVALID_INDEX, 0xffffu16);
+        // Object 0x100 is a node (itself) with children 0x200 and 0x300;
+        // only 0x300 is in the collection, at index 5.
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 0xc, IS_NODE);
+        for object in [0x100u32, 0x200, 0x300] {
+            e.map(object, 4);
+            e.mem.set_u32(object, vtable);
+        }
+        e.register(IS_NODE, |_, a| {
+            (if a[0] == 0x100 { a[0] } else { 0 }).into_ret()
+        });
+        e.register(0x0043_b480, |_, _| 2u32.into_ret());
+        e.register(0x0043_b4a0, |_, a| (0x200 + 0x100 * a[1]).into_ret());
+        e.register(0x0043_b3b0, |_, a| {
+            (if a[1] == 0x300 { 5u32 } else { 0xffff }).into_ret()
+        });
+        e.register(0x0043_b320, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x004f_0640, &args![0x9000u32, 0x100u32]);
+        assert_eq!(region_calls_to(&e, 0x0043_b320), vec![vec![0x9000, 5, 0]]);
+        assert_eq!(region_calls_to(&e, 0x0043_b3b0).len(), 3);
+    }
+
+    #[test]
+    fn region_destructor_deletes_its_members_then_runs_the_form_destructor() {
+        let mut e = Engine::new();
+        for addr in [
+            0x004f_3360u32,
+            0x004f_7740,
+            0x0040_1030,
+            0x0047_02f0,
+            0x0048_3630,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x38);
+        let list = e.mem.alloc(0x10);
+        // The list's first slot holds 0x5000, then (after one removal) null.
+        e.register_double(0x0068_15c0, move |_, a| (a[0] + 4).into_ret());
+        e.register_double(0x0063_f7b0, |e, a| {
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        e.mem.set_u32(list + 4, 0x5000);
+        e.mem.set_u32(this + 0x18, 0x6000);
+        e.mem.set_u32(this + 0x1c, list);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_08c0, &args![this]);
+        assert_eq!(e.mem.u32(this), 0x0102_397c);
+        assert_eq!(region_calls_to(&e, 0x004f_3360), vec![vec![0x6000]]);
+        assert_eq!(region_calls_to(&e, 0x004f_7740), vec![vec![0x5000]]);
+        assert_eq!(region_calls_to(&e, 0x0047_02f0), vec![vec![list, 1]]);
+        assert_eq!(region_calls_to(&e, 0x0048_3630), vec![vec![this]]);
+        // Without members only the vtable and the form destructor.
+        let bare = e.mem.alloc(0x38);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_08c0, &args![bare]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
     }
 }

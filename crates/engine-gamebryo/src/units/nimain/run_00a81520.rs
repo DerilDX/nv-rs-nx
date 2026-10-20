@@ -29,9 +29,33 @@ pub fn fn_00a81520(e: &mut Engine) {
     assign_ref_counted(e, SHADE_PROPERTY_SLOT, object);
 }
 
+/// Import slot of `InterlockedDecrement` (`stdcall`, one word: the address of the count).
+const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+
+// Translated from 00a81590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments; one of the `NiMain` shutdown steps of
+/// `00a8a280`): releases the object that `00a81520` stores in `011f5ae8`. When it is not null, drops one reference
+/// (`InterlockedDecrement` of the count at +4; at zero it
+/// calls the object's vtable slot +4) and clears the pointer.
+pub fn fn_00a81590(e: &mut Engine) {
+    let object = e.mem.u32(SHADE_PROPERTY_SLOT);
+    if object != 0 {
+        let count = e
+            .call(INTERLOCKED_DECREMENT, &args![object.wrapping_add(4)])
+            .u32();
+        if count == 0 {
+            e.vcall(object, 4, &args![]);
+        }
+        e.mem.set_u32(SHADE_PROPERTY_SLOT, 0);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a8_1520, fn_00a81520())]
+    vec![
+        entry!(0x00a8_1520, fn_00a81520()),
+        entry!(0x00a8_1590, fn_00a81590()),
+    ]
 }
 
 #[cfg(test)]
@@ -56,5 +80,46 @@ mod start_up_tests {
             e.register(ALLOCATE, |_, _| 0u32.into_ret());
         });
         assert_eq!(run.object, 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn fn_00a81590_releases_and_clears_the_held_object() {
+        let mut e = Engine::new();
+        e.map(SHADE_PROPERTY_SLOT & !0xfff, 0x1000);
+        e.put_vtable(0x0150_0000, &[0, 0x0150_1000]);
+        e.register(0x0150_1000, |_, _| Ret::default());
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0150_0000);
+        let remaining = std::rc::Rc::new(std::cell::Cell::new(1u32));
+        let counter = remaining.clone();
+        e.register_double(INTERLOCKED_DECREMENT, move |_, _| {
+            counter.set(counter.get() - 1);
+            counter.get().into_ret()
+        });
+        // Still referenced elsewhere: no destructor.
+        remaining.set(2);
+        e.mem.set_u32(SHADE_PROPERTY_SLOT, object);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_1590, &args![]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(INTERLOCKED_DECREMENT, vec![object + 4])));
+        assert!(log.iter().all(|call| call.0 != 0x0150_1000));
+        assert_eq!(e.mem.u32(SHADE_PROPERTY_SLOT), 0);
+        // Last reference: vtable slot +4 runs on the object.
+        e.mem.set_u32(SHADE_PROPERTY_SLOT, object);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_1590, &args![]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(0x0150_1000, vec![object])));
+        assert_eq!(e.mem.u32(SHADE_PROPERTY_SLOT), 0);
+        // Null: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_1590, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

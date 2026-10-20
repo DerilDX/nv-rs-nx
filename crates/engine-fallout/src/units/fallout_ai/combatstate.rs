@@ -3775,6 +3775,23 @@ pub fn fn_009a3830(e: &mut Engine, left: Ptr, right: Ptr) -> bool {
     e.mem.u32(left.addr()) == e.mem.u32(right.addr())
 }
 
+// Translated from 0099e040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the float at +0xbc of `this` (`FLD`, so a signalling NaN comes
+/// back quiet). No name in the engine map; the body reads +0xbc, which in
+/// [`CombatState`] falls inside `AttackDialogueTimer`'s span, so the class
+/// is unconfirmed.
+pub fn fn_0099e040(e: &mut Engine, this: Ptr) -> f32 {
+    x87_quiet(e.mem.f32(this.addr() + 0xbc))
+}
+
+// Translated from 009a1260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the float at +0xc8 of `this` (`FLD`, quieting a signalling NaN).
+/// No name in the engine map; [`CombatState`] has bytes at +0xc8, so the
+/// class is unconfirmed.
+pub fn fn_009a1260(e: &mut Engine, this: Ptr) -> f32 {
+    x87_quiet(e.mem.f32(this.addr() + 0xc8))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3889,6 +3906,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009a_3460, fn_009a3460(Ptr)),
         entry!(0x009a_35f0, fn_009a35f0(Ptr)),
         entry!(0x009a_3810, fn_009a3810(Ptr)),
+        entry!(0x0099_e040, fn_0099e040(Ptr) -> f32),
+        entry!(0x009a_1260, fn_009a1260(Ptr) -> f32),
     ]
 }
 
@@ -5338,5 +5357,30 @@ mod physics_work_ahead_tests {
         assert!(!e.call(0x009a_3830, &args![a, b]).bool());
         // The same pointer twice is trivially equal.
         assert!(e.call(0x009a_3830, &args![a, a]).bool());
+    }
+}
+
+#[cfg(test)]
+mod float_reader_b039_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0099e040_reads_the_float_at_0xbc() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x100);
+        e.mem.set_f32(this + 0xbc, 2.5);
+        assert_eq!(e.call(0x0099_e040, &args![this]).f64(), 2.5);
+        // A signalling NaN comes back quiet.
+        e.mem.set_u32(this + 0xbc, 0x7f80_0001);
+        let r = e.call(0x0099_e040, &args![this]).f64();
+        assert_eq!((r as f32).to_bits(), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn fn_009a1260_reads_the_float_at_0xc8() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x100);
+        e.mem.set_f32(this + 0xc8, -7.25);
+        assert_eq!(e.call(0x009a_1260, &args![this]).f64(), -7.25);
     }
 }

@@ -47,12 +47,51 @@ pub fn fn_00a9b9b0(e: &mut Engine) {
     e.mem.set_u8(0x011f_6001, 1);
 }
 
+/// The critical section `00a9bb60` holds (`011f600c`).
+const SEQUENCE_LOCK: u32 = 0x011f_600c;
+/// Import slots of `EnterCriticalSection` and `LeaveCriticalSection` (`stdcall`, one word).
+const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
+const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
+/// The global `NiTArray` `00a9bb60` empties (`011ac040`; its 16-bit used size at +0xa).
+const SEQUENCE_ARRAY: u32 = 0x011a_c040;
+/// `00a9ba90` (`thiscall` on the array, `RET 8`: the index and the address of a word).
+const REMOVE_AT: u32 = 0x00a9_ba90;
+/// `00a47770` (`thiscall`, `RET 4`; engine map
+/// `NiTArray<NiPointer<NiControllerSequence>,...>::SetSize`).
+const ARRAY_SET_SIZE: u32 = 0x00a4_7770;
+
+// Translated from 00a9bb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments; one of the `NiMain` shutdown steps of
+/// `00a8a280`): inside the critical section `011f600c`, calls `00a9ba90` on the array at
+/// `011ac040` for each index below its used size (read again after each call), passing the
+/// address of one stack word set to 0 once before the loop, then gives the array size 0
+/// (`00a47770`).
+pub fn fn_00a9bb60(e: &mut Engine) {
+    e.call(ENTER_CRITICAL_SECTION, &args![SEQUENCE_LOCK]);
+    e.with_stack(4, |e, word| {
+        let mut index = 0u32;
+        if e.mem.u16(SEQUENCE_ARRAY + 0xa) > 0 {
+            e.mem.set_u32(word.addr(), 0);
+            loop {
+                e.call(REMOVE_AT, &args![SEQUENCE_ARRAY, index, word]);
+                index = index.wrapping_add(1);
+                if index >= e.mem.u16(SEQUENCE_ARRAY + 0xa) as u32 {
+                    break;
+                }
+            }
+        }
+    });
+    e.call(ARRAY_SET_SIZE, &args![SEQUENCE_ARRAY, 0u32]);
+    e.call(LEAVE_CRITICAL_SECTION, &args![SEQUENCE_LOCK]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a9_ba80, fn_00a9ba80()),
         entry!(0x00a9_b8b0, fn_00a9b8b0()),
         entry!(0x00a9_b9b0, fn_00a9b9b0()),
+        entry!(0x00a9_bb60, fn_00a9bb60()),
     ]
 }
 
@@ -100,5 +139,53 @@ mod table_tests {
         }
         assert_eq!(e.mem.u16(0x011f_5f7c + 18), 0);
         assert_eq!(e.mem.u8(0x011f_6001), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn fn_00a9bb60_removes_every_index_inside_the_lock() {
+        let mut e = Engine::new();
+        e.map(SEQUENCE_ARRAY & !0xfff, 0x1000);
+        e.register(ENTER_CRITICAL_SECTION, |_, _| Ret::default());
+        e.register(LEAVE_CRITICAL_SECTION, |_, _| Ret::default());
+        e.register(ARRAY_SET_SIZE, |_, _| Ret::default());
+        // Each removal takes the last element away, as a shrinking array would; the
+        // word passed stays 0 until the double changes it.
+        e.register(REMOVE_AT, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), if a[1] == 0 { 0 } else { 9 });
+            e.mem.set_u32(a[2], 9);
+            Ret::default()
+        });
+        e.mem.set_u16(SEQUENCE_ARRAY + 0xa, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_bb60, &args![]);
+        let log = e.call_log.take().unwrap();
+        let indices: Vec<u32> = log
+            .iter()
+            .filter(|call| call.0 == REMOVE_AT)
+            .map(|call| call.1[1])
+            .collect();
+        assert_eq!(indices, [0, 1, 2]);
+        assert_eq!(log[1], (ENTER_CRITICAL_SECTION, vec![SEQUENCE_LOCK]));
+        assert_eq!(
+            log[log.len() - 2],
+            (ARRAY_SET_SIZE, vec![SEQUENCE_ARRAY, 0])
+        );
+        assert_eq!(
+            log[log.len() - 1],
+            (LEAVE_CRITICAL_SECTION, vec![SEQUENCE_LOCK])
+        );
+
+        // An empty array: no removal.
+        e.mem.set_u16(SEQUENCE_ARRAY + 0xa, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_bb60, &args![]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|call| call.0 != REMOVE_AT));
+        assert_eq!(log.len(), 4);
     }
 }

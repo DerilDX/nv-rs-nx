@@ -12,9 +12,19 @@ pub fn fn_006ec1c0(e: &mut Engine, this: Ptr) {
     e.call(0x006e_c1e0, &args![this]);
 }
 
+// Translated from 006ec1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack word): a destructor that only sets the
+/// vtable `0106d6b8`.
+pub fn fn_006ec1e0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0106_d6b8);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x006e_c1c0, fn_006ec1c0(Ptr))]
+    vec![
+        entry!(0x006e_c1c0, fn_006ec1c0(Ptr)),
+        entry!(0x006e_c1e0, fn_006ec1e0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -46,5 +56,18 @@ mod tests {
             0x0106_d698,
             "the vtable was stored before the call"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    #[test]
+    fn fn_006ec1e0_sets_the_vtable() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(4);
+        e.call(0x006e_c1e0, &args![this]);
+        assert_eq!(e.mem.u32(this), 0x0106_d6b8);
     }
 }

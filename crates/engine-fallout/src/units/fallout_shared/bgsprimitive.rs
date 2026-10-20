@@ -34,12 +34,668 @@ pub fn fn_004a71f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 004a51d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 8`: the address of three
+/// words and a float): copies the three words to `+0..+8` and the float to
+/// `+0xc` through `FLD`/`FSTP` (a signalling NaN is quieted).
+pub fn fn_004a51d0(e: &mut Engine, this: Ptr, point: Ptr, value: f32) {
+    let t = this.addr();
+    let p = point.addr();
+    for word in 0..3u32 {
+        let v = e.mem.u32(p + 4 * word);
+        e.mem.set_u32(t + 4 * word, v);
+    }
+    e.mem.set_u32(t + 0xc, x87_quiet_bits(value.to_bits()));
+}
+
+/// `00414430` (`thiscall`, `RET 0x10`: four floats): sets a colour.
+const COLOR_SET: u32 = 0x0041_4430;
+
+// Translated from 004a7800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): `00414430` on
+/// `this` with four 0.0 floats.
+pub fn fn_004a7800(e: &mut Engine, this: Ptr) {
+    let zero = x87_store32(0.0);
+    e.call(COLOR_SET, &args![this, zero, zero, zero, zero]);
+}
+
+// Translated from 004a51b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`: an index): the address of
+/// the word at that index (`this + index * 4`).
+pub fn fn_004a51b0(_e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    this.addr().wrapping_add(index.wrapping_mul(4))
+}
+
+// Translated from 004a4f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a two-float point, `RET 8`: the
+/// result's address and a float): both coordinates times the float (`float`
+/// stores) into the result, which is answered.
+pub fn fn_004a4f40(e: &mut Engine, this: Ptr, out: Ptr, scale: f32) -> Ptr {
+    let x = e.mem.u32(this.addr());
+    let y = e.mem.u32(this.addr() + 4);
+    let x = x87_store32(x87_mul(x87_load32(x), x87_m32(scale.to_bits())));
+    let y = x87_store32(x87_mul(x87_load32(y), x87_m32(scale.to_bits())));
+    e.mem.set_u32(out.addr(), x);
+    e.mem.set_u32(out.addr() + 4, y);
+    out
+}
+
+// Translated from 004a7ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundSphere::SetCenter` (engine map name), `thiscall`, `RET 4`
+/// (the centre's address): copies its three words to `+0xc..+0x14`.
+pub fn bs_multi_bound_sphere_set_center(e: &mut Engine, this: Ptr, center: Ptr) {
+    for word in 0..3u32 {
+        let v = e.mem.u32(center.addr() + 4 * word);
+        e.mem.set_u32(this.addr() + 0xc + 4 * word, v);
+    }
+}
+
+/// `NiObject`'s destructor body (`00a5d3d0`, `thiscall`, no stack words).
+const NI_OBJECT_DESTRUCT: u32 = 0x00a5_d3d0;
+
+// Translated from 004a7090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): runs `NiObject`'s
+/// destructor body (`00a5d3d0`) on `this`.
+pub fn fn_004a7090(e: &mut Engine, this: Ptr) {
+    e.call(NI_OBJECT_DESTRUCT, &args![this]);
+}
+
+// Translated from 004a7c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): `004a7090`.
+pub fn fn_004a7c20(e: &mut Engine, this: Ptr) {
+    fn_004a7090(e, this);
+}
+
+/// `004a4bd0` (`thiscall`, no stack words): the destructor body `004a7220`
+/// forwards to.
+const DESTRUCT_004A4BD0: u32 = 0x004a_4bd0;
+
+// Translated from 004a7220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words): `004a4bd0`.
+pub fn fn_004a7220(e: &mut Engine, this: Ptr) {
+    e.call(DESTRUCT_004A4BD0, &args![this]);
+}
+
+/// The sized free `00aa1460` (`cdecl`: the block and its size).
+const SIZED_FREE: u32 = 0x00aa_1460;
+
+// Translated from 004a5250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`: another four-word
+/// record): `004a51d0` with its first three words and its float at `+0xc`
+/// (pushed through `FLD`/`FSTP`). Answers `this`.
+pub fn fn_004a5250(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    let value = x87_quiet_bits(e.mem.u32(other.addr() + 0xc));
+    fn_004a51d0(e, this, other, f32::from_bits(value));
+    this
+}
+
+// Translated from 004a7060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundAABB::_scalar_deleting_destructor_` (engine map name),
+/// `thiscall`, `RET 4` (the flags): `004a7c20`, then with bit 0 the sized free
+/// of 0x24 bytes. Answers `this`.
+pub fn bs_multi_bound_aabb_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_004a7c20(e, this);
+    if flags & 1 != 0 {
+        e.call(SIZED_FREE, &args![this, 0x24u32]);
+    }
+    this
+}
+
+// Translated from 004a6110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSOcclusionPlane::_scalar_deleting_destructor_` (engine map name),
+/// `thiscall`, `RET 4`: `004a7090`, then with bit 0 the sized free of 0xfc
+/// bytes. Answers `this`.
+pub fn bs_occlusion_plane_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_004a7090(e, this);
+    if flags & 1 != 0 {
+        e.call(SIZED_FREE, &args![this, 0xfcu32]);
+    }
+    this
+}
+
+// Translated from 004a7bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundSphere::_scalar_deleting_destructor_` (engine map name),
+/// `thiscall`, `RET 4`: `004a7c20`, then with bit 0 the sized free of 0x1c
+/// bytes. Answers `this`.
+pub fn bs_multi_bound_sphere_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_004a7c20(e, this);
+    if flags & 1 != 0 {
+        e.call(SIZED_FREE, &args![this, 0x1cu32]);
+    }
+    this
+}
+
+// Translated from 004a4cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on four floats, `RET 4`: another
+/// four): whether all four are equal (`FUCOMPP`, `TEST AH,0x44`; a NaN is
+/// never equal), compared in order and stopping at the first difference.
+pub fn fn_004a4cc0(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    (0..4u32).all(|i| {
+        x87_m32(e.mem.u32(other.addr() + 4 * i)) == x87_m32(e.mem.u32(this.addr() + 4 * i))
+    })
+}
+
+/// The float 2.0 (`010162c0`) and 0.5 (`01016248`), the double 0.5
+/// (`01011588`) and 0.001 (`0101e788`).
+const FLOAT_TWO: u32 = 0x0101_62c0;
+const FLOAT_HALF: u32 = 0x0101_6248;
+const DOUBLE_HALF: u32 = 0x0101_1588;
+const DOUBLE_THOUSANDTH: u32 = 0x0101_e788;
+/// `00452dc0` (`thiscall` on a two-float point, `RET 8`: two floats; answers
+/// the point), `0045bb20` (`thiscall` on a point, `RET 8`: the result's
+/// address and a float) and `004a5100` (`cdecl`: a float and a word; answers
+/// the made primitive).
+const POINT2_SET: u32 = 0x0045_2dc0;
+const POINT3_SCALED: u32 = 0x0045_bb20;
+const MAKE_004A5100: u32 = 0x004a_5100;
+
+// Translated from 004a4e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, three words: the primitive type, the
+/// address of its size and a word): makes a primitive. Type 1: the size
+/// times 2.0 (`0045bb20`) into a box (`004a5040`); type 2: `004a5100` with
+/// the first float; type 3: the first and third floats as a two-float point
+/// (`00452dc0`) times 2.0 (`004a4f40`) into a plane (`004a4f80`); any other
+/// answers 0. Floats go through `FLD`/`FSTP` as they are pushed.
+pub fn fn_004a4e90(e: &mut Engine, kind: u32, size: Ptr, word: u32) -> u32 {
+    let s = size.addr();
+    e.with_stack(0x1c, |e, frame| {
+        // The frame: the two-float point (+0), the scaled size (+8), the
+        // scaled point (+0x14).
+        let point = frame.addr();
+        let scaled = point + 8;
+        let half_size = point + 0x14;
+        let two = x87_quiet_bits(e.mem.u32(FLOAT_TWO));
+        match kind {
+            1 => {
+                e.call(POINT3_SCALED, &args![s, scaled, two]);
+                fn_004a5040(e, Ptr::new(scaled), word)
+            }
+            2 => {
+                let first = x87_quiet_bits(e.mem.u32(s));
+                e.call(MAKE_004A5100, &args![first, word]).u32()
+            }
+            3 => {
+                let x = x87_quiet_bits(e.mem.u32(s));
+                let z = x87_quiet_bits(e.mem.u32(s + 8));
+                let made = e.call(POINT2_SET, &args![point, x, z]).u32();
+                fn_004a4f40(e, Ptr::new(made), Ptr::new(half_size), f32::from_bits(two));
+                fn_004a4f80(e, Ptr::new(half_size), word)
+            }
+            _ => 0,
+        }
+    })
+}
+
+/// The allocation `00401000` (`cdecl`: the size).
+const ALLOCATE_00401000: u32 = 0x0040_1000;
+
+// Translated from 004a4f80 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004a4f80 - the C++ exception-unwinding frame (FS:[0] chain, handler 00ef8c3b, state variable) and its stack cookie word are not translated
+/// Unnamed in the engine map (`cdecl`, two words: the address of a two-float
+/// size and a word): a `BGSPrimitivePlane` (0x34 bytes, `00401000`, built by
+/// `004a5280`; a failed allocation is used as it is) gets the word through
+/// its vtable slot `+8`, half of each size coordinate at `+0x18` and `+0x20`
+/// (times the double 0.5), 1.0 at `+0x1c` and the type 3 at `+4`. Answers it.
+pub fn fn_004a4f80(e: &mut Engine, size: Ptr, word: u32) -> u32 {
+    let block = e.call(ALLOCATE_00401000, &args![0x34u32]).u32();
+    let plane = if block != 0 {
+        fn_004a5280(e, Ptr::new(block)).addr()
+    } else {
+        0
+    };
+    e.vcall(plane, 8, &args![word]);
+    let half = x87_load64(e.mem.u64(DOUBLE_HALF));
+    let x = x87_store32(x87_mul(x87_load32(e.mem.u32(size.addr())), half));
+    e.mem.set_u32(plane.wrapping_add(0x18), x);
+    e.mem.set_u32(plane.wrapping_add(0x1c), x87_store32(1.0));
+    let y = x87_store32(x87_mul(x87_load32(e.mem.u32(size.addr() + 4)), half));
+    e.mem.set_u32(plane.wrapping_add(0x20), y);
+    e.mem.set_u32(plane.wrapping_add(4), 3);
+    plane
+}
+
+// Translated from 004a5040 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004a5040 - the C++ exception-unwinding frame (FS:[0] chain, handler 00eefe9b, state variable) and its stack cookie word are not translated
+/// Unnamed in the engine map (`cdecl`, two words: the address of a
+/// three-float size and a word): a `BGSPrimitiveBox` (0x4c bytes, built by
+/// `004a6370`; a failed allocation is used as it is) gets the word (slot
+/// `+8`) and half the size (`0045bb20` with 0.5, through slot `+0xc`), and the
+/// type 1 at `+4`. Answers it.
+pub fn fn_004a5040(e: &mut Engine, size: Ptr, word: u32) -> u32 {
+    let block = e.call(ALLOCATE_00401000, &args![0x4cu32]).u32();
+    let shape = if block != 0 {
+        fn_004a6370(e, Ptr::new(block)).addr()
+    } else {
+        0
+    };
+    e.vcall(shape, 8, &args![word]);
+    e.with_stack(0xc, |e, half| {
+        let factor = x87_quiet_bits(e.mem.u32(FLOAT_HALF));
+        e.call(POINT3_SCALED, &args![size, half, factor]);
+        e.vcall(shape, 0xc, &args![half]);
+    });
+    e.mem.set_u32(shape.wrapping_add(4), 1);
+    shape
+}
+
+/// `BGSPrimitive`'s vtable (`0101e72c`), `BGSPrimitivePlane`'s (`0101e75c`)
+/// and `BGSPrimitiveBox`'s (`0101e8c4`), by their RTTI.
+const BGS_PRIMITIVE_VTABLE: u32 = 0x0101_e72c;
+const BGS_PRIMITIVE_PLANE_VTABLE: u32 = 0x0101_e75c;
+const BGS_PRIMITIVE_BOX_VTABLE: u32 = 0x0101_e8c4;
+/// `006815c0` (`thiscall`, no stack words), the `NiPointer` constructor from
+/// a raw pointer `00633c90` and the `NiPointer` assignment `0066b0d0` (both
+/// `thiscall`, `RET 4`).
+const MEMBER_18_SET_UP: u32 = 0x0068_15c0;
+const NI_POINTER_FROM_RAW: u32 = 0x0063_3c90;
+const NI_POINTER_SET: u32 = 0x0066_b0d0;
+
+// Translated from 004a4ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004a4ac0 - the C++ exception-unwinding frame (FS:[0] chain, handler 00eefe71, state variable) and its stack cookie word are not translated
+/// Unnamed in the engine map: `BGSPrimitive`'s constructor (by its vtable's
+/// RTTI; `thiscall`, no stack words). The vtable, the colour at `+8` (four
+/// 0.0 through `00414430`), `006815c0` on `+0x18`, the three `NiPointer`s at
+/// `+0x24`, `+0x28`, `+0x2c` made null (`00633c90`) and assigned null again
+/// (`0066b0d0`, in the order `+0x24`, `+0x2c`, `+0x28`), and 7 at `+0x30`.
+/// Answers `this`.
+pub fn fn_004a4ac0(e: &mut Engine, this: Ptr) -> Ptr {
+    let t = this.addr();
+    e.mem.set_u32(t, BGS_PRIMITIVE_VTABLE);
+    let zero = x87_store32(0.0);
+    e.call(COLOR_SET, &args![t + 8, zero, zero, zero, zero]);
+    e.call(MEMBER_18_SET_UP, &args![t + 0x18]);
+    for at in [0x24u32, 0x28, 0x2c] {
+        e.call(NI_POINTER_FROM_RAW, &args![t + at, 0u32]);
+    }
+    for at in [0x24u32, 0x2c, 0x28] {
+        e.call(NI_POINTER_SET, &args![t + at, 0u32]);
+    }
+    e.mem.set_u32(t + 0x30, 7);
+    this
+}
+
+// Translated from 004a5280 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004a5280 - the C++ exception-unwinding frame (FS:[0] chain, handler 00eeffd8, state variable) and its stack cookie word are not translated
+/// Unnamed in the engine map: `BGSPrimitivePlane`'s constructor (`thiscall`,
+/// no stack words): `004a4ac0`, the class's vtable, the pointers at `+0x24`
+/// and `+0x2c` assigned null, the type 3 at `+4`. Answers `this`.
+pub fn fn_004a5280(e: &mut Engine, this: Ptr) -> Ptr {
+    let t = this.addr();
+    fn_004a4ac0(e, this);
+    e.mem.set_u32(t, BGS_PRIMITIVE_PLANE_VTABLE);
+    e.call(NI_POINTER_SET, &args![t + 0x24, 0u32]);
+    e.call(NI_POINTER_SET, &args![t + 0x2c, 0u32]);
+    e.mem.set_u32(t + 4, 3);
+    this
+}
+
+// Translated from 004a6370 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004a6370 - the C++ exception-unwinding frame (FS:[0] chain, handler 00eeffd8, state variable) and its stack cookie word are not translated
+/// Unnamed in the engine map: `BGSPrimitiveBox`'s constructor (`thiscall`, no
+/// stack words): `004a4ac0`, the class's vtable, the pointers at `+0x24` and
+/// `+0x2c` assigned null, the type 1 at `+4`. Answers `this`.
+pub fn fn_004a6370(e: &mut Engine, this: Ptr) -> Ptr {
+    let t = this.addr();
+    fn_004a4ac0(e, this);
+    e.mem.set_u32(t, BGS_PRIMITIVE_BOX_VTABLE);
+    e.call(NI_POINTER_SET, &args![t + 0x24, 0u32]);
+    e.call(NI_POINTER_SET, &args![t + 0x2c, 0u32]);
+    e.mem.set_u32(t + 4, 1);
+    this
+}
+
+/// The `NiPointer` read `00559450` (`thiscall`; the object), the Gamebryo
+/// allocation `00aa13e0` (`cdecl`), `BSFadeNode::BSFadeNode` (`00b4e150`,
+/// `thiscall`), the fixed-string constructor `00438170` (`thiscall`, `RET 4`:
+/// the text) and destructor `004381b0`, `00a5b950` (`thiscall` on the node,
+/// `RET 4`: the name) and `NiAVObject::UpdateProperties` (`00a5a040`).
+const NI_POINTER_GET: u32 = 0x0055_9450;
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+const FADE_NODE_CONSTRUCT: u32 = 0x00b4_e150;
+const FIXED_STRING_CONSTRUCT: u32 = 0x0043_8170;
+const FIXED_STRING_DESTRUCT: u32 = 0x0043_81b0;
+const NODE_SET_NAME: u32 = 0x00a5_b950;
+const UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+/// `"Plane"` (`0101e77c`) and the box's name (`0101e8dc`) in `.rdata`.
+const PLANE_NAME: u32 = 0x0101_e77c;
+const BOX_NAME: u32 = 0x0101_e8dc;
+
+/// The shared node build of the plane and the box: a new `BSFadeNode`
+/// (0xe4 bytes; null when the allocation fails) into the pointer at `+0x2c`,
+/// named `name` through a temporary fixed string, then its properties
+/// updated.
+fn build_node(e: &mut Engine, this: Ptr, name: u32) {
+    let t = this.addr();
+    let block = e.call(NI_ALLOCATE, &args![0xe4u32]).u32();
+    let node = if block != 0 {
+        e.call(FADE_NODE_CONSTRUCT, &args![block]).u32()
+    } else {
+        0
+    };
+    e.call(NI_POINTER_SET, &args![t + 0x2c, node]);
+    e.with_stack(4, |e, text| {
+        let made = e.call(FIXED_STRING_CONSTRUCT, &args![text, name]).u32();
+        let node = e.call(NI_POINTER_GET, &args![t + 0x2c]).u32();
+        e.call(NODE_SET_NAME, &args![node, made]);
+        e.call(FIXED_STRING_DESTRUCT, &args![text]);
+    });
+    let node = e.call(NI_POINTER_GET, &args![t + 0x2c]).u32();
+    e.call(UPDATE_PROPERTIES, &args![node]);
+}
+
+// Translated from 004a5300 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004a5300 - the C++ exception-unwinding frame (FS:[0] chain, handler 00eefeda, state variable) and its stack cookie word are not translated
+/// `BGSPrimitivePlane::Build` (engine map name), `thiscall`, no stack words:
+/// a new `BSFadeNode` named `"Plane"` into `+0x2c`, its properties updated.
+pub fn bgs_primitive_plane_build(e: &mut Engine, this: Ptr) {
+    build_node(e, this, PLANE_NAME);
+}
+
+// Translated from 004a63f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004a63f0 - the C++ exception-unwinding frame (FS:[0] chain, handler 00eefeda, state variable) and its stack cookie word are not translated
+/// Unnamed in the engine map (the box's build, `thiscall`, no stack words):
+/// only without a node at `+0x2c`, a new `BSFadeNode` named with `0101e8dc`,
+/// its properties updated.
+pub fn fn_004a63f0(e: &mut Engine, this: Ptr) {
+    if e.call(NI_POINTER_GET, &args![this.addr() + 0x2c]).u32() == 0 {
+        build_node(e, this, BOX_NAME);
+    }
+}
+
+/// `005495f0` (`thiscall` on a geometry; its data), `0045cd60` (`thiscall`
+/// on the data; its colour array), `NiGeometryData::MarkAsChanged`
+/// (`00a67090`, `RET 4`), `TESActorBaseData::GetFatigue` (engine map name of
+/// `004a8ae0`, here the data's 16-bit vertex count) and `00450f90`
+/// (`thiscall`, `RET 4`: a byte; the alpha switch).
+const GEOMETRY_DATA: u32 = 0x0054_95f0;
+const DATA_COLORS: u32 = 0x0045_cd60;
+const MARK_AS_CHANGED: u32 = 0x00a6_7090;
+const VERTEX_COUNT: u32 = 0x004a_8ae0;
+const SET_ALPHA_00450F90: u32 = 0x0045_0f90;
+
+/// Copies the four colour words at `from` to `to`.
+fn copy_color(e: &mut Engine, to: u32, from: u32) {
+    for word in 0..4u32 {
+        let v = e.mem.u32(from + 4 * word);
+        e.mem.set_u32(to + 4 * word, v);
+    }
+}
+
+/// The alpha switch both colour setters end with: `00450f90` on the object
+/// at `+0x28` with whether the colour's alpha is below 0.001.
+fn set_alpha(e: &mut Engine, this: Ptr, color: u32) {
+    let alpha = x87_m32(e.mem.u32(color + 0xc));
+    let clear = alpha < x87_load64(e.mem.u64(DOUBLE_THOUSANDTH));
+    let object = e.call(NI_POINTER_GET, &args![this.addr() + 0x28]).u32();
+    e.call(SET_ALPHA_00450F90, &args![object, u32::from(clear)]);
+}
+
+// Translated from 004a53e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSPrimitivePlane::SetColor` (engine map name), `thiscall`, `RET 4` (the
+/// colour's address): the colour into `+8`; with a geometry at `+0x24` its
+/// data's eight colours are set from it (the last first, each copied from
+/// the one after it) and marked changed (4); with an object at `+0x28` the
+/// alpha switch.
+pub fn bgs_primitive_plane_set_color(e: &mut Engine, this: Ptr, color: Ptr) {
+    let t = this.addr();
+    copy_color(e, t + 8, color.addr());
+    if e.call(NI_POINTER_GET, &args![t + 0x24]).u32() != 0 {
+        let geometry = e.call(NI_POINTER_GET, &args![t + 0x24]).u32();
+        let data = e.call(GEOMETRY_DATA, &args![geometry]).u32();
+        let colors = e.call(DATA_COLORS, &args![data]).u32();
+        copy_color(e, colors + 0x70, t + 8);
+        for to in (0..7u32).rev() {
+            copy_color(e, colors + 0x10 * to, colors + 0x10 * (to + 1));
+        }
+        e.call(MARK_AS_CHANGED, &args![data, 4u32]);
+    }
+    if e.call(NI_POINTER_GET, &args![t + 0x28]).u32() != 0 {
+        set_alpha(e, this, color.addr());
+    }
+}
+
+/// Sets every vertex colour of the geometry in the pointer at `slot` from the
+/// colour at `this + 8` and marks the data changed (4).
+fn paint_geometry(e: &mut Engine, this: Ptr, slot: u32) {
+    let geometry = e.call(NI_POINTER_GET, &args![slot]).u32();
+    let data = e.call(GEOMETRY_DATA, &args![geometry]).u32();
+    let colors = e.call(DATA_COLORS, &args![data]).u32();
+    let mut index: i32 = 0;
+    while index < i32::from(e.call(VERTEX_COUNT, &args![data]).u16()) {
+        copy_color(e, colors.wrapping_add((index as u32) << 4), this.addr() + 8);
+        index += 1;
+    }
+    e.call(MARK_AS_CHANGED, &args![data, 4u32]);
+}
+
+// Translated from 004a64e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the box's colour setter, `thiscall`, `RET 4`:
+/// the colour's address): the colour into `+8`; with a geometry at `+0x24`
+/// every vertex colour of it and of the geometry at `+0x28` (the vertex count
+/// asked again for each vertex) is set and marked changed, then the alpha
+/// switch.
+pub fn fn_004a64e0(e: &mut Engine, this: Ptr, color: Ptr) {
+    let t = this.addr();
+    copy_color(e, t + 8, color.addr());
+    if e.call(NI_POINTER_GET, &args![t + 0x24]).u32() != 0 {
+        paint_geometry(e, this, t + 0x24);
+        paint_geometry(e, this, t + 0x28);
+        set_alpha(e, this, color.addr());
+    }
+}
+
+/// `00408840` (`cdecl`, a float; the magnitude in `ST0`), `00416870`
+/// (`thiscall` on a point, `RET 0xc`: three floats; answers the point),
+/// `007af430` (`thiscall` on geometry data; its vertex array), `0043d410`
+/// (`thiscall` on a point, `RET 0xc`: a float and two words), `006240d0`
+/// (`thiscall`, no stack words: a bound's constructor), `004a5200` and
+/// `00a59c60` (`thiscall`, `RET 4`: a bound's or a point's address).
+const MAGNITUDE_00408840: u32 = 0x0040_8840;
+const POINT3_SET: u32 = 0x0041_6870;
+const DATA_VERTICES: u32 = 0x007a_f430;
+const POINT3_ZERO_0043D410: u32 = 0x0043_d410;
+const BOUND_CONSTRUCT_006240D0: u32 = 0x0062_40d0;
+const GEOMETRY_SET_BOUND_004A5200: u32 = 0x004a_5200;
+const NODE_SET_00A59C60: u32 = 0x00a5_9c60;
+/// The record the bound's centre comes from (`011f426c`), the double 0.01
+/// (`01016408`), the float 0.01 (`01013ea4`), the double 0.0 (`01012060`)
+/// and the float -1.0 (`01012054`).
+const ORIGIN_011F426C: u32 = 0x011f_426c;
+const DOUBLE_SMALL: u32 = 0x0101_6408;
+const FLOAT_SMALL: u32 = 0x0101_3ea4;
+const DOUBLE_ZERO: u32 = 0x0101_2060;
+const FLOAT_MINUS_ONE: u32 = 0x0101_2054;
+/// The sign patterns of the box's eight corners (x, y, z), in the exe's
+/// order.
+const CORNERS: [[bool; 3]; 8] = [
+    [true, false, false],
+    [false, false, false],
+    [false, true, false],
+    [true, true, false],
+    [true, false, true],
+    [false, false, true],
+    [false, true, true],
+    [true, true, true],
+];
+
+/// A size coordinate pushed as a float: `FLD`, `FCHS` when negated, `FSTP`.
+fn pushed(bits: u32, negate: bool) -> u32 {
+    let bits = x87_quiet_bits(bits);
+    if negate {
+        bits ^ 0x8000_0000
+    } else {
+        bits
+    }
+}
+
+// Translated from 004a6640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the box's size setter, `thiscall`, `RET 4`: the
+/// address of three floats). Each size coordinate becomes its magnitude
+/// (`00408840`), written back, and the size is kept at `+0x18`. With a
+/// geometry at `+0x24` its eight vertices are the corners `(±x, ±y, ±z)`
+/// (made through `00416870`, signs negated with `FCHS`) and its data marked
+/// changed (1). With a geometry at `+0x28` each vertex of it becomes the
+/// sign of each coordinate (-1.0 below 0.0, else 1.0) times the size
+/// (coordinates below 0.01 in magnitude count as 0.01), the data marked
+/// changed after each vertex (the vertex count asked again each time). A zero
+/// point is made (`0043d410`). With a node at `+0x2c`: a bound from
+/// `011f426c` with the largest coordinate as its radius (the first, the
+/// second when larger than the other two, the third when larger than both)
+/// goes to the first geometry (`004a5200`), the zero point to the node
+/// (`00a59c60`), the geometry's properties are updated and the node's slot
+/// `+0xbc` runs.
+pub fn fn_004a6640(e: &mut Engine, this: Ptr, size: Ptr) {
+    let t = this.addr();
+    let s = size.addr();
+    for i in 0..3u32 {
+        let at = fn_004a51b0(e, size, i);
+        let value = x87_quiet_bits(e.mem.u32(at));
+        let magnitude = e.call(MAGNITUDE_00408840, &args![value]).f64();
+        let stored = x87_store32(magnitude);
+        let at = fn_004a51b0(e, size, i);
+        e.mem.set_u32(at, x87_quiet_bits(stored));
+    }
+    for word in 0..3u32 {
+        let v = e.mem.u32(s + 4 * word);
+        e.mem.set_u32(t + 0x18 + 4 * word, v);
+    }
+    let kept = Ptr::new(t + 0x18);
+    if e.call(NI_POINTER_GET, &args![t + 0x24]).u32() != 0 {
+        let geometry = e.call(NI_POINTER_GET, &args![t + 0x24]).u32();
+        let data = e.call(GEOMETRY_DATA, &args![geometry]).u32();
+        let vertices = e.call(DATA_VERTICES, &args![data]).u32();
+        for (corner, signs) in CORNERS.iter().enumerate() {
+            let z_at = fn_004a51b0(e, kept, 2);
+            let z = pushed(e.mem.u32(z_at), signs[2]);
+            let y_at = fn_004a51b0(e, kept, 1);
+            let y = pushed(e.mem.u32(y_at), signs[1]);
+            let x_at = fn_004a51b0(e, kept, 0);
+            let x = pushed(e.mem.u32(x_at), signs[0]);
+            e.with_stack(0xc, |e, point| {
+                let made = e.call(POINT3_SET, &args![point, x, y, z]).u32();
+                for word in 0..3u32 {
+                    let v = e.mem.u32(made + 4 * word);
+                    e.mem.set_u32(vertices + 0xc * corner as u32 + 4 * word, v);
+                }
+            });
+        }
+        e.call(MARK_AS_CHANGED, &args![data, 1u32]);
+    }
+    if e.call(NI_POINTER_GET, &args![t + 0x28]).u32() != 0 {
+        let geometry = e.call(NI_POINTER_GET, &args![t + 0x28]).u32();
+        let data = e.call(GEOMETRY_DATA, &args![geometry]).u32();
+        let vertices = e.call(DATA_VERTICES, &args![data]).u32();
+        let mut scale = [0u32; 3];
+        for (i, word) in scale.iter_mut().enumerate() {
+            *word = e.mem.u32(s + 4 * i as u32);
+        }
+        let small = x87_load64(e.mem.u64(DOUBLE_SMALL));
+        for word in scale.iter_mut() {
+            let magnitude = e
+                .call(MAGNITUDE_00408840, &args![x87_quiet_bits(*word)])
+                .f64();
+            if magnitude < small {
+                *word = x87_quiet_bits(e.mem.u32(FLOAT_SMALL));
+            }
+        }
+        let zero = x87_load64(e.mem.u64(DOUBLE_ZERO));
+        let mut index: i32 = 0;
+        while index < i32::from(e.call(VERTEX_COUNT, &args![data]).u16()) {
+            let vertex = vertices.wrapping_add((index as u32).wrapping_mul(0xc));
+            for c in 0..3u32 {
+                let sign = if x87_m32(e.mem.u32(vertex + 4 * c)) < zero {
+                    x87_quiet_bits(e.mem.u32(FLOAT_MINUS_ONE))
+                } else {
+                    x87_store32(1.0)
+                };
+                e.mem.set_u32(vertex + 4 * c, x87_quiet_bits(sign));
+            }
+            for (c, factor) in scale.iter().enumerate() {
+                let at = vertex + 4 * c as u32;
+                let v = x87_store32(x87_mul(x87_load32(e.mem.u32(at)), x87_m32(*factor)));
+                e.mem.set_u32(at, v);
+            }
+            e.call(MARK_AS_CHANGED, &args![data, 1u32]);
+            index += 1;
+        }
+    }
+    e.with_stack(0x40, |e, frame| {
+        // The frame: the zero point (+0) and the bound (+0x10).
+        let point = frame.addr();
+        let bound = point + 0x10;
+        let zero = x87_store32(0.0);
+        e.call(POINT3_ZERO_0043D410, &args![point, zero, 0u32, 0u32]);
+        if e.call(NI_POINTER_GET, &args![t + 0x2c]).u32() == 0 {
+            return;
+        }
+        let first = e.mem.u32(s);
+        let second = e.mem.u32(s + 4);
+        let third = e.mem.u32(s + 8);
+        let mut radius = x87_quiet_bits(first);
+        if x87_m32(first) < x87_m32(second) && x87_m32(third) < x87_m32(second) {
+            radius = x87_quiet_bits(e.mem.u32(s + 4));
+        }
+        if x87_m32(e.mem.u32(s + 4)) < x87_m32(e.mem.u32(s + 8))
+            && x87_m32(e.mem.u32(s)) < x87_m32(e.mem.u32(s + 8))
+        {
+            radius = x87_quiet_bits(e.mem.u32(s + 8));
+        }
+        e.call(BOUND_CONSTRUCT_006240D0, &args![bound]);
+        fn_004a51d0(
+            e,
+            Ptr::new(bound),
+            Ptr::new(ORIGIN_011F426C),
+            f32::from_bits(x87_quiet_bits(radius)),
+        );
+        let geometry = e.call(NI_POINTER_GET, &args![t + 0x24]).u32();
+        e.call(GEOMETRY_SET_BOUND_004A5200, &args![geometry, bound]);
+        let node = e.call(NI_POINTER_GET, &args![t + 0x2c]).u32();
+        e.call(NODE_SET_00A59C60, &args![node, point]);
+        let geometry = e.call(NI_POINTER_GET, &args![t + 0x24]).u32();
+        e.call(UPDATE_PROPERTIES, &args![geometry]);
+        let node = e.call(NI_POINTER_GET, &args![t + 0x2c]).u32();
+        e.vcall(node, 0xbc, &args![]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x004a7290, fn_004a7290(Ptr) -> f32),
         entry!(0x004a_7040, fn_004a7040(Ptr) -> f64),
         entry!(0x004a_71f0, fn_004a71f0(Ptr, u32) -> Ptr),
+        entry!(0x004a_51d0, fn_004a51d0(Ptr, Ptr, f32)),
+        entry!(0x004a_7800, fn_004a7800(Ptr)),
+        entry!(0x004a_51b0, fn_004a51b0(Ptr, u32) -> u32),
+        entry!(0x004a_4f40, fn_004a4f40(Ptr, Ptr, f32) -> Ptr),
+        entry!(0x004a_7ba0, bs_multi_bound_sphere_set_center(Ptr, Ptr)),
+        entry!(0x004a_7090, fn_004a7090(Ptr)),
+        entry!(0x004a_7c20, fn_004a7c20(Ptr)),
+        entry!(0x004a_7220, fn_004a7220(Ptr)),
+        entry!(0x004a_5250, fn_004a5250(Ptr, Ptr) -> Ptr),
+        entry!(0x004a_7060, bs_multi_bound_aabb_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x004a_6110, bs_occlusion_plane_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x004a_7bf0, bs_multi_bound_sphere_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x004a_4cc0, fn_004a4cc0(Ptr, Ptr) -> bool),
+        entry!(0x004a_4e90, fn_004a4e90(u32, Ptr, u32) -> u32),
+        entry!(0x004a_4f80, fn_004a4f80(Ptr, u32) -> u32),
+        entry!(0x004a_5040, fn_004a5040(Ptr, u32) -> u32),
+        entry!(0x004a_4ac0, fn_004a4ac0(Ptr) -> Ptr),
+        entry!(0x004a_5280, fn_004a5280(Ptr) -> Ptr),
+        entry!(0x004a_6370, fn_004a6370(Ptr) -> Ptr),
+        entry!(0x004a_5300, bgs_primitive_plane_build(Ptr)),
+        entry!(0x004a_63f0, fn_004a63f0(Ptr)),
+        entry!(0x004a_53e0, bgs_primitive_plane_set_color(Ptr, Ptr)),
+        entry!(0x004a_64e0, fn_004a64e0(Ptr, Ptr)),
+        entry!(0x004a_6640, fn_004a6640(Ptr, Ptr)),
     ]
 }
 
@@ -94,5 +750,446 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod b008_tests {
+    use super::*;
+
+    fn calls(e: &mut Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log.take().unwrap()[1..].to_vec()
+    }
+
+    fn engine(doubles: bool) -> Engine {
+        let mut e = Engine::new();
+        if doubles {
+            e.map(FLOAT_TWO, 4);
+            e.mem.set_f32(FLOAT_TWO, 2.0);
+            e.map(FLOAT_HALF, 4);
+            e.mem.set_f32(FLOAT_HALF, 0.5);
+            e.map(DOUBLE_HALF, 8);
+            e.mem.set_u64(DOUBLE_HALF, 0.5f64.to_bits());
+            e.map(DOUBLE_THOUSANDTH, 8);
+            e.mem.set_u64(DOUBLE_THOUSANDTH, 0.001f64.to_bits());
+        }
+        e
+    }
+
+    #[test]
+    fn fn_004a51d0_and_004a5250_set_the_record() {
+        let mut e = engine(false);
+        let this = e.mem.alloc(0x10);
+        let other = e.mem.alloc(0x10);
+        for i in 0..3 {
+            e.mem.set_u32(other + 4 * i, 0x100 + i);
+        }
+        e.mem.set_u32(other + 0xc, 0x7f80_0001);
+        assert_eq!(e.call(0x004a_5250, &args![this, other]).u32(), this);
+        assert_eq!(e.mem.u32(this + 8), 0x102);
+        assert_eq!(e.mem.u32(this + 0xc), 0x7fc0_0001);
+        e.call(0x004a_51d0, &args![this, other, 2.5f32]);
+        assert_eq!(e.mem.f32(this + 0xc), 2.5);
+    }
+
+    #[test]
+    fn small_helpers() {
+        let mut e = engine(false);
+        e.register(COLOR_SET, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x004a_7800, &args![0x500u32]);
+        assert_eq!(calls(&mut e), vec![(COLOR_SET, vec![0x500, 0, 0, 0, 0])]);
+        assert_eq!(e.call(0x004a_51b0, &args![0x500u32, 3u32]).u32(), 0x50c);
+        let point = e.mem.alloc(8);
+        e.mem.set_f32(point, 1.5);
+        e.mem.set_f32(point + 4, -2.0);
+        let out = e.mem.alloc(8);
+        assert_eq!(e.call(0x004a_4f40, &args![point, out, 2.0f32]).u32(), out);
+        assert_eq!((e.mem.f32(out), e.mem.f32(out + 4)), (3.0, -4.0));
+        let sphere = e.mem.alloc(0x1c);
+        e.call(0x004a_7ba0, &args![sphere, point]);
+        assert_eq!(e.mem.f32(sphere + 0xc), 1.5);
+        assert_eq!(e.mem.f32(sphere + 0x10), -2.0);
+    }
+
+    #[test]
+    fn destructors_free_their_sizes() {
+        for (address, size) in [
+            (0x004a_7060u32, 0x24u32),
+            (0x004a_6110, 0xfc),
+            (0x004a_7bf0, 0x1c),
+        ] {
+            let mut e = engine(false);
+            e.register(NI_OBJECT_DESTRUCT, |_, _| Ret::default());
+            e.register(SIZED_FREE, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![0x600u32, 1u32]).u32(), 0x600);
+            assert_eq!(
+                calls(&mut e),
+                vec![
+                    (NI_OBJECT_DESTRUCT, vec![0x600]),
+                    (SIZED_FREE, vec![0x600, size])
+                ]
+            );
+            e.call_log = Some(vec![]);
+            e.call(address, &args![0x600u32, 0u32]);
+            assert_eq!(calls(&mut e), vec![(NI_OBJECT_DESTRUCT, vec![0x600])]);
+        }
+        let mut e = engine(false);
+        e.register(DESTRUCT_004A4BD0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x004a_7220, &args![0x700u32]);
+        assert_eq!(calls(&mut e), vec![(DESTRUCT_004A4BD0, vec![0x700])]);
+    }
+
+    #[test]
+    fn fn_004a4cc0_compares_four_floats() {
+        let mut e = engine(false);
+        let a = e.mem.alloc(16);
+        let b = e.mem.alloc(16);
+        for i in 0..4 {
+            e.mem.set_f32(a + 4 * i, i as f32);
+            e.mem.set_f32(b + 4 * i, i as f32);
+        }
+        assert!(e.call(0x004a_4cc0, &args![a, b]).bool());
+        e.mem.set_f32(b + 0xc, 9.0);
+        assert!(!e.call(0x004a_4cc0, &args![a, b]).bool());
+        e.mem.set_f32(b + 0xc, 3.0);
+        e.mem.set_f32(a, f32::NAN);
+        e.mem.set_f32(b, f32::NAN);
+        assert!(!e.call(0x004a_4cc0, &args![a, b]).bool());
+    }
+
+    const SHAPE_SLOTS: u32 = 0x0138_0000;
+
+    /// Engine for the makers: allocations from the heap, the vtables of
+    /// both primitive classes mapped with recorder slots.
+    fn maker_engine() -> Engine {
+        let mut e = engine(true);
+        e.register(ALLOCATE_00401000, |e, a| e.mem.alloc(a[0]).into_ret());
+        for f in [
+            COLOR_SET,
+            MEMBER_18_SET_UP,
+            NI_POINTER_FROM_RAW,
+            NI_POINTER_SET,
+        ] {
+            e.register(f, |_, _| Ret::default());
+        }
+        for table in [BGS_PRIMITIVE_PLANE_VTABLE, BGS_PRIMITIVE_BOX_VTABLE] {
+            e.map(table, 0x20);
+            for slot in (0..0x20).step_by(4) {
+                e.mem.set_u32(table + slot, SHAPE_SLOTS + slot);
+                e.register(SHAPE_SLOTS + slot, |_, _| Ret::default());
+            }
+        }
+        e.register(POINT3_SCALED, |e, a| {
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) * f32::from_bits(a[2]);
+                e.mem.set_f32(a[1] + 4 * i, v);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT2_SET, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u32(a[0] + 4, a[2]);
+            a[0].into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn fn_004a4e90_makes_a_plane() {
+        let mut e = maker_engine();
+        let size = e.mem.alloc(12);
+        e.mem.set_f32(size, 3.0);
+        e.mem.set_f32(size + 4, 7.0);
+        e.mem.set_f32(size + 8, 5.0);
+        e.call_log = Some(vec![]);
+        let plane = e.call(0x004a_4e90, &args![3u32, size, 0x44u32]).u32();
+        assert_eq!(e.mem.u32(plane), BGS_PRIMITIVE_PLANE_VTABLE);
+        assert_eq!(e.mem.u32(plane + 4), 3);
+        assert_eq!(e.mem.u32(plane + 0x30), 7);
+        // The point (3, 5) doubled, then halved.
+        assert_eq!(e.mem.f32(plane + 0x18), 3.0);
+        assert_eq!(e.mem.f32(plane + 0x1c), 1.0);
+        assert_eq!(e.mem.f32(plane + 0x20), 5.0);
+        assert!(calls(&mut e).contains(&(SHAPE_SLOTS + 8, vec![plane, 0x44])));
+    }
+
+    #[test]
+    fn fn_004a4e90_makes_a_box_and_the_rest() {
+        let mut e = maker_engine();
+        const SEEN: u32 = 0x0138_1000;
+        e.map(SEEN, 4);
+        e.register(SHAPE_SLOTS + 0xc, |e, a| {
+            let first = e.mem.u32(a[1]);
+            e.mem.set_u32(SEEN, first);
+            Ret::default()
+        });
+        let size = e.mem.alloc(12);
+        for i in 0..3 {
+            e.mem.set_f32(size + 4 * i, 2.0 + i as f32);
+        }
+        e.call_log = Some(vec![]);
+        let shape = e.call(0x004a_4e90, &args![1u32, size, 0x44u32]).u32();
+        assert_eq!(e.mem.u32(shape), BGS_PRIMITIVE_BOX_VTABLE);
+        assert_eq!(e.mem.u32(shape + 4), 1);
+        let log = calls(&mut e);
+        assert_eq!(log.iter().filter(|c| c.0 == SHAPE_SLOTS + 0xc).count(), 1);
+        // The size doubled (0045bb20 with 2.0), then halved for the box.
+        assert_eq!(e.mem.f32(SEEN), 2.0);
+        e.register(MAKE_004A5100, |_, a| {
+            (a[1] + f32::from_bits(a[0]) as u32).into_ret()
+        });
+        assert_eq!(e.call(0x004a_4e90, &args![2u32, size, 0x40u32]).u32(), 0x42);
+        assert_eq!(e.call(0x004a_4e90, &args![4u32, size, 0x40u32]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_004a4ac0_builds_the_base() {
+        let mut e = maker_engine();
+        let this = e.mem.alloc(0x34);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004a_4ac0, &args![this]).u32(), this);
+        let log = calls(&mut e);
+        assert_eq!(log[0], (COLOR_SET, vec![this + 8, 0, 0, 0, 0]));
+        let sets: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == NI_POINTER_SET)
+            .map(|c| c.1[0] - this)
+            .collect();
+        assert_eq!(sets, vec![0x24, 0x2c, 0x28]);
+        assert_eq!(e.mem.u32(this), BGS_PRIMITIVE_VTABLE);
+    }
+
+    fn node_engine(existing: u32) -> Engine {
+        let mut e = engine(false);
+        let block = 0x0139_0000u32;
+        e.register(NI_ALLOCATE, |_, _| 0x0139_0000u32.into_ret());
+        e.register(FADE_NODE_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(FIXED_STRING_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register_double(NI_POINTER_GET, move |_, _| {
+            (if existing != 0 { existing } else { block }).into_ret()
+        });
+        for f in [
+            NI_POINTER_SET,
+            NODE_SET_NAME,
+            FIXED_STRING_DESTRUCT,
+            UPDATE_PROPERTIES,
+        ] {
+            e.register(f, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn bgs_primitive_plane_build_names_a_new_node() {
+        let mut e = node_engine(0);
+        e.call(0x004a_5300, &args![0x800u32]);
+        let log = calls(&mut e);
+        assert!(log.contains(&(NI_POINTER_SET, vec![0x82c, 0x0139_0000])));
+        let named: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == FIXED_STRING_CONSTRUCT)
+            .collect();
+        assert_eq!(named[0].1[1], PLANE_NAME);
+        assert_eq!(log.last().unwrap(), &(UPDATE_PROPERTIES, vec![0x0139_0000]));
+        // The box builds only without a node.
+        let mut e = node_engine(0x7777);
+        e.call(0x004a_63f0, &args![0x800u32]);
+        assert_eq!(calls(&mut e), vec![(NI_POINTER_GET, vec![0x82c])]);
+    }
+
+    /// The colour setters' engine: the geometry pointers answer `geometry`,
+    /// whose data's colours are `colors`, with `vertices` vertices.
+    fn color_engine(geometry: u32, colors: u32, vertices: u32) -> Engine {
+        let mut e = engine(true);
+        e.register_double(NI_POINTER_GET, move |_, _| geometry.into_ret());
+        e.register(GEOMETRY_DATA, |_, a| (a[0] + 1).into_ret());
+        e.register_double(DATA_COLORS, move |_, _| colors.into_ret());
+        e.register_double(VERTEX_COUNT, move |_, _| vertices.into_ret());
+        e.register(MARK_AS_CHANGED, |_, _| Ret::default());
+        e.register(SET_ALPHA_00450F90, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn bgs_primitive_plane_set_color_fills_eight_colours() {
+        let mut e = color_engine(0x900, 0, 0);
+        let colors = e.mem.alloc(0x80);
+        e.register_double(DATA_COLORS, move |_, _| colors.into_ret());
+        let this = e.mem.alloc(0x34);
+        let color = e.mem.alloc(16);
+        for i in 0..4 {
+            e.mem.set_f32(color + 4 * i, 0.25 * i as f32);
+        }
+        e.call(0x004a_53e0, &args![this, color]);
+        for c in 0..8 {
+            assert_eq!(e.mem.f32(colors + 0x10 * c + 4), 0.25);
+        }
+        let log = calls(&mut e);
+        assert!(log.contains(&(MARK_AS_CHANGED, vec![0x901, 4])));
+        // Alpha 0.75 is not below 0.001.
+        assert!(log.contains(&(SET_ALPHA_00450F90, vec![0x900, 0])));
+        // No geometry: only the colour is kept.
+        let mut e = color_engine(0, 0, 0);
+        let this = e.mem.alloc(0x34);
+        e.call(0x004a_53e0, &args![this, color]);
+        assert!(calls(&mut e).iter().all(|c| c.0 != SET_ALPHA_00450F90));
+    }
+
+    #[test]
+    fn fn_004a64e0_paints_every_vertex_of_both_geometries() {
+        let mut e = color_engine(0x900, 0, 3);
+        let colors = e.mem.alloc(0x40);
+        e.register_double(DATA_COLORS, move |_, _| colors.into_ret());
+        let this = e.mem.alloc(0x34);
+        let color = e.mem.alloc(16);
+        e.mem.set_f32(color, 1.0);
+        e.call(0x004a_64e0, &args![this, color]);
+        for v in 0..3 {
+            assert_eq!(e.mem.f32(colors + 0x10 * v), 1.0);
+        }
+        assert_eq!(e.mem.f32(colors + 0x30), 0.0);
+        let log = calls(&mut e);
+        assert_eq!(log.iter().filter(|c| c.0 == MARK_AS_CHANGED).count(), 2);
+        // Alpha 0.0 is below 0.001.
+        assert!(log.contains(&(SET_ALPHA_00450F90, vec![0x900, 1])));
+    }
+}
+
+#[cfg(test)]
+mod b008_box_tests {
+    use super::*;
+
+    const GEOMETRY_A: u32 = 0x013e_0000;
+    const GEOMETRY_B: u32 = 0x013e_1000;
+    const NODE_SLOT: u32 = 0x013e_2000;
+    const SEEN_RADIUS: u32 = 0x013e_3000;
+
+    struct BoxCase {
+        e: Engine,
+        this: u32,
+        corners: u32,
+        normals: u32,
+        node: u32,
+    }
+
+    fn engine(node_present: bool) -> BoxCase {
+        let mut e = Engine::new();
+        for (at, bits) in [(DOUBLE_SMALL, 0.01f64.to_bits()), (DOUBLE_ZERO, 0)] {
+            e.map(at, 8);
+            e.mem.set_u64(at, bits);
+        }
+        e.map(FLOAT_SMALL, 4);
+        e.mem.set_f32(FLOAT_SMALL, 0.01);
+        e.map(FLOAT_MINUS_ONE, 4);
+        e.mem.set_f32(FLOAT_MINUS_ONE, -1.0);
+        e.map(ORIGIN_011F426C, 0xc);
+        e.register(MAGNITUDE_00408840, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])).abs(),
+            ..Ret::default()
+        });
+        e.register(POINT3_SET, |e, a| {
+            for i in 0..3 {
+                e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+            }
+            a[0].into_ret()
+        });
+        let corners = e.mem.alloc(0x60);
+        let normals = e.mem.alloc(0x18);
+        e.mem.set_f32(normals, -3.0);
+        e.mem.set_f32(normals + 4, 2.0);
+        e.mem.set_f32(normals + 8, 0.0);
+        e.mem.set_f32(normals + 0xc, 1.0);
+        e.mem.set_f32(normals + 0x10, -1.0);
+        e.mem.set_f32(normals + 0x14, 5.0);
+        let node = e.mem.alloc(4);
+        let table = e.mem.alloc(0xc0);
+        e.mem.set_u32(table + 0xbc, NODE_SLOT);
+        e.mem.set_u32(node, table);
+        let this = e.mem.alloc(0x34);
+        e.mem.set_u32(this + 0x24, GEOMETRY_A);
+        e.mem.set_u32(this + 0x28, GEOMETRY_B);
+        e.mem
+            .set_u32(this + 0x2c, if node_present { node } else { 0 });
+        e.register(NI_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(GEOMETRY_DATA, |_, a| (a[0] + 1).into_ret());
+        e.register_double(DATA_VERTICES, move |_, a| {
+            (if a[0] == GEOMETRY_A + 1 {
+                corners
+            } else {
+                normals
+            })
+            .into_ret()
+        });
+        e.register(VERTEX_COUNT, |_, _| 2u32.into_ret());
+        e.map(SEEN_RADIUS, 4);
+        e.register(GEOMETRY_SET_BOUND_004A5200, |e, a| {
+            let radius = e.mem.u32(a[1] + 0xc);
+            e.mem.set_u32(SEEN_RADIUS, radius);
+            Ret::default()
+        });
+        for f in [
+            MARK_AS_CHANGED,
+            POINT3_ZERO_0043D410,
+            BOUND_CONSTRUCT_006240D0,
+            NODE_SET_00A59C60,
+            UPDATE_PROPERTIES,
+            NODE_SLOT,
+        ] {
+            e.register(f, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        BoxCase {
+            e,
+            this,
+            corners,
+            normals,
+            node,
+        }
+    }
+
+    #[test]
+    fn fn_004a6640_builds_the_box() {
+        let mut b = engine(true);
+        let size = b.e.mem.alloc(12);
+        b.e.mem.set_f32(size, -2.0);
+        b.e.mem.set_f32(size + 4, 4.0);
+        b.e.mem.set_f32(size + 8, 0.005);
+        b.e.call(0x004a_6640, &args![b.this, size]);
+        let e = &mut b.e;
+        assert_eq!(e.mem.f32(size), 2.0);
+        assert_eq!(e.mem.f32(b.this + 0x18), 2.0);
+        // Corner 0 is (-x, y, z), corner 7 (-x, -y, -z).
+        assert_eq!(e.mem.f32(b.corners), -2.0);
+        assert_eq!(e.mem.f32(b.corners + 4), 4.0);
+        assert_eq!(e.mem.f32(b.corners + 0x54 + 8), -0.005);
+        // The normals: signs times the size, the tiny z counting as 0.01.
+        let n: Vec<f32> = (0..6).map(|i| e.mem.f32(b.normals + 4 * i)).collect();
+        assert_eq!(n, vec![-2.0, 4.0, 0.01, 2.0, -4.0, 0.01]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.iter().filter(|c| c.0 == MARK_AS_CHANGED).count(), 3);
+        let bound: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == GEOMETRY_SET_BOUND_004A5200)
+            .collect();
+        assert_eq!(bound[0].1[0], GEOMETRY_A);
+        // The radius is the largest coordinate (4.0, the second).
+        assert_eq!(e.mem.f32(SEEN_RADIUS), 4.0);
+        assert!(log.contains(&(NODE_SLOT, vec![b.node])));
+    }
+
+    #[test]
+    fn fn_004a6640_without_a_node() {
+        let mut b = engine(false);
+        let size = b.e.mem.alloc(12);
+        b.e.mem.set_f32(size + 8, 1.0);
+        b.e.call(0x004a_6640, &args![b.this, size]);
+        let log = b.e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != GEOMETRY_SET_BOUND_004A5200));
+        assert!(log.iter().any(|c| c.0 == POINT3_ZERO_0043D410));
     }
 }

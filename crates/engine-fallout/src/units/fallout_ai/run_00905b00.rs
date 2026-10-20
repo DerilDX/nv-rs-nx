@@ -11,9 +11,25 @@ pub fn fn_00905b90(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// Translated from 00905b00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00905b00 - the C++ exception-unwinding frame (FS:[0]) is not translated
+/// A constructor (no name in the engine map; `RET 4`): the base part
+/// (`00483710`), then placement `new` of 8 bytes at `this` (`006e6da0`)
+/// and, when that gives an address, `006e9c30` on it with `argument`.
+pub fn fn_00905b00(e: &mut Engine, this: Ptr, argument: u32) {
+    e.call(0x0048_3710, &args![this]);
+    let place = e.call(0x006e_6da0, &args![8u32, this]).u32();
+    if place != 0 {
+        e.call(0x006e_9c30, &args![place, argument]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0090_5b90, fn_00905b90(Ptr, u32) -> u32)]
+    vec![
+        entry!(0x0090_5b90, fn_00905b90(Ptr, u32) -> u32),
+        entry!(0x0090_5b00, fn_00905b00(Ptr, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -48,5 +64,39 @@ mod le81_thunk_tests {
             check(0x0090_5b90, 0x008d_f980, 0x14, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+}
+
+#[cfg(test)]
+mod b039_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00905b00_builds_the_part_at_this() {
+        for place in [0u32, 0x6000] {
+            let mut e = Engine::new();
+            e.register(0x0048_3710, |_, _| Ret::default());
+            e.register_double(0x006e_6da0, move |_, _| Ret {
+                eax: place,
+                ..Ret::default()
+            });
+            e.register(0x006e_9c30, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            e.call(0x0090_5b00, &args![0x5000u32, 0x77u32]);
+            let log = e.call_log.take().unwrap();
+            let calls = |target: u32| {
+                log.iter()
+                    .filter(|(a, _)| *a == target)
+                    .map(|(_, w)| w.clone())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(calls(0x0048_3710), vec![vec![0x5000]]);
+            assert_eq!(calls(0x006e_6da0), vec![vec![8, 0x5000]]);
+            if place == 0 {
+                assert!(calls(0x006e_9c30).is_empty());
+            } else {
+                assert_eq!(calls(0x006e_9c30), vec![vec![0x6000, 0x77]]);
+            }
+        }
     }
 }

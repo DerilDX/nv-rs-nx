@@ -312,6 +312,39 @@ pub fn fn_005b4a70(e: &mut Engine) {
     e.set_global(MESSAGE_ANSWER, answer);
 }
 
+/// `-1.0` (`double`), the result when there is no answer for the caller.
+const NO_ANSWER: u32 = 0x0101_a6b0;
+
+// Translated from 005b4a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A script command body (no name in the engine map; the eight words of
+/// [`ScriptArgs`], answer in `AL`) that reads the message-box answer: the
+/// caller is the running reference's owner id (`0084e3a0`) when there is a
+/// reference that is not temporary (`004077c0`), otherwise the running
+/// script's, and false when there is neither. When an answer is waiting
+/// (the signed answer byte above -1) for that caller, the result is the
+/// answer and the answer and its owner are reset (0xff, 0); otherwise the
+/// result is the `double` at `0101a6b0` (-1.0). True.
+pub fn fn_005b4a80(e: &mut Engine, a: ScriptArgs) -> bool {
+    let caller = if !a.this_obj.is_null() && !e.call(IS_TEMPORARY, &args![a.this_obj]).bool() {
+        e.call(OWNER_ID, &args![a.this_obj]).u32()
+    } else if !a.script_obj.is_null() {
+        e.call(OWNER_ID, &args![a.script_obj]).u32()
+    } else {
+        return false;
+    };
+    let answer = e.global::<i8>(MESSAGE_ANSWER);
+    if i32::from(answer) > -1 && caller == e.global::<u32>(MESSAGE_OWNER) {
+        let answer = e.global::<i8>(MESSAGE_ANSWER);
+        e.mem.set_f64(a.result.addr(), f64::from(answer));
+        e.set_global(MESSAGE_ANSWER, 0xffu8);
+        e.set_global(MESSAGE_OWNER, 0u32);
+    } else {
+        let no_answer = x87_load64(e.global::<u64>(NO_ANSWER));
+        e.mem.set_u64(a.result.addr(), no_answer.to_bits());
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -322,6 +355,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_005b4960(u32, u32, u32, u32, u32, u32, u32, Ptr, u32, u32) -> bool
         ),
         entry!(0x005b4a70, fn_005b4a70()),
+        entry!(0x005b_4a80, fn_005b4a80(ScriptArgs) -> bool),
     ]
 }
 
@@ -724,5 +758,87 @@ mod tests {
         assert_eq!(e.global::<u8>(MESSAGE_ANSWER), 2);
         assert!(log.iter().any(|c| c.0 == STRING_DESTROY));
         assert!(log.iter().all(|c| c.0 != SHOW_PLAIN && c.0 != SHOW_BOX));
+    }
+}
+
+#[cfg(test)]
+mod answer_b039_tests {
+    use super::*;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0118_c000, 0x1000);
+        e.map(0x011c_a000, 0x1000);
+        e.map(0x0101_a000, 0x1000);
+        e.set_global(NO_ANSWER, -1.0f64);
+        e.register(IS_TEMPORARY, |e, a| word(u32::from(e.mem.u32(a[0]) == 1)));
+        e.register(OWNER_ID, |_, a| word(a[0] + 0x100));
+        e
+    }
+
+    fn script_args(this_obj: u32, script_obj: u32, result: u32) -> ScriptArgs {
+        ScriptArgs {
+            param_info: 0,
+            script_data: 0,
+            this_obj: Ptr::new(this_obj),
+            containing_obj: Ptr::new(0),
+            script_obj: Ptr::new(script_obj),
+            event_list: 0,
+            result: Ptr::new(result),
+            opcode_offset: 0,
+        }
+    }
+
+    #[test]
+    fn the_answer_for_the_reference_is_given_once() {
+        let mut e = engine();
+        let reference = e.mem.alloc(4);
+        let result = e.mem.alloc(8);
+        e.set_global(MESSAGE_ANSWER, 2u8);
+        e.set_global(MESSAGE_OWNER, reference + 0x100);
+        assert!(e
+            .call(0x005b_4a80, &args![script_args(reference, 0, result)])
+            .bool());
+        assert_eq!(e.mem.f64(result), 2.0);
+        assert_eq!(e.global::<u8>(MESSAGE_ANSWER), 0xff);
+        assert_eq!(e.global::<u32>(MESSAGE_OWNER), 0);
+        assert!(e
+            .call(0x005b_4a80, &args![script_args(reference, 0, result)])
+            .bool());
+        assert_eq!(e.mem.f64(result), -1.0);
+    }
+
+    #[test]
+    fn a_temporary_reference_uses_the_script_and_no_caller_fails() {
+        let mut e = engine();
+        let reference = e.mem.alloc(4);
+        e.mem.set_u32(reference, 1);
+        let script = e.mem.alloc(4);
+        let result = e.mem.alloc(8);
+        e.set_global(MESSAGE_ANSWER, 0u8);
+        e.set_global(MESSAGE_OWNER, script + 0x100);
+        assert!(e
+            .call(0x005b_4a80, &args![script_args(reference, script, result)])
+            .bool());
+        assert_eq!(e.mem.f64(result), 0.0);
+        // Another owner: -1.
+        e.set_global(MESSAGE_ANSWER, 1u8);
+        e.set_global(MESSAGE_OWNER, 0x55u32);
+        assert!(e
+            .call(0x005b_4a80, &args![script_args(0, script, result)])
+            .bool());
+        assert_eq!(e.mem.f64(result), -1.0);
+        assert_eq!(e.global::<u8>(MESSAGE_ANSWER), 1);
+        // Neither a usable reference nor a script.
+        assert!(!e
+            .call(0x005b_4a80, &args![script_args(reference, 0, result)])
+            .bool());
     }
 }

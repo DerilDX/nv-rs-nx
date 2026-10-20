@@ -231,6 +231,46 @@ pub fn bgs_quest_objective_scalar_deleting_destructor(
     this
 }
 
+/// `005ec1f0` (`thiscall`, no stack word; unit `bgsquestobjective.cpp`).
+const OBJECTIVE_CLEAR: u32 = 0x005e_c1f0;
+/// `0046ffb0` (`thiscall`, no stack word): the target list's destructor.
+const TARGET_LIST_DESTRUCTOR: u32 = 0x0046_ffb0;
+/// `004037d0` (`thiscall`, no stack word): the `BSStringT` destructor.
+const STRING_DESTRUCTOR: u32 = 0x0040_37d0;
+/// `005ec4d0` (`thiscall`, `RET 4`): run with 1 on each target.
+const TARGET_DELETE: u32 = 0x005e_c4d0;
+/// `0063f7b0` (`thiscall`, no stack word): run on the list after each target.
+const LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
+
+// Translated from 005ec140 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005ec140 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00efa316, state variable) is not translated
+/// Unnamed in the engine map (unit `bgsquestobjective.cpp`, `thiscall`, no stack word): the
+/// `BGSQuestObjective` destructor. Sets the vtable `01047088`, calls `005ec1f0` on `this`,
+/// destroys `ListTargets` (+0x14, `0046ffb0`) and `cDisplayText` (+8, `004037d0`).
+pub fn fn_005ec140(e: &mut Engine, this: Ptr<BGSQuestObjective>) {
+    e.mem.set_u32(this.addr(), 0x0104_7088);
+    e.call(OBJECTIVE_CLEAR, &args![this]);
+    e.call(TARGET_LIST_DESTRUCTOR, &args![this.addr() + 0x14]);
+    e.call(STRING_DESTRUCTOR, &args![this.addr() + 8]);
+}
+
+// Translated from 005ec460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bgsquestobjective.cpp`, `thiscall`, no stack word):
+/// empties the objective's target list (`007d6bb0`): while the list is not null and its node
+/// is not the end (`008256d0`), the target in the node (`006815c0`) is deleted
+/// (`005ec4d0(1)`, skipped for null) and `0063f7b0` runs on the list.
+pub fn fn_005ec460(e: &mut Engine, this: Ptr<BGSQuestObjective>) {
+    let list = e.call(TARGET_LIST, &args![this]).u32();
+    while list != 0 && !e.call(NODE_IS_END, &args![list]).bool() {
+        let slot = e.call(NODE_ITEM_SLOT, &args![list]).u32();
+        let target = e.mem.u32(slot);
+        if target != 0 {
+            e.call(TARGET_DELETE, &args![target, 1u32]);
+        }
+        e.call(LIST_REMOVE_HEAD, &args![list]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -246,6 +286,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x005ec440, fn_005ec440(Ptr<BGSQuestObjective>, u32)),
         entry!(0x005e_c110, bgs_quest_objective_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x005e_c140, fn_005ec140(Ptr<BGSQuestObjective>)),
+        entry!(0x005e_c460, fn_005ec460(Ptr<BGSQuestObjective>)),
     ]
 }
 
@@ -538,5 +580,76 @@ mod thunk_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn fn_005ec140_destroys_the_members() {
+        let mut e = Engine::new();
+        for callee in [OBJECTIVE_CLEAR, TARGET_LIST_DESTRUCTOR, STRING_DESTRUCTOR] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x24);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_c140, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [
+                (OBJECTIVE_CLEAR, vec![this]),
+                (TARGET_LIST_DESTRUCTOR, vec![this + 0x14]),
+                (STRING_DESTRUCTOR, vec![this + 8]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this), 0x0104_7088);
+    }
+
+    #[test]
+    fn fn_005ec460_deletes_each_target_until_the_list_is_empty() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x24);
+        let slot = e.mem.alloc(4);
+        let left = Rc::new(Cell::new(3u32));
+        let (empty, slots, remove) = (left.clone(), left.clone(), left.clone());
+        e.register(TARGET_LIST, |_, a| (a[0] + 0x14).into_ret());
+        e.register_double(NODE_IS_END, move |_, _| (empty.get() == 0).into_ret());
+        // The second target slot holds null.
+        e.register_double(NODE_ITEM_SLOT, move |e, _| {
+            let target = if slots.get() == 2 {
+                0
+            } else {
+                0x7000 + slots.get()
+            };
+            e.mem.set_u32(slot, target);
+            slot.into_ret()
+        });
+        e.register_double(LIST_REMOVE_HEAD, move |_, _| {
+            remove.set(remove.get() - 1);
+            Ret::default()
+        });
+        e.register(TARGET_DELETE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005e_c460, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let deleted: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == TARGET_DELETE)
+            .cloned()
+            .collect();
+        assert_eq!(
+            deleted,
+            [
+                (TARGET_DELETE, vec![0x7003, 1]),
+                (TARGET_DELETE, vec![0x7001, 1]),
+            ]
+        );
+        assert_eq!(left.get(), 0);
+        assert_eq!(log.iter().filter(|c| c.0 == LIST_REMOVE_HEAD).count(), 3);
     }
 }

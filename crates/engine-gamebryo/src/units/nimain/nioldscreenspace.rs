@@ -192,6 +192,66 @@ pub fn fn_00a91290(e: &mut Engine) {
     e.mem.set_u32(SCREEN_SPACE_OBJECT_SLOT, block);
 }
 
+/// `00aa4060` (`thiscall` on the memory manager, one stack word): the memory manager's
+/// deallocate.
+const MEMORY_MANAGER_DEALLOCATE: u32 = 0x00aa_4060;
+/// `00e7f900` (`thiscall`, one stack word; unit `NiXenonRenderer/nid3dpass.cpp`).
+const D3D_PASS_RELEASE: u32 = 0x00e7_f900;
+
+// Translated from 00a90ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nioldscreenspace.cpp`, `thiscall`, no stack word): the
+/// tear-down of the 0x18-byte object `00a91290` builds. Clears the word at +8; when the
+/// pointer at +0xc is set, that block's first word is disposed of (when the word in front of
+/// it is 0 the block from that word on goes back to the memory manager, otherwise its vtable
+/// slot 0 runs with 3), `00e7f900(1)` runs on its third word when that is set, and the block
+/// goes back to the memory manager (`00aa4060`). Last, the storage at +0 is freed
+/// (`00aa10f0`).
+pub fn fn_00a90ac0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let inner = e.mem.u32(base + 0xc);
+    e.mem.set_u32(base + 8, 0);
+    if inner != 0 {
+        let first = e.mem.u32(inner);
+        if first != 0 {
+            let header = first.wrapping_sub(4);
+            if e.mem.u32(header) == 0 {
+                e.call(
+                    MEMORY_MANAGER_DEALLOCATE,
+                    &args![MEMORY_MANAGER_OBJECT, header],
+                );
+            } else {
+                e.vcall(first, 0, &args![3u32]);
+            }
+        }
+        let third = e.mem.u32(inner + 8);
+        if third != 0 {
+            e.call(D3D_PASS_RELEASE, &args![third, 1u32]);
+        }
+        e.call(
+            MEMORY_MANAGER_DEALLOCATE,
+            &args![MEMORY_MANAGER_OBJECT, inner],
+        );
+    }
+    let storage = e.mem.u32(base);
+    e.call(FREE, &args![storage]);
+}
+
+// Translated from 00a91930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nioldscreenspace.cpp`, no arguments; one of the `NiMain`
+/// shutdown steps of `00a8a280`): when `011f5e50` holds the object `00a91290` built, tears it
+/// down ([`fn_00a90ac0`]) and gives it back to the memory manager. The pointer is not
+/// cleared.
+pub fn fn_00a91930(e: &mut Engine) {
+    let object = e.mem.u32(SCREEN_SPACE_OBJECT_SLOT);
+    if object != 0 {
+        fn_00a90ac0(e, Ptr::new(object));
+        e.call(
+            MEMORY_MANAGER_DEALLOCATE,
+            &args![MEMORY_MANAGER_OBJECT, object],
+        );
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -206,6 +266,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a9_0030, ni_screen_space_camera_is_equal(Ptr, Ptr) -> bool),
         entry!(0x00a9_0180, fn_00a90180(Ptr<NiTArray>, u32)),
         entry!(0x00a9_1290, fn_00a91290()),
+        entry!(0x00a9_0ac0, fn_00a90ac0(Ptr)),
+        entry!(0x00a9_1930, fn_00a91930()),
     ]
 }
 
@@ -424,5 +486,110 @@ mod start_up_tests {
         e.register(MEMORY_MANAGER_ALLOCATE, |_, _| 0u32.into_ret());
         e.call(0x00a9_1290, &args![]);
         assert_eq!(e.mem.u32(SCREEN_SPACE_OBJECT_SLOT), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_b043 {
+    use super::*;
+
+    fn calls(e: &mut Engine, top: u32) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|call| call.0 != top)
+            .collect()
+    }
+
+    fn fixture() -> Engine {
+        let mut e = Engine::new();
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        e.register(D3D_PASS_RELEASE, |_, _| Ret::default());
+        e.register(FREE, |_, _| Ret::default());
+        e.put_vtable(0x0150_0000, &[0x0150_1000]);
+        e.register(0x0150_1000, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn fn_00a90ac0_tears_down_the_inner_block_and_frees_the_storage() {
+        let mut e = fixture();
+        let this = e.mem.alloc(0x18);
+        let inner = e.mem.alloc(0xc);
+        let counted = e.mem.alloc(8);
+        e.mem.set_u32(counted, 2);
+        e.mem.set_u32(counted + 4, 0x0150_0000);
+        e.mem.set_u32(this, 0x7000);
+        e.mem.set_u32(this + 8, 5);
+        e.mem.set_u32(this + 0xc, inner);
+        e.mem.set_u32(inner, counted + 4);
+        e.mem.set_u32(inner + 8, 0x6000);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_0ac0, &args![this]);
+        assert_eq!(
+            calls(&mut e, 0x00a9_0ac0),
+            vec![
+                (0x0150_1000, vec![counted + 4, 3]),
+                (D3D_PASS_RELEASE, vec![0x6000, 1]),
+                (
+                    MEMORY_MANAGER_DEALLOCATE,
+                    vec![MEMORY_MANAGER_OBJECT, inner]
+                ),
+                (FREE, vec![0x7000]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 8), 0);
+
+        // A first word with a zero header is freed from the header; no third word.
+        e.mem.set_u32(counted, 0);
+        e.mem.set_u32(inner + 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_0ac0, &args![this]);
+        assert_eq!(
+            calls(&mut e, 0x00a9_0ac0),
+            vec![
+                (
+                    MEMORY_MANAGER_DEALLOCATE,
+                    vec![MEMORY_MANAGER_OBJECT, counted]
+                ),
+                (
+                    MEMORY_MANAGER_DEALLOCATE,
+                    vec![MEMORY_MANAGER_OBJECT, inner]
+                ),
+                (FREE, vec![0x7000]),
+            ]
+        );
+
+        // No inner block: only the storage is freed.
+        e.mem.set_u32(this + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_0ac0, &args![this]);
+        assert_eq!(calls(&mut e, 0x00a9_0ac0), vec![(FREE, vec![0x7000])]);
+    }
+
+    #[test]
+    fn fn_00a91930_frees_the_built_object_when_there_is_one() {
+        let mut e = fixture();
+        e.map(SCREEN_SPACE_OBJECT_SLOT & !0xfff, 0x1000);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_1930, &args![]);
+        assert!(calls(&mut e, 0x00a9_1930).is_empty());
+        let object = e.mem.alloc(0x18);
+        e.mem.set_u32(object, 0x7100);
+        e.mem.set_u32(SCREEN_SPACE_OBJECT_SLOT, object);
+        e.call_log = Some(vec![]);
+        e.call(0x00a9_1930, &args![]);
+        assert_eq!(
+            calls(&mut e, 0x00a9_1930),
+            vec![
+                (FREE, vec![0x7100]),
+                (
+                    MEMORY_MANAGER_DEALLOCATE,
+                    vec![MEMORY_MANAGER_OBJECT, object]
+                ),
+            ]
+        );
+        assert_eq!(e.mem.u32(SCREEN_SPACE_OBJECT_SLOT), object);
     }
 }

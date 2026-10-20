@@ -28,9 +28,28 @@ pub fn fn_00e7ee80(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The globals `00e7eea0` sets: the renderer (`0126f710`) and its shader library word
+/// (`0126f714`, the renderer's +0x8b8).
+const RENDERER_0126F710: u32 = 0x0126_f710;
+const LIBRARY_0126F714: u32 = 0x0126_f714;
+
+// Translated from 00e7eea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7eea0`), `cdecl`, the renderer: keeps it at `0126f710`
+/// and its +0x8b8 at `0126f714` (0 without a renderer).
+pub fn fn_00e7eea0(e: &mut Engine, renderer: u32) {
+    e.mem.set_u32(RENDERER_0126F710, renderer);
+    let library = if renderer != 0 {
+        e.mem.u32(renderer.wrapping_add(0x8b8))
+    } else {
+        0
+    };
+    e.mem.set_u32(LIBRARY_0126F714, library);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_eea0, fn_00e7eea0(u32)),
         entry!(0x00e7_ee70, fn_00e7ee70(Ptr) -> Ptr),
         entry!(0x00e7_ee80, fn_00e7ee80(Ptr) -> Ptr),
     ]
@@ -55,5 +74,23 @@ mod tests {
         assert_eq!(e.mem.bytes(block + 1, 3), vec![0xcc; 3]);
         assert_eq!(e.mem.bytes(block + 4, 0x10), vec![0; 0x10]);
         assert_eq!(e.mem.u32(block + 0x14), 0xcccc_cccc);
+    }
+}
+
+#[cfg(test)]
+mod b000w_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e7eea0_keeps_the_renderer_and_library() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        let renderer = e.mem.alloc(0x900);
+        e.mem.set_u32(renderer + 0x8b8, 0x77);
+        e.call(0x00e7_eea0, &args![renderer]);
+        assert_eq!(e.mem.u32(RENDERER_0126F710), renderer);
+        assert_eq!(e.mem.u32(LIBRARY_0126F714), 0x77);
+        e.call(0x00e7_eea0, &args![0u32]);
+        assert_eq!(e.mem.u32(LIBRARY_0126F714), 0);
     }
 }

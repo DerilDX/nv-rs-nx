@@ -39,12 +39,52 @@ pub fn fn_00c46960(_e: &mut Engine, _this: Ptr) -> u32 {
     0x0120_2e60
 }
 
+/// `100.0` (`double`, `01017a40`), the rotation-matrix maker `004a0c90`
+/// (`thiscall (matrix, angle)`), the point-times-matrix product `004b3ae0`
+/// (`cdecl (&result, &point, &matrix)`, answers the result) and the global
+/// `NiPoint3` the result goes to (`01202e68`).
+const WIND_SCALE: u32 = 0x0101_7a40;
+const MAKE_ROTATION: u32 = 0x004a_0c90;
+const POINT_TIMES_MATRIX: u32 = 0x004b_3ae0;
+const WIND_VECTOR: u32 = 0x0120_2e68;
+
+// Translated from 00c468c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the global wind vector (the engine map has no name; `cdecl
+/// (strength, angle)`): the point `(0, strength * 100.0, 0)` (the product
+/// an x87 `FMUL` by the `double`, stored as a `float`) times the rotation
+/// matrix `004a0c90` makes from `angle`, its three words stored at
+/// `01202e68`.
+pub fn fn_00c468c0(e: &mut Engine, strength: f32, angle: f32) {
+    let scale = f64::from_bits(e.global::<u64>(WIND_SCALE));
+    let scaled = x87_store32(x87_mul(x87_load32(strength.to_bits()), scale));
+    e.with_stack(0x3c, |e, frame| {
+        let point = frame.addr();
+        let matrix = point + 0xc;
+        let result = point + 0x30;
+        e.mem.set_f32(point, 0.0);
+        e.mem.set_u32(point + 4, x87_quiet_bits(scaled));
+        e.mem.set_f32(point + 8, 0.0);
+        e.call(
+            MAKE_ROTATION,
+            &args![matrix, x87_quiet_bits(angle.to_bits())],
+        );
+        let product = e
+            .call(POINT_TIMES_MATRIX, &args![result, point, matrix])
+            .u32();
+        for i in 0..3 {
+            let value = e.mem.u32(product + 4 * i);
+            e.set_global(WIND_VECTOR + 4 * i, value);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00c4_6960, fn_00c46960(Ptr) -> u32),
         entry!(0x00c4_67f0, fn_00c467f0(Ptr, Ptr)),
         entry!(0x00c4_6810, fn_00c46810(Ptr, Ptr) -> bool),
+        entry!(0x00c4_68c0, fn_00c468c0(f32, f32)),
     ]
 }
 
@@ -98,5 +138,31 @@ mod constant_getter_tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c4_6960, &args![0x1000u32]).u32(), 0x0120_2e60);
         assert_eq!(e.call(0x00c4_6960, &args![0u32]).u32(), 0x0120_2e60);
+    }
+
+    #[test]
+    fn wind_vector_is_the_rotated_scaled_point() {
+        let mut e = Engine::new();
+        e.map(WIND_SCALE, 8);
+        e.set_global(WIND_SCALE, 100.0f64);
+        e.map(WIND_VECTOR, 0xc);
+        e.register(MAKE_ROTATION, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        // The "product" adds the matrix's first word (the angle) to each
+        // coordinate of the point.
+        e.register(POINT_TIMES_MATRIX, |e, a| {
+            let angle = e.mem.f32(a[2]);
+            for i in 0..3 {
+                let value = e.mem.f32(a[1] + 4 * i) + angle;
+                e.mem.set_f32(a[0] + 4 * i, value);
+            }
+            a[0].into_ret()
+        });
+        e.call(0x00c4_68c0, &args![0.25f32, 1.5f32]);
+        assert_eq!(e.global::<f32>(WIND_VECTOR), 1.5);
+        assert_eq!(e.global::<f32>(WIND_VECTOR + 4), 26.5);
+        assert_eq!(e.global::<f32>(WIND_VECTOR + 8), 1.5);
     }
 }

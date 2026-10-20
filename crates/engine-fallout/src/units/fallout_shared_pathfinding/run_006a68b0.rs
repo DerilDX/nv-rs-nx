@@ -14,9 +14,19 @@ pub fn fn_006a68b0(e: &mut Engine, this: Ptr) {
     e.call(0x006a_68d0, &args![this]);
 }
 
+// Translated from 006a68d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the smart pointer at +8 of `this` (`0045cec0`; the decompiler's
+/// library name for it does not apply).
+pub fn fn_006a68d0(e: &mut Engine, this: Ptr) {
+    e.call(0x0045_cec0, &args![this.addr().wrapping_add(8)]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x006a_68b0, fn_006a68b0(Ptr))]
+    vec![
+        entry!(0x006a_68b0, fn_006a68b0(Ptr)),
+        entry!(0x006a_68d0, fn_006a68d0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -40,5 +50,22 @@ mod thunk_tests {
         e.call_log = Some(vec![]);
         e.call(0x006a_68b0, &args![0x0000_5000u32]);
         assert_eq!(calls_to(&e, 0x006a_68d0), vec![vec![0x5000]]);
+    }
+}
+
+#[cfg(test)]
+mod b039_tests {
+    use super::*;
+
+    #[test]
+    fn fn_006a68d0_destroys_the_pointer_at_8() {
+        let mut e = Engine::new();
+        e.register(0x0045_cec0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x006a_68d0, &args![0x5000u32]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == 0x0045_cec0).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![0x5008]);
     }
 }

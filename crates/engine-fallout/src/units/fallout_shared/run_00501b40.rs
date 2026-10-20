@@ -24,11 +24,36 @@ pub fn fn_00501cc0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+// Translated from 00501c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// String assignment (no name in the engine map): `BSStringT<char>::Set`
+/// (`00438470`, engine map) on `this` with `text`; returns `this`.
+pub fn fn_00501c10(e: &mut Engine, this: Ptr, text: u32) -> Ptr {
+    e.call(0x0043_8470, &args![this, text]);
+    this
+}
+
+// Translated from 00501cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A constructor of a six-word object (no name in the engine map): every
+/// word 0 except the fifth (+0x10), which is -1, stored in the exe's order
+/// (+0, +4, +0xc, +0x10, +0x14, +8). Returns `this`.
+pub fn fn_00501cd0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, 0);
+    e.mem.set_u32(base + 4, 0);
+    e.mem.set_u32(base + 0xc, 0);
+    e.mem.set_u32(base + 0x10, 0xffff_ffff);
+    e.mem.set_u32(base + 0x14, 0);
+    e.mem.set_u32(base + 8, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0050_1b90, fn_00501b90(Ptr, Ptr)),
         entry!(0x0050_1cc0, fn_00501cc0(Ptr, u32) -> u32),
+        entry!(0x0050_1c10, fn_00501c10(Ptr, u32) -> Ptr),
+        entry!(0x0050_1cd0, fn_00501cd0(Ptr) -> Ptr),
     ]
 }
 
@@ -78,5 +103,39 @@ mod a07_thunk_tests {
     #[test]
     fn thunk_00501cc0() {
         assert_eq!(check(0x0050_1cc0, 0x004f_fb70, 0x3c), 0xdead_beef);
+    }
+}
+
+#[cfg(test)]
+mod b039_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00501c10_sets_the_string_and_returns_this() {
+        let mut e = Engine::new();
+        e.register(0x0043_8470, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0050_1c10, &args![0x1000u32, 0x2000u32]).u32(),
+            0x1000
+        );
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == 0x0043_8470).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![0x1000, 0x2000]);
+    }
+
+    #[test]
+    fn fn_00501cd0_clears_the_words_but_the_fifth() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x18);
+        for i in 0..6 {
+            e.mem.set_u32(this + 4 * i, 0x1234);
+        }
+        assert_eq!(e.call(0x0050_1cd0, &args![this]).u32(), this);
+        for i in 0..6 {
+            let expected = if i == 4 { 0xffff_ffff } else { 0 };
+            assert_eq!(e.mem.u32(this + 4 * i), expected);
+        }
     }
 }

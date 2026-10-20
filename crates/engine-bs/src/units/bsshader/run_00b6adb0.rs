@@ -72,9 +72,27 @@ pub fn fn_00b6b180(e: &mut Engine, texture: Ptr, target: Ptr) -> u32 {
         .u32()
 }
 
+/// Imported `InterlockedIncrement` (import slot).
+const IMPORT_INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+
+// Translated from 00b6aed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6adb0`): an `NiPointer` constructor, `thiscall` with the
+/// object: stores it at `this` and, when not null, counts its reference count (+4) up through
+/// `InterlockedIncrement`. Answers `this`.
+pub fn fn_00b6aed0(e: &mut Engine, this: Ptr, object: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), object);
+    if object != 0 {
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00b6_b180, fn_00b6b180(Ptr, Ptr) -> u32)]
+    vec![
+        entry!(0x00b6_b180, fn_00b6b180(Ptr, Ptr) -> u32),
+        entry!(0x00b6_aed0, fn_00b6aed0(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -179,5 +197,31 @@ mod tests {
         // Width fails first: no height asked; the format check asks for the buffer twice.
         assert_eq!(calls(&e, HEIGHT).len(), 3);
         assert_eq!(calls(&e, BUFFER_OF).len(), 5);
+    }
+}
+
+#[cfg(test)]
+mod b000v_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b6aed0_holds_and_counts_the_object() {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let slot = e.mem.alloc(4);
+        assert_eq!(e.call(0x00b6_aed0, &args![slot, 0x500u32]).u32(), slot);
+        assert_eq!(e.mem.u32(slot), 0x500);
+        e.call(0x00b6_aed0, &args![slot, 0u32]);
+        assert_eq!(e.mem.u32(slot), 0);
+        let counted: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == IMPORT_INTERLOCKED_INCREMENT)
+            .map(|(_, w)| w.clone())
+            .collect();
+        assert_eq!(counted, vec![vec![0x504]]);
     }
 }

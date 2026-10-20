@@ -499,9 +499,77 @@ pub fn fn_00e80020(e: &mut Engine, this: Ptr, max_size: u32, grow_by: u32) -> Pt
     this
 }
 
+/// The pass globals `00e7f920` keeps: the renderer (`0126f724`), its device (`0126f720`,
+/// counted with the device's `AddRef`/`Release`, virtual slots 4 and 8) and its shader
+/// library word (`0126f728`, the renderer's +0x8b8).
+const PASS_RENDERER_0126F724: u32 = 0x0126_f724;
+const PASS_DEVICE_0126F720: u32 = 0x0126_f720;
+const PASS_LIBRARY_0126F728: u32 = 0x0126_f728;
+/// The three pass limits `00e7f830`, `00e7f840` and `00e7f850` store (`011bf558`,
+/// `011bf55c`, `011bf560`).
+const PASS_LIMIT_011BF558: u32 = 0x011b_f558;
+const PASS_LIMIT_011BF55C: u32 = 0x011b_f55c;
+const PASS_LIMIT_011BF560: u32 = 0x011b_f560;
+
+// Translated from 00e7f920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nid3dpass.cpp`), `cdecl`, the renderer: keeps it at
+/// `0126f724`. With a renderer, the device held at `0126f720` is released (slot 8) and
+/// replaced by the renderer's device (+0x288; counted, slot 4, when not null), and
+/// `0126f728` gets the renderer's +0x8b8. Without one, the held device is released and both
+/// words cleared.
+pub fn fn_00e7f920(e: &mut Engine, renderer: u32) {
+    e.mem.set_u32(PASS_RENDERER_0126F724, renderer);
+    if renderer != 0 {
+        let device = e.mem.u32(renderer.wrapping_add(0x288));
+        let held = e.mem.u32(PASS_DEVICE_0126F720);
+        if held != 0 {
+            e.vcall(held, 8, &args![]);
+        }
+        e.mem.set_u32(PASS_DEVICE_0126F720, device);
+        if device != 0 {
+            e.vcall(device, 4, &args![]);
+        }
+        let renderer = e.mem.u32(PASS_RENDERER_0126F724);
+        let library = e.mem.u32(renderer.wrapping_add(0x8b8));
+        e.mem.set_u32(PASS_LIBRARY_0126F728, library);
+    } else {
+        let held = e.mem.u32(PASS_DEVICE_0126F720);
+        if held != 0 {
+            e.vcall(held, 8, &args![]);
+        }
+        e.mem.set_u32(PASS_DEVICE_0126F720, 0);
+        e.mem.set_u32(PASS_LIBRARY_0126F728, 0);
+    }
+}
+
+// Translated from 00e7f830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nid3dpass.cpp`), `cdecl`, one word: stores it at `011bf558`
+/// (the renderer passes its texture blend stage count).
+pub fn fn_00e7f830(e: &mut Engine, value: u32) {
+    e.mem.set_u32(PASS_LIMIT_011BF558, value);
+}
+
+// Translated from 00e7f840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nid3dpass.cpp`), `cdecl`, one word: stores it at `011bf55c`
+/// (the renderer passes its simultaneous texture count).
+pub fn fn_00e7f840(e: &mut Engine, value: u32) {
+    e.mem.set_u32(PASS_LIMIT_011BF55C, value);
+}
+
+// Translated from 00e7f850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nid3dpass.cpp`), `cdecl`, one word: stores it at `011bf560`
+/// (the renderer passes its sampler count).
+pub fn fn_00e7f850(e: &mut Engine, value: u32) {
+    e.mem.set_u32(PASS_LIMIT_011BF560, value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_f920, fn_00e7f920(u32)),
+        entry!(0x00e7_f830, fn_00e7f830(u32)),
+        entry!(0x00e7_f840, fn_00e7f840(u32)),
+        entry!(0x00e7_f850, fn_00e7f850(u32)),
         entry!(0x00e8_0150, fn_00e80150()),
         entry!(0x00e8_0620, fn_00e80620()),
         entry!(0x00e8_0190, fn_00e80190(Ptr<NiD3DPass>)),
@@ -970,5 +1038,60 @@ mod b000r_tests {
         e.call(0x00e8_0020, &args![array, 0x1_0000u32, 4u32]);
         assert_eq!(e.mem.u32(array + 4), 0);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod b000w_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00e7f920_swaps_the_held_device() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.put_vtable(0x6000, &[0, 0x6104, 0x6108]);
+        e.register(0x6104, |_, _| Ret::default());
+        e.register(0x6108, |_, _| Ret::default());
+        let old = e.mem.alloc(4);
+        e.mem.set_u32(old, 0x6000);
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(device, 0x6000);
+        let renderer = e.mem.alloc(0x900);
+        e.mem.set_u32(renderer + 0x288, device);
+        e.mem.set_u32(renderer + 0x8b8, 0x55);
+        e.mem.set_u32(PASS_DEVICE_0126F720, old);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_f920, &args![renderer]);
+        assert_eq!(e.mem.u32(PASS_RENDERER_0126F724), renderer);
+        assert_eq!(e.mem.u32(PASS_DEVICE_0126F720), device);
+        assert_eq!(e.mem.u32(PASS_LIBRARY_0126F728), 0x55);
+        assert_eq!(calls(&e, 0x6108), vec![vec![old]]);
+        assert_eq!(calls(&e, 0x6104), vec![vec![device]]);
+        e.call(0x00e7_f920, &args![0u32]);
+        assert_eq!(e.mem.u32(PASS_DEVICE_0126F720), 0);
+        assert_eq!(e.mem.u32(PASS_LIBRARY_0126F728), 0);
+        assert_eq!(calls(&e, 0x6108), vec![vec![old], vec![device]]);
+    }
+
+    #[test]
+    fn pass_limits_are_stored() {
+        let mut e = Engine::new();
+        e.map(0x011b_f000, 0x1000);
+        e.call(0x00e7_f830, &args![8u32]);
+        e.call(0x00e7_f840, &args![4u32]);
+        e.call(0x00e7_f850, &args![16u32]);
+        assert_eq!(e.mem.u32(PASS_LIMIT_011BF558), 8);
+        assert_eq!(e.mem.u32(PASS_LIMIT_011BF55C), 4);
+        assert_eq!(e.mem.u32(PASS_LIMIT_011BF560), 16);
     }
 }
