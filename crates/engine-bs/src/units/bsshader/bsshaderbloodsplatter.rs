@@ -244,6 +244,15 @@ pub fn bs_shader_blood_splatter_load_stages_and_passes(e: &mut Engine, this: Ptr
     true
 }
 
+// Translated from 00b80600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshaderbloodsplatter.cpp`): a pass's pixel shader setter,
+/// `thiscall` with one stack word (the shader): `NiPointer` assignment of the shader to the
+/// pass's +0x44 (the old shader released, `InterlockedDecrement` on its +4 and deleted through
+/// vtable slot +4 at 0; the new one held), nothing when it already holds it.
+pub fn fn_00b80600(e: &mut Engine, this: Ptr, shader: Ptr) {
+    ni_pointer_assign(e, this.addr() + 0x44, shader.addr());
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -254,6 +263,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00b8_0e70,
             bs_shader_blood_splatter_create_shader() -> Ptr
         ),
+        entry!(0x00b8_0600, fn_00b80600(Ptr, Ptr)),
     ]
 }
 
@@ -424,5 +434,29 @@ mod b000h_tests {
             assert_eq!(e.mem.u32(a[2] + 0x60), 1);
         }
         assert!(calls(&e, STAGE_DELETE_00E7ECD0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod pixel_shader_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn fn_00b80600_assigns_the_pixel_shader() {
+        let mut e = rig();
+        let pass = e.mem.alloc(0x68);
+        let old = object(&mut e, 1);
+        let new = object(&mut e, 0);
+        e.mem.set_u32(pass + 0x44, old);
+        e.call(0x00b8_0600, &args![pass, new]);
+        assert_eq!(e.mem.u32(pass + 0x44), new);
+        assert_eq!(e.mem.u32(new + 4), 1);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![old]]);
+        e.call(0x00b8_0600, &args![pass, new]);
+        assert_eq!(e.mem.u32(new + 4), 1);
+        e.call(0x00b8_0600, &args![pass, 0u32]);
+        assert_eq!(e.mem.u32(pass + 0x44), 0);
+        assert_eq!(e.mem.u32(new + 4), 0);
     }
 }

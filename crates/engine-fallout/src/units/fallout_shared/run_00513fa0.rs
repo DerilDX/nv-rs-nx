@@ -61,13 +61,167 @@ pub fn fn_005146a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The component destructors `005146d0` runs, in its order: the offset in
+/// the object and the destructor.
+const COMPONENT_DESTRUCTORS: [(u32, u32); 8] = [
+    (0xb4, 0x0047_b520),
+    (0xa4, 0x0047_a1a0),
+    (0x9c, 0x0047_5380),
+    (0x8c, 0x0048_eaf0),
+    (0x84, 0x0048_e7d0),
+    (0x5c, 0x0040_2c40),
+    (0x3c, 0x0048_a490),
+    (0x30, 0x0059_1300),
+];
+
+// Translated from 00514410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: 1 when `004c0bd0` on the component at `+0x70` answers
+/// true, else 2 when bit 8 of that component's byte at `+8` is set
+/// (`00514450`), else 0.
+pub fn fn_00514410(e: &mut Engine, this: Ptr) -> u8 {
+    let component = this.addr() + 0x70;
+    if e.call(0x004c_0bd0, &args![component]).bool() {
+        1
+    } else if fn_00514450(e, Ptr::new(component)) {
+        2
+    } else {
+        0
+    }
+}
+
+// Translated from 00514450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 8 of the byte at `this + 8` is set.
+pub fn fn_00514450(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 8) & 8 != 0
+}
+
+// Translated from 005146d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005146d0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// The destructor body `005146a0` runs (vtable `0102a9c4`, RTTI
+/// `.?AVTESObjectBOOK@@`): stores the object's and its components'
+/// vtables as the constructor `00514500` does, runs the components'
+/// destructors (`COMPONENT_DESTRUCTORS`, last component first) and then
+/// `0050e9f0` on the object.
+pub fn fn_005146d0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for (offset, vtable) in [
+        (0x00, 0x0102_a9c4),
+        (0x30, 0x0102_a9b0),
+        (0x3c, 0x0102_a98c),
+        (0x5c, 0x0102_a96c),
+        (0x68, 0x0102_a958),
+        (0x74, 0x0102_a940),
+        (0x84, 0x0102_a920),
+        (0x8c, 0x0102_a90c),
+        (0x94, 0x0102_a8f4),
+        (0x9c, 0x0102_a8e0),
+        (0xa4, 0x0102_a8cc),
+        (0xb4, 0x0102_a8b8),
+    ] {
+        e.mem.set_u32(base + offset, vtable);
+    }
+    for (offset, destructor) in COMPONENT_DESTRUCTORS {
+        e.call(destructor, &args![base + offset]);
+    }
+    e.call(0x0050_e9f0, &args![this]);
+}
+
+// Translated from 00514830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The start values of the constructor `00514500`: 2 zero bytes at
+/// `+0xC0` (`00403d30`, a `memset` wrapper), then the byte at `+0xC1` set
+/// to 0xFF, and `0041fd00` on `+0x74` with 0 (the engine map's
+/// `NonActorMagicCaster::SetCurrentSpell` name is a folded body's).
+pub fn fn_00514830(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0040_3d30, &args![base + 0xc0, 0u32, 2u32]);
+    e.mem.set_u8(base + 0xc1, 0xff);
+    e.call(0x0041_fd00, &args![base + 0x74, 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_4500, fn_00514500(Ptr) -> Ptr),
         entry!(0x0051_44f0, fn_005144f0(Ptr, u32) -> u16),
         entry!(0x0051_46a0, fn_005146a0(Ptr, u32) -> Ptr),
+        entry!(0x0051_4410, fn_00514410(Ptr) -> u8),
+        entry!(0x0051_4450, fn_00514450(Ptr) -> bool),
+        entry!(0x0051_46d0, fn_005146d0(Ptr)),
+        entry!(0x0051_4830, fn_00514830(Ptr)),
     ]
+}
+
+#[cfg(test)]
+mod b023_tests {
+    use super::*;
+
+    fn calls(e: &mut Engine, skip: u32) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != skip)
+            .collect()
+    }
+
+    #[test]
+    fn kind_from_the_component_at_0x70() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc4);
+        e.register(0x004c_0bd0, |_, _| Ret {
+            eax: 0x100,
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0051_4410, &[this]).u8(), 0);
+        e.mem.set_u8(this + 0x78, 8);
+        assert_eq!(e.call(0x0051_4410, &[this]).u8(), 2);
+        assert!(e.call(0x0051_4450, &[this + 0x70]).bool());
+        e.mem.set_u8(this + 0x78, 0xf7);
+        assert!(!e.call(0x0051_4450, &[this + 0x70]).bool());
+        e.register(0x004c_0bd0, |_, a| Ret {
+            eax: u32::from(a[0] % 2 == 0),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0051_4410, &[this]).u8(), 1);
+        assert_eq!(
+            calls(&mut e, 0x0051_4410),
+            vec![(0x004c_0bd0, vec![this + 0x70])]
+        );
+    }
+
+    #[test]
+    fn destructor_body_and_start_values() {
+        let mut e = Engine::new();
+        for (_, d) in COMPONENT_DESTRUCTORS {
+            e.register(d, |_, _| Ret::default());
+        }
+        for a in [0x0050_e9f0, 0x0040_3d30, 0x0041_fd00] {
+            e.register(a, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0xc4);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_46d0, &[this]);
+        let mut expected: Vec<(u32, Vec<u32>)> = COMPONENT_DESTRUCTORS
+            .iter()
+            .map(|(o, d)| (*d, vec![this + o]))
+            .collect();
+        expected.push((0x0050_e9f0, vec![this]));
+        assert_eq!(calls(&mut e, 0x0051_46d0), expected);
+        assert_eq!(e.mem.u32(this), 0x0102_a9c4);
+        assert_eq!(e.mem.u32(this + 0xb4), 0x0102_a8b8);
+
+        e.call_log = Some(vec![]);
+        e.call(0x0051_4830, &[this]);
+        assert_eq!(
+            calls(&mut e, 0x0051_4830),
+            vec![
+                (0x0040_3d30, vec![this + 0xc0, 0, 2]),
+                (0x0041_fd00, vec![this + 0x74, 0]),
+            ]
+        );
+        assert_eq!(e.mem.u8(this + 0xc1), 0xff);
+    }
 }
 
 #[cfg(test)]

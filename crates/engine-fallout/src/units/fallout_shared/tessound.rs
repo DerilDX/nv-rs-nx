@@ -184,6 +184,142 @@ pub fn fn_005e2c70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `BSStringT<char>` text assignment (`004037f0`, `ECX` = string, two stack words: text,
+/// minimum capacity).
+const STRING_SET_004037F0: u32 = 0x0040_37f0;
+/// `00559450` (`ECX`): the word at +0 (a `BSStringT`'s text pointer).
+const STRING_CHARACTERS_00559450: u32 = 0x0055_9450;
+/// The empty C string (`01011584`).
+const EMPTY_TEXT: u32 = 0x0101_1584;
+/// The TLS setting guard (`00404eb0`, `ECX` = the guard, four stack words) and its restore
+/// (`00404ee0`, `ECX` = the guard).
+const SETTING_GUARD: u32 = 0x0040_4eb0;
+const SETTING_GUARD_RESTORE: u32 = 0x0040_4ee0;
+/// `"D:\_Fallout3\Platforms\Common\Code\Fallout Shared\TESSound.c"`, the guard's source file.
+const SOURCE_FILE_NAME: u32 = 0x0104_517c;
+/// The player (`011dea3c`), or null.
+const PLAYER: u32 = 0x011d_ea3c;
+/// `004997b0` (`ECX` = actor): sneaking (flag 0x400 without 0x800), `AL`.
+const IS_SNEAKING_004997B0: u32 = 0x0049_97b0;
+/// `Actor::IsRunning` (Xbox PDB, `00884730`, `ECX` = actor), `AL`.
+const IS_RUNNING: u32 = 0x0088_4730;
+/// `"Sneak"`, `"Run"`, `"Walk"`.
+const TEXT_SNEAK: u32 = 0x0104_4fd8;
+const TEXT_RUN: u32 = 0x0104_4fd4;
+const TEXT_WALK: u32 = 0x0104_4fcc;
+/// `"BRUSH%s%s"` and `"BRUSH%sWalk"`.
+const FORMAT_BRUSH_MOVE: u32 = 0x0104_4fc0;
+const FORMAT_BRUSH_WALK: u32 = 0x0104_4fb4;
+/// `sprintf_s` (`00406d00`, `cdecl`: buffer, size, format, variable words).
+const SPRINTF_S: u32 = 0x0040_6d00;
+/// The data handler (`011c3f2c`) and `TESDataHandler::GetSound` by editor id (Xbox PDB,
+/// `004616c0`, `ECX` = data handler, one stack word: the name).
+const DATA_HANDLER: u32 = 0x011c_3f2c;
+const GET_SOUND_BY_NAME: u32 = 0x0046_16c0;
+/// The table of ten name texts `005e2b50` reads (`01196d40`).
+const NAME_TABLE: u32 = 0x0119_6d40;
+
+// Translated from 005e2c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (in this unit's range; `ECX` and one stack word, `RET 4`): copies
+/// `text` into the editor id string at +0x3c (`004037f0` with a minimum capacity of 0) and
+/// answers true.
+pub fn fn_005e2c10(e: &mut Engine, this: Ptr, text: Ptr) -> bool {
+    e.call(STRING_SET_004037F0, &args![this.addr() + 0x3c, text, 0u32]);
+    true
+}
+
+// Translated from 005e2c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (in this unit's range; `ECX`): the text of the editor id string at
+/// +0x3c (`00559450`, read a second time when nonzero), or the empty string `01011584`.
+pub fn fn_005e2c30(e: &mut Engine, this: Ptr) -> u32 {
+    let string = this.addr() + 0x3c;
+    if e.call(STRING_CHARACTERS_00559450, &args![string]).u32() != 0 {
+        e.call(STRING_CHARACTERS_00559450, &args![string]).u32()
+    } else {
+        EMPTY_TEXT
+    }
+}
+
+// Translated from 005e2b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (in this unit's range; `cdecl`, one word): for `index` 0 to 9 (signed)
+/// the word of the table at `01196d40`, otherwise 0.
+pub fn fn_005e2b50(e: &mut Engine, index: i32) -> u32 {
+    if (0..10).contains(&index) {
+        e.global::<u32>(NAME_TABLE + index as u32 * 4)
+    } else {
+        0
+    }
+}
+
+// Translated from 005e2a70 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005e2a70 - the /GS cookie check (00ec408c) is not translated
+/// `TESSound::GetPassThroughSound` (Xbox PDB), `cdecl` with one word, a material index: the
+/// sound `TESDataHandler::GetSound` finds by name. With a player the name is
+/// `"BRUSH%s%s"` of the index's name (`005e2b50`) and `"Sneak"` (sneaking, `004997b0`), else
+/// `"Run"` (`Actor::IsRunning`) or `"Walk"`; without one `"BRUSH%sWalk"`. Each name is made
+/// by `sprintf_s` in its own 0x28-byte stack buffer.
+pub fn tes_sound_get_pass_through_sound(e: &mut Engine, index: i32) -> u32 {
+    let player = e.global::<u32>(PLAYER);
+    e.with_stack(0x28, |e, name| {
+        if player != 0 {
+            let player = e.global::<u32>(PLAYER);
+            let movement = if e.call(IS_SNEAKING_004997B0, &args![player]).u8() != 0 {
+                TEXT_SNEAK
+            } else {
+                let player = e.global::<u32>(PLAYER);
+                if e.call(IS_RUNNING, &args![player]).u8() != 0 {
+                    TEXT_RUN
+                } else {
+                    TEXT_WALK
+                }
+            };
+            let material = fn_005e2b50(e, index);
+            e.call(
+                SPRINTF_S,
+                &args![name, 0x28u32, FORMAT_BRUSH_MOVE, material, movement],
+            );
+        } else {
+            let material = fn_005e2b50(e, index);
+            e.call(
+                SPRINTF_S,
+                &args![name, 0x28u32, FORMAT_BRUSH_WALK, material],
+            );
+        }
+        let data_handler = e.global::<u32>(DATA_HANDLER);
+        e.call(GET_SOUND_BY_NAME, &args![data_handler, name]).u32()
+    })
+}
+
+// Translated from 005e3600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESSound::GenerateDefaultObjects` (Xbox PDB), no words: a TLS setting guard on the stack
+/// (`00404eb0` with 0x2f, 1, this unit's source file name and line 0x559), restored at once
+/// (`00404ee0`).
+pub fn tes_sound_generate_default_objects(e: &mut Engine) {
+    e.with_stack(4, |e, guard| {
+        e.call(
+            SETTING_GUARD,
+            &args![guard, 0x2fu32, 1u32, SOURCE_FILE_NAME, 0x559u32],
+        );
+        e.call(SETTING_GUARD_RESTORE, &args![guard]);
+    });
+}
+
+// Translated from 005e2ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005e2ca0 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00ef9dd3, state variable) is not translated
+/// The `TESSound` destructor body (unnamed in the map; `ECX`, no stack words; the scalar
+/// deleting destructor `005e2c70` runs it): stores the two vtables (`01044ffc` at +0,
+/// `01044fe4` at +0x30, RTTI `.?AVTESSound@@`), then destroys the editor id string at +0x3c
+/// (`004037d0`), the component at +0x30 (`00591300`) and the `TESBoundAnimObject` base
+/// (`0050f740`).
+pub fn fn_005e2ca0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0104_4ffc);
+    e.mem.set_u32(base + 0x30, 0x0104_4fe4);
+    e.call(0x0040_37d0, &args![base + 0x3c]);
+    e.call(0x0059_1300, &args![base + 0x30]);
+    e.call(0x0050_f740, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -191,7 +327,155 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005e_2ef0, fn_005e2ef0(Ptr)),
         entry!(0x005e_3160, fn_005e3160(Ptr, Ptr) -> bool),
         entry!(0x005e_2c70, fn_005e2c70(Ptr, u32) -> Ptr),
+        entry!(0x005e_2c10, fn_005e2c10(Ptr, Ptr) -> bool),
+        entry!(0x005e_2c30, fn_005e2c30(Ptr) -> u32),
+        entry!(0x005e_2b50, fn_005e2b50(i32) -> u32),
+        entry!(0x005e_2a70, tes_sound_get_pass_through_sound(i32) -> u32),
+        entry!(0x005e_3600, tes_sound_generate_default_objects()),
+        entry!(0x005e_2ca0, fn_005e2ca0(Ptr)),
     ]
+}
+
+#[cfg(test)]
+mod sound_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_005e2c10_sets_the_editor_id() {
+        let mut e = Engine::new();
+        e.register(STRING_SET_004037F0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005e_2c10, &args![0x5000u32, 0x7000u32]).bool());
+        assert_eq!(
+            calls(&e, STRING_SET_004037F0),
+            vec![vec![0x503c, 0x7000, 0]]
+        );
+    }
+
+    #[test]
+    fn fn_005e2c30_answers_the_text_or_empty() {
+        let mut e = Engine::new();
+        e.register(STRING_CHARACTERS_00559450, |e, a| {
+            e.mem.u32(a[0]).into_ret()
+        });
+        let this = e.mem.alloc(0x6c);
+        assert_eq!(e.call(0x005e_2c30, &args![this]).u32(), EMPTY_TEXT);
+        e.mem.set_u32(this + 0x3c, 0x0abc_0000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x005e_2c30, &args![this]).u32(), 0x0abc_0000);
+        assert_eq!(calls(&e, STRING_CHARACTERS_00559450).len(), 2);
+    }
+
+    #[test]
+    fn fn_005e2b50_reads_the_table_in_range() {
+        let mut e = Engine::new();
+        e.map(0x0119_6000, 0x1000);
+        for i in 0..11u32 {
+            e.mem.set_u32(NAME_TABLE + i * 4, 0x100 + i);
+        }
+        assert_eq!(e.call(0x005e_2b50, &args![0u32]).u32(), 0x100);
+        assert_eq!(e.call(0x005e_2b50, &args![9u32]).u32(), 0x109);
+        assert_eq!(e.call(0x005e_2b50, &args![10u32]).u32(), 0);
+        assert_eq!(e.call(0x005e_2b50, &args![u32::MAX]).u32(), 0);
+    }
+
+    fn pass_through_rig(player: u32, sneaking: u32, running: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0119_6000, 0x1000);
+        e.map(0x011c_3000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_u32(NAME_TABLE + 8, 0x0222_0000);
+        e.set_global(PLAYER, player);
+        e.set_global(DATA_HANDLER, 0x0444_0000u32);
+        e.register_double(IS_SNEAKING_004997B0, move |_, _| sneaking.into_ret());
+        e.register_double(IS_RUNNING, move |_, _| running.into_ret());
+        e.register(SPRINTF_S, |_, _| Ret::default());
+        e.register(GET_SOUND_BY_NAME, |_, _| 0x0555_0000u32.into_ret());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_005e2a70_names_the_brush_sound_by_movement() {
+        for (sneaking, running, movement) in [
+            (1u32, 1u32, TEXT_SNEAK),
+            (0x100, 1, TEXT_RUN),
+            (0, 0, TEXT_WALK),
+        ] {
+            let mut e = pass_through_rig(0x0333_0000, sneaking, running);
+            assert_eq!(e.call(0x005e_2a70, &args![2u32]).u32(), 0x0555_0000);
+            let printed = calls(&e, SPRINTF_S);
+            assert_eq!(printed.len(), 1);
+            assert_eq!(
+                printed[0][1..],
+                [0x28, FORMAT_BRUSH_MOVE, 0x0222_0000, movement]
+            );
+            assert_eq!(
+                calls(&e, GET_SOUND_BY_NAME),
+                vec![vec![0x0444_0000, printed[0][0]]]
+            );
+            assert_eq!(calls(&e, IS_SNEAKING_004997B0), vec![vec![0x0333_0000]]);
+        }
+    }
+
+    #[test]
+    fn fn_005e2a70_without_a_player_walks() {
+        let mut e = pass_through_rig(0, 1, 1);
+        assert_eq!(e.call(0x005e_2a70, &args![2u32]).u32(), 0x0555_0000);
+        let printed = calls(&e, SPRINTF_S);
+        assert_eq!(printed[0][1..], [0x28, FORMAT_BRUSH_WALK, 0x0222_0000]);
+        assert!(calls(&e, IS_SNEAKING_004997B0).is_empty());
+    }
+
+    #[test]
+    fn fn_005e3600_sets_and_restores_the_guard() {
+        let mut e = Engine::new();
+        e.register(SETTING_GUARD, |_, _| Ret::default());
+        e.register(SETTING_GUARD_RESTORE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x005e_3600, &args![]);
+        let guard = calls(&e, SETTING_GUARD);
+        assert_eq!(guard.len(), 1);
+        assert_eq!(guard[0][1..], [0x2f, 1, SOURCE_FILE_NAME, 0x559]);
+        assert_eq!(calls(&e, SETTING_GUARD_RESTORE), vec![vec![guard[0][0]]]);
+    }
+
+    #[test]
+    fn fn_005e2ca0_destroys_last_first() {
+        let mut e = Engine::new();
+        for addr in [0x0040_37d0, 0x0059_1300, 0x0050_f740] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x6c);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_2ca0, &args![this]);
+        let order: Vec<(u32, Vec<u32>)> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .cloned()
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (0x0040_37d0, vec![this + 0x3c]),
+                (0x0059_1300, vec![this + 0x30]),
+                (0x0050_f740, vec![this]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this), 0x0104_4ffc);
+        assert_eq!(e.mem.u32(this + 0x30), 0x0104_4fe4);
+    }
 }
 
 #[cfg(test)]

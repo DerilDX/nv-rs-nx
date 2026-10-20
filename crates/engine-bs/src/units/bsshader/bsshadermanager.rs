@@ -1394,9 +1394,224 @@ pub fn bs_shader_manager_get_texture(
     }
 }
 
+/// The two shader settings the profile choosers read: `011f91bc` (the pixel chooser's when its
+/// byte is set) and `011f91c0` (otherwise, and the vertex chooser's).
+const PROFILE_SETTING_011F91BC: u32 = 0x011f_91bc;
+const PROFILE_SETTING_011F91C0: u32 = 0x011f_91c0;
+/// The profile strings (read in Ghidra).
+const PS_1_3_010A93D4: u32 = 0x010a_93d4;
+const PS_2_0_010A93CC: u32 = 0x010a_93cc;
+const PS_2_A_010A93C4: u32 = 0x010a_93c4;
+const PS_2_B_010A93BC: u32 = 0x010a_93bc;
+const PS_3_0_010A93B4: u32 = 0x010a_93b4;
+const VS_1_1_010A93EC: u32 = 0x010a_93ec;
+const VS_2_0_010A93E4: u32 = 0x010a_93e4;
+const VS_3_0_010A93DC: u32 = 0x010a_93dc;
+
+// Translated from 00b4f380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshadermanager.cpp`): the pixel shader profile string,
+/// `cdecl` with one byte. The setting is the word at `011f91bc` (always read) when the byte is
+/// set, else the one at `011f91c0`; 1 gives `"ps_1_3"`, 2 `"ps_2_0"`, 3 and 5 `"ps_2_a"`, 4
+/// and 6 `"ps_2_b"`, 7 `"ps_3_0"` (the arms of the switch's jump table at `00b4f3c0`, read in
+/// Ghidra), anything else null. Answers the string's address.
+pub fn fn_00b4f380(e: &mut Engine, first_setting: u8) -> u32 {
+    let mut setting = e.global::<u32>(PROFILE_SETTING_011F91BC);
+    if first_setting == 0 {
+        setting = e.global::<u32>(PROFILE_SETTING_011F91C0);
+    }
+    match setting.wrapping_sub(1) {
+        0 => PS_1_3_010A93D4,
+        1 => PS_2_0_010A93CC,
+        2 | 4 => PS_2_A_010A93C4,
+        3 | 5 => PS_2_B_010A93BC,
+        6 => PS_3_0_010A93B4,
+        _ => 0,
+    }
+}
+
+// Translated from 00b4f3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshadermanager.cpp`): the vertex shader profile string,
+/// no arguments. For the setting at `011f91c0`: 1 gives `"vs_1_1"`, 2 to 6 `"vs_2_0"`, 7
+/// `"vs_3_0"` (the switch's jump table at `00b4f408`, read in Ghidra), anything else null.
+pub fn fn_00b4f3e0(e: &mut Engine) -> u32 {
+    match e.global::<u32>(PROFILE_SETTING_011F91C0).wrapping_sub(1) {
+        0 => VS_1_1_010A93EC,
+        1..=5 => VS_2_0_010A93E4,
+        6 => VS_3_0_010A93DC,
+        _ => 0,
+    }
+}
+
+/// The shader level names `GetShaderLevelString` answers (read in Ghidra), levels 0 to 7,
+/// and `"???"` for any other level.
+const SHADER_LEVEL_NAMES: [u32; 8] = [
+    0x010a_9454, // "BSSM_SV_NONE"
+    0x010a_9448, // "BSSM_SV_1_X"
+    0x010a_943c, // "BSSM_SV_2_0"
+    0x010a_942c, // "BSSM_SV_2_A96"
+    0x010a_941c, // "BSSM_SV_2_B96"
+    0x010a_9410, // "BSSM_SV_2_A"
+    0x010a_9404, // "BSSM_SV_2_B"
+    0x010a_93f8, // "BSSM_SV_3_0"
+];
+const SHADER_LEVEL_UNKNOWN: u32 = 0x010a_93f4;
+
+// Translated from 00b4f4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderManager::GetShaderLevelString` (Xbox PDB), no arguments: the name of the shader
+/// level at `011f91c0` (the arms of the switch's jump table at `00b4f4e8`, read in Ghidra), the
+/// unknown-level string for anything above 7.
+pub fn bs_shader_manager_get_shader_level_string(e: &mut Engine) -> u32 {
+    let level = e.global::<u32>(PROFILE_SETTING_011F91C0);
+    match SHADER_LEVEL_NAMES.get(level as usize) {
+        Some(name) => *name,
+        None => SHADER_LEVEL_UNKNOWN,
+    }
+}
+
+/// The globals `00b4f710` sets besides the two profile settings: a flag word (0x2f at level 2
+/// and above, 0xf at level 1, bit 4 cleared below level 2), the byte set when both major
+/// versions are 3 or more, the byte cleared below level 2, the word set to 0x15 and the vendor
+/// word (2, 1 or 3) for the three recognised drivers, the `float` copied from `010a9478`, the
+/// byte kept set only with `011f94a4` and `011f94d8`, and the byte copied from `011f94e4`.
+const SHADER_FLAGS_011F91D8: u32 = 0x011f_91d8;
+const VERSION_3_BOTH_011F94A4: u32 = 0x011f_94a4;
+const BELOW_LEVEL_2_FLAG_011F941E: u32 = 0x011f_941e;
+const VENDOR_SETTING_011AD870: u32 = 0x011a_d870;
+const VENDOR_011F94B8: u32 = 0x011f_94b8;
+const FLOAT_TARGET_01200458: u32 = 0x0120_0458;
+const FLOAT_SOURCE_010A9478: u32 = 0x010a_9478;
+const KEPT_FLAG_011AD80E: u32 = 0x011a_d80e;
+const REQUIRED_FLAG_011F94D8: u32 = 0x011f_94d8;
+const COPIED_FLAG_011F91A4: u32 = 0x011f_91a4;
+const COPY_SOURCE_011F94E4: u32 = 0x011f_94e4;
+/// `_strnicmp` (`00ec7ec0`, `cdecl`: string, string, count) and the driver prefixes it
+/// compares (`"ati"`, `"nv"`, `"ig"`, read in Ghidra).
+const STRNICMP: u32 = 0x00ec_7ec0;
+const PREFIX_ATI_010A9484: u32 = 0x010a_9484;
+const PREFIX_NV_010A9480: u32 = 0x010a_9480;
+const PREFIX_IG_010A947C: u32 = 0x010a_947c;
+
+// Translated from 00b4f710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`bsshadermanager.cpp`): the shader manager's set-up from the
+/// device, `cdecl`: pixel and vertex shader versions (their major version is byte 1), the
+/// force-1.x byte, the device and driver name strings and the maximum pixel shader instruction
+/// count.
+///
+/// Both majors 2 or more: level 2 (`011f91c0`), flags 0x2f, `011f94a4` when both are 3 or
+/// more; with both strings, the driver prefix picks the level and settings: `"ati"` gives level
+/// 6 above 0x60 instructions (else 4), pixel setting (`011f91bc`) 6, `011ad870` 0x15 and vendor
+/// 2; `"nv"` and `"ig"` give level 5 above 0x60 (else 3), pixel setting 5 and vendor 1 or 3;
+/// above 0xff instructions `011f94a6` is set. (The level changes only from 2.) Any other driver
+/// gives level 2 and pixel setting 2. After a driver check the `float` at `010a9478` is copied
+/// to `01200458` and bit 4 of the flags is cleared for a level below 2. Otherwise both majors 1
+/// or more give level 1 and flags 0xf, else level 0; `011f941e` is cleared and bit 4 of the
+/// flags too. Then the force byte turns a nonzero level into 1, `011ad80e` stays set only when
+/// it, `011f94a4` and `011f94d8` are all set, and `011f91a4` gets the byte at `011f94e4`.
+pub fn fn_00b4f710(
+    e: &mut Engine,
+    pixel_shader_version: u32,
+    vertex_shader_version: u32,
+    force_1x_shaders: u8,
+    device_name: Ptr,
+    driver_name: Ptr,
+    max_ps_instructions: i32,
+) {
+    let pixel_major = (pixel_shader_version >> 8) as u8;
+    let vertex_major = (vertex_shader_version >> 8) as u8;
+    // The level as the exe keeps it in EAX (always the value of 011f91c0).
+    let mut level: u32;
+    if pixel_major >= 2 && vertex_major >= 2 {
+        level = 2;
+        e.set_global(PROFILE_SETTING_011F91C0, level);
+        e.set_global(SHADER_FLAGS_011F91D8, 0x2fu32);
+        if pixel_major >= 3 && vertex_major >= 3 {
+            e.set_global(VERSION_3_BOTH_011F94A4, 1u8);
+        }
+        if !device_name.is_null() && !driver_name.is_null() {
+            let driver = driver_name.addr();
+            let has_prefix = |e: &mut Engine, prefix: u32, count: u32| {
+                e.call(STRNICMP, &args![driver, prefix, count]).i32() == 0
+            };
+            // (level when 0x60 instructions or fewer, level above, vendor word)
+            let vendor = if has_prefix(e, PREFIX_ATI_010A9484, 3) {
+                Some((4u32, 6u32, 2u32))
+            } else if has_prefix(e, PREFIX_NV_010A9480, 2) {
+                Some((3, 5, 1))
+            } else if has_prefix(e, PREFIX_IG_010A947C, 2) {
+                Some((3, 5, 3))
+            } else {
+                None
+            };
+            match vendor {
+                Some((low_level, high_level, vendor_word)) => {
+                    level = e.global::<u32>(PROFILE_SETTING_011F91C0);
+                    if max_ps_instructions > 0x60 {
+                        if level == 2 {
+                            level = high_level;
+                            e.set_global(PROFILE_SETTING_011F91C0, level);
+                        }
+                        e.set_global(PROFILE_SETTING_011F91BC, high_level);
+                        if max_ps_instructions > 0xff {
+                            e.set_global(SHADER_1D_SELECT_011F94A6, 1u8);
+                        }
+                    } else {
+                        if level == 2 {
+                            level = low_level;
+                            e.set_global(PROFILE_SETTING_011F91C0, level);
+                        }
+                        e.set_global(PROFILE_SETTING_011F91BC, high_level);
+                    }
+                    if vendor_word == 2 {
+                        e.set_global(VENDOR_SETTING_011AD870, 0x15u32);
+                    }
+                    e.set_global(VENDOR_011F94B8, vendor_word);
+                }
+                None => {
+                    level = 2;
+                    e.set_global(PROFILE_SETTING_011F91C0, level);
+                    e.set_global(PROFILE_SETTING_011F91BC, level);
+                }
+            }
+            let copied = x87_quiet_bits(e.global::<u32>(FLOAT_SOURCE_010A9478));
+            e.set_global(FLOAT_TARGET_01200458, copied);
+            if (level as i32) < 2 {
+                let flags = e.global::<u32>(SHADER_FLAGS_011F91D8) & 0xffff_ffef;
+                e.set_global(SHADER_FLAGS_011F91D8, flags);
+            }
+        }
+    } else {
+        if pixel_major >= 1 && vertex_major >= 1 {
+            level = 1;
+            e.set_global(PROFILE_SETTING_011F91C0, level);
+            e.set_global(BELOW_LEVEL_2_FLAG_011F941E, 0u8);
+            e.set_global(SHADER_FLAGS_011F91D8, 0xfu32);
+        } else {
+            level = 0;
+            e.set_global(PROFILE_SETTING_011F91C0, level);
+            e.set_global(BELOW_LEVEL_2_FLAG_011F941E, 0u8);
+        }
+        let flags = e.global::<u32>(SHADER_FLAGS_011F91D8) & 0xffff_ffef;
+        e.set_global(SHADER_FLAGS_011F91D8, flags);
+    }
+    if force_1x_shaders != 0 && level != 0 {
+        e.set_global(PROFILE_SETTING_011F91C0, 1u32);
+    }
+    let copied = e.global::<u8>(COPY_SOURCE_011F94E4);
+    let keep = e.global::<u8>(KEPT_FLAG_011AD80E) != 0
+        && e.global::<u8>(VERSION_3_BOTH_011F94A4) != 0
+        && e.global::<u8>(REQUIRED_FLAG_011F94D8) != 0;
+    e.set_global(KEPT_FLAG_011AD80E, u8::from(keep));
+    e.set_global(COPIED_FLAG_011F91A4, copied);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00b4_f4a0,
+            bs_shader_manager_get_shader_level_string() -> u32
+        ),
+        entry!(0x00b4_f710, fn_00b4f710(u32, u32, u8, Ptr, Ptr, i32)),
         entry!(
             0x00b5_5840,
             bs_shader_manager_get_texture(Ptr, bool, Ptr, bool, bool)
@@ -1411,6 +1626,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b4_f5c0, bs_shader_manager_get_accumulator() -> Ptr),
         entry!(0x00b5_5540, bs_shader_manager_set_fog_property(u32, Ptr)),
         entry!(0x00b5_7420, fn_00b57420()),
+        entry!(0x00b4_f380, fn_00b4f380(u8) -> u32),
+        entry!(0x00b4_f3e0, fn_00b4f3e0() -> u32),
     ]
 }
 
@@ -2449,5 +2666,200 @@ pub(crate) mod creator_rig {
         let mut log = e.call_log.take().unwrap();
         log.remove(0);
         (answer, log)
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    fn engine(first: u32, second: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.set_global(PROFILE_SETTING_011F91BC, first);
+        e.set_global(PROFILE_SETTING_011F91C0, second);
+        e
+    }
+
+    #[test]
+    fn fn_00b4f380_picks_the_pixel_profile() {
+        let expected = [
+            (0u32, 0u32),
+            (1, PS_1_3_010A93D4),
+            (2, PS_2_0_010A93CC),
+            (3, PS_2_A_010A93C4),
+            (4, PS_2_B_010A93BC),
+            (5, PS_2_A_010A93C4),
+            (6, PS_2_B_010A93BC),
+            (7, PS_3_0_010A93B4),
+            (8, 0),
+        ];
+        for (setting, profile) in expected {
+            let mut e = engine(setting, 0);
+            assert_eq!(e.call(0x00b4_f380, &args![1u32]).u32(), profile);
+            let mut e = engine(0, setting);
+            assert_eq!(e.call(0x00b4_f380, &args![0u32]).u32(), profile);
+        }
+        // Only the low byte of the argument word counts.
+        let mut e = engine(7, 1);
+        assert_eq!(e.call(0x00b4_f380, &args![0x100u32]).u32(), PS_1_3_010A93D4);
+    }
+
+    #[test]
+    fn fn_00b4f3e0_picks_the_vertex_profile() {
+        let expected = [
+            (0u32, 0u32),
+            (1, VS_1_1_010A93EC),
+            (2, VS_2_0_010A93E4),
+            (6, VS_2_0_010A93E4),
+            (7, VS_3_0_010A93DC),
+            (8, 0),
+        ];
+        for (setting, profile) in expected {
+            let mut e = engine(7, setting);
+            assert_eq!(e.call(0x00b4_f3e0, &args![]).u32(), profile);
+        }
+    }
+}
+
+#[cfg(test)]
+mod b000s_tests {
+    use super::*;
+
+    const DEVICE: u32 = 0x5000;
+    const ATI: u32 = 0x5100;
+    const NV: u32 = 0x5200;
+    const IG: u32 = 0x5300;
+    const OTHER: u32 = 0x5400;
+
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_9180, 0x80);
+        e.map(0x011f_9400, 0x100);
+        e.map(0x011a_d800, 0x80);
+        e.map(FLOAT_TARGET_01200458, 4);
+        e.map(FLOAT_SOURCE_010A9478, 4);
+        e.set_global(FLOAT_SOURCE_010A9478, 0xb7a7_c5acu32);
+        // `_strnicmp` double: the drivers are named by address.
+        e.register(STRNICMP, |_, a| {
+            let hit = matches!(
+                (a[0], a[1]),
+                (ATI, PREFIX_ATI_010A9484) | (NV, PREFIX_NV_010A9480) | (IG, PREFIX_IG_010A947C)
+            );
+            u32::from(!hit).into_ret()
+        });
+        e
+    }
+
+    fn configure(e: &mut Engine, versions: (u32, u32), force: u32, driver: u32, count: i32) {
+        e.call(
+            0x00b4_f710,
+            &args![versions.0, versions.1, force, DEVICE, driver, count],
+        );
+    }
+
+    fn state(e: &Engine) -> (u32, u32, u32, u8, u32) {
+        (
+            e.global(PROFILE_SETTING_011F91C0),
+            e.global(PROFILE_SETTING_011F91BC),
+            e.global(SHADER_FLAGS_011F91D8),
+            e.global(SHADER_1D_SELECT_011F94A6),
+            e.global(VENDOR_011F94B8),
+        )
+    }
+
+    #[test]
+    fn get_shader_level_string_names_levels_0_to_7() {
+        let mut e = rig();
+        for (level, name) in SHADER_LEVEL_NAMES.iter().enumerate() {
+            e.set_global(PROFILE_SETTING_011F91C0, level as u32);
+            assert_eq!(e.call(0x00b4_f4a0, &args![]).u32(), *name);
+        }
+        e.set_global(PROFILE_SETTING_011F91C0, 8u32);
+        assert_eq!(e.call(0x00b4_f4a0, &args![]).u32(), SHADER_LEVEL_UNKNOWN);
+    }
+
+    #[test]
+    fn fn_00b4f710_picks_the_level_by_driver() {
+        let mut e = rig();
+        configure(&mut e, (0x300, 0x300), 0, ATI, 0x200);
+        assert_eq!(state(&e), (6, 6, 0x2f, 1, 2));
+        assert_eq!(e.global::<u32>(VENDOR_SETTING_011AD870), 0x15);
+        assert_eq!(e.global::<u8>(VERSION_3_BOTH_011F94A4), 1);
+        assert_eq!(e.global::<u32>(FLOAT_TARGET_01200458), 0xb7a7_c5ac);
+
+        let mut e = rig();
+        configure(&mut e, (0x200, 0x300), 0, ATI, 0x60);
+        assert_eq!(state(&e), (4, 6, 0x2f, 0, 2));
+        assert_eq!(e.global::<u8>(VERSION_3_BOTH_011F94A4), 0);
+
+        let mut e = rig();
+        configure(&mut e, (0x300, 0x300), 0, NV, 0x100);
+        assert_eq!(state(&e), (5, 5, 0x2f, 1, 1));
+        let mut e = rig();
+        configure(&mut e, (0x300, 0x300), 0, NV, 0x61);
+        assert_eq!(state(&e), (5, 5, 0x2f, 0, 1));
+        let mut e = rig();
+        configure(&mut e, (0x300, 0x300), 0, IG, 0x10);
+        assert_eq!(state(&e), (3, 5, 0x2f, 0, 3));
+        assert_eq!(e.global::<u32>(VENDOR_SETTING_011AD870), 0);
+
+        let mut e = rig();
+        configure(&mut e, (0x300, 0x300), 0, OTHER, 0x200);
+        assert_eq!(state(&e), (2, 2, 0x2f, 0, 0));
+    }
+
+    #[test]
+    fn fn_00b4f710_without_names_keeps_level_2() {
+        let mut e = rig();
+        e.set_global(PROFILE_SETTING_011F91BC, 9u32);
+        e.call(
+            0x00b4_f710,
+            &args![0x200u32, 0x200u32, 0u32, 0u32, ATI, 0x200u32],
+        );
+        assert_eq!(state(&e), (2, 9, 0x2f, 0, 0));
+        assert_eq!(e.global::<u32>(FLOAT_TARGET_01200458), 0);
+    }
+
+    #[test]
+    fn fn_00b4f710_low_versions_and_the_force_byte() {
+        let mut e = rig();
+        e.set_global(SHADER_FLAGS_011F91D8, 0xffu32);
+        e.set_global(BELOW_LEVEL_2_FLAG_011F941E, 1u8);
+        configure(&mut e, (0x100, 0x2ff), 0, ATI, 0x200);
+        assert_eq!(state(&e).0, 1);
+        assert_eq!(e.global::<u32>(SHADER_FLAGS_011F91D8), 0xf);
+        assert_eq!(e.global::<u8>(BELOW_LEVEL_2_FLAG_011F941E), 0);
+
+        let mut e = rig();
+        e.set_global(SHADER_FLAGS_011F91D8, 0xffu32);
+        configure(&mut e, (0x0ff, 0x300), 1, ATI, 0x200);
+        // Level 0 stays 0 even when forced.
+        assert_eq!(state(&e).0, 0);
+        assert_eq!(e.global::<u32>(SHADER_FLAGS_011F91D8), 0xef);
+
+        let mut e = rig();
+        configure(&mut e, (0x300, 0x300), 1, ATI, 0x200);
+        assert_eq!(state(&e).0, 1);
+    }
+
+    #[test]
+    fn fn_00b4f710_keeps_011ad80e_only_with_both_bytes() {
+        let mut e = rig();
+        e.set_global(KEPT_FLAG_011AD80E, 1u8);
+        e.set_global(REQUIRED_FLAG_011F94D8, 1u8);
+        e.set_global(COPY_SOURCE_011F94E4, 0x5au8);
+        configure(&mut e, (0x300, 0x300), 0, OTHER, 0);
+        assert_eq!(e.global::<u8>(KEPT_FLAG_011AD80E), 1);
+        assert_eq!(e.global::<u8>(COPIED_FLAG_011F91A4), 0x5a);
+        configure(&mut e, (0x300, 0x300), 0, OTHER, 0);
+        assert_eq!(e.global::<u8>(KEPT_FLAG_011AD80E), 1);
+
+        let mut e = rig();
+        e.set_global(KEPT_FLAG_011AD80E, 1u8);
+        e.set_global(COPY_SOURCE_011F94E4, 7u8);
+        configure(&mut e, (0x300, 0x300), 0, OTHER, 0);
+        assert_eq!(e.global::<u8>(KEPT_FLAG_011AD80E), 0);
+        assert_eq!(e.global::<u8>(COPIED_FLAG_011F91A4), 7);
     }
 }

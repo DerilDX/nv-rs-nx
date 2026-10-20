@@ -41,13 +41,133 @@ pub fn fn_004fe6e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 004fe560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// An `InitItem` (the form behind the vtable `01025594`, RTTI
+/// `.?AVBGSTalkingActivator@@`, stores the same component vtables): unless
+/// form flag 0x8 is set (`004013e0`), `TESModelTextureSwap::InitItem` (Xbox
+/// PDB, `0048aa80`) on `this + 0x30` with the form, then sets form flag 0x8
+/// (`00484ab0`).
+pub fn fn_004fe560(e: &mut Engine, this: Ptr) {
+    if e.call(0x0040_13e0, &args![this]).bool() {
+        return;
+    }
+    e.call(0x0048_aa80, &args![this.addr() + 0x30, this]);
+    e.call(0x0048_4ab0, &args![this, true]);
+}
+
+// Translated from 004fe710 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004fe710 - the exception-unwinding frame (FS:[0]) is not translated.
+/// The destructor body `004fe6e0` runs (vtable `01025594`, RTTI
+/// `.?AVBGSTalkingActivator@@`): stores the object's and its components'
+/// vtables as the constructor `004fe640` does, then runs `00483710` and
+/// `00510640` on the object.
+pub fn fn_004fe710(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0102_5594);
+    e.mem.set_u32(base + 0x30, 0x0102_557c);
+    e.mem.set_u32(base + 0x3c, 0x0102_5558);
+    e.mem.set_u32(base + 0x5c, 0x0102_5544);
+    e.mem.set_u32(base + 0x68, 0x0102_5530);
+    e.mem.set_u32(base + 0x70, 0x0102_5520);
+    e.call(0x0048_3710, &args![this]);
+    e.call(0x0051_0640, &args![this]);
+}
+
+// Translated from 004fe7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The start values of the constructor `004fe640`: clears the word at
+/// `+0x94`, then runs `00510710` on the object.
+pub fn fn_004fe7a0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr() + 0x94, 0);
+    e.call(0x0051_0710, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x004f_e640, fn_004fe640(Ptr) -> Ptr),
         entry!(0x004f_e630, fn_004fe630(Ptr, u32) -> u32),
         entry!(0x004f_e6e0, fn_004fe6e0(Ptr, u32) -> Ptr),
+        entry!(0x004f_e560, fn_004fe560(Ptr)),
+        entry!(0x004f_e710, fn_004fe710(Ptr)),
+        entry!(0x004f_e7a0, fn_004fe7a0(Ptr)),
     ]
+}
+
+#[cfg(test)]
+mod b023_tests {
+    use super::*;
+
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for a in addrs {
+            e.register(*a, |_, _| Ret::default());
+        }
+    }
+
+    fn calls(e: &mut Engine, skip: u32) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != skip)
+            .collect()
+    }
+
+    #[test]
+    fn init_item_once() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[0x0048_aa80, 0x0048_4ab0]);
+        let this = e.mem.alloc(0x98);
+        e.register(0x0040_13e0, |_, _| Ret {
+            eax: 0x100,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x004f_e560, &[this]);
+        // 0x100 is false in AL: the components run.
+        assert_eq!(
+            calls(&mut e, 0x004f_e560),
+            vec![
+                (0x0040_13e0, vec![this]),
+                (0x0048_aa80, vec![this + 0x30, this]),
+                (0x0048_4ab0, vec![this, 1]),
+            ]
+        );
+        e.register(0x0040_13e0, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x004f_e560, &[this]);
+        assert_eq!(calls(&mut e, 0x004f_e560), vec![(0x0040_13e0, vec![this])]);
+    }
+
+    #[test]
+    fn destructor_body_and_start_values() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[0x0048_3710, 0x0051_0640, 0x0051_0710]);
+        let this = e.mem.alloc(0x98);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_e710, &[this]);
+        assert_eq!(
+            calls(&mut e, 0x004f_e710),
+            vec![(0x0048_3710, vec![this]), (0x0051_0640, vec![this])]
+        );
+        for (offset, vtable) in [
+            (0, 0x0102_5594),
+            (0x30, 0x0102_557c),
+            (0x3c, 0x0102_5558),
+            (0x5c, 0x0102_5544),
+            (0x68, 0x0102_5530),
+            (0x70, 0x0102_5520),
+        ] {
+            assert_eq!(e.mem.u32(this + offset), vtable);
+        }
+        e.mem.set_u32(this + 0x94, 0xffff_ffff);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_e7a0, &[this]);
+        assert_eq!(calls(&mut e, 0x004f_e7a0), vec![(0x0051_0710, vec![this])]);
+        assert_eq!(e.mem.u32(this + 0x94), 0);
+    }
 }
 
 #[cfg(test)]

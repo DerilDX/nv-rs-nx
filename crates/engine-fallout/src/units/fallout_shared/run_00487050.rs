@@ -68,12 +68,52 @@ pub fn fn_00487200(e: &mut Engine, this: Ptr) {
     e.call(0x0048_3710, &args![this]);
 }
 
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// RTTI type descriptor `.?AVBaseFormComponent@@`.
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+/// RTTI type descriptor `.?AVTESFullName@@`.
+const TYPE_TES_FULL_NAME: u32 = 0x0118_3158;
+/// `00408da0` (`thiscall`, no stack words; engine map
+/// `MapMarkerData::GetLocationName`, a shared body): what `00559450` gives
+/// for +4, or `01011584` (an empty string) when that is 0.
+const GET_TEXT: u32 = 0x0040_8da0;
+/// `004037f0` (`thiscall`, two words: text, then a word passed as 0): sets
+/// a `BSStringT`.
+const STRING_SET: u32 = 0x0040_37f0;
+
+// Translated from 004870f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the name of another component (`thiscall (this; other)`; no Xbox
+/// PDB name): when `other` (a `BaseFormComponent`) casts to `TESFullName`,
+/// its text (`00408da0`) is set into the string at +4 of `this`
+/// (`004037f0(text, 0)`).
+pub fn fn_004870f0(e: &mut Engine, this: Ptr, other: Ptr) {
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_TES_FULL_NAME,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return;
+    }
+    let text = e.call(GET_TEXT, &args![source]).u32();
+    e.call(STRING_SET, &args![this.addr() + 4, text, 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0048_7200, fn_00487200(Ptr)),
         entry!(0x00487050, fn_00487050(Ptr, Ptr<TESFile>)),
         entry!(0x004871d0, fn_004871d0(Ptr) -> Ptr),
+        entry!(0x0048_70f0, fn_004870f0(Ptr, Ptr)),
     ]
 }
 
@@ -192,5 +232,37 @@ mod component_tests {
             0x0101_cb94,
             "the vtable was stored before the call"
         );
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn fn_004870f0_copies_the_name_of_a_full_name_component() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            assert_eq!(a[1..], [0, TYPE_BASE_FORM_COMPONENT, TYPE_TES_FULL_NAME, 0]);
+            word(a[0])
+        });
+        e.register(GET_TEXT, |_, a| word(a[0] + 0x10));
+        e.register(STRING_SET, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0048_70f0, &args![0x100u32, 0x200u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.last().unwrap(), &(STRING_SET, vec![0x104, 0x210, 0]));
+
+        e.register(RT_DYNAMIC_CAST, |_, _| word(0));
+        e.call_log = Some(vec![]);
+        e.call(0x0048_70f0, &args![0x100u32, 0x200u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
     }
 }

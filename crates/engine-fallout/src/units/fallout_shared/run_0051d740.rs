@@ -169,6 +169,119 @@ pub fn fn_0051dad0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 0051d740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at the address `00408d60` returns for the global at
+/// `011d5ce8` (`cdecl`, no arguments).
+pub fn fn_0051d740(e: &mut Engine) -> u8 {
+    let at = e.call(0x0040_8d60, &args![0x011d_5ce8u32]).u32();
+    e.mem.u8(at)
+}
+
+// Translated from 0051e2a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `0xB1` plus one of the weapon's bytes: with `alternate` false the byte
+/// at +0x103 (zero-extended); otherwise the signed byte at +0x1A1, unless
+/// that byte sign-extended equals 0xFF, when the byte at +0x103 again. The
+/// exe compares the sign-extended byte with 0xFF (not -1), so that test
+/// never holds and a 0xFF byte gives `0xB1 - 1`; translated as the exe
+/// does it.
+pub fn fn_0051e2a0(e: &mut Engine, this: Ptr, alternate: u8) -> i32 {
+    let base = this.addr();
+    if alternate == 0 {
+        return i32::from(e.mem.u8(base + 0x103)) + 0xb1;
+    }
+    let signed = i32::from(e.mem.i8(base + 0x1a1));
+    if signed == 0xff {
+        i32::from(e.mem.u8(base + 0x103)) + 0xb1
+    } else {
+        signed + 0xb1
+    }
+}
+
+/// The offsets of the ten components `0051e300` clears (each through its
+/// own vtable slot 4).
+const CLEARED_COMPONENTS: [u32; 10] = [
+    0x1d0, 0x1e8, 0x200, 0x270, 0x290, 0x2b0, 0x2d0, 0x2f0, 0x310, 0x330,
+];
+
+// Translated from 0051e300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the weapon's ten model components (vtable slot 4,
+/// `ClearDataComponent`, of each at +0x1D0 .. +0x330) and empties the two
+/// strings at +0x35C and +0x368 (`004037f0` with 0, 0).
+pub fn fn_0051e300(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for offset in CLEARED_COMPONENTS {
+        e.vcall(base + offset, 4, &[]);
+    }
+    e.call(0x0040_37f0, &args![base + 0x35c, 0u32, 0u32]);
+    e.call(0x0040_37f0, &args![base + 0x368, 0u32, 0u32]);
+}
+
+// Translated from 0051db00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0051db00 - the exception-unwinding frame (FS:[0]) and its state numbers are not translated
+/// `TESObjectWEAP`'s destructor body: stores the class's 19 vtables (at +0
+/// and in each component), clears the components (`0051e300`), then
+/// destroys the members and bases last to first by address and finally the
+/// base destructor `0050e9f0` (tesobject.cpp).
+pub fn fn_0051db00(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let vtables: [(u32, u32); 19] = [
+        (0x00, 0x0102_c51c),
+        (0x30, 0x0102_c504),
+        (0x3c, 0x0102_c4e0),
+        (0x5c, 0x0102_c4c0),
+        (0x68, 0x0102_c4ac),
+        (0x74, 0x0102_c494),
+        (0x84, 0x0102_c474),
+        (0x8c, 0x0102_c460),
+        (0x94, 0x0102_c448),
+        (0x9c, 0x0102_c430),
+        (0xa4, 0x0102_c41c),
+        (0xac, 0x0102_c408),
+        (0xb4, 0x0102_c3f4),
+        (0xbc, 0x0102_c3e0),
+        (0xc4, 0x0102_c3cc),
+        (0xcc, 0x0102_c3b4),
+        (0xd0, 0x0102_c3a0),
+        (0xe0, 0x0102_c38c),
+        (0xe8, 0x0102_c378),
+    ];
+    for (offset, vtable) in vtables {
+        e.mem.set_u32(base + offset, vtable);
+    }
+    fn_0051e300(e, this);
+    let members: [(u32, u32); 24] = [
+        (0x368, 0x0040_37d0),
+        (0x35c, 0x0040_37d0),
+        (0x330, 0x0048_a490),
+        (0x310, 0x0048_a490),
+        (0x2f0, 0x0048_a490),
+        (0x2d0, 0x0048_a490),
+        (0x2b0, 0x0048_a490),
+        (0x290, 0x0048_a490),
+        (0x270, 0x0048_a490),
+        (0x200, 0x0048_9070),
+        (0x1e8, 0x0048_9070),
+        (0x1d0, 0x0048_9070),
+        (0xe8, 0x0047_b520),
+        (0xe0, 0x0047_4d40),
+        (0xd0, 0x0047_a1a0),
+        (0xbc, 0x0047_b880),
+        (0xb4, 0x0047_5380),
+        (0xac, 0x0047_50e0),
+        (0x9c, 0x0047_fdf0),
+        (0x94, 0x0048_7200),
+        (0x8c, 0x0048_eaf0),
+        (0x84, 0x0048_e7d0),
+        (0x5c, 0x0040_2c40),
+        (0x3c, 0x0048_a490),
+    ];
+    for (offset, destructor) in members {
+        e.call(destructor, &args![base + offset]);
+    }
+    e.call(0x0059_1300, &args![base + 0x30]);
+    e.call(0x0050_e9f0, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -176,6 +289,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_d760, fn_0051d760(Ptr, u32) -> u32),
         entry!(0x0051_ddf0, fn_0051ddf0(Ptr)),
         entry!(0x0051_dad0, fn_0051dad0(Ptr, u32) -> Ptr),
+        entry!(0x0051_d740, fn_0051d740() -> u8),
+        entry!(0x0051_e2a0, fn_0051e2a0(Ptr, u8) -> i32),
+        entry!(0x0051_e300, fn_0051e300(Ptr)),
+        entry!(0x0051_db00, fn_0051db00(Ptr)),
     ]
 }
 
@@ -441,5 +558,120 @@ mod movement_path_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod b020_tests {
+    use super::*;
+
+    fn calls(e: &mut Engine, skip: u32) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 != skip)
+            .collect()
+    }
+
+    #[test]
+    fn b020_0051d740_reads_the_byte() {
+        let mut e = Engine::new();
+        let p = e.mem.alloc(4);
+        e.mem.set_u8(p, 0x9a);
+        e.register_double(0x0040_8d60, move |_, a| {
+            assert_eq!(a, &[0x011d_5ce8]);
+            Ret {
+                eax: p,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(e.call(0x0051_d740, &[]).u8(), 0x9a);
+    }
+
+    #[test]
+    fn b020_0051e2a0_picks_the_byte() {
+        let mut e = Engine::new();
+        let p = e.mem.alloc(0x200);
+        e.mem.set_u8(p + 0x103, 0x0c);
+        e.mem.set_u8(p + 0x1a1, 0x05);
+        assert_eq!(e.call(0x0051_e2a0, &args![p, 0u32]).i32(), 0xbd);
+        assert_eq!(e.call(0x0051_e2a0, &args![p, 0x100u32]).i32(), 0xbd);
+        assert_eq!(e.call(0x0051_e2a0, &args![p, 1u32]).i32(), 0xb6);
+        e.mem.set_u8(p + 0x1a1, 0xff);
+        assert_eq!(e.call(0x0051_e2a0, &args![p, 1u32]).i32(), 0xb0);
+        e.mem.set_u8(p + 0x1a1, 0x80);
+        assert_eq!(e.call(0x0051_e2a0, &args![p, 1u32]).i32(), 0xb1 - 0x80);
+    }
+
+    #[test]
+    fn b020_0051e300_clears_the_components_and_strings() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0150_0000, &[0, 0x0000_1004]);
+        e.register(0x0000_1004, |_, _| Ret::default());
+        e.register(0x0040_37f0, |_, _| Ret::default());
+        let p = e.mem.alloc(0x388);
+        for o in CLEARED_COMPONENTS {
+            e.mem.set_u32(p + o, 0x0150_0000);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0051_e300, &args![p]);
+        let mut want: Vec<(u32, Vec<u32>)> = CLEARED_COMPONENTS
+            .iter()
+            .map(|o| (0x0000_1004, vec![p + o]))
+            .collect();
+        want.push((0x0040_37f0, vec![p + 0x35c, 0, 0]));
+        want.push((0x0040_37f0, vec![p + 0x368, 0, 0]));
+        assert_eq!(calls(&mut e, 0x0051_e300), want);
+    }
+
+    #[test]
+    fn b020_0051db00_destroys_the_weapon() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0150_0000, &[0, 0x0000_1004]);
+        let p = e.mem.alloc(0x388);
+        // The ten cleared components (not given a vtable by the
+        // destructor) use the test vtable.
+        for o in CLEARED_COMPONENTS {
+            e.mem.set_u32(p + o, 0x0150_0000);
+        }
+        e.register(0x0000_1004, |_, _| Ret::default());
+        e.register(0x0040_37f0, |_, _| Ret::default());
+        for a in [
+            0x0040_37d0,
+            0x0048_a490,
+            0x0048_9070,
+            0x0047_b520,
+            0x0047_4d40,
+            0x0047_a1a0,
+            0x0047_b880,
+            0x0047_5380,
+            0x0047_50e0,
+            0x0047_fdf0,
+            0x0048_7200,
+            0x0048_eaf0,
+            0x0048_e7d0,
+            0x0040_2c40,
+            0x0059_1300,
+            0x0050_e9f0,
+        ] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0051_db00, &args![p]);
+        assert_eq!(e.mem.u32(p), 0x0102_c51c);
+        assert_eq!(e.mem.u32(p + 0x30), 0x0102_c504);
+        assert_eq!(e.mem.u32(p + 0xa4), 0x0102_c41c);
+        assert_eq!(e.mem.u32(p + 0xe8), 0x0102_c378);
+        let log = calls(&mut e, 0x0051_db00);
+        assert_eq!(log.len(), 38);
+        assert_eq!(log[0], (0x0000_1004, vec![p + 0x1d0]));
+        assert_eq!(log[11], (0x0040_37f0, vec![p + 0x368, 0, 0]));
+        assert_eq!(log[12], (0x0040_37d0, vec![p + 0x368]));
+        assert_eq!(log[21], (0x0048_9070, vec![p + 0x200]));
+        assert_eq!(log[34], (0x0040_2c40, vec![p + 0x5c]));
+        assert_eq!(log[35], (0x0048_a490, vec![p + 0x3c]));
+        assert_eq!(log[36], (0x0059_1300, vec![p + 0x30]));
+        assert_eq!(log[37], (0x0050_e9f0, vec![p]));
     }
 }

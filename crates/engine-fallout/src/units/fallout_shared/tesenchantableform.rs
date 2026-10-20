@@ -74,9 +74,52 @@ pub fn tesenchantableform_init_item(e: &mut Engine, this: Ptr, owner: Ptr) {
     e.mem.free(slot);
 }
 
+// Translated from 004830d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESEnchantableForm::InitializeDataComponent` (Xbox PDB, matched by the
+/// engine map): the word at +4 (the enchantment) null, the 16-bit word at
+/// +8 0 and the word at +0xC 4.
+pub fn tes_enchantable_form_initialize_data_component(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr() + 4, 0);
+    e.mem.set_u16(this.addr() + 8, 0);
+    e.mem.set_u32(this.addr() + 0xc, 4);
+}
+
+// Translated from 00483170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the 16-bit word at +8 (no Xbox PDB name; `thiscall`, `RET 4`).
+pub fn fn_00483170(e: &mut Engine, this: Ptr, value: u16) {
+    e.mem.set_u16(this.addr() + 8, value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0048_3210, tesenchantableform_init_item(Ptr, Ptr))]
+    vec![
+        entry!(0x0048_3210, tesenchantableform_init_item(Ptr, Ptr)),
+        entry!(
+            0x004830d0,
+            tes_enchantable_form_initialize_data_component(Ptr)
+        ),
+        entry!(0x00483170, fn_00483170(Ptr, u16)),
+    ]
+}
+
+#[cfg(test)]
+mod b019_tests {
+    use super::*;
+
+    #[test]
+    fn start_values_and_the_16_bit_store() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        e.mem.write(this, &[0xff; 0x10]);
+        e.call(0x0048_30d0, &args![this]);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(e.mem.u16(this + 8), 0);
+        assert_eq!(e.mem.u16(this + 0xa), 0xffff);
+        assert_eq!(e.mem.u32(this + 0xc), 4);
+        e.call(0x0048_3170, &args![this, 0x1_2345u32]);
+        assert_eq!(e.mem.u16(this + 8), 0x2345);
+        assert_eq!(e.mem.u16(this + 0xa), 0xffff);
+    }
 }
 
 #[cfg(test)]

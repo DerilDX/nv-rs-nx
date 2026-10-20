@@ -29,11 +29,38 @@ pub fn fn_00589930(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 00589980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the start values of the form `fn_005898c0` constructs (the vtable
+/// it stores, `010320fc`, has the RTTI name `.?AVBGSAcousticSpace@@`): the
+/// words at +0x34..+0x44, +0x48 and +0x50 to 0, the byte at +0x30 to 1 and
+/// the word at +0x4c to 1. `ECX`, no stack words. The engine map gives it
+/// no name.
+pub fn fn_00589980(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for offset in [0x34, 0x38, 0x3c, 0x40, 0x44, 0x50] {
+        e.mem.set_u32(base + offset, 0);
+    }
+    e.mem.set_u8(base + 0x30, 1);
+    e.mem.set_u32(base + 0x48, 0);
+    e.mem.set_u32(base + 0x4c, 1);
+}
+
+// Translated from 00589960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body `fn_00589930` runs: stores the vtable `010320fc`
+/// back and runs the base destructor `0050e9f0` (tesobject.cpp). `ECX`, no
+/// stack words. The engine map gives it no name.
+pub fn fn_00589960(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0103_20fc);
+    e.call(0x0050_e9f0, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0058_98c0, fn_005898c0(Ptr) -> Ptr),
         entry!(0x0058_9930, fn_00589930(Ptr, u32) -> Ptr),
+        entry!(0x0058_9980, fn_00589980(Ptr)),
+        entry!(0x0058_9960, fn_00589960(Ptr)),
     ]
 }
 
@@ -79,5 +106,37 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod b022_tests {
+    use super::*;
+
+    #[test]
+    fn the_start_values() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x54);
+        e.mem.write(object, &[0xaa; 0x54]);
+        e.call(0x0058_9980, &[object]);
+        for offset in [0x34, 0x38, 0x3c, 0x40, 0x44, 0x48, 0x50] {
+            assert_eq!(e.mem.u32(object + offset), 0);
+        }
+        assert_eq!(e.mem.u8(object + 0x30), 1);
+        assert_eq!(e.mem.u8(object + 0x31), 0xaa);
+        assert_eq!(e.mem.u32(object + 0x4c), 1);
+        assert_eq!(e.mem.u32(object + 0x2c), 0xaaaa_aaaa);
+    }
+
+    #[test]
+    fn the_destructor_restores_the_vtable_and_runs_the_base() {
+        let mut e = Engine::new();
+        e.register(0x0050_e9f0, |_, _| Ret::default());
+        let object = e.mem.alloc(0x54);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_9960, &[object]);
+        assert_eq!(e.mem.u32(object), 0x0103_20fc);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1..], [(0x0050_e9f0, vec![object])]);
     }
 }

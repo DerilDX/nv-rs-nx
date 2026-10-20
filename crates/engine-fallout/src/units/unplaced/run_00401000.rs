@@ -76,6 +76,59 @@ pub fn fn_00401150(e: &mut Engine, this: Ptr) -> u8 {
     fn_00401170(e, this)
 }
 
+/// Whether the word at +8 of `this` has any bit of `mask` (`SETNZ AL`; the upper bytes of
+/// `EAX` keep the masked word's, which callers do not read).
+fn word_eight_has(e: &mut Engine, this: Ptr, mask: u32) -> bool {
+    e.mem.u32(this.addr().wrapping_add(8)) & mask != 0
+}
+
+// Translated from 00401190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only, plain `RET`): tests mask 0x400 in the word at +8.
+pub fn fn_00401190(e: &mut Engine, this: Ptr) -> bool {
+    word_eight_has(e, this, 0x400)
+}
+
+// Translated from 004011b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only, plain `RET`): tests mask 0x10000 in the word at
+/// +8.
+pub fn fn_004011b0(e: &mut Engine, this: Ptr) -> bool {
+    word_eight_has(e, this, 0x0001_0000)
+}
+
+// Translated from 004011d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only, plain `RET`): tests mask 0x20000 in the word at
+/// +8.
+pub fn fn_004011d0(e: &mut Engine, this: Ptr) -> bool {
+    word_eight_has(e, this, 0x0002_0000)
+}
+
+// Translated from 004011f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only, plain `RET`): tests mask 0x80000 in the word at
+/// +8.
+pub fn fn_004011f0(e: &mut Engine, this: Ptr) -> bool {
+    word_eight_has(e, this, 0x0008_0000)
+}
+
+// Translated from 00401210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only, plain `RET`): tests mask 0x2000000 in the word at
+/// +8.
+pub fn fn_00401210(e: &mut Engine, this: Ptr) -> bool {
+    word_eight_has(e, this, 0x0200_0000)
+}
+
+// Translated from 00401230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only, plain `RET`): tests mask 0x40000000 in the word at
+/// +8.
+pub fn fn_00401230(e: &mut Engine, this: Ptr) -> bool {
+    word_eight_has(e, this, 0x4000_0000)
+}
+
+// Translated from 00401250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only, plain `RET`): tests mask 0x200 in the word at +8.
+pub fn fn_00401250(e: &mut Engine, this: Ptr) -> bool {
+    word_eight_has(e, this, 0x200)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -85,6 +138,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00401170, fn_00401170(Ptr) -> u8),
         entry!(0x004013e0, fn_004013e0(Ptr) -> bool),
         entry!(0x0040_10b0, fn_004010b0(Ptr) -> Ptr),
+        entry!(0x0040_1190, fn_00401190(Ptr) -> bool),
+        entry!(0x0040_11b0, fn_004011b0(Ptr) -> bool),
+        entry!(0x0040_11d0, fn_004011d0(Ptr) -> bool),
+        entry!(0x0040_11f0, fn_004011f0(Ptr) -> bool),
+        entry!(0x0040_1210, fn_00401210(Ptr) -> bool),
+        entry!(0x0040_1230, fn_00401230(Ptr) -> bool),
+        entry!(0x0040_1250, fn_00401250(Ptr) -> bool),
     ]
 }
 
@@ -210,5 +270,36 @@ mod thunk_tests {
         // Neighbouring bytes are not part of the result.
         e.mem.set_u8(object + 5, 0xff);
         assert_eq!(e.call(0x0040_1150, &[object]).u32() & 0xff, 0x5a);
+    }
+}
+
+#[cfg(test)]
+mod flag_word_tests {
+    use super::*;
+
+    #[test]
+    fn flag_getters_test_their_mask_in_the_word_at_eight() {
+        let mut e = Engine::new();
+        let form = e.mem.alloc(0x10);
+        for (address, mask) in [
+            (0x0040_1190u32, 0x400u32),
+            (0x0040_11b0, 0x0001_0000),
+            (0x0040_11d0, 0x0002_0000),
+            (0x0040_11f0, 0x0008_0000),
+            (0x0040_1210, 0x0200_0000),
+            (0x0040_1230, 0x4000_0000),
+            (0x0040_1250, 0x200),
+        ] {
+            e.mem.set_u32(form + 8, mask);
+            assert!(e.call(address, &args![form]).bool(), "{address:08x}");
+            e.mem.set_u32(form + 8, !mask);
+            assert!(!e.call(address, &args![form]).bool(), "{address:08x}");
+            // Only the word at +8 counts.
+            e.mem.set_u32(form + 4, mask);
+            e.mem.set_u32(form + 0xc, mask);
+            assert!(!e.call(address, &args![form]).bool(), "{address:08x}");
+            e.mem.set_u32(form + 4, 0);
+            e.mem.set_u32(form + 0xc, 0);
+        }
     }
 }

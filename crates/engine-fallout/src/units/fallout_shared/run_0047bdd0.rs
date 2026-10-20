@@ -4,7 +4,100 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl`, five words).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// RTTI type descriptor `.?AVBaseFormComponent@@`.
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+/// RTTI type descriptor `.?AVBGSTouchSpellForm@@`.
+const TYPE_BGS_TOUCH_SPELL_FORM: u32 = 0x0118_6a8c;
+/// `00726070` (`thiscall`): the word at +4.
+const GET_WORD_4: u32 = 0x0072_6070;
+/// `006ecd40` (`thiscall`, one word): stores it at +4 (the engine map's
+/// name, `CombatProcedureAttackMelee::Initialize`, is a folded body).
+const SET_WORD_4: u32 = 0x006e_cd40;
+/// `004a8ae0` (`thiscall`): the 16-bit word at +8 (folded body; engine map
+/// `TESActorBaseData::GetFatigue`).
+const GET_SHORT_8: u32 = 0x004a_8ae0;
+/// `00483170` (`thiscall`, one word): stores its low 16 bits at +8.
+const SET_SHORT_8: u32 = 0x0048_3170;
+
+// Translated from 0047bdd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies a `BGSTouchSpellForm` component (`thiscall (this; other)`; no Xbox
+/// PDB name): when `other` (a `BaseFormComponent`) casts to
+/// `BGSTouchSpellForm`, its word at +4 and its 16-bit word at +8 are stored
+/// in `this` through their setters.
+pub fn fn_0047bdd0(e: &mut Engine, this: Ptr, other: Ptr) {
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_BGS_TOUCH_SPELL_FORM,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return;
+    }
+    let value = e.call(GET_WORD_4, &args![source]).u32();
+    e.call(SET_WORD_4, &args![this, value]);
+    let short = e.call(GET_SHORT_8, &args![source]).u16();
+    e.call(SET_SHORT_8, &args![this, u32::from(short)]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![entry!(0x0047_bdd0, fn_0047bdd0(Ptr, Ptr))]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn copies_both_fields_from_a_touch_spell_form() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            assert_eq!(
+                a[1..],
+                [0, TYPE_BASE_FORM_COMPONENT, TYPE_BGS_TOUCH_SPELL_FORM, 0]
+            );
+            word(a[0])
+        });
+        e.register(GET_WORD_4, |_, _| word(0x1234));
+        e.register(GET_SHORT_8, |_, _| word(0xffff_0042));
+        e.register(SET_WORD_4, |_, _| Ret::default());
+        e.register(SET_SHORT_8, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_bdd0, &args![0x100u32, 0x200u32]);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 == SET_WORD_4 || c.0 == SET_SHORT_8)
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                (SET_WORD_4, vec![0x100, 0x1234]),
+                (SET_SHORT_8, vec![0x100, 0x42])
+            ]
+        );
+
+        e.register(RT_DYNAMIC_CAST, |_, _| word(0));
+        e.call_log = Some(vec![]);
+        e.call(0x0047_bdd0, &args![0x100u32, 0x200u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
 }

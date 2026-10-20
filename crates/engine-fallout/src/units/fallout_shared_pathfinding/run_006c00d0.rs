@@ -14,9 +14,50 @@ pub fn fn_006c0170(e: &mut Engine, this: Ptr) {
     e.call(0x006c_0150, &args![this]);
 }
 
+/// The `hkpEntityActivationListener` vtable (its RTTI locator names
+/// `.?AVhkpEntityActivationListener@@`).
+const ENTITY_ACTIVATION_LISTENER_VTABLE: u32 = 0x0106_c3c4;
+/// The game's `operator delete` (`00401030`, cdecl, the block).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+
+// Translated from 006c0100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// An `hkpEntityActivationListener` constructor: stores the interface's
+/// vtable and returns `this`.
+pub fn fn_006c0100(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem
+        .set_u32(this.addr(), ENTITY_ACTIVATION_LISTENER_VTABLE);
+    this
+}
+
+// Translated from 006c0150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `hkpEntityActivationListener` destructor body: stores the
+/// interface's vtable (`EAX` is left holding `this` only as the store's
+/// address; the callers do not read it).
+pub fn fn_006c0150(e: &mut Engine, this: Ptr) {
+    e.mem
+        .set_u32(this.addr(), ENTITY_ACTIVATION_LISTENER_VTABLE);
+}
+
+// Translated from 006c00d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `hkpEntityActivationListener` scalar deleting destructor: runs the
+/// destructor (`006c0170`), frees the object when bit 0 of `flags` is set,
+/// and returns `this`.
+pub fn fn_006c00d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006c0170(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x006c_0170, fn_006c0170(Ptr))]
+    vec![
+        entry!(0x006c_0170, fn_006c0170(Ptr)),
+        entry!(0x006c0100, fn_006c0100(Ptr) -> Ptr),
+        entry!(0x006c0150, fn_006c0150(Ptr)),
+        entry!(0x006c00d0, fn_006c00d0(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -40,5 +81,34 @@ mod thunk_tests {
         e.call_log = Some(vec![]);
         e.call(0x006c_0170, &args![0x0000_5000u32]);
         assert_eq!(calls_to(&e, 0x006c_0150), vec![vec![0x5000]]);
+    }
+
+    #[test]
+    fn constructor_006c0100_stores_the_vtable() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(4);
+        assert_eq!(e.call(0x006c_0100, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), ENTITY_ACTIVATION_LISTENER_VTABLE);
+    }
+
+    #[test]
+    fn destructor_006c0150_stores_the_vtable() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(4);
+        e.call(0x006c_0150, &args![this]);
+        assert_eq!(e.mem.u32(this), ENTITY_ACTIVATION_LISTENER_VTABLE);
+    }
+
+    #[test]
+    fn deleting_destructor_006c00d0_frees_only_on_bit_0() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let this = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006c_00d0, &args![this, 2u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), ENTITY_ACTIVATION_LISTENER_VTABLE);
+        assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x006c_00d0, &args![this, 1u32]);
+        assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![this]]);
     }
 }

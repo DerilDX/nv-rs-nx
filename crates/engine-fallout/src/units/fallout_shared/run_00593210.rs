@@ -42,11 +42,39 @@ pub fn fn_00593240(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The word `00593210` clears and `00593220` reads.
+const VALUE_011CA898: u32 = 0x011c_a898;
+
+// Translated from 00593210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): clears the word at `011ca898`.
+pub fn fn_00593210(e: &mut Engine) {
+    e.set_global(VALUE_011CA898, 0u32);
+}
+
+// Translated from 00593220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): the word at `011ca898`.
+pub fn fn_00593220(e: &mut Engine) -> u32 {
+    e.global(VALUE_011CA898)
+}
+
+// Translated from 005932b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` and one stack word, `RET 4`): when `source` is not null,
+/// copies 0x24 bytes from it over this record through `00401460` (cdecl: destination,
+/// source, size).
+pub fn fn_005932b0(e: &mut Engine, this: Ptr, source: Ptr) {
+    if !source.is_null() {
+        e.call(0x0040_1460, &args![this, source, 0x24u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0059_3230, fn_00593230(Ptr, u32) -> u32),
         entry!(0x0059_3240, fn_00593240(Ptr) -> Ptr),
+        entry!(0x0059_3210, fn_00593210()),
+        entry!(0x0059_3220, fn_00593220() -> u32),
+        entry!(0x0059_32b0, fn_005932b0(Ptr, Ptr)),
     ]
 }
 
@@ -110,5 +138,32 @@ mod static_init_callee_tests {
         assert_eq!(e.mem.u8(this + 0x1c), 4);
         assert_eq!(e.mem.u32(this + 0x20), 0xffff_ffff);
         assert_eq!(e.mem.u32(this + 0x24), 0xaaaa_aaaa);
+    }
+
+    #[test]
+    fn fn_00593210_and_fn_00593220_clear_and_read_the_word() {
+        let mut e = Engine::new();
+        e.map(VALUE_011CA898, 4);
+        e.set_global(VALUE_011CA898, 0x1234u32);
+        assert_eq!(e.call(0x0059_3220, &args![]).u32(), 0x1234);
+        e.call(0x0059_3210, &args![]);
+        assert_eq!(e.global::<u32>(VALUE_011CA898), 0);
+        assert_eq!(e.call(0x0059_3220, &args![]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_005932b0_copies_from_a_source_only() {
+        for source in [0u32, 0x6000] {
+            let mut e = Engine::new();
+            e.register(0x0040_1460, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            e.call(0x0059_32b0, &args![0x5000u32, source]);
+            let log = e.call_log.take().unwrap();
+            if source == 0 {
+                assert_eq!(log.len(), 1);
+            } else {
+                assert_eq!(log[1..], [(0x0040_1460, vec![0x5000, source, 0x24])]);
+            }
+        }
     }
 }

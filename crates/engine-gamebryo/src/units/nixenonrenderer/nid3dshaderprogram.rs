@@ -4,7 +4,167 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `NiRefObject`'s vtable (`0101dce4`), its object count `NiRefObject::ms_uiObjects`
+/// (`011f4400`, raised through the imported `InterlockedIncrement`), `NiD3DShaderProgram`'s
+/// vtable (`010ef73c`, RTTI `.?AVNiD3DShaderProgram@@`) and
+/// `NiD3DShaderProgram::SetD3DRenderer` (`00e89760`, `thiscall`, one word).
+const NI_REF_OBJECT_VTABLE_0101DCE4: u32 = 0x0101_dce4;
+const NI_REF_OBJECT_COUNT_011F4400: u32 = 0x011f_4400;
+const IMPORT_INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+const SHADER_PROGRAM_VTABLE_010EF73C: u32 = 0x010e_f73c;
+const SET_D3D_RENDERER_00E89760: u32 = 0x00e8_9760;
+
+// Translated from 00e897d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderProgram::NiD3DShaderProgram` (engine map), `thiscall` with two stack words: the
+/// renderer and the program type. The `NiRefObject` part (vtable `0101dce4`, count +4 cleared,
+/// `ms_uiObjects` at `011f4400` raised), the program type at +8, the vtable `010ef73c`, the words
+/// +0xc to +0x28 cleared, then `SetD3DRenderer` with the renderer. Answers `this`.
+pub fn ni_d3d_shader_program_ni_d3d_shader_program(
+    e: &mut Engine,
+    this: Ptr,
+    renderer: Ptr,
+    program_type: u32,
+) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, NI_REF_OBJECT_VTABLE_0101DCE4);
+    e.mem.set_u32(base + 4, 0);
+    e.call(
+        IMPORT_INTERLOCKED_INCREMENT,
+        &args![NI_REF_OBJECT_COUNT_011F4400],
+    );
+    e.mem.set_u32(base + 8, program_type);
+    e.mem.set_u32(base, SHADER_PROGRAM_VTABLE_010EF73C);
+    for offset in (0xcu32..=0x28).step_by(4) {
+        e.mem.set_u32(base + offset, 0);
+    }
+    e.call(SET_D3D_RENDERER_00E89760, &args![base, renderer]);
+    this
+}
+
+// Translated from 00e89760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderProgram::SetD3DRenderer` (engine map), `thiscall` with one stack word (the
+/// renderer), stored at +0x24. With a renderer: the old device at +0x20 is released (its
+/// vtable slot +8, `stdcall`), the renderer's device (+0x288) is kept there and referenced
+/// (slot +4) when not null, and +0x28 takes the renderer's +0x8b8. Without one: +0x28 is
+/// cleared, the old device released and +0x20 cleared.
+pub fn ni_d3d_shader_program_set_d3d_renderer(e: &mut Engine, this: Ptr, renderer: Ptr) {
+    let base = this.addr();
+    let renderer = renderer.addr();
+    e.mem.set_u32(base + 0x24, renderer);
+    if renderer != 0 {
+        let device = e.mem.u32(renderer + 0x288);
+        let old = e.mem.u32(base + 0x20);
+        if old != 0 {
+            e.vcall(old, 8, &args![]);
+        }
+        e.mem.set_u32(base + 0x20, device);
+        if device != 0 {
+            e.vcall(device, 4, &args![]);
+        }
+        let renderer = e.mem.u32(base + 0x24);
+        let state = e.mem.u32(renderer.wrapping_add(0x8b8));
+        e.mem.set_u32(base + 0x28, state);
+        return;
+    }
+    let old = e.mem.u32(base + 0x20);
+    e.mem.set_u32(base + 0x28, 0);
+    if old != 0 {
+        e.vcall(old, 8, &args![]);
+    }
+    e.mem.set_u32(base + 0x20, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![
+        entry!(
+            0x00e8_97d0,
+            ni_d3d_shader_program_ni_d3d_shader_program(Ptr, Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00e8_9760,
+            ni_d3d_shader_program_set_d3d_renderer(Ptr, Ptr)
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shader_program_constructor_sets_up_the_program() {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |_, _| Ret::default());
+        e.register(SET_D3D_RENDERER_00E89760, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x2c);
+        e.mem.write(this, &[0xcc; 0x2c]);
+        let answer = e
+            .call(0x00e8_97d0, &args![this, 0x0e00_0000u32, 1u32])
+            .u32();
+        assert_eq!(answer, this);
+        assert_eq!(e.mem.u32(this), SHADER_PROGRAM_VTABLE_010EF73C);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(e.mem.u32(this + 8), 1);
+        assert_eq!(e.mem.bytes(this + 0xc, 0x20), vec![0; 0x20]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (
+                    IMPORT_INTERLOCKED_INCREMENT,
+                    vec![NI_REF_OBJECT_COUNT_011F4400]
+                ),
+                (SET_D3D_RENDERER_00E89760, vec![this, 0x0e00_0000]),
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod set_renderer_tests {
+    use super::*;
+
+    const DEVICE_VTABLE: u32 = 0x0e00_0000;
+    const ADD_REFERENCE: u32 = 0x0e01_0004;
+    const RELEASE: u32 = 0x0e01_0008;
+
+    #[test]
+    fn set_d3d_renderer_swaps_the_device() {
+        let mut e = Engine::new();
+        e.put_vtable(DEVICE_VTABLE, &[0, ADD_REFERENCE, RELEASE]);
+        e.register(ADD_REFERENCE, |_, _| Ret::default());
+        e.register(RELEASE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let old = e.mem.alloc(4);
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(old, DEVICE_VTABLE);
+        e.mem.set_u32(device, DEVICE_VTABLE);
+        let renderer = e.mem.alloc(0x8bc);
+        e.mem.set_u32(renderer + 0x288, device);
+        e.mem.set_u32(renderer + 0x8b8, 0x0e02_0000);
+        let program = e.mem.alloc(0x2c);
+        e.mem.set_u32(program + 0x20, old);
+        e.call(0x00e8_9760, &args![program, renderer]);
+        assert_eq!(e.mem.u32(program + 0x24), renderer);
+        assert_eq!(e.mem.u32(program + 0x20), device);
+        assert_eq!(e.mem.u32(program + 0x28), 0x0e02_0000);
+        e.call(0x00e8_9760, &args![program, 0u32]);
+        assert_eq!(e.mem.u32(program + 0x20), 0);
+        assert_eq!(e.mem.u32(program + 0x28), 0);
+        let log = e.call_log.take().unwrap();
+        let released: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == RELEASE)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(released, vec![old, device]);
+        let referenced: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == ADD_REFERENCE)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(referenced, vec![device]);
+    }
 }

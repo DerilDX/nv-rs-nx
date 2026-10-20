@@ -58,6 +58,19 @@ pub fn ni_lines_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
     e.call(JUMP_TARGET_00A9B1A0, &args![this, stream]);
 }
 
+/// `NiGeometry::CopyMembers` (`00a5ac90`, thiscall: clone, cloning process).
+const NI_GEOMETRY_COPY_MEMBERS: u32 = 0x00a5_ac90;
+
+// Translated from 00a80400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiLines::CopyMembers` (Xbox PDB name in the engine map): hands this
+/// object's word at +0xB8 to the clone's vtable +0xE4, then copies the
+/// `NiGeometry` members (`00a5ac90`).
+pub fn ni_lines_copy_members(e: &mut Engine, this: Ptr, clone: Ptr, cloning: Ptr) {
+    let data = e.mem.u32(this.addr().wrapping_add(0xb8));
+    e.vcall(clone.addr(), 0xe4, &args![data]);
+    e.call(NI_GEOMETRY_COPY_MEMBERS, &args![this, clone, cloning]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -67,6 +80,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a9_b180, ni_lines_load_binary(Ptr, Ptr)),
         entry!(0x00a9_b190, ni_lines_register_streamables(Ptr, Ptr) -> bool),
         entry!(0x00a9_b1a0, ni_lines_save_binary(Ptr, Ptr)),
+        entry!(0x00a8_0400, ni_lines_copy_members(Ptr, Ptr, Ptr)),
     ]
 }
 
@@ -158,5 +172,26 @@ mod tests {
         let hits: Vec<_> = log.iter().filter(|call| call.0 == TARGET).collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
+    }
+
+    #[test]
+    fn copy_members_sets_the_clone_data_then_copies_the_geometry() {
+        let mut e = Engine::new();
+        e.register(0x7000_00e4, |_, _| Ret::default());
+        e.register(NI_GEOMETRY_COPY_MEMBERS, |_, _| Ret::default());
+        e.put_vtable(0x9100_0000, &[0; 0x3a]);
+        e.mem.set_u32(0x9100_00e4, 0x7000_00e4);
+        let this = e.mem.alloc(0xc0);
+        e.mem.set_u32(this + 0xb8, 0x4444);
+        let clone = e.mem.alloc(0xc0);
+        e.mem.set_u32(clone, 0x9100_0000);
+        e.call_log = Some(vec![]);
+        e.call(0x00a8_0400, &args![this, clone, 0x5555u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (0x7000_00e4, vec![clone, 0x4444]));
+        assert_eq!(
+            log[2],
+            (NI_GEOMETRY_COPY_MEMBERS, vec![this, clone, 0x5555])
+        );
     }
 }

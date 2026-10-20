@@ -61,6 +61,65 @@ pub fn fn_005174d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `004ae750` (thiscall): null for a null `this`, otherwise `00620b80`'s
+/// result (engine map name `bhkCharacterProxy::operator*`, unconfirmed).
+const OBJECT_PROXY: u32 = 0x004a_e750;
+/// `009d9f40` (thiscall): `this + 0xe0`.
+const PLUS_E0: u32 = 0x009d_9f40;
+/// `00519b00` `PackageTarget::GetTargType` (Xbox PDB name in the engine
+/// map; thiscall).
+const PACKAGE_TARGET_GET_TARG_TYPE: u32 = 0x0051_9b00;
+
+// Translated from 00517690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `PackageTarget::GetTargType` on `this + 8`.
+pub fn fn_00517690(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(PACKAGE_TARGET_GET_TARG_TYPE, &args![this.byte_add(8)])
+        .u32()
+}
+
+// Translated from 00517670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `00517690` on what `009d9f40` answers
+/// (`this + 0xe0`).
+pub fn fn_00517670(e: &mut Engine, this: Ptr) -> u32 {
+    let member = e.call(PLUS_E0, &args![this]).u32();
+    fn_00517690(e, Ptr::new(member))
+}
+
+// Translated from 00517630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: 5 when `004ae750` answers null, otherwise
+/// `00517670` on its answer.
+pub fn fn_00517630(e: &mut Engine, this: Ptr) -> u32 {
+    let proxy = e.call(OBJECT_PROXY, &args![this]).u32();
+    if proxy == 0 {
+        5
+    } else {
+        fn_00517670(e, Ptr::new(proxy))
+    }
+}
+
+// Translated from 00517500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body of the form `005173e0` builds (the vtables it stores
+/// are `TESObjectDOOR`'s by their RTTI): stores the six vtables at +0,
+/// +0x30, +0x3C, +0x5C, +0x68, +0x70, then `00517610`, and destroys the
+/// members in reverse order: +0x88 (`0046ffb0`), +0x68 (`00475380`), +0x3C
+/// (`0048a490`), +0x30 (`00591300`), and the base (`0050f740`).
+// Translation incomplete: 00517500 - SEH exception unwinding is unsupported.
+pub fn fn_00517500(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0102_b1fc);
+    e.mem.set_u32(base + 0x30, 0x0102_b1e4);
+    e.mem.set_u32(base + 0x3c, 0x0102_b1c0);
+    e.mem.set_u32(base + 0x5c, 0x0102_b1ac);
+    e.mem.set_u32(base + 0x68, 0x0102_b198);
+    e.mem.set_u32(base + 0x70, 0x0102_b188);
+    fn_00517610(e, this);
+    e.call(0x0046_ffb0, &args![base + 0x88]);
+    e.call(0x0047_5380, &args![base + 0x68]);
+    e.call(0x0048_a490, &args![base + 0x3c]);
+    e.call(0x0059_1300, &args![base + 0x30]);
+    e.call(0x0050_f740, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -68,6 +127,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_73e0, fn_005173e0(Ptr) -> Ptr),
         entry!(0x0051_75d0, fn_005175d0(Ptr)),
         entry!(0x0051_74d0, fn_005174d0(Ptr, u32) -> Ptr),
+        entry!(0x0051_7690, fn_00517690(Ptr) -> u32),
+        entry!(0x0051_7670, fn_00517670(Ptr) -> u32),
+        entry!(0x0051_7630, fn_00517630(Ptr) -> u32),
+        entry!(0x0051_7500, fn_00517500(Ptr)),
     ]
 }
 
@@ -167,5 +230,93 @@ mod movement_path_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod b036_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00517690_asks_the_package_target_at_8() {
+        let mut e = Engine::new();
+        e.register(PACKAGE_TARGET_GET_TARG_TYPE, |_, a| Ret {
+            eax: a[0] ^ 0xff,
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0051_7690, &args![0x1000u32]).u32(), 0x10f7);
+    }
+
+    #[test]
+    fn fn_00517670_goes_through_the_member_at_e0() {
+        let mut e = Engine::new();
+        e.register(PLUS_E0, |_, a| Ret {
+            eax: a[0] + 0xe0,
+            ..Ret::default()
+        });
+        e.register(PACKAGE_TARGET_GET_TARG_TYPE, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0051_7670, &args![0x1000u32]).u32(), 0x10e8);
+    }
+
+    #[test]
+    fn fn_00517630_answers_5_without_a_proxy() {
+        let mut e = Engine::new();
+        e.register(OBJECT_PROXY, |_, a| Ret {
+            eax: if a[0] == 0x2000 { 0 } else { 0x3000 },
+            ..Ret::default()
+        });
+        e.register(PLUS_E0, |_, a| Ret {
+            eax: a[0] + 0xe0,
+            ..Ret::default()
+        });
+        e.register(PACKAGE_TARGET_GET_TARG_TYPE, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0051_7630, &args![0x2000u32]).u32(), 5);
+        assert_eq!(e.call(0x0051_7630, &args![0x1000u32]).u32(), 0x30e8);
+    }
+
+    #[test]
+    fn fn_00517500_restores_the_vtables_and_destroys_in_reverse() {
+        let mut e = Engine::new();
+        for addr in [
+            0x0051_9550u32,
+            0x0046_ffb0,
+            0x0047_5380,
+            0x0048_a490,
+            0x0059_1300,
+            0x0050_f740,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x90);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_7500, &args![this]);
+        for (off, vtable) in [
+            (0u32, 0x0102_b1fcu32),
+            (0x30, 0x0102_b1e4),
+            (0x3c, 0x0102_b1c0),
+            (0x5c, 0x0102_b1ac),
+            (0x68, 0x0102_b198),
+            (0x70, 0x0102_b188),
+        ] {
+            assert_eq!(e.mem.u32(this + off), vtable);
+        }
+        let calls: Vec<_> = e.call_log.take().unwrap().into_iter().skip(1).collect();
+        assert_eq!(
+            calls,
+            vec![
+                (0x0051_9550, vec![this]),
+                (0x0046_ffb0, vec![this + 0x88]),
+                (0x0047_5380, vec![this + 0x68]),
+                (0x0048_a490, vec![this + 0x3c]),
+                (0x0059_1300, vec![this + 0x30]),
+                (0x0050_f740, vec![this]),
+            ]
+        );
     }
 }

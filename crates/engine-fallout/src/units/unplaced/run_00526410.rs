@@ -30,11 +30,165 @@ pub fn fn_005266c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `BGSLightingTemplate`'s vtable (its RTTI name, read through the locator
+/// at `0102cd90`).
+const LIGHTING_TEMPLATE_VTABLE: u32 = 0x0102_cd94;
+/// `TESForm::~TESForm` (Xbox PDB name of `00483630`; `ECX` = form).
+const TES_FORM_DESTRUCTOR: u32 = 0x0048_3630;
+/// `00403d30` (cdecl: destination, byte, count): fills memory.
+const FILL_MEMORY: u32 = 0x0040_3d30;
+/// `TESFile::GetTESForm` (Xbox PDB name of `00472660`; `ECX` = file): the
+/// current record's form type.
+const GET_TES_FORM: u32 = 0x0047_2660;
+/// `TESForm::LoadForm` (Xbox PDB name of `00485110`; `ECX` = form, the file).
+const TES_FORM_LOAD_FORM: u32 = 0x0048_5110;
+/// `TESFile::GetTESChunk` (Xbox PDB name of `004726b0`; `ECX` = file).
+const GET_TES_CHUNK: u32 = 0x0047_26b0;
+/// `004726f0` (`ECX` = file): moves to the next chunk; true when there is one.
+const NEXT_CHUNK: u32 = 0x0047_26f0;
+/// `00401660` (`ECX` = file): the current chunk's size.
+const CHUNK_SIZE: u32 = 0x0040_1660;
+/// `TESFile::GetChunkData` (Xbox PDB overload `_ov3`, `00472890`): `thiscall`
+/// (file; buffer, size).
+const GET_CHUNK_DATA: u32 = 0x0047_2890;
+/// `TESForm::LoadData` (Xbox PDB name of `004861f0`; `ECX` = form; file,
+/// destination, size).
+const TES_FORM_LOAD_DATA: u32 = 0x0048_61f0;
+/// `00401680` (`ECX` = file): whether the data read needs its byte order
+/// swapped.
+const FILE_NEEDS_SWAP: u32 = 0x0040_1680;
+/// `00526790` (`ECX` = the data at `+0x18`): the data block's byte swap.
+const SWAP_DATA: u32 = 0x0052_6790;
+/// The form type this loader reads (0x65).
+const LIGHTING_TEMPLATE_FORM_TYPE: u32 = 0x65;
+/// The most an `EDID` chunk is read (0x200 bytes).
+const EDITOR_ID_MAXIMUM: u32 = 0x200;
+/// Virtual slot `0x134`: called with the editor id's characters.
+const SLOT_SET_EDITOR_ID: u32 = 0x134;
+/// Virtual slot `0xe0`: called with the file for `OBND`.
+const SLOT_LOAD_BOUNDS: u32 = 0xe0;
+/// The chunk tags.
+const CHUNK_DATA: u32 = 0x4154_4144;
+const CHUNK_EDID: u32 = 0x4449_4445;
+const CHUNK_OBND: u32 = 0x444e_424f;
+
+// Translated from 00526640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initialises the 0x2c-byte data block at `this` (the block at
+/// `BGSLightingTemplate + 0x18`, which `005265c0` passes): words +0x00 to
+/// +0x08 zero, floats +0x0c and +0x10 0.0, words +0x14 and +0x18 zero, floats
+/// +0x1c 1.0, +0x20 0.0, +0x24 1.0, word +0x28 zero. Returns `this`. The
+/// engine map gives it no name.
+pub fn fn_00526640(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, 0);
+    e.mem.set_u32(base + 0x4, 0);
+    e.mem.set_u32(base + 0x8, 0);
+    // FLDZ / FSTP float.
+    e.mem.set_u32(base + 0xc, x87_store32(0.0));
+    e.mem.set_u32(base + 0x10, x87_store32(0.0));
+    e.mem.set_u32(base + 0x14, 0);
+    e.mem.set_u32(base + 0x18, 0);
+    // FLD1 / FSTP float.
+    e.mem.set_u32(base + 0x1c, x87_store32(1.0));
+    e.mem.set_u32(base + 0x20, x87_store32(0.0));
+    e.mem.set_u32(base + 0x24, x87_store32(1.0));
+    e.mem.set_u32(base + 0x28, 0);
+    this
+}
+
+// Translated from 005266f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSLightingTemplate`'s destructor body (the vtable it stores, `0102cd94`,
+/// is `BGSLightingTemplate`'s by RTTI): puts back the class vtable and runs
+/// `TESForm::~TESForm` (`00483630`). The engine map gives it no name.
+pub fn fn_005266f0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), LIGHTING_TEMPLATE_VTABLE);
+    e.call(TES_FORM_DESTRUCTOR, &args![this]);
+}
+
+// Translated from 00526710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the 0x2c-byte data block at `this + 0x18` (`00403d30` with 0 and
+/// 0x2c). The engine map gives it no name.
+pub fn fn_00526710(e: &mut Engine, this: Ptr) {
+    e.call(FILL_MEMORY, &args![this.addr() + 0x18, 0u32, 0x2cu32]);
+}
+
+// Translated from 005268a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005268a0 - the security-cookie check (00ec408c) is not translated.
+/// `BGSLightingTemplate`'s record loader (`thiscall`, the file; `RET 4`; the
+/// engine map gives it no name): false when the record is not of form type
+/// 0x65; otherwise `TESForm::LoadForm`, then chunk by chunk until a zero tag
+/// or no next chunk (`004726f0`):
+/// - `DATA`: `TESForm::LoadData` into `this + 0x18`, 0x2c bytes;
+/// - `EDID`: read into a stack buffer of the chunk's size (the `_alloca`
+///   `00ec5ec0` rounds it up to 16 bytes), at most 0x200 bytes, then virtual
+///   slot `0x134` with the buffer;
+/// - `OBND`: virtual slot `0xe0` with the file.
+///
+/// After the chunks, when the data read needs its byte order swapped
+/// (`00401680`), the block at `+0x18` is swapped (`00526790`). Returns true.
+pub fn fn_005268a0(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
+    let object = this.addr();
+    if e.call(GET_TES_FORM, &args![file]).u32() != LIGHTING_TEMPLATE_FORM_TYPE {
+        return false;
+    }
+    e.call(TES_FORM_LOAD_FORM, &args![this, file]);
+    loop {
+        let chunk = e.call(GET_TES_CHUNK, &args![file]).u32();
+        if chunk == 0 {
+            break;
+        }
+        match chunk {
+            CHUNK_DATA => {
+                e.call(
+                    TES_FORM_LOAD_DATA,
+                    &args![this, file, object + 0x18, 0x2cu32],
+                );
+            }
+            CHUNK_EDID => {
+                let size = e.call(CHUNK_SIZE, &args![file]).u32();
+                // `_alloca_probe_16`: the buffer is the size rounded up to 16 bytes.
+                let reserved = size.wrapping_add(15) & !15;
+                e.with_stack(reserved, |e, buffer| {
+                    e.call(GET_CHUNK_DATA, &args![file, buffer, EDITOR_ID_MAXIMUM]);
+                    e.vcall(object, SLOT_SET_EDITOR_ID, &args![buffer]);
+                });
+            }
+            CHUNK_OBND => {
+                e.vcall(object, SLOT_LOAD_BOUNDS, &args![file]);
+            }
+            _ => {}
+        }
+        if !e.call(NEXT_CHUNK, &args![file]).bool() {
+            break;
+        }
+    }
+    if e.call(FILE_NEEDS_SWAP, &args![file]).bool() {
+        e.call(SWAP_DATA, &args![object + 0x18]);
+    }
+    true
+}
+
+// Translated from 005269c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unless `004013e0` reports true for `this`, runs `00483710` on it and
+/// `00484ab0` with 1. The engine map gives it no name.
+pub fn fn_005269c0(e: &mut Engine, this: Ptr) {
+    if e.call(0x0040_13e0, &args![this]).bool() {
+        return;
+    }
+    e.call(0x0048_3710, &args![this]);
+    e.call(0x0048_4ab0, &args![this, 1u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0052_65c0, fn_005265c0(Ptr) -> Ptr),
         entry!(0x0052_66c0, fn_005266c0(Ptr, u32) -> Ptr),
+        entry!(0x0052_6640, fn_00526640(Ptr) -> Ptr),
+        entry!(0x0052_66f0, fn_005266f0(Ptr)),
+        entry!(0x0052_6710, fn_00526710(Ptr)),
+        entry!(0x0052_68a0, fn_005268a0(Ptr, Ptr) -> bool),
+        entry!(0x0052_69c0, fn_005269c0(Ptr)),
     ]
 }
 
@@ -81,5 +235,150 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod b027_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn at_00526640_sets_the_start_values() {
+        let mut e = Engine::new();
+        let block: Ptr = Ptr::new(e.mem.alloc(0x2c));
+        for i in 0..11 {
+            e.mem.set_u32(block.addr() + 4 * i, 0xffff_ffff);
+        }
+        assert_eq!(e.call(0x0052_6640, &args![block]).u32(), block.addr());
+        let words: Vec<u32> = (0..11).map(|i| e.mem.u32(block.addr() + 4 * i)).collect();
+        assert_eq!(
+            words,
+            vec![0, 0, 0, 0, 0, 0, 0, 0x3f80_0000, 0, 0x3f80_0000, 0]
+        );
+    }
+
+    #[test]
+    fn at_005266f0_restores_the_vtable_and_runs_the_form_destructor() {
+        let mut e = Engine::new();
+        e.register(TES_FORM_DESTRUCTOR, |_, _| ret(0));
+        let this: Ptr = Ptr::new(e.mem.alloc(0x44));
+        e.call_log = Some(vec![]);
+        e.call(0x0052_66f0, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), LIGHTING_TEMPLATE_VTABLE);
+        assert_eq!(calls(&e, TES_FORM_DESTRUCTOR), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn at_00526710_clears_the_data_block() {
+        let mut e = Engine::new();
+        e.register(FILL_MEMORY, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        e.call(0x0052_6710, &args![0x4000u32]);
+        assert_eq!(calls(&e, FILL_MEMORY), vec![vec![0x4018, 0, 0x2c]]);
+    }
+
+    /// Runs the loader over `chunks` with the given form type and swap flag.
+    fn load(form_type: u32, chunks: Vec<u32>, swap: bool) -> (Engine, u32, bool) {
+        let mut e = Engine::new();
+        let position = Rc::new(Cell::new(0usize));
+        let (list, at) = (chunks.clone(), position.clone());
+        e.register_double(GET_TES_CHUNK, move |_, _| {
+            ret(list.get(at.get()).copied().unwrap_or(0))
+        });
+        let total = chunks.len();
+        e.register_double(NEXT_CHUNK, move |_, _| {
+            position.set(position.get() + 1);
+            ret(u32::from(position.get() < total))
+        });
+        e.register_double(GET_TES_FORM, move |_, _| ret(form_type));
+        e.register_double(FILE_NEEDS_SWAP, move |_, _| ret(u32::from(swap)));
+        e.register(CHUNK_SIZE, |_, _| ret(0x21));
+        for addr in [
+            TES_FORM_LOAD_FORM,
+            GET_CHUNK_DATA,
+            TES_FORM_LOAD_DATA,
+            SWAP_DATA,
+            0x0f00_0100,
+            0x0f00_0200,
+        ] {
+            e.register(addr, |_, _| ret(0));
+        }
+        let mut slots = vec![0u32; 0x138 / 4];
+        slots[(SLOT_LOAD_BOUNDS / 4) as usize] = 0x0f00_0100;
+        slots[(SLOT_SET_EDITOR_ID / 4) as usize] = 0x0f00_0200;
+        e.put_vtable(0x0f00_0000, &slots);
+        let this = e.mem.alloc(0x44);
+        e.mem.set_u32(this, 0x0f00_0000);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0052_68a0, &args![this, 0x7000u32]).bool();
+        (e, this, result)
+    }
+
+    #[test]
+    fn at_005268a0_refuses_another_form_type() {
+        let (e, _, result) = load(0x64, vec![CHUNK_DATA], false);
+        assert!(!result);
+        assert!(calls(&e, TES_FORM_LOAD_FORM).is_empty());
+    }
+
+    #[test]
+    fn at_005268a0_reads_each_chunk() {
+        let (e, this, result) = load(0x65, vec![CHUNK_EDID, CHUNK_OBND, CHUNK_DATA, 0x1234], true);
+        assert!(result);
+        assert_eq!(calls(&e, TES_FORM_LOAD_FORM), vec![vec![this, 0x7000]]);
+        assert_eq!(
+            calls(&e, TES_FORM_LOAD_DATA),
+            vec![vec![this, 0x7000, this + 0x18, 0x2c]]
+        );
+        let reads = calls(&e, GET_CHUNK_DATA);
+        assert_eq!(reads.len(), 1);
+        assert_eq!(reads[0][2], EDITOR_ID_MAXIMUM);
+        assert_eq!(calls(&e, 0x0f00_0200), vec![vec![this, reads[0][1]]]);
+        assert_eq!(calls(&e, 0x0f00_0100), vec![vec![this, 0x7000]]);
+        assert_eq!(calls(&e, SWAP_DATA), vec![vec![this + 0x18]]);
+    }
+
+    #[test]
+    fn at_005268a0_stops_at_a_zero_tag_and_skips_the_swap() {
+        let (e, _, result) = load(0x65, vec![0, CHUNK_DATA], false);
+        assert!(result);
+        assert!(calls(&e, TES_FORM_LOAD_DATA).is_empty());
+        assert!(calls(&e, NEXT_CHUNK).is_empty());
+        assert!(calls(&e, SWAP_DATA).is_empty());
+    }
+
+    #[test]
+    fn at_005269c0_marks_only_when_not_done() {
+        let mut e = Engine::new();
+        e.register(0x0048_3710, |_, _| ret(0));
+        e.register(0x0048_4ab0, |_, _| ret(0));
+        e.register(0x0040_13e0, |_, _| ret(0x100));
+        e.call_log = Some(vec![]);
+        e.call(0x0052_69c0, &args![0x4000u32]);
+        assert_eq!(calls(&e, 0x0048_3710), vec![vec![0x4000]]);
+        assert_eq!(calls(&e, 0x0048_4ab0), vec![vec![0x4000, 1]]);
+        e.register(0x0040_13e0, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        e.call(0x0052_69c0, &args![0x4000u32]);
+        assert!(calls(&e, 0x0048_3710).is_empty());
     }
 }

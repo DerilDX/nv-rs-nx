@@ -74,11 +74,44 @@ pub fn fn_00619df0(e: &mut Engine, this: Ptr) -> bool {
     e.mem.u8(this.addr().wrapping_add(0x25)) & 1 != 0
 }
 
+// Translated from 00619c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The topic's (`ECX`) per-quest entry that holds the topic info (one stack word; `RET 4`):
+/// walks `005d8a70`'s list until a node with no item, and returns the first entry (the
+/// item itself, not its quest word as `00619d00` returns) whose infos (`00619f20`, below
+/// the count `0084e3a0` of `00717e50`, unsigned) include `info`. 0 if none. Unlike
+/// `00619d00` it neither refuses a null info nor follows the topic's flag bit 0. The
+/// engine map gives it no name.
+pub fn fn_00619c50(e: &mut Engine, this: Ptr, info: u32) -> u32 {
+    let mut node = e.call(TOPIC_QUEST_LIST, &args![this]).u32();
+    loop {
+        if node == 0 {
+            return 0;
+        }
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        if e.mem.u32(item) == 0 {
+            return 0;
+        }
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        let entry = e.mem.u32(item);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        let infos = e.call(PLUS_FOUR, &args![entry]).u32();
+        let count = e.call(WORD_AT_0XC, &args![infos]).u32();
+        let mut index = 0u32;
+        while index < count {
+            if e.call(ENTRY_INFO, &args![entry, index]).u32() == info {
+                return entry;
+            }
+            index += 1;
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0061_9d00, fn_00619d00(Ptr, u32) -> u32),
         entry!(0x0061_9df0, fn_00619df0(Ptr) -> bool),
+        entry!(0x0061_9c50, fn_00619c50(Ptr, u32) -> u32),
     ]
 }
 
@@ -176,5 +209,31 @@ mod tests {
         let log = e.call_log.take().unwrap();
         let topics: Vec<_> = log.iter().filter(|c| c.0 == GET_TOPIC).collect();
         assert_eq!(topics, [&(GET_TOPIC, vec![1, 5])]);
+    }
+
+    #[test]
+    fn fn_00619c50_finds_the_entry_holding_the_info() {
+        let mut e = setup();
+        let first = entry(&mut e, 0x1111, &[0x10, 0x20]);
+        let second = entry(&mut e, 0x2222, &[0x30, 0x40]);
+        let t = topic(&mut e, &[first, second]);
+        assert_eq!(e.call(0x0061_9c50, &args![t, 0x40u32]).u32(), second);
+        assert_eq!(e.call(0x0061_9c50, &args![t, 0x10u32]).u32(), first);
+        assert_eq!(e.call(0x0061_9c50, &args![t, 0x50u32]).u32(), 0);
+        // An empty list (first node without an item) finds nothing.
+        let empty = topic(&mut e, &[0]);
+        assert_eq!(e.call(0x0061_9c50, &args![empty, 0x10u32]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00619c50_ignores_the_redirect_flag_and_matches_a_null_info() {
+        let mut e = setup();
+        let held = entry(&mut e, 0x3333, &[0]);
+        let t = topic(&mut e, &[held]);
+        e.mem.set_u8(t + 0x25, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0061_9c50, &args![t, 0u32]).u32(), held);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|call| call.0 != GET_TOPIC));
     }
 }

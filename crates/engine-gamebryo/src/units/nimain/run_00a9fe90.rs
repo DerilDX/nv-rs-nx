@@ -53,12 +53,46 @@ pub fn fn_00a9fe90(
     Ptr::new(buffer)
 }
 
+/// The word at `offset` of the object at +0x10 of `buffer`, or 0 when there is none.
+fn pixel_data_word(e: &Engine, buffer: u32, offset: u32) -> u32 {
+    let data = e.mem.u32(buffer + 0x10);
+    if data == 0 {
+        0
+    } else {
+        e.mem.u32(data + offset)
+    }
+}
+
+// Translated from 00a9ff00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00a9fe90`): a depth-stencil buffer for a buffer, `cdecl` with
+/// two words: the buffer and the renderer. 0 when either is null. Otherwise asks the renderer
+/// (its vtable slot +0x94) for a format object from the word at +0xc of the buffer's +0x10
+/// object (0 when there is none), 0x20 and 8, and answers [`fn_00a9fe90`] with the buffer's
+/// width (+8) and height (+0xc), the renderer, that format object and the word at +0x10 of the
+/// buffer's +0x10 object.
+pub fn fn_00a9ff00(e: &mut Engine, buffer: Ptr, renderer: Ptr) -> Ptr {
+    let buffer = buffer.addr();
+    let renderer = renderer.addr();
+    if buffer == 0 || renderer == 0 {
+        return Ptr::NULL;
+    }
+    let source = pixel_data_word(e, buffer, 0xc);
+    let format = e.vcall(renderer, 0x94, &args![source, 0x20u32, 8u32]).u32();
+    let data = pixel_data_word(e, buffer, 0x10);
+    let height = e.mem.u32(buffer + 0xc);
+    let width = e.mem.u32(buffer + 8);
+    fn_00a9fe90(e, width, height, renderer, Ptr::new(format), data)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00a9_fe90,
-        fn_00a9fe90(u32, u32, u32, Ptr, u32) -> Ptr
-    )]
+    vec![
+        entry!(
+            0x00a9_fe90,
+            fn_00a9fe90(u32, u32, u32, Ptr, u32) -> Ptr
+        ),
+        entry!(0x00a9_ff00, fn_00a9ff00(Ptr, Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -145,5 +179,81 @@ mod tests {
             .u32();
         assert_eq!(answer, 0);
         assert!(calls(&e, NI_ALLOCATE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod buffer_target_tests {
+    use super::*;
+
+    const RENDERER_VTABLE: u32 = 0x0e00_0000;
+    const FORMAT_OF: u32 = 0x0e01_0094;
+    const BUFFER_SET_UP: u32 = 0x0e02_0094;
+
+    /// The renderer's format double answers a format object whose +4 is 0xf for a source word
+    /// of 3, else one whose +4 is 0.
+    fn engine() -> (Engine, u32) {
+        let mut e = Engine::new();
+        let mut slots = vec![0u32; 0x26];
+        slots[0x25] = FORMAT_OF;
+        e.put_vtable(RENDERER_VTABLE, &slots);
+        let good = e.mem.alloc(8);
+        e.mem.set_u32(good + 4, 0xf);
+        let bad = e.mem.alloc(8);
+        e.register_double(FORMAT_OF, move |_, a| {
+            if a[1] == 3 { good } else { bad }.into_ret()
+        });
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(BASE_CONSTRUCT_00A8F190, |_, a| a[0].into_ret());
+        let mut buffer_slots = vec![0u32; 0x26];
+        buffer_slots[0x25] = BUFFER_SET_UP;
+        e.put_vtable(NI_DEPTH_STENCIL_BUFFER_VTABLE, &buffer_slots);
+        e.register(BUFFER_SET_UP, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        let renderer = e.mem.alloc(4);
+        e.mem.set_u32(renderer, RENDERER_VTABLE);
+        (e, renderer)
+    }
+
+    #[test]
+    fn fn_00a9ff00_makes_a_buffer_of_the_source_size() {
+        let (mut e, renderer) = engine();
+        let source = e.mem.alloc(0x14);
+        let data = e.mem.alloc(0x14);
+        e.mem.set_u32(data + 0xc, 3);
+        e.mem.set_u32(data + 0x10, 4);
+        e.mem.set_u32(source + 8, 64);
+        e.mem.set_u32(source + 0xc, 32);
+        e.mem.set_u32(source + 0x10, data);
+        let made = e.call(0x00a9_ff00, &args![source, renderer]).u32();
+        assert_ne!(made, 0);
+        assert_eq!(e.mem.u32(made + 8), 64);
+        assert_eq!(e.mem.u32(made + 0xc), 32);
+        let log = e.call_log.take().unwrap();
+        let formats: Vec<&Vec<u32>> = log
+            .iter()
+            .filter(|c| c.0 == FORMAT_OF)
+            .map(|c| &c.1)
+            .collect();
+        assert_eq!(formats, vec![&vec![renderer, 3, 0x20, 8]]);
+        let set_up: Vec<&Vec<u32>> = log
+            .iter()
+            .filter(|c| c.0 == BUFFER_SET_UP)
+            .map(|c| &c.1)
+            .collect();
+        assert_eq!(set_up[0][2], 4);
+    }
+
+    #[test]
+    fn fn_00a9ff00_without_pixel_data_or_pointers() {
+        let (mut e, renderer) = engine();
+        let source = e.mem.alloc(0x14);
+        // No pixel data: source word 0, the format refused, nothing made.
+        assert_eq!(e.call(0x00a9_ff00, &args![source, renderer]).u32(), 0);
+        assert_eq!(e.call(0x00a9_ff00, &args![0u32, renderer]).u32(), 0);
+        assert_eq!(e.call(0x00a9_ff00, &args![source, 0u32]).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.iter().filter(|c| c.0 == FORMAT_OF).count(), 1);
+        assert_eq!(log.iter().filter(|c| c.0 == NI_ALLOCATE).count(), 0);
     }
 }

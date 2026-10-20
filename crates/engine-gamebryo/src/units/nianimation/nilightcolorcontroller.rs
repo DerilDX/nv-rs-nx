@@ -39,6 +39,24 @@ pub fn ni_light_color_controller_get_viewer_strings(e: &mut Engine, this: Ptr, s
     });
 }
 
+/// The base constructor `00a57c80` runs first (`00a38e00`, named
+/// `NiBoolInterpController::CopyMembers` in the engine map; thiscall).
+const INTERP_CONTROLLER_CONSTRUCT: u32 = 0x00a3_8e00;
+/// `NiPoint3InterpController`'s vtable (RTTI
+/// `.?AVNiPoint3InterpController@@`).
+const NI_POINT3_INTERP_CONTROLLER_VTABLE: u32 = 0x0109_ad74;
+
+// Translated from 00a57c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Named `NiLightColorController::CopyMembers` in the engine map, but the
+/// body is the `NiPoint3InterpController` constructor: the base constructor
+/// (`00a38e00`), then that class's vtable. Returns `this`.
+pub fn fn_00a57c80(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(INTERP_CONTROLLER_CONSTRUCT, &args![this]);
+    e.mem
+        .set_u32(this.addr(), NI_POINT3_INTERP_CONTROLLER_VTABLE);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -47,6 +65,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00a4d5a0,
             ni_light_color_controller_get_viewer_strings(Ptr, Ptr)
         ),
+        entry!(0x00a5_7c80, fn_00a57c80(Ptr) -> Ptr),
     ]
 }
 
@@ -114,5 +133,17 @@ mod tests {
             assert_eq!(&set.1[..2], [strings, size]);
             assert_eq!(stored.get(), 0x7777_0001);
         }
+    }
+
+    #[test]
+    fn fn_00a57c80_runs_the_base_then_stores_the_vtable() {
+        let mut e = Engine::new();
+        e.register(INTERP_CONTROLLER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0x1234);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x38);
+        assert_eq!(e.call(0x00a5_7c80, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_POINT3_INTERP_CONTROLLER_VTABLE);
     }
 }

@@ -68,9 +68,33 @@ pub fn tes_weight_form_get_form_weight(e: &mut Engine, form: Ptr, flag: u8) -> f
     }
 }
 
+// Translated from 00910b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWeightForm::InitializeDataComponent` (Xbox PDB, matched by the
+/// engine map): the weight (`float` at +4) 0 (`FLDZ`/`FSTP`).
+pub fn tes_weight_form_initialize_data_component(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr() + 4, x87_store32(0.0));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0048_ebc0, tes_weight_form_get_form_weight(Ptr, u8) -> f32)]
+    vec![
+        entry!(0x0048_ebc0, tes_weight_form_get_form_weight(Ptr, u8) -> f32),
+        entry!(0x00910b10, tes_weight_form_initialize_data_component(Ptr)),
+    ]
+}
+
+#[cfg(test)]
+mod b019_tests {
+    use super::*;
+
+    #[test]
+    fn weight_starts_at_zero() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0xffff_ffff);
+        e.call(0x0091_0b10, &args![this]);
+        assert_eq!(e.mem.u32(this + 4), 0);
+    }
 }
 
 #[cfg(test)]

@@ -86,6 +86,101 @@ pub fn fn_00512ba0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The component destructors `00512bd0` runs, in its order: the offset in
+/// the object and the destructor.
+const COMPONENT_DESTRUCTORS: [(u32, u32); 9] = [
+    (0x16c, 0x0047_b520),
+    (0x164, 0x0047_4d40),
+    (0x15c, 0x0047_b880),
+    (0x14c, 0x0047_5380),
+    (0x70, 0x0048_0400),
+    (0x68, 0x0048_7200),
+    (0x60, 0x0048_eaf0),
+    (0x58, 0x0048_e7d0),
+    (0x30, 0x0059_1300),
+];
+
+// Translated from 00512bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00512bd0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// The destructor body `00512ba0` runs (vtable `0102a62c`, RTTI
+/// `.?AVTESObjectARMO@@`): stores the object's and its components'
+/// vtables as the constructor `005129f0` does, runs the components'
+/// destructors (`COMPONENT_DESTRUCTORS`, last component first) and then
+/// `0050e9f0` on the object.
+pub fn fn_00512bd0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for (offset, vtable) in [
+        (0x00, 0x0102_a62c),
+        (0x30, 0x0102_a614),
+        (0x3c, 0x0102_a600),
+        (0x48, 0x0102_a5e8),
+        (0x58, 0x0102_a5c8),
+        (0x60, 0x0102_a5b4),
+        (0x68, 0x0102_a59c),
+        (0x70, 0x0102_a588),
+        (0x14c, 0x0102_a574),
+        (0x154, 0x0102_a560),
+        (0x15c, 0x0102_a54c),
+        (0x164, 0x0102_a538),
+        (0x16c, 0x0102_a524),
+    ] {
+        e.mem.set_u32(base + offset, vtable);
+    }
+    for (offset, destructor) in COMPONENT_DESTRUCTORS {
+        e.call(destructor, &args![base + offset]);
+    }
+    e.call(0x0050_e9f0, &args![this]);
+}
+
+// Translated from 00512d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (called by `005f2b60`): walks a list of 0xC-byte entries
+/// (a form at `+0`, a chance byte at `+4`, a key word at `+8`). The list
+/// is the word at `+0x188` when the byte at `+0x18C` is set, otherwise the
+/// word at `+0x188` of the object `+0x188` points at (none when that is
+/// null). For each entry (the walk going on while the node is not empty,
+/// `008256d0`, and nothing is found yet) with a form and the key `key`,
+/// a number from `00487f50`, masked with 0x63, below the chance byte
+/// (signed compare) picks the entry's form; `RET 4`.
+pub fn fn_00512d40(e: &mut Engine, this: Ptr, key: u32) -> u32 {
+    let base = this.addr();
+    let mut found = 0u32;
+    let mut node = if e.mem.u8(base + 0x18c) != 0 {
+        e.mem.u32(base + 0x188)
+    } else {
+        let template = e.mem.u32(base + 0x188);
+        if template != 0 {
+            e.mem.u32(template + 0x188)
+        } else {
+            0
+        }
+    };
+    while node != 0 && !e.call(0x0082_56d0, &args![node]).bool() && found == 0 {
+        let entry_at = e.call(0x0068_15c0, &args![node]).u32();
+        let entry = e.mem.u32(entry_at);
+        node = e.call(0x0072_6070, &args![node]).u32();
+        if e.mem.u32(entry) != 0 && e.mem.u32(entry + 8) == key {
+            let roll = (e.call(0x0048_7f50, &args![]).u32() & 0x63) as i32;
+            if roll < i32::from(e.mem.u8(entry + 4)) {
+                found = e.mem.u32(entry);
+            }
+        }
+    }
+    found
+}
+
+// Translated from 00512e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The start values of the constructor `005129f0`: 0xC zero bytes at
+/// `+0x178` (`00403d30`, a `memset` wrapper), the byte at `+0x18C` and the
+/// word at `+0x188` cleared, and `0041fd00` on `+0x48` with 3 (the engine
+/// map's `NonActorMagicCaster::SetCurrentSpell` name is a folded body's).
+pub fn fn_00512e10(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(0x0040_3d30, &args![base + 0x178, 0u32, 0xcu32]);
+    e.mem.set_u8(base + 0x18c, 0);
+    e.mem.set_u32(base + 0x188, 0);
+    e.call(0x0041_fd00, &args![base + 0x48, 3u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -94,7 +189,115 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_29e0, fn_005129e0(Ptr, u32) -> u16),
         entry!(0x0051_29f0, fn_005129f0(Ptr) -> Ptr),
         entry!(0x0051_2ba0, fn_00512ba0(Ptr, u32) -> Ptr),
+        entry!(0x0051_2bd0, fn_00512bd0(Ptr)),
+        entry!(0x0051_2d40, fn_00512d40(Ptr, u32) -> u32),
+        entry!(0x0051_2e10, fn_00512e10(Ptr)),
     ]
+}
+
+#[cfg(test)]
+mod b023_tests {
+    use super::*;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    fn calls(e: &mut Engine, skip: u32) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != skip)
+            .collect()
+    }
+
+    #[test]
+    fn destructor_body_and_start_values() {
+        let mut e = Engine::new();
+        for (_, d) in COMPONENT_DESTRUCTORS {
+            e.register(d, |_, _| Ret::default());
+        }
+        for a in [0x0050_e9f0, 0x0040_3d30, 0x0041_fd00] {
+            e.register(a, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x190);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_2bd0, &[this]);
+        let log = calls(&mut e, 0x0051_2bd0);
+        let mut expected: Vec<(u32, Vec<u32>)> = COMPONENT_DESTRUCTORS
+            .iter()
+            .map(|(o, d)| (*d, vec![this + o]))
+            .collect();
+        expected.push((0x0050_e9f0, vec![this]));
+        assert_eq!(log, expected);
+        assert_eq!(e.mem.u32(this), 0x0102_a62c);
+        assert_eq!(e.mem.u32(this + 0x16c), 0x0102_a524);
+
+        e.mem.set_u8(this + 0x18c, 1);
+        e.mem.set_u32(this + 0x188, 0x1234);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_2e10, &[this]);
+        assert_eq!(
+            calls(&mut e, 0x0051_2e10),
+            vec![
+                (0x0040_3d30, vec![this + 0x178, 0, 0xc]),
+                (0x0041_fd00, vec![this + 0x48, 3]),
+            ]
+        );
+        assert_eq!(e.mem.u8(this + 0x18c), 0);
+        assert_eq!(e.mem.u32(this + 0x188), 0);
+    }
+
+    #[test]
+    fn picks_the_first_entry_with_the_key_that_wins_the_roll() {
+        let mut e = Engine::new();
+        e.register(0x0082_56d0, |e, a| {
+            ret(u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0))
+        });
+        e.register(0x0068_15c0, |_, a| ret(a[0]));
+        e.register(0x0072_6070, |e, a| ret(e.mem.u32(a[0] + 4)));
+        // The roll is 0x7f & 0x63 = 0x63 (99).
+        e.register(0x0048_7f50, |_, _| ret(0xffff_ff7f));
+        let entry = |e: &mut Engine, form: u32, chance: u8, key: u32| {
+            let p = e.mem.alloc(0xc);
+            e.mem.set_u32(p, form);
+            e.mem.set_u8(p + 4, chance);
+            e.mem.set_u32(p + 8, key);
+            p
+        };
+        let entries = [
+            entry(&mut e, 0, 200, 7),
+            entry(&mut e, 0x11, 200, 8),
+            entry(&mut e, 0x22, 99, 7),
+            entry(&mut e, 0x33, 100, 7),
+            entry(&mut e, 0x44, 200, 7),
+        ];
+        let nodes = e.mem.alloc(8 * entries.len() as u32);
+        for (i, p) in entries.iter().enumerate() {
+            let node = nodes + 8 * i as u32;
+            e.mem.set_u32(node, *p);
+            let next = if i + 1 < entries.len() { node + 8 } else { 0 };
+            e.mem.set_u32(node + 4, next);
+        }
+        let this = e.mem.alloc(0x190);
+        e.mem.set_u8(this + 0x18c, 1);
+        e.mem.set_u32(this + 0x188, nodes);
+        assert_eq!(e.call(0x0051_2d40, &[this, 7]).u32(), 0x33);
+        assert_eq!(e.call(0x0051_2d40, &[this, 8]).u32(), 0x11);
+        assert_eq!(e.call(0x0051_2d40, &[this, 9]).u32(), 0);
+        // Without the byte, the list comes from the template at +0x188.
+        let template = e.mem.alloc(0x190);
+        e.mem.set_u32(template + 0x188, nodes);
+        e.mem.set_u8(this + 0x18c, 0);
+        e.mem.set_u32(this + 0x188, template);
+        assert_eq!(e.call(0x0051_2d40, &[this, 7]).u32(), 0x33);
+        e.mem.set_u32(this + 0x188, 0);
+        assert_eq!(e.call(0x0051_2d40, &[this, 7]).u32(), 0);
+    }
 }
 
 #[cfg(test)]

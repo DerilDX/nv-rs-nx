@@ -24,12 +24,73 @@ pub fn script_compiler_get_function_def(_e: &mut Engine, opcode: i32) -> Ptr {
     }
 }
 
+/// The opcode word (+8) of the entry just past each table (0x1CD console
+/// entries, 0x280 script entries): the tables' end markers.
+const CONSOLE_END_OPCODE: u32 = 0x0119_08f0;
+const SCRIPT_END_OPCODE: u32 = 0x0119_6d18;
+/// `Error` (`0040fbe0`, engine map; `cdecl`, a format and its words) and the
+/// two messages: "The script function list doesn't have all the names
+/// filled in." (`010374a0`) and "The script console-command list doesn't
+/// have all the names filled in." (`01037458`).
+const ERROR: u32 = 0x0040_fbe0;
+const SCRIPT_LIST_INCOMPLETE: u32 = 0x0103_74a0;
+const CONSOLE_LIST_INCOMPLETE: u32 = 0x0103_7458;
+
+// Translated from 005aea50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ScriptCompiler::ScriptCompiler` (Xbox PDB; `thiscall`, no stack words):
+/// checks that the script command table ends with opcode `0x1280` and the
+/// console table with `0x1CD` (the entries past their ends), reporting each
+/// mismatch through `Error`. Returns `this`.
+pub fn script_compiler_script_compiler(e: &mut Engine, this: Ptr) -> Ptr {
+    if e.mem.u32(SCRIPT_END_OPCODE) != 0x1280 {
+        e.call(ERROR, &args![SCRIPT_LIST_INCOMPLETE]);
+    }
+    if e.mem.u32(CONSOLE_END_OPCODE) != 0x1cd {
+        e.call(ERROR, &args![CONSOLE_LIST_INCOMPLETE]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x005b1120,
-        script_compiler_get_function_def(i32) -> Ptr
-    )]
+    vec![
+        entry!(
+            0x005b1120,
+            script_compiler_get_function_def(i32) -> Ptr
+        ),
+        entry!(0x005aea50, script_compiler_script_compiler(Ptr) -> Ptr),
+    ]
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+
+    #[test]
+    fn reports_tables_without_their_end_markers() {
+        let mut e = Engine::new();
+        e.register(ERROR, |_, _| Ret::default());
+        e.map(0x0119_0000, 0x7000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x005a_ea50, &args![0x40u32]).u32(), 0x40);
+        let errors: Vec<Vec<u32>> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 == ERROR)
+            .map(|c| c.1)
+            .collect();
+        assert_eq!(
+            errors,
+            vec![vec![SCRIPT_LIST_INCOMPLETE], vec![CONSOLE_LIST_INCOMPLETE]]
+        );
+        e.mem.set_u32(SCRIPT_END_OPCODE, 0x1280);
+        e.mem.set_u32(CONSOLE_END_OPCODE, 0x1cd);
+        e.call_log = Some(vec![]);
+        e.call(0x005a_ea50, &args![0x40u32]);
+        assert!(!e.call_log.take().unwrap().iter().any(|c| c.0 == ERROR));
+    }
 }
 
 #[cfg(test)]

@@ -270,7 +270,7 @@ const SLOT_28: u32 = 0x14;
 fn borrow_of_kind(e: &mut Engine, this: Ptr, renderer: u32, kind: u32, outs: [u32; 6]) -> u32 {
     e.call(
         TEXTURE_QUERY_00B6C2C0,
-        &args![this, renderer, kind, outs[0], outs[1], outs[2], outs[3], outs[4], outs[5]],
+        &args![renderer, kind, outs[0], outs[1], outs[2], outs[3], outs[4], outs[5]],
     );
     let answer: Vec<u32> = outs.iter().map(|out| e.mem.u32(*out)).collect();
     e.call(
@@ -827,7 +827,7 @@ mod tests {
         e.set_global(OBJECT_011F91AC, image_space);
         e.register_double(TEXTURE_QUERY_00B6C2C0, |e, a| {
             for i in 0..6 {
-                e.mem.set_u32(a[3 + i as usize], a[2] * 0x10 + i);
+                e.mem.set_u32(a[2 + i as usize], a[1] * 0x10 + i);
             }
             Ret::default()
         });

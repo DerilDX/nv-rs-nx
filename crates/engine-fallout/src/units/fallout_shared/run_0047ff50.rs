@@ -20,12 +20,61 @@ pub fn fn_0047ffa0(e: &mut Engine, this: Ptr) {
     e.call(0x0048_3710, &args![this]);
 }
 
+// Translated from 0047ff70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `TESAttributes` constructor (unnamed in the map; `ECX`, no stack words, plain `RET`):
+/// runs the base constructor `00402d30` on `this`, stores the vtable `0101bf84` (RTTI
+/// `.?AVTESAttributes@@`), runs `TESAttributes::InitializeDataComponent` (`0047ffc0`) and
+/// answers `this`.
+pub fn fn_0047ff70(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0040_2d30, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0101_bf84);
+    e.call(0x0047_ffc0, &args![this]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0047_ffa0, fn_0047ffa0(Ptr)),
         entry!(0x0047ff50, fn_0047ff50(Ptr, u16)),
+        entry!(0x0047_ff70, fn_0047ff70(Ptr) -> Ptr),
     ]
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0047ff70_runs_the_base_stores_the_vtable_then_initializes() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc);
+        // Each double records the vtable word it sees in the word after it.
+        e.register(0x0040_2d30, |e, a| {
+            e.mem.set_u32(a[0], 0x1234);
+            Ret::default()
+        });
+        e.register(0x0047_ffc0, |e, a| {
+            let seen = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0] + 4, seen);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_ff70, &args![this]).u32(), this);
+        let order: Vec<(u32, Vec<u32>)> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 == 0x0040_2d30 || c.0 == 0x0047_ffc0)
+            .collect();
+        assert_eq!(
+            order,
+            vec![(0x0040_2d30, vec![this]), (0x0047_ffc0, vec![this])]
+        );
+        assert_eq!(e.mem.u32(this), 0x0101_bf84);
+        assert_eq!(e.mem.u32(this + 4), 0x0101_bf84);
+    }
 }
 
 #[cfg(test)]

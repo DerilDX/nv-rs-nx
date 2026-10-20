@@ -22,9 +22,48 @@ pub fn teseyes_teseyes(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 005fc1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears `TESEyes`' flags byte (`cFlags`, Xbox PDB; PC +0x30).
+pub fn fn_005fc1b0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u8(this.addr() + 0x30, 0);
+}
+
+// Translated from 005fc120 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005fc120 - the exception-unwinding frame (FS:[0]) and its state numbers are not translated
+/// `TESEyes`' destructor body: stores the three vtables (`TESEyes`, its
+/// `TESFullName` at +0x18 and `TESTexture` at +0x24), then destroys the
+/// texture (`0048e2e0`), the full name (`00591300`) and the `TESForm` base
+/// (`TESForm::~TESForm`, `00483630`).
+pub fn fn_005fc120(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0104_973c);
+    e.mem.set_u32(base + 0x18, 0x0104_9724);
+    e.mem.set_u32(base + 0x24, 0x0104_9704);
+    e.call(0x0048_e2e0, &args![base + 0x24]);
+    e.call(0x0059_1300, &args![base + 0x18]);
+    e.call(0x0048_3630, &args![this]);
+}
+
+// Translated from 005fc0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESEyes`' scalar deleting destructor: the destructor body
+/// (`005fc120`), then frees `this` (`00401030`) when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn fn_005fc0f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_005fc120(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005f_c050, teseyes_teseyes(Ptr) -> Ptr)]
+    vec![
+        entry!(0x005f_c050, teseyes_teseyes(Ptr) -> Ptr),
+        entry!(0x005f_c1b0, fn_005fc1b0(Ptr)),
+        entry!(0x005f_c120, fn_005fc120(Ptr)),
+        entry!(0x005f_c0f0, fn_005fc0f0(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -51,5 +90,71 @@ mod tests {
                 (0x24, 4, 0x0104_9704),
             ],
         });
+    }
+}
+
+#[cfg(test)]
+mod b020_tests {
+    use crate::prelude::*;
+
+    fn calls(e: &mut Engine, skip: u32) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 != skip)
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for a in [0x0048_e2e0, 0x0059_1300, 0x0048_3630, 0x0040_1030] {
+            e.register(a, |_, _| Ret::default());
+        }
+        e
+    }
+
+    #[test]
+    fn b020_005fc1b0_clears_the_flags() {
+        let mut e = Engine::new();
+        let p = e.mem.alloc(0x34);
+        e.mem.set_u32(p + 0x30, 0xffff_ffff);
+        e.call(0x005f_c1b0, &args![p]);
+        assert_eq!(e.mem.u32(p + 0x30), 0xffff_ff00);
+    }
+
+    #[test]
+    fn b020_005fc120_destroys_the_eyes() {
+        let mut e = engine();
+        let p = e.mem.alloc(0x34);
+        e.call_log = Some(vec![]);
+        e.call(0x005f_c120, &args![p]);
+        assert_eq!(e.mem.u32(p), 0x0104_973c);
+        assert_eq!(e.mem.u32(p + 0x18), 0x0104_9724);
+        assert_eq!(e.mem.u32(p + 0x24), 0x0104_9704);
+        assert_eq!(
+            calls(&mut e, 0x005f_c120),
+            vec![
+                (0x0048_e2e0, vec![p + 0x24]),
+                (0x0059_1300, vec![p + 0x18]),
+                (0x0048_3630, vec![p]),
+            ]
+        );
+    }
+
+    #[test]
+    fn b020_005fc0f0_frees_on_bit_0() {
+        let mut e = engine();
+        let p = e.mem.alloc(0x34);
+        for (flags, frees) in [(0u32, false), (2, false), (3, true)] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x005f_c0f0, &args![p, flags]).u32(), p);
+            let log = calls(&mut e, 0x005f_c0f0);
+            assert_eq!(log.len(), if frees { 4 } else { 3 });
+            assert_eq!(log[0], (0x0048_e2e0, vec![p + 0x24]));
+            if frees {
+                assert_eq!(log[3], (0x0040_1030, vec![p]));
+            }
+        }
     }
 }

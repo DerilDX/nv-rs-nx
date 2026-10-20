@@ -25,9 +25,30 @@ pub fn fn_0049e2f0(e: &mut Engine, a: Ptr, b: Ptr, tolerance: f32) -> bool {
     true
 }
 
+/// `00408840`: cdecl, a `float` argument, the absolute value in `ST0` (it
+/// hands the float on to `00408860`).
+const FLOAT_ABS: u32 = 0x0040_8840;
+
+// Translated from 0049e390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name. cdecl: whether `|a - b|` (the difference rounded to a
+/// `float`, then `00408840`) is at most `tolerance`. The `FCOMPP` of the
+/// tolerance with the absolute difference answers false when the tolerance
+/// is below it or the comparison is unordered.
+pub fn fn_0049e390(e: &mut Engine, a: f32, b: f32, tolerance: f32) -> bool {
+    let difference = x87_store32(x87_sub(x87_load32(a.to_bits()), x87_m32(b.to_bits())));
+    let difference = x87_quiet_bits(difference);
+    let magnitude = e.call(FLOAT_ABS, &args![difference]).f64();
+    let tolerance = x87_load32(tolerance.to_bits());
+    // C0 clear: not below and not unordered.
+    tolerance >= magnitude
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0049e2f0, fn_0049e2f0(Ptr, Ptr, f32) -> bool)]
+    vec![
+        entry!(0x0049e2f0, fn_0049e2f0(Ptr, Ptr, f32) -> bool),
+        entry!(0x0049e390, fn_0049e390(f32, f32, f32) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -76,5 +97,32 @@ mod tests {
         let log = e.call_log.take().unwrap();
         let compares = log.iter().filter(|(addr, _)| *addr == FLOATS_CLOSE).count();
         assert_eq!(compares, 2);
+    }
+
+    #[test]
+    fn floats_close_0049e390_compares_the_difference_with_the_tolerance() {
+        let mut e = Engine::new();
+        e.register(FLOAT_ABS, |_, a| {
+            let v = f32::from_bits(a[0]);
+            Ret {
+                st0: f64::from(v).abs(),
+                ..Ret::default()
+            }
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0049_e390, &args![1.0f32, 1.25f32, 0.25f32]).bool());
+        assert!(!e.call(0x0049_e390, &args![1.0f32, 1.5f32, 0.25f32]).bool());
+        assert!(e.call(0x0049_e390, &args![2.0f32, 2.0f32, 0.0f32]).bool());
+        assert!(!e.call(0x0049_e390, &args![f32::NAN, 2.0f32, 1.0f32]).bool());
+        assert!(!e.call(0x0049_e390, &args![1.0f32, 2.0f32, f32::NAN]).bool());
+        let passed: Vec<u32> = e
+            .call_log
+            .iter()
+            .flatten()
+            .filter(|(a, _)| *a == FLOAT_ABS)
+            .map(|(_, w)| w[0])
+            .collect();
+        assert_eq!(passed[0], (-0.25f32).to_bits());
+        assert_eq!(passed[1], (-0.5f32).to_bits());
     }
 }

@@ -12,9 +12,30 @@ pub fn fn_009da7a0(e: &mut Engine, this: Ptr) {
     e.call(0x009c_a6c0, &args![this]);
 }
 
+// Translated from 009da760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: returns 5 (`thiscall`, `this` unread). The
+/// body is shared by the linker (several vtables point to it).
+pub fn fn_009da760(_e: &mut Engine, _this: Ptr) -> u32 {
+    5
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x009d_a7a0, fn_009da7a0(Ptr))]
+    vec![
+        entry!(0x009d_a7a0, fn_009da7a0(Ptr)),
+        entry!(0x009d_a760, fn_009da760(Ptr) -> u32),
+    ]
+}
+
+#[cfg(test)]
+mod get_type_tests {
+    use super::*;
+
+    #[test]
+    fn at_009da760_returns_five() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x009d_a760, &args![0x1234u32]).u32(), 5);
+    }
 }
 
 #[cfg(test)]

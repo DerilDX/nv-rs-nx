@@ -23,11 +23,51 @@ pub fn fn_00418f10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `BaseExtraList::GetExtraData` (`00410220`, thiscall, type byte).
+const GET_EXTRA_DATA: u32 = 0x0041_0220;
+/// `BaseExtraList::AddExtra` (`0040ff60`, thiscall, extra data).
+const ADD_EXTRA: u32 = 0x0040_ff60;
+/// `00401000` (cdecl, byte count): allocates a block.
+const ALLOCATE_BLOCK: u32 = 0x0040_1000;
+/// `004308f0` (thiscall, word): the constructor of the type-0x29 extra data
+/// (0x10 bytes), holding the word at +0xC.
+const EXTRA_CONSTRUCT: u32 = 0x0043_08f0;
+/// The extra data type this function handles.
+const EXTRA_TYPE: u32 = 0x29;
+
+// Translated from 00418e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: sets the word held by the extra list's
+/// type-0x29 extra data to `value` and returns that extra data. An existing
+/// one first releases its old word (`00418f10(old, 1)` when non-null); a
+/// missing one is created (0x10 bytes, `004308f0(value)`) and added to the
+/// list.
+// Translation incomplete: 00418e30 - SEH exception unwinding (the allocation's cleanup on unwind) is unsupported.
+pub fn fn_00418e30(e: &mut Engine, this: Ptr, value: u32) -> u32 {
+    let extra = e.call(GET_EXTRA_DATA, &args![this, EXTRA_TYPE]).u32();
+    if extra != 0 {
+        let old = e.mem.u32(extra + 0xc);
+        if old != 0 {
+            fn_00418f10(e, Ptr::new(old), 1);
+        }
+        e.mem.set_u32(extra + 0xc, value);
+        return extra;
+    }
+    let block = e.call(ALLOCATE_BLOCK, &args![0x10u32]).u32();
+    let created = if block != 0 {
+        e.call(EXTRA_CONSTRUCT, &args![block, value]).u32()
+    } else {
+        0
+    };
+    e.call(ADD_EXTRA, &args![this, created]);
+    created
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0041_8f40, fn_00418f40(Ptr)),
         entry!(0x0041_8f10, fn_00418f10(Ptr, u32) -> Ptr),
+        entry!(0x0041_8e30, fn_00418e30(Ptr, u32) -> u32),
     ]
 }
 
@@ -82,5 +122,62 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+
+    #[test]
+    fn fn_00418e30_replaces_the_held_word_or_adds_the_extra() {
+        let mut e = Engine::new();
+        // The list's extra (if any) is its word at +0.
+        e.register(GET_EXTRA_DATA, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        e.register(ADD_EXTRA, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(ALLOCATE_BLOCK, |e, a| Ret {
+            eax: e.mem.alloc(a[0]),
+            ..Ret::default()
+        });
+        e.register(EXTRA_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 0xc, a[1]);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        e.register(0x0041_8f40, |_, _| Ret::default());
+        e.register(0x0040_1030, |_, _| Ret::default());
+        let list = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        let extra = e.call(0x0041_8e30, &args![list, 0x5000u32]).u32();
+        assert_ne!(extra, 0);
+        assert_eq!(e.mem.u32(list), extra);
+        assert_eq!(e.mem.u32(extra + 0xc), 0x5000);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(GET_EXTRA_DATA, vec![list, 0x29])));
+        assert!(!log.iter().any(|c| c.0 == 0x0041_8f40));
+
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0041_8e30, &args![list, 0x6000u32]).u32(), extra);
+        assert_eq!(e.mem.u32(extra + 0xc), 0x6000);
+        let log = e.call_log.take().unwrap();
+        assert!(
+            log.contains(&(0x0040_1030, vec![0x5000])),
+            "old word released"
+        );
+        assert!(!log.iter().any(|c| c.0 == ADD_EXTRA));
+
+        e.mem.set_u32(extra + 0xc, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0041_8e30, &args![list, 0x7000u32]);
+        assert!(!e
+            .call_log
+            .take()
+            .unwrap()
+            .iter()
+            .any(|c| c.0 == 0x0041_8f40));
+        assert_eq!(e.mem.u32(extra + 0xc), 0x7000);
     }
 }

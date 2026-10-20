@@ -88,12 +88,50 @@ pub fn tes_scriptable_form_init_item(e: &mut Engine, this: Ptr<TESScriptableForm
     e.set(this, TESScriptableForm::bIsInitialized, true);
 }
 
+/// `BaseFormComponent` RTTI type descriptor (`.?AVBaseFormComponent@@`).
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+/// `TESScriptableForm` RTTI type descriptor (`.?AVTESScriptableForm@@`).
+const TYPE_TES_SCRIPTABLE_FORM: u32 = 0x0118_3254;
+/// `00726070` (`thiscall`): the word at +4 (here `pFormScript`).
+const GET_WORD_4: u32 = 0x0072_6070;
+/// `006ecd40` (`thiscall`, one word): stores it at +4 (the engine map's
+/// name, `CombatProcedureAttackMelee::Initialize`, is a folded body).
+const SET_WORD_4: u32 = 0x006e_cd40;
+
+// Translated from 0048cce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the script of another component (`thiscall (this; other)`; no
+/// Xbox PDB name): when `other` (a `BaseFormComponent`) casts to
+/// `TESScriptableForm`, its word at +4 (`pFormScript`) is stored at +4 of
+/// `this` through the setter `006ecd40`.
+pub fn fn_0048cce0(e: &mut Engine, this: Ptr<TESScriptableForm>, other: Ptr) {
+    let source = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![
+                other,
+                0u32,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_TES_SCRIPTABLE_FORM,
+                0u32
+            ],
+        )
+        .u32();
+    if source == 0 {
+        return;
+    }
+    let script = e.call(GET_WORD_4, &args![source]).u32();
+    e.call(SET_WORD_4, &args![this, script]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x0048cd90,
-        tes_scriptable_form_init_item(Ptr<TESScriptableForm>, Ptr)
-    )]
+    vec![
+        entry!(
+            0x0048cd90,
+            tes_scriptable_form_init_item(Ptr<TESScriptableForm>, Ptr)
+        ),
+        entry!(0x0048_cce0, fn_0048cce0(Ptr<TESScriptableForm>, Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -206,5 +244,40 @@ mod tests {
         let (e, this, log) = run(0x0000_1234, true, true, true, true);
         assert_eq!(e.get(this, TESScriptableForm::pFormScript), 0x0000_1234);
         assert!(calls_to(&log, FORM_GET_FILE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn fn_0048cce0_copies_the_script_of_a_scriptable_form() {
+        let mut e = Engine::new();
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            assert_eq!(
+                a[1..],
+                [0, TYPE_BASE_FORM_COMPONENT, TYPE_TES_SCRIPTABLE_FORM, 0]
+            );
+            word(a[0])
+        });
+        e.register(GET_WORD_4, |_, a| word(a[0] + 0x10));
+        e.register(SET_WORD_4, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0048_cce0, &args![0x100u32, 0x200u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.last().unwrap(), &(SET_WORD_4, vec![0x100, 0x210]));
+
+        e.register(RT_DYNAMIC_CAST, |_, _| word(0));
+        e.call_log = Some(vec![]);
+        e.call(0x0048_cce0, &args![0x100u32, 0x200u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
     }
 }

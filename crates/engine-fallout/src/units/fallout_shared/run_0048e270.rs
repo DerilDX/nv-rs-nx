@@ -41,11 +41,25 @@ pub fn fn_0048e340(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 0048e2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0048e2e0 - the exception-unwinding frame (FS:[0]) and the security-cookie word it pushes are not translated.
+/// The destructor of the class `fn_0048e270` constructs (`TESTexture` by
+/// its layout; the engine map gives it no name): stores the vtable
+/// (`0101d7c4`) back, runs `00483710` on `this` (an empty function in the
+/// exe) and destroys the string at +4 (`004037d0`). `ECX`, no stack words.
+/// The exception-unwinding frame is not translated.
+pub fn fn_0048e2e0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE);
+    e.call(0x0048_3710, &args![this]);
+    e.call(0x0040_37d0, &args![this.byte_add(4)]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0048e270, fn_0048e270(Ptr) -> Ptr),
         entry!(0x0048e340, fn_0048e340(Ptr)),
+        entry!(0x0048_e2e0, fn_0048e2e0(Ptr)),
     ]
 }
 
@@ -98,6 +112,27 @@ mod tests {
                 (STRING_CONSTRUCT, vec![object + 4]),
                 (TEXT_POINTER, vec![object + 4]),
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod b022_tests {
+    use super::*;
+
+    #[test]
+    fn the_destructor_restores_the_vtable_and_destroys_the_name() {
+        let mut e = Engine::new();
+        e.register(0x0048_3710, |_, _| Ret::default());
+        e.register(0x0040_37d0, |_, _| Ret::default());
+        let object = e.mem.alloc(0xc);
+        e.call_log = Some(vec![]);
+        e.call(0x0048_e2e0, &args![object]);
+        assert_eq!(e.mem.u32(object), VTABLE);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [(0x0048_3710, vec![object]), (0x0040_37d0, vec![object + 4])]
         );
     }
 }

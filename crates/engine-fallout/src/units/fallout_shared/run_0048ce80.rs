@@ -15,9 +15,22 @@ pub fn fn_0048cee0(e: &mut Engine, this: Ptr) -> u32 {
     e.call(STRING_LENGTH, &args![this.addr() + 4]).u32()
 }
 
+/// A `BSStringT`'s text setter (`004037f0`, `RET 8`): (text, length).
+const SET_TEXT: u32 = 0x0040_37f0;
+
+// Translated from 0048ce80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the string at `this + 4`: its text set to (0, 0) with
+/// `004037f0`. `ECX`, no stack words. The engine map gives it no name.
+pub fn fn_0048ce80(e: &mut Engine, this: Ptr) {
+    e.call(SET_TEXT, &args![this.addr() + 4, 0u32, 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0048cee0, fn_0048cee0(Ptr) -> u32)]
+    vec![
+        entry!(0x0048cee0, fn_0048cee0(Ptr) -> u32),
+        entry!(0x0048_ce80, fn_0048ce80(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -35,5 +48,20 @@ mod tests {
         assert_eq!(e.call(0x0048_cee0, &[0x4000]).u32(), 0x4004 ^ 0x5555);
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1], (STRING_LENGTH, vec![0x4004]));
+    }
+}
+
+#[cfg(test)]
+mod b022_tests {
+    use super::*;
+
+    #[test]
+    fn clearing_sets_the_string_at_4_to_nothing() {
+        let mut e = Engine::new();
+        e.register(SET_TEXT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0048_ce80, &[0x4000]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1..], [(SET_TEXT, vec![0x4004, 0, 0])]);
     }
 }

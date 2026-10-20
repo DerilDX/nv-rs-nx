@@ -25,9 +25,54 @@ pub fn fn_005fdaa0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 005fdc30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the byte at `this + 0x48` (`ECX`, no stack words). The
+/// constructor `fn_005fdaa0` runs it last. The engine map gives it no name.
+pub fn fn_005fdc30(e: &mut Engine, this: Ptr) {
+    e.mem.set_u8(this.addr() + 0x48, 0);
+}
+
+// Translated from 005fdb90 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 005fdb90 - the exception-unwinding frame (FS:[0]) and the security-cookie word it pushes are not translated.
+/// The destructor body of the type-10 form `fn_005fdaa0` constructs
+/// (`TESHair`, the RTTI name of the vtable `01049b9c`): it
+/// stores the vtables back (`01049b9c`, and the components' at +0x18,
+/// +0x24, +0x3c), then runs the component destructors `0048e2e0` (+0x3c),
+/// `00489070` (+0x24), `00591300` (+0x18) and `TESForm::~TESForm`
+/// (`00483630`, engine map). `ECX`, no stack words. The
+/// exception-unwinding frame is not translated.
+pub fn fn_005fdb90(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0104_9b9c);
+    e.mem.set_u32(base + 0x18, 0x0104_9b88);
+    e.mem.set_u32(base + 0x24, 0x0104_9b64);
+    e.mem.set_u32(base + 0x3c, 0x0104_9b44);
+    e.call(0x0048_e2e0, &args![base + 0x3c]);
+    e.call(0x0048_9070, &args![base + 0x24]);
+    e.call(0x0059_1300, &args![base + 0x18]);
+    e.call(0x0048_3630, &args![this]);
+}
+
+// Translated from 005fdb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the type-10 form: runs `fn_005fdb90` on
+/// `this`, then frees `this` with `00401030` when bit 0 of `flags` is set.
+/// Returns `this`. `__thiscall`, `RET 4`. The engine map gives it no name.
+pub fn fn_005fdb60(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_005fdb90(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005f_daa0, fn_005fdaa0(Ptr) -> Ptr)]
+    vec![
+        entry!(0x005f_daa0, fn_005fdaa0(Ptr) -> Ptr),
+        entry!(0x005f_dc30, fn_005fdc30(Ptr)),
+        entry!(0x005f_db90, fn_005fdb90(Ptr)),
+        entry!(0x005f_db60, fn_005fdb60(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -56,5 +101,55 @@ mod tests {
                 (0x3c, 4, 0x0104_9b44),
             ],
         });
+    }
+}
+
+#[cfg(test)]
+mod b022_tests {
+    use super::*;
+
+    #[test]
+    fn the_flag_at_0x48_is_cleared() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x4c);
+        e.mem.set_u8(object + 0x48, 3);
+        e.mem.set_u8(object + 0x49, 3);
+        e.call(0x005f_dc30, &[object]);
+        assert_eq!(e.mem.u8(object + 0x48), 0);
+        assert_eq!(e.mem.u8(object + 0x49), 3);
+    }
+
+    #[test]
+    fn the_destructor_runs_the_bases_and_deletes_on_flag_one() {
+        let mut e = Engine::new();
+        for callee in [
+            0x0048_e2e0,
+            0x0048_9070,
+            0x0059_1300,
+            0x0048_3630,
+            0x0040_1030,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        let object = e.mem.alloc(0x4c);
+        for flags in [0u32, 1, 2] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x005f_db60, &[object, flags]).u32(), object);
+            let log = e.call_log.take().unwrap();
+            let mut expected = vec![
+                (0x0048_e2e0, vec![object + 0x3c]),
+                (0x0048_9070, vec![object + 0x24]),
+                (0x0059_1300, vec![object + 0x18]),
+                (0x0048_3630, vec![object]),
+            ];
+            if flags & 1 != 0 {
+                expected.push((0x0040_1030, vec![object]));
+            }
+            assert_eq!(log[1..], expected[..]);
+            assert_eq!(e.mem.u32(object), 0x0104_9b9c);
+            assert_eq!(e.mem.u32(object + 0x18), 0x0104_9b88);
+            assert_eq!(e.mem.u32(object + 0x24), 0x0104_9b64);
+            assert_eq!(e.mem.u32(object + 0x3c), 0x0104_9b44);
+        }
     }
 }

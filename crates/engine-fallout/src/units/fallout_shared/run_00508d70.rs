@@ -68,6 +68,36 @@ pub fn fn_00508eb0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 00508d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 0x2000 of the flags word at +8 is set (the engine map gives
+/// it no name).
+pub fn fn_00508d70(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 8) & 0x2000 != 0
+}
+
+// Translated from 00508d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `this + index + 8` (the engine map gives it no name).
+pub fn fn_00508d90(e: &mut Engine, this: Ptr, index: u32) -> u8 {
+    e.mem.u8(this.addr().wrapping_add(index).wrapping_add(8))
+}
+
+// Translated from 00508ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00508ee0 - C++ exception unwinding (FS:[0] frame) not translated
+/// The destructor body of the form `00508e00` constructs (the class is
+/// unconfirmed): the six vtable pointers `00508e00` stores, then the
+/// component destructor `00483710` and the base destructor `00510640`.
+pub fn fn_00508ee0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0102_6d0c);
+    e.mem.set_u32(base + 0x30, 0x0102_6cf4);
+    e.mem.set_u32(base + 0x3c, 0x0102_6cd0);
+    e.mem.set_u32(base + 0x5c, 0x0102_6cbc);
+    e.mem.set_u32(base + 0x68, 0x0102_6ca8);
+    e.mem.set_u32(base + 0x70, 0x0102_6c98);
+    e.call(0x0048_3710, &args![this]);
+    e.call(0x0051_0640, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -77,6 +107,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0050_8f70, fn_00508f70(Ptr)),
         entry!(0x0050_8dc0, fn_00508dc0(Ptr, u32) -> Ptr),
         entry!(0x0050_8eb0, fn_00508eb0(Ptr, u32) -> Ptr),
+        entry!(0x00508d70, fn_00508d70(Ptr) -> bool),
+        entry!(0x00508d90, fn_00508d90(Ptr, u32) -> u8),
+        entry!(0x00508ee0, fn_00508ee0(Ptr)),
     ]
 }
 
@@ -218,5 +251,34 @@ mod clear_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+
+    #[test]
+    fn flag_0x2000_and_byte_at_index() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        assert!(!e.call(0x0050_8d70, &args![this]).bool());
+        e.mem.set_u32(this + 8, 0x2000);
+        assert!(e.call(0x0050_8d70, &args![this]).bool());
+        e.mem.set_u8(this + 0xb, 0x5a);
+        assert_eq!(e.call(0x0050_8d90, &args![this, 3u32]).u8(), 0x5a);
+    }
+
+    #[test]
+    fn destructor_body_restores_the_vtables() {
+        let mut e = Engine::new();
+        e.register(0x0048_3710, |_, _| Ret::default());
+        e.register(0x0051_0640, |_, _| Ret::default());
+        let this = e.mem.alloc(0x94);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_8ee0, &args![this]);
+        assert_eq!(e.mem.u32(this), 0x0102_6d0c);
+        assert_eq!(e.mem.u32(this + 0x70), 0x0102_6c98);
+        let log = e.call_log.take().unwrap();
+        let callees: Vec<_> = log.iter().skip(1).map(|(a, w)| (*a, w.clone())).collect();
+        assert_eq!(
+            callees,
+            vec![(0x0048_3710, vec![this]), (0x0051_0640, vec![this])]
+        );
     }
 }

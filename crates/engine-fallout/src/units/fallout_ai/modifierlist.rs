@@ -96,6 +96,506 @@ pub fn fn_00937160(e: &mut Engine, this: Ptr<ModifierList>, source: Ptr<Modifier
     }
 }
 
+/// `00401030` (`cdecl`, one word): frees a block.
+const FREE: u32 = 0x0040_1030;
+/// `0063f7b0` (`thiscall`): drops the head item of a `BSSimpleList` (the
+/// second node's item moves into the head, the node is deleted; a list
+/// without a second node gets a null head item).
+const LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
+/// `005ae3d0` (`thiscall`, `RET 4`): adds the item at the given address to a
+/// `BSSimpleList`.
+const LIST_ADD: u32 = 0x005a_e3d0;
+/// `00905330` (`thiscall`, `RET 4`): removes the item at the given address
+/// from a `BSSimpleList`.
+const LIST_REMOVE: u32 = 0x0090_5330;
+/// `00938060` (`thiscall`, `RET 4`, unit `modifierlist.cpp`): frees and
+/// clears the fast collection's slot of an actor value.
+const FAST_SLOT_REMOVE: u32 = 0x0093_8060;
+/// `006b9130` (`thiscall`): a modifier's `float` value (+4), in ST0.
+const MODIFIER_VALUE: u32 = 0x006b_9130;
+/// `004f5d90` (`thiscall`, `RET 4`): stores a modifier's `float` value (+4).
+const MODIFIER_SET_VALUE: u32 = 0x004f_5d90;
+/// `0066e920` (`cdecl`, one word): the actor value's info record (0 outside
+/// `0..0x4d`).
+const ACTOR_VALUE_INFO: u32 = 0x0066_e920;
+/// `00937fd0` (no arguments, unit `modifierlist.cpp`): builds the slot table
+/// at `011e0618` and the slot count at `011e0750` once.
+const BUILD_FAST_SLOTS: u32 = 0x0093_7fd0;
+/// `BGSSaveGameBuffer::StartVariableSizedValue` (engine map), `00865f20`.
+const SAVE_START_VARIABLE_SIZED: u32 = 0x0086_5f20;
+/// `00865e50` (`thiscall`, `RET 0xc`): writes `size` bytes from an address
+/// to the save buffer (third word 0 here).
+const SAVE_WRITE: u32 = 0x0086_5e50;
+/// `BGSSaveGameBuffer::SaveVariableSizedValue_ov2` (engine map), `00865ff0`.
+const SAVE_END_VARIABLE_SIZED: u32 = 0x0086_5ff0;
+/// The fast-modifier slot of each actor value (`int[0x4d]`, 0x4d for a value
+/// without a slot), built by `00937fd0`.
+const FAST_SLOT_INDEX: u32 = 0x011e_0618;
+/// The number of fast-modifier slots (`011e0750`).
+const FAST_SLOT_COUNT: u32 = 0x011e_0750;
+/// `double` 0.0 (`01012060`).
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+
+/// A `ModifierList` field or slot read: `ModifierList` +0x0C is
+/// `pFastModifiers` (Xbox PDB), whose first word is the slot array.
+fn fast_slots(e: &Engine, this: Ptr<ModifierList>) -> u32 {
+    let collection = e.get(this, ModifierList::pFastModifiers);
+    e.mem.u32(collection)
+}
+
+/// The slot of actor value `kind` (`FAST_SLOT_INDEX[kind]`, signed index).
+fn fast_slot_index(e: &Engine, kind: i8) -> u32 {
+    e.mem
+        .u32(FAST_SLOT_INDEX.wrapping_add((i32::from(kind) as u32).wrapping_mul(4)))
+}
+
+/// `count * 4` as the exe's `MUL`/`SETO`/`NEG`/`OR` computes it: all ones
+/// when the product overflows.
+fn array_bytes(count: u32) -> u32 {
+    let product = u64::from(count) * 4;
+    if product >> 32 != 0 {
+        0xffff_ffff
+    } else {
+        product as u32
+    }
+}
+
+// Translated from 009370b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ModifierList::DeleteAllModifiers` (engine map name): frees each item of
+/// the list (`00401030`) and drops it from the head (`0063f7b0`) until the
+/// head item is null; then, when `pFastModifiers` is set, deletes that
+/// collection ([`fn_00937130`] with flag 1) and clears the pointer.
+pub fn modifier_list_delete_all_modifiers(e: &mut Engine, this: Ptr<ModifierList>) {
+    loop {
+        let item_address = e.call(NODE_ITEM_ADDRESS, &args![this]).u32();
+        let item = e.mem.u32(item_address);
+        if item == 0 {
+            break;
+        }
+        e.call(FREE, &args![item]);
+        e.call(LIST_REMOVE_HEAD, &args![this]);
+    }
+    if e.get(this, ModifierList::pFastModifiers) != 0 {
+        let collection = e.get(this, ModifierList::pFastModifiers);
+        if collection != 0 {
+            fn_00937130(e, Ptr::new(collection), 1);
+        }
+        e.set(this, ModifierList::pFastModifiers, 0);
+    }
+}
+
+// Translated from 00937130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The fast-modifier collection's deleting destructor (no Xbox PDB name):
+/// [`fn_00937f40`], then, with bit 0 of `flags`, the collection's own block
+/// freed (`00401030`). Returns `this`.
+pub fn fn_00937130(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00937f40(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00937280 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00937280 - the C++ exception unwinding states (FS:[0] frame, handler 00eed64b) are not translated
+/// Puts `modifier` into the fast slot of actor value `kind` (no Xbox PDB
+/// name): with neither a modifier nor a collection nothing happens; an
+/// existing collection's slot is freed first (`00938060`). A modifier whose
+/// value is not 0 (or NaN), or any modifier when the list allows zero
+/// values (+8), is stored, the collection (4 bytes, [`fn_00937d70`]; null
+/// when the allocation fails) made first when missing.
+pub fn fn_00937280(e: &mut Engine, this: Ptr<ModifierList>, kind: i8, modifier: u32) {
+    if modifier == 0 && e.get(this, ModifierList::pFastModifiers) == 0 {
+        return;
+    }
+    if e.get(this, ModifierList::pFastModifiers) != 0 {
+        let collection = e.get(this, ModifierList::pFastModifiers);
+        e.call(FAST_SLOT_REMOVE, &args![collection, i32::from(kind)]);
+    }
+    if modifier == 0 {
+        return;
+    }
+    let value = e.call(MODIFIER_VALUE, &args![modifier]).f64();
+    // FCOMP 0.0; TEST AH,0x44; JP: not equal (or unordered) stores.
+    let zero = e.mem.f64(ZERO_DOUBLE);
+    if value == zero && e.get(this, ModifierList::bZeroValuesAllowed) == 0 {
+        return;
+    }
+    if e.get(this, ModifierList::pFastModifiers) == 0 {
+        let block = e.call(ALLOCATE, &args![4u32]).u32();
+        let collection = if block == 0 {
+            0
+        } else {
+            fn_00937d70(e, Ptr::new(block)).addr()
+        };
+        e.set(this, ModifierList::pFastModifiers, collection);
+    }
+    let slots = fast_slots(e, this);
+    let index = fast_slot_index(e, kind);
+    e.mem
+        .set_u32(slots.wrapping_add(index.wrapping_mul(4)), modifier);
+}
+
+// Translated from 00937380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes `modifier` into the list (no Xbox PDB name): nothing for a null
+/// one; an actor value whose info record (`0066e920`) has bit 0 of +0x44
+/// set goes to its fast slot ([`fn_00937280`]), any other is added to the
+/// list (`005ae3d0`, given the address of the argument).
+pub fn fn_00937380(e: &mut Engine, this: Ptr<ModifierList>, modifier: u32) {
+    if modifier == 0 {
+        return;
+    }
+    let kind = fn_009373f0(e, Ptr::new(modifier)) as i8;
+    let info = e.call(ACTOR_VALUE_INFO, &args![i32::from(kind)]).u32();
+    // ActorValueInfo +0x44: flags; bit 0 marks a value kept in a fast slot.
+    if info != 0 && e.mem.u32(info + 0x44) & 1 != 0 {
+        fn_00937280(e, this, kind, modifier);
+    } else {
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), modifier);
+            e.call(LIST_ADD, &args![this, slot]);
+        });
+    }
+}
+
+// Translated from 00937400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes `modifier` (no Xbox PDB name): nothing for a null one; a
+/// fast-slot actor value with a collection has its slot cleared
+/// (`00938060`); otherwise the modifier is removed from the list
+/// (`00905330`, given the address of the argument) and the argument word,
+/// as it stands after that call, is freed (`00401030`).
+pub fn fn_00937400(e: &mut Engine, this: Ptr<ModifierList>, modifier: u32) {
+    if modifier == 0 {
+        return;
+    }
+    let kind = fn_009373f0(e, Ptr::new(modifier)) as i8;
+    let info = e.call(ACTOR_VALUE_INFO, &args![i32::from(kind)]).u32();
+    if info != 0
+        && e.mem.u32(info + 0x44) & 1 != 0
+        && e.get(this, ModifierList::pFastModifiers) != 0
+    {
+        let kind = fn_009373f0(e, Ptr::new(modifier)) as i8;
+        let collection = e.get(this, ModifierList::pFastModifiers);
+        e.call(FAST_SLOT_REMOVE, &args![collection, i32::from(kind)]);
+    } else {
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), modifier);
+            e.call(LIST_REMOVE, &args![this, slot]);
+            let item = e.mem.u32(slot.addr());
+            e.call(FREE, &args![item]);
+        });
+    }
+}
+
+/// Allocates an 8-byte modifier and constructs it ([`fn_009375b0`]) with
+/// `kind` and the value bits; 0 when the allocation fails.
+fn new_modifier(e: &mut Engine, kind: u8, value_bits: u32) -> u32 {
+    let block = e.call(ALLOCATE, &args![8u32]).u32();
+    if block == 0 {
+        0
+    } else {
+        fn_009375b0(e, Ptr::new(block), kind, f32::from_bits(value_bits)).addr()
+    }
+}
+
+// Translated from 00937480 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00937480 - the C++ exception unwinding states (FS:[0] frame, handler 00f0b23b) are not translated
+/// `ModifierList::AdjustModifier` (engine map name): without a modifier for
+/// `kind`, a `delta` other than 0 (or NaN), or any delta when the list
+/// allows zero values, makes a new modifier ([`fn_009375b0`], 8 bytes;
+/// null when the allocation fails) taken in by [`fn_00937380`]. With one,
+/// its value becomes [`fn_00937810`]`(value, delta, mode)`, and a modifier
+/// whose value is then 0 is removed ([`fn_00937400`]) unless the list
+/// allows zero values.
+pub fn modifier_list_adjust_modifier(
+    e: &mut Engine,
+    this: Ptr<ModifierList>,
+    kind: u8,
+    delta: f32,
+    mode: u32,
+) {
+    let delta_bits = x87_store32(x87_load32(delta.to_bits()));
+    let zero = e.mem.f64(ZERO_DOUBLE);
+    let modifier = fn_00937760(e, this, kind as i8);
+    if modifier == 0 {
+        // FCOMP 0.0; TEST AH,0x44; JP: not equal (or unordered) adds.
+        if x87_load32(delta.to_bits()) != zero || e.get(this, ModifierList::bZeroValuesAllowed) != 0
+        {
+            let made = new_modifier(e, kind, delta_bits);
+            fn_00937380(e, this, made);
+        }
+        return;
+    }
+    let value = e.call(MODIFIER_VALUE, &args![modifier]).f64();
+    let adjusted = fn_00937810(
+        e,
+        f32::from_bits(x87_store32(value)),
+        f32::from_bits(delta_bits),
+        mode,
+    );
+    let stored = x87_store32(x87_load32(x87_store32(adjusted)));
+    e.call(MODIFIER_SET_VALUE, &args![modifier, stored]);
+    let value = e.call(MODIFIER_VALUE, &args![modifier]).f64();
+    if value == zero && e.get(this, ModifierList::bZeroValuesAllowed) == 0 {
+        fn_00937400(e, this, modifier);
+    }
+}
+
+// Translated from 009375b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The modifier constructor (no Xbox PDB name): the actor value byte at +0,
+/// the value stored by `004f5d90`. Returns `this`.
+pub fn fn_009375b0(e: &mut Engine, this: Ptr, kind: u8, value: f32) -> Ptr {
+    e.mem.set_u8(this.addr(), kind);
+    let bits = x87_store32(x87_load32(value.to_bits()));
+    e.call(MODIFIER_SET_VALUE, &args![this, bits]);
+    this
+}
+
+// Translated from 009375e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009375e0 - the C++ exception unwinding states (FS:[0] frame, handler 00eeb0fb) are not translated
+/// Sets the modifier of `kind` to `value` (no Xbox PDB name): without one, a
+/// value other than 0 (or NaN), or any value when the list allows zero
+/// values, makes a new modifier taken in by [`fn_00937380`]; with one, a
+/// value of 0 removes it ([`fn_00937400`]) unless zero values are allowed,
+/// and any other value is stored (`004f5d90`).
+pub fn fn_009375e0(e: &mut Engine, this: Ptr<ModifierList>, kind: u8, value: f32) {
+    let value_bits = x87_store32(x87_load32(value.to_bits()));
+    let zero = e.mem.f64(ZERO_DOUBLE);
+    let is_zero = x87_load32(value.to_bits()) == zero;
+    let modifier = fn_00937760(e, this, kind as i8);
+    if modifier == 0 {
+        if !is_zero || e.get(this, ModifierList::bZeroValuesAllowed) != 0 {
+            let made = new_modifier(e, kind, value_bits);
+            fn_00937380(e, this, made);
+        }
+    } else if is_zero && e.get(this, ModifierList::bZeroValuesAllowed) == 0 {
+        fn_00937400(e, this, modifier);
+    } else {
+        e.call(MODIFIER_SET_VALUE, &args![modifier, value_bits]);
+    }
+}
+
+// Translated from 009376e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ModifierList::GetModifierItem` (engine map name): the value of the
+/// modifier of `kind` (stored to a `float` local), 0 without one; `*found`
+/// says whether there was one. In ST0.
+pub fn modifier_list_get_modifier_item(
+    e: &mut Engine,
+    this: Ptr<ModifierList>,
+    kind: u8,
+    found: Ptr,
+) -> f64 {
+    let modifier = fn_00937760(e, this, kind as i8);
+    e.mem.set_u8(found.addr(), (modifier != 0) as u8);
+    let bits = if modifier != 0 {
+        x87_store32(e.call(MODIFIER_VALUE, &args![modifier]).f64())
+    } else {
+        0
+    };
+    x87_load32(bits)
+}
+
+// Translated from 00937730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ModifierList::GetModifier` (engine map name): [`modifier_list_get_modifier_item`]
+/// with a local `found` byte (cleared first); its ST0 result is this
+/// function's.
+pub fn modifier_list_get_modifier(e: &mut Engine, this: Ptr<ModifierList>, kind: u8) -> f64 {
+    e.with_stack(4, |e, found| {
+        e.mem.set_u8(found.addr(), 0);
+        modifier_list_get_modifier_item(e, this, kind, found)
+    })
+}
+
+// Translated from 00937760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds the modifier of actor value `kind` (no Xbox PDB name): with a fast
+/// collection and a slot below 0x4d, the slot's word; otherwise the first
+/// list item whose actor value byte ([`fn_009373f0`]) is `kind`, the walk
+/// ending at a null head item or once one is found. 0 when none.
+pub fn fn_00937760(e: &mut Engine, this: Ptr<ModifierList>, kind: i8) -> u32 {
+    let mut found = 0u32;
+    if e.get(this, ModifierList::pFastModifiers) != 0 && (fast_slot_index(e, kind) as i32) < 0x4d {
+        let slots = fast_slots(e, this);
+        let index = fast_slot_index(e, kind);
+        return e.mem.u32(slots.wrapping_add(index.wrapping_mul(4)));
+    }
+    let mut node = this.addr();
+    while node != 0 {
+        let item_address = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+        if e.mem.u32(item_address) == 0 || found != 0 {
+            break;
+        }
+        let item_address = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+        let item = e.mem.u32(item_address);
+        if item != 0 && fn_009373f0(e, Ptr::new(item)) as i8 == kind {
+            found = item;
+        }
+        node = e.call(NEXT_NODE, &args![node]).u32();
+    }
+    found
+}
+
+// Translated from 00937810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `value + delta` stored to a `float` (`cdecl`; no Xbox PDB name), then
+/// clamped by `mode`: 0 keeps it at most 0 (a positive sum becomes 0), 1
+/// at least 0 (a negative sum becomes 0), any other mode leaves it; NaN
+/// is kept. In ST0.
+pub fn fn_00937810(_e: &mut Engine, value: f32, delta: f32, mode: u32) -> f64 {
+    let mut sum = x87_store32(x87_add(
+        x87_load32(value.to_bits()),
+        x87_m32(delta.to_bits()),
+    ));
+    match mode {
+        0 => {
+            // FCOMP 0.0; TEST AH,0x41; JNZ: only "above" clears.
+            if x87_load32(sum) > 0.0 {
+                sum = x87_store32(0.0);
+            }
+        }
+        1 => {
+            // FCOMP 0.0; TEST AH,0x5; JP: only "below" clears.
+            if x87_load32(sum) < 0.0 {
+                sum = x87_store32(0.0);
+            }
+        }
+        _ => {}
+    }
+    x87_load32(sum)
+}
+
+// Translated from 00937b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ModifierList::SaveGame_ov2` (engine map name): in a variable-sized
+/// value of the save buffer (`00865f20` ... `00865ff0` with the count),
+/// each modifier of the list and then of the fast slots (`011e0750` of
+/// them) as its actor value byte and its 4-byte value (`00865e50`).
+pub fn modifier_list_save_game_ov2(e: &mut Engine, this: Ptr<ModifierList>, buffer: Ptr) {
+    let mut count = 0u32;
+    let token = e.call(SAVE_START_VARIABLE_SIZED, &args![buffer]).u32();
+    let mut node = this.addr();
+    while node != 0 {
+        let item_address = e.call(NODE_ITEM_ADDRESS, &args![node]).u32();
+        let item = e.mem.u32(item_address);
+        if item != 0 {
+            e.call(SAVE_WRITE, &args![buffer, item, 1u32, 0u32]);
+            e.call(SAVE_WRITE, &args![buffer, item + 4, 4u32, 0u32]);
+            count = count.wrapping_add(1);
+        }
+        node = e.call(NEXT_NODE, &args![node]).u32();
+    }
+    if e.get(this, ModifierList::pFastModifiers) != 0 {
+        let mut i = 0u32;
+        while i < e.mem.u32(FAST_SLOT_COUNT) {
+            let slot = |e: &Engine| {
+                e.mem
+                    .u32(fast_slots(e, this).wrapping_add(i.wrapping_mul(4)))
+            };
+            if slot(e) != 0 {
+                let item = slot(e);
+                e.call(SAVE_WRITE, &args![buffer, item, 1u32, 0u32]);
+                let item = slot(e);
+                e.call(SAVE_WRITE, &args![buffer, item.wrapping_add(4), 4u32, 0u32]);
+                count = count.wrapping_add(1);
+            }
+            i = i.wrapping_add(1);
+        }
+    }
+    e.call(SAVE_END_VARIABLE_SIZED, &args![buffer, count, token]);
+}
+
+// Translated from 00937d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The fast-modifier collection constructor (no Xbox PDB name): builds the
+/// slot table (`00937fd0`), then with no slots the array pointer is 0;
+/// otherwise an array of `011e0750` words is allocated (`00401000`; size
+/// all ones on overflow) and every word cleared (no null check, as in the
+/// exe). Returns `this`.
+pub fn fn_00937d70(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(BUILD_FAST_SLOTS, &args![]);
+    if e.mem.u32(FAST_SLOT_COUNT) == 0 {
+        e.mem.set_u32(this.addr(), 0);
+        return this;
+    }
+    let count = e.mem.u32(FAST_SLOT_COUNT);
+    let block = if count == 0 {
+        0
+    } else {
+        e.call(ALLOCATE, &args![array_bytes(count)]).u32()
+    };
+    e.mem.set_u32(this.addr(), block);
+    let mut i = 0i32;
+    while i < e.mem.u32(FAST_SLOT_COUNT) as i32 {
+        let array = e.mem.u32(this.addr());
+        e.mem
+            .set_u32(array.wrapping_add((i as u32).wrapping_mul(4)), 0);
+        i += 1;
+    }
+    this
+}
+
+// Translated from 00937e10 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00937e10 - the C++ exception unwinding states (FS:[0] frame, handler 00f0814b) are not translated
+/// The fast-modifier collection's copy constructor (no Xbox PDB name):
+/// a source without an array gives a null array; otherwise a new array of
+/// `011e0750` words (null for no slots) whose used slots hold copies of the
+/// source's modifiers (8 bytes each, `00936fd0`; null when the allocation
+/// fails) and the rest 0. Returns `this`.
+pub fn fn_00937e10(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    if e.mem.u32(other.addr()) == 0 {
+        e.mem.set_u32(this.addr(), 0);
+        return this;
+    }
+    let count = e.mem.u32(FAST_SLOT_COUNT);
+    let block = if count == 0 {
+        0
+    } else {
+        e.call(ALLOCATE, &args![array_bytes(count)]).u32()
+    };
+    e.mem.set_u32(this.addr(), block);
+    let mut i = 0i32;
+    while i < e.mem.u32(FAST_SLOT_COUNT) as i32 {
+        let at = (i as u32).wrapping_mul(4);
+        let source = e.mem.u32(e.mem.u32(other.addr()).wrapping_add(at));
+        let copy = if source != 0 {
+            let block = e.call(ALLOCATE, &args![8u32]).u32();
+            if block == 0 {
+                0
+            } else {
+                let source = e.mem.u32(e.mem.u32(other.addr()).wrapping_add(at));
+                e.call(MODIFIER_COPY, &args![block, source]).u32()
+            }
+        } else {
+            0
+        };
+        let array = e.mem.u32(this.addr());
+        e.mem.set_u32(array.wrapping_add(at), copy);
+        i += 1;
+    }
+    this
+}
+
+// Translated from 00937f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties the fast-modifier collection (no Xbox PDB name): with slots and
+/// an array, frees every non-null slot's modifier and then the array
+/// (`00401030`), and clears the array pointer.
+pub fn fn_00937f40(e: &mut Engine, this: Ptr) {
+    if e.mem.u32(FAST_SLOT_COUNT) == 0 || e.mem.u32(this.addr()) == 0 {
+        return;
+    }
+    let mut i = 0i32;
+    while i < e.mem.u32(FAST_SLOT_COUNT) as i32 {
+        let at = e
+            .mem
+            .u32(this.addr())
+            .wrapping_add((i as u32).wrapping_mul(4));
+        let modifier = e.mem.u32(at);
+        if modifier != 0 {
+            e.call(FREE, &args![modifier]);
+        }
+        i += 1;
+    }
+    let array = e.mem.u32(this.addr());
+    e.call(FREE, &args![array]);
+    e.mem.set_u32(this.addr(), 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -105,6 +605,37 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x0093_7b30, fn_00937b30(Ptr)),
         entry!(0x009373f0, fn_009373f0(Ptr) -> u8),
+        entry!(
+            0x009370b0,
+            modifier_list_delete_all_modifiers(Ptr<ModifierList>)
+        ),
+        entry!(0x00937130, fn_00937130(Ptr, u32) -> Ptr),
+        entry!(0x00937280, fn_00937280(Ptr<ModifierList>, i8, u32)),
+        entry!(0x00937380, fn_00937380(Ptr<ModifierList>, u32)),
+        entry!(0x00937400, fn_00937400(Ptr<ModifierList>, u32)),
+        entry!(
+            0x00937480,
+            modifier_list_adjust_modifier(Ptr<ModifierList>, u8, f32, u32)
+        ),
+        entry!(0x009375b0, fn_009375b0(Ptr, u8, f32) -> Ptr),
+        entry!(0x009375e0, fn_009375e0(Ptr<ModifierList>, u8, f32)),
+        entry!(
+            0x009376e0,
+            modifier_list_get_modifier_item(Ptr<ModifierList>, u8, Ptr) -> f64
+        ),
+        entry!(
+            0x00937730,
+            modifier_list_get_modifier(Ptr<ModifierList>, u8) -> f64
+        ),
+        entry!(0x00937760, fn_00937760(Ptr<ModifierList>, i8) -> u32),
+        entry!(0x00937810, fn_00937810(f32, f32, u32) -> f64),
+        entry!(
+            0x00937b50,
+            modifier_list_save_game_ov2(Ptr<ModifierList>, Ptr)
+        ),
+        entry!(0x00937d70, fn_00937d70(Ptr) -> Ptr),
+        entry!(0x00937e10, fn_00937e10(Ptr, Ptr) -> Ptr),
+        entry!(0x00937f40, fn_00937f40(Ptr)),
     ]
 }
 
@@ -285,5 +816,412 @@ mod copy_tests {
         assert!(calls_to(&log, MODIFIER_COPY).is_empty());
         assert_eq!(e.mem.u32(this + 0xc), 0);
         assert_eq!(calls_to(&log, ADD_MODIFIER), [vec![this, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod b019_tests {
+    use super::*;
+
+    /// The actor value whose info record marks it as a fast-slot value.
+    const FAST_KIND: u8 = 5;
+    /// Its slot.
+    const FAST_SLOT: u32 = 1;
+
+    /// Doubles for every callee outside this file; the list helpers work on
+    /// real nodes (item at +0, next node at +4), modifiers keep their value
+    /// at +4, `00401000` allocates from the engine heap, and only
+    /// `FAST_KIND` has an info record with bit 0 of +0x44.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0101_2000, 0x1000);
+        e.map(0x011e_0000, 0x1000);
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(FAST_SLOT_COUNT, 2u32);
+        for kind in 0..0x4du32 {
+            e.set_global(FAST_SLOT_INDEX + 4 * kind, 0x4du32);
+        }
+        e.set_global(FAST_SLOT_INDEX + 4 * u32::from(FAST_KIND), FAST_SLOT);
+        let info = e.mem.alloc(0x48);
+        e.mem.set_u32(info + 0x44, 1);
+        e.register_double(ACTOR_VALUE_INFO, move |_, a| Ret {
+            eax: if a[0] == u32::from(FAST_KIND) {
+                info
+            } else {
+                0
+            },
+            ..Ret::default()
+        });
+        e.register(NODE_ITEM_ADDRESS, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.register(NEXT_NODE, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4),
+            ..Ret::default()
+        });
+        e.register(ALLOCATE, |e, a| Ret {
+            eax: e.mem.alloc(a[0]),
+            ..Ret::default()
+        });
+        e.register(MODIFIER_VALUE, |e, a| Ret {
+            st0: f64::from(e.mem.f32(a[0] + 4)),
+            ..Ret::default()
+        });
+        e.register(MODIFIER_SET_VALUE, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e.register(MODIFIER_COPY, |e, a| {
+            let (kind, value) = (e.mem.u32(a[1]), e.mem.u32(a[1] + 4));
+            e.mem.set_u32(a[0], kind);
+            e.mem.set_u32(a[0] + 4, value);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        for address in [
+            FREE,
+            LIST_REMOVE_HEAD,
+            LIST_ADD,
+            LIST_REMOVE,
+            FAST_SLOT_REMOVE,
+            BUILD_FAST_SLOTS,
+            SAVE_START_VARIABLE_SIZED,
+            SAVE_WRITE,
+            SAVE_END_VARIABLE_SIZED,
+        ] {
+            e.register(address, |_, _| Ret {
+                eax: 0x7700,
+                ..Ret::default()
+            });
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn modifier(e: &mut Engine, kind: u8, value: f32) -> u32 {
+        let m = e.mem.alloc(8);
+        e.mem.set_u8(m, kind);
+        e.mem.set_f32(m + 4, value);
+        m
+    }
+
+    /// A list holding `items` (head node at `this`), no fast collection.
+    fn list(e: &mut Engine, items: &[u32]) -> Ptr<ModifierList> {
+        let this: Ptr<ModifierList> = e.new_object();
+        let mut node = this.addr();
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if i + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        this
+    }
+
+    /// A fast collection for `this` with `slots` as its array.
+    fn collection(e: &mut Engine, this: Ptr<ModifierList>, slots: [u32; 2]) -> (u32, u32) {
+        let array = e.mem.alloc(8);
+        e.mem.set_u32(array, slots[0]);
+        e.mem.set_u32(array + 4, slots[1]);
+        let collection = e.mem.alloc(4);
+        e.mem.set_u32(collection, array);
+        e.set(this, ModifierList::pFastModifiers, collection);
+        (collection, array)
+    }
+
+    #[test]
+    fn delete_all_frees_the_items_and_the_fast_collection() {
+        let mut e = engine();
+        let item = modifier(&mut e, 2, 1.0);
+        let this = list(&mut e, &[item]);
+        // Dropping the head leaves a null item.
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        let fast = modifier(&mut e, FAST_KIND, 2.0);
+        let (collection, array) = collection(&mut e, this, [0, fast]);
+        e.call(0x0093_70b0, &args![this]);
+        assert_eq!(
+            calls(&e, FREE),
+            vec![vec![item], vec![fast], vec![array], vec![collection]]
+        );
+        assert_eq!(calls(&e, LIST_REMOVE_HEAD), vec![vec![this.addr()]]);
+        assert_eq!(e.get(this, ModifierList::pFastModifiers), 0);
+    }
+
+    #[test]
+    fn collection_destructor_frees_itself_only_with_bit_0() {
+        let mut e = engine();
+        let this = e.mem.alloc(4);
+        assert_eq!(e.call(0x0093_7130, &args![this, 2u32]).u32(), this);
+        assert!(calls(&e, FREE).is_empty());
+        e.call(0x0093_7130, &args![this, 1u32]);
+        assert_eq!(calls(&e, FREE), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fast_slot_store_follows_value_and_zero_rule() {
+        let mut e = engine();
+        let this = list(&mut e, &[]);
+        // Neither a modifier nor a collection: nothing.
+        e.call(0x0093_7280, &args![this, FAST_KIND, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        // A zero value without zero values allowed: nothing stored.
+        let zero = modifier(&mut e, FAST_KIND, 0.0);
+        e.call(0x0093_7280, &args![this, FAST_KIND, zero]);
+        assert!(calls(&e, ALLOCATE).is_empty());
+        // Allowed: the collection is made and the slot set.
+        e.set(this, ModifierList::bZeroValuesAllowed, 1);
+        e.call(0x0093_7280, &args![this, FAST_KIND, zero]);
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![4], vec![8]]);
+        assert_eq!(calls(&e, BUILD_FAST_SLOTS).len(), 1);
+        let slots = fast_slots(&e, this);
+        assert_eq!(e.mem.u32(slots + 4 * FAST_SLOT), zero);
+        // With a collection the slot is cleared first (signed kind).
+        let other = modifier(&mut e, FAST_KIND, 3.0);
+        e.call(0x0093_7280, &args![this, FAST_KIND, other]);
+        let collection = e.get(this, ModifierList::pFastModifiers);
+        assert_eq!(
+            calls(&e, FAST_SLOT_REMOVE),
+            vec![vec![collection, u32::from(FAST_KIND)]]
+        );
+        assert_eq!(e.mem.u32(slots + 4 * FAST_SLOT), other);
+    }
+
+    #[test]
+    fn add_sends_fast_values_to_their_slot_and_others_to_the_list() {
+        let mut e = engine();
+        let this = list(&mut e, &[]);
+        let plain = modifier(&mut e, 2, 1.0);
+        e.register_double(LIST_ADD, move |e, a| {
+            // The list gets the address of a word holding the modifier.
+            assert_eq!(e.mem.u32(a[1]), plain);
+            Ret::default()
+        });
+        e.call(0x0093_7380, &args![this, 0u32]);
+        assert!(calls(&e, ACTOR_VALUE_INFO).is_empty());
+        e.call(0x0093_7380, &args![this, plain]);
+        assert_eq!(calls(&e, LIST_ADD).len(), 1);
+        assert_eq!(calls(&e, ACTOR_VALUE_INFO), vec![vec![2]]);
+        let fast = modifier(&mut e, FAST_KIND, 1.0);
+        e.call(0x0093_7380, &args![this, fast]);
+        assert_eq!(calls(&e, LIST_ADD).len(), 1);
+        let slots = fast_slots(&e, this);
+        assert_eq!(e.mem.u32(slots + 4 * FAST_SLOT), fast);
+    }
+
+    #[test]
+    fn remove_clears_a_fast_slot_or_frees_the_list_item() {
+        let mut e = engine();
+        let this = list(&mut e, &[]);
+        let fast = modifier(&mut e, FAST_KIND, 1.0);
+        // A fast value without a collection goes through the list.
+        e.register(LIST_REMOVE, |e, a| {
+            e.mem.set_u32(a[1], 0x4444);
+            Ret::default()
+        });
+        e.call(0x0093_7400, &args![this, fast]);
+        assert_eq!(calls(&e, LIST_REMOVE)[0][0], this.addr());
+        assert_eq!(calls(&e, FREE), vec![vec![0x4444]]);
+        let (collection, _) = collection(&mut e, this, [0, fast]);
+        e.call(0x0093_7400, &args![this, fast]);
+        assert_eq!(
+            calls(&e, FAST_SLOT_REMOVE),
+            vec![vec![collection, u32::from(FAST_KIND)]]
+        );
+        assert_eq!(calls(&e, FREE).len(), 1);
+    }
+
+    #[test]
+    fn adjust_adds_changes_and_removes() {
+        let mut e = engine();
+        let this = list(&mut e, &[]);
+        // No modifier and a zero delta: nothing.
+        e.call(0x0093_7480, &args![this, 2u32, 0.0f32, 2u32]);
+        assert!(calls(&e, ALLOCATE).is_empty());
+        // A new modifier goes to the list.
+        e.call(0x0093_7480, &args![this, 2u32, 2.5f32, 2u32]);
+        let added = calls(&e, LIST_ADD);
+        assert_eq!(added.len(), 1);
+        let made = calls(&e, ALLOCATE);
+        assert_eq!(made, vec![vec![8]]);
+        // An existing modifier is adjusted and, at 0, removed.
+        let item = modifier(&mut e, 3, 1.5);
+        let this = list(&mut e, &[item]);
+        e.call(0x0093_7480, &args![this, 3u32, 1.0f32, 2u32]);
+        assert_eq!(e.mem.f32(item + 4), 2.5);
+        e.call(0x0093_7480, &args![this, 3u32, -2.5f32, 2u32]);
+        assert_eq!(e.mem.f32(item + 4), 0.0);
+        assert_eq!(calls(&e, LIST_REMOVE).len(), 1);
+        // Mode 1 keeps the sum at least 0.
+        let item = modifier(&mut e, 4, 1.0);
+        let this = list(&mut e, &[item]);
+        e.set(this, ModifierList::bZeroValuesAllowed, 1);
+        e.call(0x0093_7480, &args![this, 4u32, -3.0f32, 1u32]);
+        assert_eq!(e.mem.f32(item + 4), 0.0);
+        assert_eq!(calls(&e, LIST_REMOVE).len(), 1);
+    }
+
+    #[test]
+    fn modifier_constructor_stores_kind_and_value() {
+        let mut e = engine();
+        let m = e.mem.alloc(8);
+        assert_eq!(e.call(0x0093_75b0, &args![m, 7u32, 1.25f32]).u32(), m);
+        assert_eq!(e.mem.u8(m), 7);
+        assert_eq!(
+            calls(&e, MODIFIER_SET_VALUE),
+            vec![vec![m, 1.25f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn set_adds_stores_or_removes() {
+        let mut e = engine();
+        let item = modifier(&mut e, 3, 1.5);
+        let this = list(&mut e, &[item]);
+        e.call(0x0093_75e0, &args![this, 3u32, 4.0f32]);
+        assert_eq!(e.mem.f32(item + 4), 4.0);
+        e.call(0x0093_75e0, &args![this, 3u32, 0.0f32]);
+        assert_eq!(calls(&e, LIST_REMOVE).len(), 1);
+        e.call(0x0093_75e0, &args![this, 9u32, 0.0f32]);
+        assert!(calls(&e, ALLOCATE).is_empty());
+        e.call(0x0093_75e0, &args![this, 9u32, f32::NAN]);
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![8]]);
+        assert_eq!(calls(&e, LIST_ADD).len(), 1);
+    }
+
+    #[test]
+    fn get_modifier_reads_the_value_or_zero() {
+        let mut e = engine();
+        let item = modifier(&mut e, 3, 1.5);
+        let this = list(&mut e, &[item]);
+        let found = e.mem.alloc(4);
+        let v = e.call(0x0093_76e0, &args![this, 3u32, found]).f64();
+        assert_eq!((v, e.mem.u8(found)), (1.5, 1));
+        let v = e.call(0x0093_76e0, &args![this, 4u32, found]).f64();
+        assert_eq!((v, e.mem.u8(found)), (0.0, 0));
+        assert_eq!(e.call(0x0093_7730, &args![this, 3u32]).f64(), 1.5);
+    }
+
+    #[test]
+    fn find_uses_the_fast_slot_or_walks_the_list() {
+        let mut e = engine();
+        let a = modifier(&mut e, 3, 1.0);
+        let b = modifier(&mut e, 4, 2.0);
+        let c = modifier(&mut e, 4, 3.0);
+        let this = list(&mut e, &[a, b, c]);
+        assert_eq!(e.call(0x0093_7760, &args![this, 4u32]).u32(), b);
+        assert_eq!(e.call(0x0093_7760, &args![this, 6u32]).u32(), 0);
+        // The walk stops once found: no NEXT_NODE call after b's node.
+        e.call_log = Some(vec![]);
+        e.call(0x0093_7760, &args![this, 3u32]);
+        assert_eq!(calls(&e, NEXT_NODE).len(), 1);
+        let fast = modifier(&mut e, FAST_KIND, 1.0);
+        collection(&mut e, this, [0, fast]);
+        assert_eq!(
+            e.call(0x0093_7760, &args![this, u32::from(FAST_KIND)])
+                .u32(),
+            fast
+        );
+        // A value without a slot (0x4d) still walks the list.
+        assert_eq!(e.call(0x0093_7760, &args![this, 4u32]).u32(), b);
+    }
+
+    #[test]
+    fn add_and_clamp_by_mode() {
+        let mut e = engine();
+        let f = |e: &mut Engine, v: f32, d: f32, m: u32| e.call(0x0093_7810, &args![v, d, m]).f64();
+        assert_eq!(f(&mut e, 1.0, 2.0, 0), 0.0);
+        assert_eq!(f(&mut e, -1.0, -2.0, 0), -3.0);
+        assert_eq!(f(&mut e, -1.0, -2.0, 1), 0.0);
+        assert_eq!(f(&mut e, 1.0, 2.0, 1), 3.0);
+        assert_eq!(f(&mut e, 1.0, 2.0, 7), 3.0);
+        assert!(f(&mut e, f32::NAN, 2.0, 0).is_nan());
+    }
+
+    #[test]
+    fn save_writes_list_then_fast_modifiers_and_the_count() {
+        let mut e = engine();
+        let a = modifier(&mut e, 3, 1.0);
+        let this = list(&mut e, &[a]);
+        let fast = modifier(&mut e, FAST_KIND, 2.0);
+        collection(&mut e, this, [0, fast]);
+        let buffer = 0x9900u32;
+        e.call(0x0093_7b50, &args![this, buffer]);
+        assert_eq!(
+            calls(&e, SAVE_WRITE),
+            vec![
+                vec![buffer, a, 1, 0],
+                vec![buffer, a + 4, 4, 0],
+                vec![buffer, fast, 1, 0],
+                vec![buffer, fast + 4, 4, 0],
+            ]
+        );
+        assert_eq!(
+            calls(&e, SAVE_END_VARIABLE_SIZED),
+            vec![vec![buffer, 2, 0x7700]]
+        );
+    }
+
+    #[test]
+    fn collection_constructor_clears_one_word_per_slot() {
+        let mut e = engine();
+        let this = e.mem.alloc(4);
+        e.call(0x0093_7d70, &args![this]);
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![8]]);
+        let array = e.mem.u32(this);
+        assert_eq!((e.mem.u32(array), e.mem.u32(array + 4)), (0, 0));
+        e.set_global(FAST_SLOT_COUNT, 0u32);
+        e.call(0x0093_7d70, &args![this]);
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(array_bytes(0x4000_0000), 0xffff_ffff);
+    }
+
+    #[test]
+    fn collection_copy_copies_each_used_slot() {
+        let mut e = engine();
+        let fast = modifier(&mut e, FAST_KIND, 2.0);
+        let array = e.mem.alloc(8);
+        e.mem.set_u32(array + 4, fast);
+        let other = e.mem.alloc(4);
+        e.mem.set_u32(other, array);
+        let this = e.mem.alloc(4);
+        assert_eq!(e.call(0x0093_7e10, &args![this, other]).u32(), this);
+        let copy = e.mem.u32(this);
+        assert_eq!(e.mem.u32(copy), 0);
+        let copied = e.mem.u32(copy + 4);
+        assert_ne!(copied, fast);
+        assert_eq!(e.mem.f32(copied + 4), 2.0);
+        e.mem.set_u32(other, 0);
+        e.call(0x0093_7e10, &args![this, other]);
+        assert_eq!(e.mem.u32(this), 0);
+    }
+
+    #[test]
+    fn collection_clear_frees_slots_then_the_array() {
+        let mut e = engine();
+        let array = e.mem.alloc(8);
+        e.mem.set_u32(array + 4, 0x1234);
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, array);
+        e.call(0x0093_7f40, &args![this]);
+        assert_eq!(calls(&e, FREE), vec![vec![0x1234], vec![array]]);
+        assert_eq!(e.mem.u32(this), 0);
+        e.call(0x0093_7f40, &args![this]);
+        assert_eq!(calls(&e, FREE).len(), 2);
     }
 }

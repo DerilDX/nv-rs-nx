@@ -429,6 +429,18 @@ pub fn fistp(value: f64) -> i32 {
     }
 }
 
+/// `FISTP dword` under rounding toward zero (the compiler's `FNSTCW`, `OR
+/// 0xC00`, `FLDCW`, `FISTP`, `FLDCW` sequence): the value truncated; the
+/// integer indefinite 0x80000000 for NaN and values out of range.
+pub fn fistp_chop(value: f64) -> i32 {
+    let r = value.trunc();
+    if r.is_nan() || r < i32::MIN as f64 || r > i32::MAX as f64 {
+        i32::MIN
+    } else {
+        r as i32
+    }
+}
+
 /// The `CMPEQSS`/`RSQRTSS` pair of the Havok normalizer: the hardware
 /// estimate of `1 / sqrt(x)` on x86, exact elsewhere.
 #[cfg(target_arch = "x86_64")]
@@ -441,6 +453,609 @@ pub fn rsqrt_estimate(x: f32) -> f32 {
 #[cfg(not(target_arch = "x86_64"))]
 pub fn rsqrt_estimate(x: f32) -> f32 {
     1.0 / x.sqrt()
+}
+
+// ---- Transcendental and other non-arithmetic instructions ------------------
+//
+// `FSIN`, `FCOS`, `FSINCOS`, `FPTAN`, `FPATAN`, `F2XM1`, `FYL2X`, `FYL2XP1`,
+// `FSCALE`, `FRNDINT`, `FPREM` and `FPREM1` compute to the extended format and
+// differ from Rust's `f64` functions (the FPU reduces arguments with its own
+// 66-bit pi, rounds once from its internal result, and so on). On x86_64 the
+// helpers below run the instruction itself on the host's FPU: the operands are
+// loaded as the exe loads them (`FLD qword`/`FLD dword` into the 80-bit
+// register), the instruction runs under the running game thread's control word
+// ([`control_word`], every exception masked so the host never traps), and the
+// result is kept as the 80-bit value ([`X87Ext`]) until the translation stores
+// it as the exe does ([`X87Ext::store64`] for `FSTP qword`, [`X87Ext::store32`]
+// for `FSTP dword`): the same bits as the game's x87. Precision control does
+// not apply to these instructions (Intel SDM vol. 1, 8.1.5.2); the rounding
+// mode does (`FRNDINT`, and the stores).
+//
+// Elsewhere (not x86_64) a portable fallback computes them with Rust's `f64`
+// functions: close, but not bit-exact (marked in `soft`).
+
+/// An x87 register's value as the FPU holds it: the 80-bit extended format as
+/// `FSTP tbyte` stores it (little-endian: the 64-bit significand with its
+/// explicit integer bit, then sign and 15-bit exponent).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct X87Ext(pub [u8; 10]);
+
+impl X87Ext {
+    /// The value from its sign-and-exponent word and its 64-bit significand.
+    pub fn from_parts(sign_exponent: u16, significand: u64) -> Self {
+        let mut bytes = [0u8; 10];
+        bytes[..8].copy_from_slice(&significand.to_le_bytes());
+        bytes[8..].copy_from_slice(&sign_exponent.to_le_bytes());
+        X87Ext(bytes)
+    }
+
+    /// The 64-bit significand (bit 63 is the explicit integer bit).
+    pub fn significand(self) -> u64 {
+        let mut word = [0u8; 8];
+        word.copy_from_slice(&self.0[..8]);
+        u64::from_le_bytes(word)
+    }
+
+    /// The sign (bit 15) and biased exponent (bits 0-14).
+    pub fn sign_exponent(self) -> u16 {
+        u16::from_le_bytes([self.0[8], self.0[9]])
+    }
+
+    /// `FLD qword`: the double `value` in a register (exact; a signalling NaN
+    /// quieted).
+    pub fn load64(value: f64) -> Self {
+        imp::load64(value)
+    }
+
+    /// `FLD dword`: the float with the bit pattern `bits` in a register
+    /// (exact; a signalling NaN quieted).
+    pub fn load32(bits: u32) -> Self {
+        imp::load32(bits)
+    }
+
+    /// `FSTP qword`: the value rounded to a double with the control word's
+    /// rounding mode.
+    pub fn store64(self) -> f64 {
+        imp::store64(self)
+    }
+
+    /// `FSTP dword`: the value rounded to a float with the control word's
+    /// rounding mode, as its bits.
+    pub fn store32(self) -> u32 {
+        imp::store32(self)
+    }
+}
+
+impl From<f64> for X87Ext {
+    /// [`X87Ext::load64`].
+    fn from(value: f64) -> Self {
+        X87Ext::load64(value)
+    }
+}
+
+/// Status word bit C2: `FPREM`/`FPREM1` incomplete, or the operand of `FSIN`/
+/// `FCOS`/`FSINCOS`/`FPTAN` out of range (|x| >= 2^63).
+pub const X87_STATUS_C2: u16 = 0x0400;
+
+/// `FSIN`: the sine of ST0. An operand out of range (|x| >= 2^63) comes back
+/// unchanged, as the FPU leaves it (C2 set).
+pub fn x87_fsin(x: X87Ext) -> X87Ext {
+    imp::fsin(x)
+}
+
+/// `FCOS`: the cosine of ST0 (out of range: unchanged, as [`x87_fsin`]).
+pub fn x87_fcos(x: X87Ext) -> X87Ext {
+    imp::fcos(x)
+}
+
+/// `FSINCOS`: `(sine, cosine)` of ST0 (afterwards ST1 holds the sine and ST0
+/// the cosine). An operand out of range (|x| >= 2^63) pushes nothing on the
+/// FPU, which the code after it does not expect: that stops with a panic.
+pub fn x87_fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
+    imp::fsincos(x)
+}
+
+/// `FPTAN`: the tangent of ST0 (the 1.0 the instruction then pushes is not
+/// returned: the exe pops it). An operand out of range stops as
+/// [`x87_fsincos`] does.
+pub fn x87_fptan(x: X87Ext) -> X87Ext {
+    imp::fptan(x)
+}
+
+/// `FPATAN` with ST1 = `y` and ST0 = `x`: the arctangent of `y / x` with the
+/// quadrant of the signs (`atan2(y, x)`), left in ST0 after the pop.
+pub fn x87_fpatan(y: X87Ext, x: X87Ext) -> X87Ext {
+    imp::fpatan(y, x)
+}
+
+/// `F2XM1`: `2^x - 1` (defined for -1 <= x <= 1).
+pub fn x87_f2xm1(x: X87Ext) -> X87Ext {
+    imp::f2xm1(x)
+}
+
+/// `FYL2X` with ST1 = `y` and ST0 = `x`: `y * log2(x)` after the pop.
+pub fn x87_fyl2x(y: X87Ext, x: X87Ext) -> X87Ext {
+    imp::fyl2x(y, x)
+}
+
+/// `FYL2XP1` with ST1 = `y` and ST0 = `x`: `y * log2(x + 1)` after the pop.
+pub fn x87_fyl2xp1(y: X87Ext, x: X87Ext) -> X87Ext {
+    imp::fyl2xp1(y, x)
+}
+
+/// `FSCALE` with ST0 = `x` and ST1 = `scale`: `x * 2^trunc(scale)` (the new
+/// ST0; ST1 is left as it was).
+pub fn x87_fscale(x: X87Ext, scale: X87Ext) -> X87Ext {
+    imp::fscale(x, scale)
+}
+
+/// `FRNDINT`: ST0 rounded to an integer with the control word's rounding mode.
+pub fn x87_frndint(x: X87Ext) -> X87Ext {
+    imp::frndint(x)
+}
+
+/// `FPREM` with ST0 = `x` and ST1 = `y`: the partial remainder of `x / y` with
+/// the quotient truncated (`fmod`), and the status word right after the
+/// instruction (C2 [`X87_STATUS_C2`] set: incomplete, run it again; C0, C3, C1
+/// the low three quotient bits).
+pub fn x87_fprem(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
+    imp::fprem(x, y)
+}
+
+/// `FPREM1`: as [`x87_fprem`] with the quotient rounded to nearest (the IEEE
+/// remainder).
+pub fn x87_fprem1(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
+    imp::fprem1(x, y)
+}
+
+/// `FISTP qword`: ST0 stored as a 64-bit integer, rounded with the control
+/// word's rounding mode ([`control_word`]); the integer indefinite
+/// 0x8000_0000_0000_0000 for a NaN or a value out of range.
+pub fn x87_fistp64(x: X87Ext) -> i64 {
+    imp::fistp64(x, control_word())
+}
+
+/// `FISTP qword` inside the compiler's truncating sequence (`FNSTCW`, `OR
+/// 0xC00`, `FLDCW`, `FISTP`, `FLDCW`, as `_ftol2`-style code sets it): the
+/// value rounded toward zero, the integer indefinite for a NaN or a value out
+/// of range. The thread's control word is left as it was.
+pub fn x87_fistp64_chop(x: X87Ext) -> i64 {
+    imp::fistp64(x, control_word() | ROUNDING_CONTROL)
+}
+
+#[cfg(target_arch = "x86_64")]
+use hw as imp;
+#[cfg(not(target_arch = "x86_64"))]
+use soft as imp;
+
+/// The instructions on the host's x87 (x86_64).
+#[cfg(target_arch = "x86_64")]
+mod hw {
+    use super::X87Ext;
+
+    /// The memory one instruction sequence works on, at fixed offsets the
+    /// assembly names: operands `a` (+0) and `b` (+10), results `r0` (+20) and
+    /// `r1` (+30), the control word to run under (+40), the host's saved one
+    /// (+42) and the status word (+44).
+    #[repr(C)]
+    struct Frame {
+        a: [u8; 10],
+        b: [u8; 10],
+        r0: [u8; 10],
+        r1: [u8; 10],
+        word: u16,
+        saved: u16,
+        status: u16,
+    }
+
+    fn frame(a: [u8; 10], b: [u8; 10]) -> Frame {
+        Frame {
+            a,
+            b,
+            r0: [0; 10],
+            r1: [0; 10],
+            // The game thread's control word with every exception masked: an
+            // unmasked one would trap in the host (the game runs with all of
+            // them masked, `DEFAULT_CONTROL_WORD` and 0x007F).
+            word: super::control_word() | 0x003f,
+            saved: 0,
+            status: 0,
+        }
+    }
+
+    /// Runs the instructions on `$frame` under its control word: saves the
+    /// host's control word, loads the frame's, runs them, then `FNINIT` (an
+    /// empty register stack and cleared flags, whatever the instructions left)
+    /// and the host's control word again.
+    macro_rules! run {
+        ($frame:expr, $($code:literal),+ $(,)?) => {
+            // SAFETY: the instructions read and write only the frame (through
+            // the pointer in `f`), leave the x87 stack empty (FNINIT) and the
+            // host's control word as it was; every x87 register is declared
+            // clobbered.
+            unsafe {
+                core::arch::asm!(
+                    "fnstcw word ptr [{f} + 42]",
+                    "fldcw word ptr [{f} + 40]",
+                    $($code,)+
+                    "fninit",
+                    "fldcw word ptr [{f} + 42]",
+                    f = in(reg) core::ptr::addr_of_mut!($frame),
+                    out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                    out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+                    options(nostack),
+                )
+            }
+        };
+    }
+
+    fn word8(bytes: &[u8]) -> [u8; 8] {
+        let mut out = [0u8; 8];
+        out.copy_from_slice(&bytes[..8]);
+        out
+    }
+
+    pub fn load64(value: f64) -> X87Ext {
+        let mut a = [0u8; 10];
+        a[..8].copy_from_slice(&value.to_bits().to_le_bytes());
+        let mut f = frame(a, [0; 10]);
+        run!(f, "fld qword ptr [{f}]", "fstp tbyte ptr [{f} + 20]");
+        X87Ext(f.r0)
+    }
+
+    pub fn load32(bits: u32) -> X87Ext {
+        let mut a = [0u8; 10];
+        a[..4].copy_from_slice(&bits.to_le_bytes());
+        let mut f = frame(a, [0; 10]);
+        run!(f, "fld dword ptr [{f}]", "fstp tbyte ptr [{f} + 20]");
+        X87Ext(f.r0)
+    }
+
+    pub fn store64(x: X87Ext) -> f64 {
+        let mut f = frame(x.0, [0; 10]);
+        run!(f, "fld tbyte ptr [{f}]", "fstp qword ptr [{f} + 20]");
+        f64::from_bits(u64::from_le_bytes(word8(&f.r0)))
+    }
+
+    pub fn store32(x: X87Ext) -> u32 {
+        let mut f = frame(x.0, [0; 10]);
+        run!(f, "fld tbyte ptr [{f}]", "fstp dword ptr [{f} + 20]");
+        u32::from_le_bytes([f.r0[0], f.r0[1], f.r0[2], f.r0[3]])
+    }
+
+    pub fn fsin(x: X87Ext) -> X87Ext {
+        let mut f = frame(x.0, [0; 10]);
+        run!(
+            f,
+            "fld tbyte ptr [{f}]",
+            "fsin",
+            "fstp tbyte ptr [{f} + 20]"
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn fcos(x: X87Ext) -> X87Ext {
+        let mut f = frame(x.0, [0; 10]);
+        run!(
+            f,
+            "fld tbyte ptr [{f}]",
+            "fcos",
+            "fstp tbyte ptr [{f} + 20]"
+        );
+        X87Ext(f.r0)
+    }
+
+    /// Stops when C2 says the operand was out of range: the instruction
+    /// pushed nothing.
+    fn check_pushed(name: &str, x: X87Ext, status: u16) {
+        assert!(
+            status & super::X87_STATUS_C2 == 0,
+            "{name} of {x:?}: operand out of range (|x| >= 2^63), nothing pushed"
+        );
+    }
+
+    pub fn fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
+        let mut f = frame(x.0, [0; 10]);
+        run!(
+            f,
+            "fld tbyte ptr [{f}]",
+            "fsincos",
+            "fnstsw word ptr [{f} + 44]",
+            "fstp tbyte ptr [{f} + 30]",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        check_pushed("FSINCOS", x, f.status);
+        (X87Ext(f.r0), X87Ext(f.r1))
+    }
+
+    pub fn fptan(x: X87Ext) -> X87Ext {
+        let mut f = frame(x.0, [0; 10]);
+        run!(
+            f,
+            "fld tbyte ptr [{f}]",
+            "fptan",
+            "fnstsw word ptr [{f} + 44]",
+            "fstp tbyte ptr [{f} + 30]",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        check_pushed("FPTAN", x, f.status);
+        X87Ext(f.r0)
+    }
+
+    pub fn fpatan(y: X87Ext, x: X87Ext) -> X87Ext {
+        let mut f = frame(y.0, x.0);
+        run!(
+            f,
+            "fld tbyte ptr [{f}]",
+            "fld tbyte ptr [{f} + 10]",
+            "fpatan",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn f2xm1(x: X87Ext) -> X87Ext {
+        let mut f = frame(x.0, [0; 10]);
+        run!(
+            f,
+            "fld tbyte ptr [{f}]",
+            "f2xm1",
+            "fstp tbyte ptr [{f} + 20]"
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn fyl2x(y: X87Ext, x: X87Ext) -> X87Ext {
+        let mut f = frame(y.0, x.0);
+        run!(
+            f,
+            "fld tbyte ptr [{f}]",
+            "fld tbyte ptr [{f} + 10]",
+            "fyl2x",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn fyl2xp1(y: X87Ext, x: X87Ext) -> X87Ext {
+        let mut f = frame(y.0, x.0);
+        run!(
+            f,
+            "fld tbyte ptr [{f}]",
+            "fld tbyte ptr [{f} + 10]",
+            "fyl2xp1",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn fscale(x: X87Ext, scale: X87Ext) -> X87Ext {
+        let mut f = frame(x.0, scale.0);
+        run!(
+            f,
+            "fld tbyte ptr [{f} + 10]",
+            "fld tbyte ptr [{f}]",
+            "fscale",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn frndint(x: X87Ext) -> X87Ext {
+        let mut f = frame(x.0, [0; 10]);
+        run!(
+            f,
+            "fld tbyte ptr [{f}]",
+            "frndint",
+            "fstp tbyte ptr [{f} + 20]"
+        );
+        X87Ext(f.r0)
+    }
+
+    pub fn fprem(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
+        let mut f = frame(x.0, y.0);
+        run!(
+            f,
+            "fld tbyte ptr [{f} + 10]",
+            "fld tbyte ptr [{f}]",
+            "fprem",
+            "fnstsw word ptr [{f} + 44]",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        (X87Ext(f.r0), f.status)
+    }
+
+    pub fn fprem1(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
+        let mut f = frame(x.0, y.0);
+        run!(
+            f,
+            "fld tbyte ptr [{f} + 10]",
+            "fld tbyte ptr [{f}]",
+            "fprem1",
+            "fnstsw word ptr [{f} + 44]",
+            "fstp tbyte ptr [{f} + 20]",
+        );
+        (X87Ext(f.r0), f.status)
+    }
+
+    /// `FISTP qword` under the control word `word` (exceptions masked).
+    pub fn fistp64(x: X87Ext, word: u16) -> i64 {
+        let mut f = frame(x.0, [0; 10]);
+        f.word = word | 0x003f;
+        run!(f, "fld tbyte ptr [{f}]", "fistp qword ptr [{f} + 20]");
+        i64::from_le_bytes(word8(&f.r0))
+    }
+}
+
+/// Portable fallback (not x86_64): the extended format converted in software
+/// and the instructions computed with Rust's `f64` functions. NOT bit-exact
+/// with the x87: the results are the `f64` library's, a store to a float
+/// rounds twice, the rounding mode of the control word is honoured only by
+/// `FRNDINT`, and the status word reports every `FPREM`/`FPREM1` complete. It
+/// is compiled (and its conversions tested) on x86_64 too.
+#[cfg_attr(target_arch = "x86_64", allow(dead_code))]
+mod soft {
+    use super::X87Ext;
+
+    const EXT_BIAS: i32 = 16383;
+    const INTEGER_BIT: u64 = 1 << 63;
+
+    pub fn load64(value: f64) -> X87Ext {
+        let bits = value.to_bits();
+        let sign = ((bits >> 63) as u16) << 15;
+        let exponent = ((bits >> 52) & 0x7ff) as i32;
+        let fraction = bits & 0x000f_ffff_ffff_ffff;
+        match exponent {
+            0 if fraction == 0 => X87Ext::from_parts(sign, 0),
+            0 => {
+                // A double denormal is a normal extended value.
+                let shift = fraction.leading_zeros();
+                let e = -1022 - (shift as i32 - 11) + EXT_BIAS;
+                X87Ext::from_parts(sign | e as u16, fraction << shift)
+            }
+            0x7ff if fraction == 0 => X87Ext::from_parts(sign | 0x7fff, INTEGER_BIT),
+            // A NaN, quieted (bit 62 of the significand), payload kept.
+            0x7ff => X87Ext::from_parts(sign | 0x7fff, INTEGER_BIT | (1 << 62) | (fraction << 11)),
+            _ => X87Ext::from_parts(
+                sign | (exponent - 1023 + EXT_BIAS) as u16,
+                INTEGER_BIT | (fraction << 11),
+            ),
+        }
+    }
+
+    pub fn load32(bits: u32) -> X87Ext {
+        // Widened exactly with the payload kept, then quieted by `load64`.
+        load64(super::x87_m32(bits))
+    }
+
+    /// `v * 2^k` for any `k` the conversion needs, through two in-range
+    /// factors applied one after the other.
+    fn scaled(v: f64, k: i32) -> f64 {
+        let half = k / 2;
+        v * 2f64.powi(half) * 2f64.powi(k - half)
+    }
+
+    pub fn store64(x: X87Ext) -> f64 {
+        let sign_exponent = x.sign_exponent();
+        let negative = sign_exponent & 0x8000 != 0;
+        let exponent = i32::from(sign_exponent & 0x7fff);
+        let significand = x.significand();
+        let magnitude = if exponent == 0x7fff {
+            if significand << 1 == 0 {
+                f64::INFINITY
+            } else {
+                f64::from_bits(0x7ff0_0000_0000_0000 | ((significand << 1) >> 12) | (1 << 51))
+            }
+        } else {
+            // Rounded to 53 bits by the integer conversion (to nearest), then
+            // scaled (exact unless the result is a double denormal).
+            scaled(significand as f64, exponent - EXT_BIAS - 63)
+        };
+        if negative {
+            -magnitude
+        } else {
+            magnitude
+        }
+    }
+
+    pub fn store32(x: X87Ext) -> u32 {
+        super::x87_store32(store64(x))
+    }
+
+    fn unary(x: X87Ext, op: impl Fn(f64) -> f64) -> X87Ext {
+        load64(op(store64(x)))
+    }
+
+    pub fn fsin(x: X87Ext) -> X87Ext {
+        unary(x, f64::sin)
+    }
+
+    pub fn fcos(x: X87Ext) -> X87Ext {
+        unary(x, f64::cos)
+    }
+
+    pub fn fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
+        (fsin(x), fcos(x))
+    }
+
+    pub fn fptan(x: X87Ext) -> X87Ext {
+        unary(x, f64::tan)
+    }
+
+    pub fn fpatan(y: X87Ext, x: X87Ext) -> X87Ext {
+        load64(store64(y).atan2(store64(x)))
+    }
+
+    pub fn f2xm1(x: X87Ext) -> X87Ext {
+        unary(x, |v| (v * std::f64::consts::LN_2).exp_m1())
+    }
+
+    pub fn fyl2x(y: X87Ext, x: X87Ext) -> X87Ext {
+        load64(store64(y) * store64(x).log2())
+    }
+
+    pub fn fyl2xp1(y: X87Ext, x: X87Ext) -> X87Ext {
+        load64(store64(y) * (store64(x).ln_1p() / std::f64::consts::LN_2))
+    }
+
+    pub fn fscale(x: X87Ext, scale: X87Ext) -> X87Ext {
+        let s = store64(scale).trunc();
+        load64(store64(x) * 2f64.powf(s))
+    }
+
+    pub fn frndint(x: X87Ext) -> X87Ext {
+        let v = store64(x);
+        let rounded = match super::control_word() & super::ROUNDING_CONTROL {
+            super::ROUND_DOWN => v.floor(),
+            super::ROUND_UP => v.ceil(),
+            super::ROUND_NEAREST => {
+                // Ties to even.
+                let mut r = v.round();
+                if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
+                    r -= v.signum();
+                }
+                r
+            }
+            _ => v.trunc(),
+        };
+        load64(rounded)
+    }
+
+    pub fn fprem(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
+        (load64(store64(x) % store64(y)), 0)
+    }
+
+    pub fn fprem1(x: X87Ext, y: X87Ext) -> (X87Ext, u16) {
+        let (a, b) = (store64(x), store64(y));
+        let q = a / b;
+        let mut n = q.round();
+        if (q - q.trunc()).abs() == 0.5 && n % 2.0 != 0.0 {
+            n -= q.signum();
+        }
+        (load64(a - n * b), 0)
+    }
+
+    pub fn fistp64(x: X87Ext, word: u16) -> i64 {
+        let v = store64(x);
+        let r = match word & super::ROUNDING_CONTROL {
+            super::ROUND_DOWN => v.floor(),
+            super::ROUND_UP => v.ceil(),
+            super::ROUND_NEAREST => {
+                let mut r = v.round();
+                if (v - v.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
+                    r -= v.signum();
+                }
+                r
+            }
+            _ => v.trunc(),
+        };
+        // -2^63 is the only value of 2^63's magnitude in range.
+        if r.is_nan() || r >= 2f64.powi(63) || r < -(2f64.powi(63)) {
+            i64::MIN
+        } else {
+            r as i64
+        }
+    }
 }
 
 #[cfg(test)]
@@ -881,5 +1496,204 @@ mod tests {
             x87_store32(x87_add(x87_m32(0xffff_ffff), x87_m32(0x7fff_ffff))),
             0x7fff_ffff
         );
+    }
+
+    // ---- Transcendental helpers ----
+
+    fn ext(v: f64) -> X87Ext {
+        X87Ext::load64(v)
+    }
+
+    #[test]
+    fn loads_widen_exactly_and_stores_give_the_value_back() {
+        assert_eq!(ext(1.0), X87Ext::from_parts(0x3fff, 1 << 63));
+        assert_eq!(ext(-2.0), X87Ext::from_parts(0xc000, 1 << 63));
+        assert_eq!(
+            X87Ext::load32(0x3fc0_0000),
+            X87Ext::from_parts(0x3fff, 3 << 62)
+        );
+        // FLD quiets a signalling NaN and keeps its payload.
+        let quieted = X87Ext::load32(0x7f80_0001);
+        assert_eq!(quieted.store32(), 0x7fc0_0001);
+        assert_eq!(
+            X87Ext::load64(f64::from_bits(0x7ff0_0000_0000_0001))
+                .store64()
+                .to_bits(),
+            0x7ff8_0000_0000_0001
+        );
+        for v in [1.5, -0.0, 5e-324, f64::INFINITY, f64::MAX, 0.1] {
+            assert_eq!(ext(v).store64().to_bits(), v.to_bits());
+        }
+    }
+
+    #[test]
+    fn the_software_conversions_match_the_fpu() {
+        for bits in [
+            0x3ff8_0000_0000_0000u64,
+            0x8000_0000_0000_0000,
+            0x0000_0000_0000_0001,
+            0x000f_ffff_ffff_ffff,
+            0x7ff0_0000_0000_0000,
+            0x7ff0_0000_0000_0001,
+            0xfff8_0000_0000_1234,
+            0x3fb9_9999_9999_999a,
+        ] {
+            let v = f64::from_bits(bits);
+            assert_eq!(soft::load64(v), X87Ext::load64(v), "{bits:#x}");
+            assert_eq!(
+                soft::store64(X87Ext::load64(v)).to_bits(),
+                bits | if v.is_nan() { 1 << 51 } else { 0 }
+            );
+        }
+        for bits in [0x3fc0_0000u32, 0x7f80_0001, 0x0000_0001, 0xff80_0000] {
+            assert_eq!(soft::load32(bits), X87Ext::load32(bits), "{bits:#x}");
+        }
+        // An extended value between two doubles rounds to nearest, ties to even.
+        let between = X87Ext::from_parts(0x3fff, (1 << 63) | (1 << 10) | 1);
+        assert_eq!(soft::store64(between), between.store64());
+        let tie = X87Ext::from_parts(0x3fff, (1 << 63) | (1 << 10));
+        assert_eq!(soft::store64(tie), tie.store64());
+    }
+
+    #[test]
+    fn transcendental_results_are_the_fpus() {
+        assert_eq!(x87_fsin(ext(0.0)).store64(), 0.0);
+        assert_eq!(x87_fcos(ext(0.0)).store64(), 1.0);
+        assert_eq!(x87_fptan(ext(0.0)).store64(), 0.0);
+        assert_eq!(
+            x87_fpatan(ext(1.0), ext(1.0)).store64(),
+            std::f64::consts::FRAC_PI_4
+        );
+        assert_eq!(
+            x87_fpatan(ext(1.0), ext(-1.0)).store64(),
+            3.0 * std::f64::consts::FRAC_PI_4
+        );
+        assert_eq!(x87_fyl2x(ext(1.0), ext(8.0)).store64(), 3.0);
+        assert_eq!(x87_fyl2x(ext(-2.0), ext(0.25)).store64(), 4.0);
+        assert_eq!(x87_fyl2xp1(ext(1.0), ext(0.0)).store64(), 0.0);
+        assert_eq!(x87_f2xm1(ext(0.0)).store64(), 0.0);
+        assert_eq!(x87_f2xm1(ext(-1.0)).store64(), -0.5);
+        assert_eq!(x87_fscale(ext(1.5), ext(3.7)).store64(), 12.0);
+        assert_eq!(x87_fscale(ext(1.5), ext(-1.9)).store64(), 0.75);
+        let (sin, cos) = x87_fsincos(ext(0.5));
+        assert_eq!(sin, x87_fsin(ext(0.5)));
+        assert_eq!(cos, x87_fcos(ext(0.5)));
+        // FSIN reduces with the FPU's own pi: sin(pi as a double) is the
+        // well-known x87 result, not the correctly rounded 1.2246467991473532e-16.
+        assert_eq!(
+            x87_fsin(ext(std::f64::consts::PI)).store64(),
+            1.2246063538223773e-16
+        );
+        // An operand out of range comes back unchanged.
+        let huge = ext(2f64.powi(64));
+        assert_eq!(x87_fsin(huge), huge);
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn fsincos_out_of_range_stops() {
+        x87_fsincos(ext(2f64.powi(64)));
+    }
+
+    #[test]
+    fn remainders_report_the_status_word() {
+        let (r, status) = x87_fprem(ext(7.0), ext(3.0));
+        assert_eq!(r.store64(), 1.0);
+        assert_eq!(status & X87_STATUS_C2, 0);
+        // Quotient 2: C1 (bit 9) holds its bit 0, C3 (bit 14) bit 1, C0 (bit 8) bit 2.
+        assert_eq!(status & 0x4300, 0x4000);
+        let (r, _) = x87_fprem1(ext(8.0), ext(3.0));
+        assert_eq!(r.store64(), -1.0);
+        let (r, _) = x87_fprem(ext(-7.5), ext(2.0));
+        assert_eq!(r.store64(), -1.5);
+        // Exponents 2^70 apart: one FPREM reduces only part of the way.
+        let (_, status) = x87_fprem(ext(2f64.powi(80)), ext(3.0));
+        assert_ne!(status & X87_STATUS_C2, 0);
+    }
+
+    #[test]
+    fn the_control_word_decides_rounding_but_not_precision() {
+        // FRNDINT and the stores follow the rounding mode.
+        let rounded = |word: u16, v: f64| with_word(word, || x87_frndint(ext(v)).store64());
+        assert_eq!(rounded(0x027f, 2.5), 2.0);
+        assert_eq!(rounded(0x027f, 3.5), 4.0);
+        assert_eq!(rounded(0x067f, -2.5), -3.0);
+        assert_eq!(rounded(0x0a7f, 2.25), 3.0);
+        assert_eq!(rounded(0x0e7f, -2.75), -2.0);
+        let near_one = ext(1.0 + 2f64.powi(-30));
+        assert_eq!(with_word(0x027f, || near_one.store32()), 0x3f80_0000);
+        assert_eq!(with_word(0x0a7f, || near_one.store32()), 0x3f80_0001);
+        // 24-bit precision control: stores and transcendentals keep their
+        // precision (only FADD/FSUB/FMUL/FDIV/FSQRT round to 24 bits).
+        assert_eq!(
+            with_word(0x007f, || near_one.store64()),
+            1.0 + 2f64.powi(-30)
+        );
+        let at53 = with_word(0x027f, || x87_fsin(ext(1.0)));
+        let at24 = with_word(0x007f, || x87_fsin(ext(1.0)));
+        assert_eq!(at24, at53);
+        assert_ne!(at24.significand() & 0xff_ffff_ffff, 0, "64-bit result");
+        // The helpers leave the thread's control word as it was.
+        with_word(0x007f, || {
+            x87_fcos(ext(1.0));
+            assert_eq!(control_word(), 0x007f);
+        });
+    }
+
+    #[test]
+    fn fistp_chop_truncates_toward_zero() {
+        assert_eq!(fistp_chop(2.9), 2);
+        assert_eq!(fistp_chop(-2.9), -2);
+        assert_eq!(fistp_chop(-0.5), 0);
+        assert_eq!(fistp_chop(2147483647.9), i32::MAX);
+        assert_eq!(fistp_chop(2147483648.0), i32::MIN);
+        assert_eq!(fistp_chop(-2147483648.9), i32::MIN);
+        assert_eq!(fistp_chop(-2147483649.0), i32::MIN);
+        assert_eq!(fistp_chop(f64::NAN), i32::MIN);
+    }
+
+    #[test]
+    fn fistp64_rounds_with_the_control_word_and_chop_truncates() {
+        let at = |word: u16, v: f64| with_word(word, || x87_fistp64(ext(v)));
+        assert_eq!(at(0x027f, 2.5), 2);
+        assert_eq!(at(0x027f, 3.5), 4);
+        assert_eq!(at(0x067f, -2.5), -3);
+        assert_eq!(at(0x0a7f, 2.25), 3);
+        assert_eq!(at(0x0e7f, -2.75), -2);
+        assert_eq!(with_word(0x027f, || x87_fistp64_chop(ext(-2.75))), -2);
+        assert_eq!(
+            with_word(0x007f, || x87_fistp64_chop(ext(1e15 + 0.9))),
+            1_000_000_000_000_000
+        );
+        assert_eq!(x87_fistp64_chop(ext(-(2f64.powi(63)))), i64::MIN);
+        assert_eq!(x87_fistp64_chop(ext(2f64.powi(63))), i64::MIN);
+        assert_eq!(x87_fistp64(ext(f64::NAN)), i64::MIN);
+        assert_eq!(x87_fistp64(ext(f64::INFINITY)), i64::MIN);
+        // The thread's control word stays.
+        assert_eq!(
+            with_word(0x007f, || {
+                x87_fistp64_chop(ext(1.5));
+                control_word()
+            }),
+            0x007f
+        );
+        // The software fallback agrees on these.
+        for (word, v) in [
+            (0x027fu16, 2.5f64),
+            (0x0e7f, -2.75),
+            (0x067f, -2.5),
+            (0x027f, 1e19),
+            (0x027f, f64::NAN),
+        ] {
+            assert_eq!(
+                soft::fistp64(ext(v), word),
+                hw_fistp64(ext(v), word),
+                "{word:#x} {v}"
+            );
+        }
+    }
+
+    fn hw_fistp64(x: X87Ext, word: u16) -> i64 {
+        with_word(word, || x87_fistp64(x))
     }
 }

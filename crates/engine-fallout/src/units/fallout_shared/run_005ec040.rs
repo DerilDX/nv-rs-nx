@@ -36,11 +36,22 @@ pub fn fn_005ec090(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 005ec060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bits 5 to 7 of the byte at `+0` as a number 0 to 7 (unnamed in the map;
+/// `ECX`, no stack words): the byte sign-extended, masked with 0xE0 and
+/// shifted right arithmetically by 5. `TESCondition` items keep their
+/// comparison operator there.
+pub fn fn_005ec060(e: &mut Engine, this: Ptr) -> u32 {
+    let flags = i32::from(e.mem.u8(this.addr()) as i8);
+    ((flags & 0xe0) >> 5) as u32
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x005ec040, fn_005ec040(Ptr) -> bool),
         entry!(0x005ec090, fn_005ec090(Ptr) -> Ptr),
+        entry!(0x005ec060, fn_005ec060(Ptr) -> u32),
     ]
 }
 
@@ -86,6 +97,16 @@ mod tests {
             e.mem.set_u8(item, byte);
             let back = e.call(0x005e_c040, &args![Ptr::<()>::new(item)]).bool();
             assert_eq!(back, expected, "byte {byte:#x}");
+        }
+    }
+
+    #[test]
+    fn bits_5_to_7_of_the_first_byte_005ec060() {
+        let mut e = Engine::new();
+        let item = e.mem.alloc(4);
+        for (byte, expected) in [(0x00u8, 0u32), (0x1f, 0), (0x20, 1), (0xa1, 5), (0xff, 7)] {
+            e.mem.set_u8(item, byte);
+            assert_eq!(e.call(0x005e_c060, &args![item]).u32(), expected);
         }
     }
 }

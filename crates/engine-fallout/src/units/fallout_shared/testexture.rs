@@ -51,12 +51,66 @@ pub fn tes_texture_load_texture_chunk(e: &mut Engine, texture: Ptr, file: Ptr<TE
     });
 }
 
+/// `ICON`.
+const CHUNK_ICON: u32 = 0x4e4f_4349;
+/// `"%s_n.dds"`.
+const NORMAL_FORMAT: u32 = 0x0101_d7e0;
+
+// Translated from 0048e3b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESTexture::IsTextureChunk` (engine map), cdecl: whether the chunk is
+/// `ICON`.
+pub fn tes_texture_is_texture_chunk(_e: &mut Engine, chunk: u32) -> bool {
+    chunk == CHUNK_ICON
+}
+
+// Translated from 0048e5b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0048e5b0 - the /GS stack cookie check (00ec408c) is not translated.
+/// `TESTexture::GetAsNormalFile` (engine map), cdecl: sets the string
+/// `result` to `path` with its extension replaced by `_n.dds` (the path
+/// copied with `00406d30`, the last `.` found with `0040ab30`, formatted
+/// with `"%s_n.dds"`, set with `004037f0`) and answers its text
+/// (`00559450`); answers 0 without a path or an extension. The stack
+/// cookie check is not translated.
+pub fn tes_texture_get_as_normal_file(e: &mut Engine, result: Ptr, path: u32) -> u32 {
+    if path == 0 {
+        return 0;
+    }
+    e.with_stack(0x210, |e, buffers| {
+        let copy = buffers.addr();
+        let normal = buffers.addr() + 0x108;
+        e.call(0x0040_6d30, &args![copy, 0x104u32, path]);
+        let dot = e.call(0x0040_ab30, &args![copy, 0x2eu32]).u32();
+        if dot == 0 {
+            return 0;
+        }
+        e.mem.set_u8(dot, 0);
+        e.call(0x0040_6d00, &args![normal, 0x104u32, NORMAL_FORMAT, copy]);
+        e.call(0x0040_37f0, &args![result, normal, 0u32]);
+        e.call(0x0055_9450, &args![result]).u32()
+    })
+}
+
+// Translated from 0048e580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The normal-map name of this texture: `TESTexture::GetAsNormalFile`
+/// into `result` with the texture's path (`00408da0`, engine map name
+/// `MapMarkerData::GetLocationName`), whose `EAX` it passes on.
+/// `__thiscall`, `RET 4`. The engine map gives it no name.
+pub fn fn_0048e580(e: &mut Engine, this: Ptr, result: Ptr) -> u32 {
+    let path = e.call(0x0040_8da0, &args![this]).u32();
+    tes_texture_get_as_normal_file(e, result, path)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x0048e3d0,
-        tes_texture_load_texture_chunk(Ptr, Ptr<TESFile>)
-    )]
+    vec![
+        entry!(
+            0x0048e3d0,
+            tes_texture_load_texture_chunk(Ptr, Ptr<TESFile>)
+        ),
+        entry!(0x0048_e3b0, tes_texture_is_texture_chunk(u32) -> bool),
+        entry!(0x0048_e5b0, tes_texture_get_as_normal_file(Ptr, u32) -> u32),
+        entry!(0x0048_e580, fn_0048e580(Ptr, Ptr) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -144,5 +198,103 @@ mod tests {
         assert!(calls_to(&log, CHUNK_SIZE).is_empty());
         let (log, _) = run(0x5000, 0, b"x\0");
         assert!(calls_to(&log, CHUNK_SIZE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod b022_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn ret(eax: u32) -> Ret {
+        Ret {
+            eax,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn only_icon_is_a_texture_chunk() {
+        let mut e = Engine::new();
+        assert!(e.call(0x0048_e3b0, &[CHUNK_ICON]).bool());
+        assert!(!e.call(0x0048_e3b0, &[0x4c44_4f4d]).bool());
+    }
+
+    /// Doubles that behave as the CRT helpers: copy, last `.`, format
+    /// (`%s_n.dds`), set (records the text).
+    fn engine() -> (Engine, Rc<RefCell<Vec<u8>>>) {
+        let mut e = Engine::new();
+        e.register(0x0040_6d30, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e.register(0x0040_ab30, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            ret(text
+                .iter()
+                .rposition(|&c| c == a[1] as u8)
+                .map_or(0, |i| a[0] + i as u32))
+        });
+        e.register(0x0040_6d00, |e, a| {
+            let mut text = e.mem.cstr(a[3]);
+            text.extend(b"_n.dds");
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        let set = Rc::new(RefCell::new(vec![]));
+        let seen = set.clone();
+        e.register_double(0x0040_37f0, move |e, a| {
+            *seen.borrow_mut() = e.mem.cstr(a[1]);
+            Ret::default()
+        });
+        e.register(0x0055_9450, |_, a| ret(a[0] + 0x1000));
+        e.call_log = Some(vec![]);
+        (e, set)
+    }
+
+    #[test]
+    fn the_normal_map_name_replaces_the_extension() {
+        let (mut e, set) = engine();
+        let path = e.mem.alloc(0x40);
+        e.mem.set_cstr(path, b"textures/a.b/rock.dds");
+        let result = e.mem.alloc(8);
+        assert_eq!(e.call(0x0048_e5b0, &[result, path]).u32(), result + 0x1000);
+        assert_eq!(*set.borrow(), b"textures/a.b/rock_n.dds");
+        let formats: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == 0x0040_6d00)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(formats[0][1..3], [0x104, NORMAL_FORMAT]);
+    }
+
+    #[test]
+    fn no_path_or_no_extension_answers_zero() {
+        let (mut e, set) = engine();
+        let result = e.mem.alloc(8);
+        assert_eq!(e.call(0x0048_e5b0, &[result, 0]).u32(), 0);
+        let path = e.mem.alloc(0x40);
+        e.mem.set_cstr(path, b"textures/rock");
+        assert_eq!(e.call(0x0048_e5b0, &[result, path]).u32(), 0);
+        assert!(set.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_texture_passes_its_own_path() {
+        let (mut e, set) = engine();
+        let path = e.mem.alloc(0x40);
+        e.mem.set_cstr(path, b"x.dds");
+        e.register_double(0x0040_8da0, move |_, _| ret(path));
+        let result = e.mem.alloc(8);
+        assert_eq!(
+            e.call(0x0048_e580, &[0x5000, result]).u32(),
+            result + 0x1000
+        );
+        assert_eq!(*set.borrow(), b"x_n.dds");
     }
 }

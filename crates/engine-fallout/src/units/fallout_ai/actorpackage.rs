@@ -106,6 +106,137 @@ pub fn actor_package_move_to(
     e.set(this, ActorPackage::fPackageStartTime, empty_start_time);
 }
 
+/// Interlocked decrement of the word at the address (`004019a0`, cdecl;
+/// the engine map's name `WaitForSingleObjectEx` belongs to folded code).
+const INTERLOCKED_DECREMENT: u32 = 0x0040_19a0;
+/// Interlocked increment of the word at the address (`0040b460`, cdecl).
+const INTERLOCKED_INCREMENT: u32 = 0x0040_b460;
+/// `TESPackage`'s reference count (+0x7C).
+const PACKAGE_REF_COUNT: u32 = 0x7c;
+/// The `Calendar` singleton (`011de7b8`).
+const CALENDAR: u32 = 0x011d_e7b8;
+/// `Calendar::GetHour` (`00867da0`, a `float` in `ST0`).
+const CALENDAR_GET_HOUR: u32 = 0x0086_7da0;
+/// The package's type byte (`0041ca90`, `fallout shared/extradatalist.cpp`
+/// by the engine map).
+const PACKAGE_TYPE: u32 = 0x0041_ca90;
+/// `ActorPackageData::CreateActorPackageData` (`008c6ca0`, cdecl, the
+/// package type).
+const CREATE_ACTOR_PACKAGE_DATA: u32 = 0x008c_6ca0;
+/// `BGSSaveGameBuffer::SaveFormID_ov2` (`00865df0`, the buffer, the form and
+/// a flag word).
+const SAVE_FORM_ID: u32 = 0x0086_5df0;
+/// Writes bytes into the save buffer (`00865e50`, the buffer, the address,
+/// the size and a flag word).
+const SAVE_DATA: u32 = 0x0086_5e50;
+/// A `TESForm` getter (`0084e3a0`) whose result `00469860` checks.
+const FORM_VALUE_0084E3A0: u32 = 0x0084_e3a0;
+/// A `TESDataHandler` check (`00469860`, the data handler and the value).
+const DATA_HANDLER_CHECK_00469860: u32 = 0x0046_9860;
+/// The `TESDataHandler` singleton pointer (`011c3f2c`).
+const DATA_HANDLER: u32 = 0x011c_3f2c;
+
+// Translated from 008c6030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPackage::DecRefCount` (Xbox PDB): interlocked decrement of the
+/// package's reference count (+0x7C); returns the new count.
+pub fn tes_package_dec_ref_count(e: &mut Engine, this: Ptr) -> u32 {
+    let count = this.addr().wrapping_add(PACKAGE_REF_COUNT);
+    e.call(INTERLOCKED_DECREMENT, &args![count]).u32()
+}
+
+// Translated from 008c6100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPackage::IncRefCount` (Xbox PDB): interlocked increment of the
+/// package's reference count (+0x7C); returns the new count.
+pub fn tes_package_inc_ref_count(e: &mut Engine, this: Ptr) -> u32 {
+    let count = this.addr().wrapping_add(PACKAGE_REF_COUNT);
+    e.call(INTERLOCKED_INCREMENT, &args![count]).u32()
+}
+
+// Translated from 008c6080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorPackage::InitFromPackage` (Xbox PDB): nothing when `package` is
+/// already this one's; otherwise clears this one, and for a package that is
+/// not null takes a reference on it, stores the calendar's hour as the start
+/// time, the package, new data for the package's type
+/// (`ActorPackageData::CreateActorPackageData`), procedure index 0 and
+/// `target` at +8.
+pub fn actor_package_init_from_package(e: &mut Engine, this: Ptr, package: Ptr, target: u32) {
+    let base = this.addr();
+    if package.addr() == e.mem.u32(base) {
+        return;
+    }
+    actorpackage_clear(e, this);
+    if package.is_null() {
+        return;
+    }
+    tes_package_inc_ref_count(e, package);
+    let hour = e.call(CALENDAR_GET_HOUR, &args![CALENDAR]).f64();
+    e.mem.set_u32(base + 0x10, x87_store32(hour));
+    e.mem.set_u32(base, package.addr());
+    let kind = e.call(PACKAGE_TYPE, &args![package]).u32();
+    let data = e.call(CREATE_ACTOR_PACKAGE_DATA, &args![kind]).u32();
+    e.mem.set_u32(base + 4, data);
+    e.mem.set_u32(base + 0xc, 0);
+    e.mem.set_u32(base + 8, target);
+}
+
+// Translated from 008c65d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorPackage::SaveGame` (Xbox PDB): writes the package's form id;
+/// for a package, when the data handler check (`00469860` on `0084e3a0`'s
+/// value) passes, its type byte (0xFF when the package's virtual `+0x15C`
+/// refuses the buffer's version) and, unless 0xFF, the package's own data
+/// (virtual `+0x54`); then the data's type byte (its virtual `+8`, 0xFF
+/// without data) and, unless 0xFF, the data's own save (virtual `+0xC`), the
+/// words at +0xC, +0x10 and +0x14 and the form id of the target at +8.
+pub fn actor_package_save_game(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    let base = this.addr();
+    let version = e.vcall(buffer.addr(), 8, &args![]).u32();
+    let package = e.mem.u32(base);
+    e.call(SAVE_FORM_ID, &args![buffer, package, 0u32]);
+    if e.mem.u32(base) == 0 {
+        return;
+    }
+    e.with_stack(2, |e, bytes| {
+        let package_type = bytes.addr();
+        let data_type = bytes.addr() + 1;
+        let package = e.mem.u32(base);
+        let value = e.call(FORM_VALUE_0084E3A0, &args![package]).u32();
+        let data_handler = e.global::<u32>(DATA_HANDLER);
+        if e.call(DATA_HANDLER_CHECK_00469860, &args![data_handler, value])
+            .bool()
+        {
+            let package = e.mem.u32(base);
+            let kind = e.call(PACKAGE_TYPE, &args![package]).u8();
+            e.mem.set_u8(package_type, kind);
+            let package = e.mem.u32(base);
+            if !e.vcall(package, 0x15c, &args![version]).bool() {
+                e.mem.set_u8(package_type, 0xff);
+            }
+            e.call(SAVE_DATA, &args![buffer, package_type, 1u32, 0u32]);
+            if e.mem.u8(package_type) as i8 != -1 {
+                let package = e.mem.u32(base);
+                e.vcall(package, 0x54, &args![buffer]);
+            }
+        }
+        let data = e.mem.u32(base + 4);
+        let kind = if data != 0 {
+            e.vcall(data, 8, &args![]).u32()
+        } else {
+            0xffff_ffff
+        };
+        e.mem.set_u8(data_type, kind as u8);
+        e.call(SAVE_DATA, &args![buffer, data_type, 1u32, 0u32]);
+        if e.mem.u8(data_type) as i8 != -1 {
+            let data = e.mem.u32(base + 4);
+            e.vcall(data, 0xc, &args![buffer]);
+        }
+    });
+    e.call(SAVE_DATA, &args![buffer, base + 0xc, 4u32, 0u32]);
+    e.call(SAVE_DATA, &args![buffer, base + 0x10, 4u32, 0u32]);
+    e.call(SAVE_DATA, &args![buffer, base + 0x14, 4u32, 0u32]);
+    let target = e.mem.u32(base + 8);
+    e.call(SAVE_FORM_ID, &args![buffer, target, 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -115,6 +246,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x008c5ef0, actorpackage_clear(Ptr)),
         entry!(0x008c6060, fn_008c6060(Ptr)),
+        entry!(0x008c6030, tes_package_dec_ref_count(Ptr) -> u32),
+        entry!(0x008c6100, tes_package_inc_ref_count(Ptr) -> u32),
+        entry!(0x008c6080, actor_package_init_from_package(Ptr, Ptr, u32)),
+        entry!(0x008c65d0, actor_package_save_game(Ptr, Ptr)),
     ]
 }
 
@@ -316,5 +451,212 @@ mod move_to_tests {
         e.call(0x008c_6130, &args![from, to]);
         assert_eq!(e.mem.u32(to + 0x10), 0xffe0_0001);
         assert_eq!(e.mem.u32(from + 0x10), 0x7fe0_0003);
+    }
+
+    fn calls_to_008c(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .iter()
+            .flatten()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn package_ref_counts_go_through_the_interlocked_helpers() {
+        let mut e = Engine::new();
+        e.register(INTERLOCKED_DECREMENT, |_, _| 4u32.into_ret());
+        e.register(INTERLOCKED_INCREMENT, |_, _| 6u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008c_6030, &args![0x1000u32]).u32(), 4);
+        assert_eq!(e.call(0x008c_6100, &args![0x1000u32]).u32(), 6);
+        assert_eq!(calls_to_008c(&e, INTERLOCKED_DECREMENT), vec![vec![0x107c]]);
+        assert_eq!(calls_to_008c(&e, INTERLOCKED_INCREMENT), vec![vec![0x107c]]);
+    }
+
+    fn init_doubles(e: &mut Engine) {
+        e.map(0x011d_ea3c, 4);
+        let holder = e.mem.alloc(0x210);
+        e.set_global(0x011d_ea3c, holder);
+        e.map(0x0101_2054, 4);
+        e.set_global(0x0101_2054, -1.0f32);
+        e.register(INTERLOCKED_DECREMENT, |_, _| 1u32.into_ret());
+        e.register(INTERLOCKED_INCREMENT, |_, _| 2u32.into_ret());
+        e.register(CALENDAR_GET_HOUR, |_, _| 7.5f32.into_ret());
+        e.register(PACKAGE_TYPE, |_, _| 0x12u32.into_ret());
+        e.register(CREATE_ACTOR_PACKAGE_DATA, |_, _| 0x5150u32.into_ret());
+    }
+
+    #[test]
+    fn init_from_package_takes_the_new_package() {
+        let mut e = Engine::new();
+        init_doubles(&mut e);
+        let this = e.mem.alloc(0x18);
+        let package = e.mem.alloc(0x80);
+        e.call_log = Some(vec![]);
+        e.call(0x008c_6080, &args![this, package, 0x77u32]);
+        assert_eq!(e.mem.u32(this), package);
+        assert_eq!(e.mem.u32(this + 4), 0x5150);
+        assert_eq!(e.mem.u32(this + 8), 0x77);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        assert_eq!(e.mem.f32(this + 0x10), 7.5);
+        assert_eq!(
+            calls_to_008c(&e, INTERLOCKED_INCREMENT),
+            vec![vec![package + 0x7c]]
+        );
+        assert_eq!(
+            calls_to_008c(&e, CREATE_ACTOR_PACKAGE_DATA),
+            vec![vec![0x12]]
+        );
+        // The same package again: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x008c_6080, &args![this, package, 0x99u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        assert_eq!(e.mem.u32(this + 8), 0x77);
+    }
+
+    #[test]
+    fn init_from_a_null_package_only_clears() {
+        let mut e = Engine::new();
+        init_doubles(&mut e);
+        let this = e.mem.alloc(0x18);
+        e.mem.set_u32(this + 8, 0x44);
+        // With +0 already null a null package returns at once: start from
+        // an old package.
+        let old = e.mem.alloc(0x80);
+        e.mem.set_u32(this, old);
+        e.register(0x0067_4d40, |_, _| false.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x008c_6080, &args![this, 0u32, 0x55u32]);
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert!(calls_to_008c(&e, INTERLOCKED_INCREMENT).is_empty());
+        assert!(calls_to_008c(&e, CALENDAR_GET_HOUR).is_empty());
+    }
+
+    /// A save buffer whose virtual `+8` answers the version, and doubles of
+    /// the save helpers that record the bytes written.
+    fn save_setup(e: &mut Engine, check: bool) -> u32 {
+        e.put_vtable(0x0310_0000, &[0, 0, 0x0310_1000]);
+        e.register(0x0310_1000, |_, _| 9u32.into_ret());
+        let buffer = e.mem.alloc(4);
+        e.mem.set_u32(buffer, 0x0310_0000);
+        e.register(SAVE_FORM_ID, |_, _| Ret::default());
+        e.register(SAVE_DATA, |_, _| Ret::default());
+        e.register(FORM_VALUE_0084E3A0, |_, _| 0x33u32.into_ret());
+        e.map(DATA_HANDLER, 4);
+        e.set_global(DATA_HANDLER, 0x0400_0000u32);
+        if check {
+            e.register(DATA_HANDLER_CHECK_00469860, |_, _| true.into_ret());
+        } else {
+            e.register(DATA_HANDLER_CHECK_00469860, |_, _| false.into_ret());
+        }
+        e.register(PACKAGE_TYPE, |_, _| 0x05u32.into_ret());
+        buffer
+    }
+
+    fn saved_bytes(e: &Engine) -> Vec<(u32, u32)> {
+        calls_to_008c(e, SAVE_DATA)
+            .iter()
+            .map(|w| {
+                (
+                    w[2],
+                    if w[2] == 1 {
+                        u32::from(e.mem.u8(w[1]))
+                    } else {
+                        w[1]
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn save_game_without_a_package_writes_only_its_form_id() {
+        let mut e = Engine::new();
+        let buffer = save_setup(&mut e, true);
+        let this = e.mem.alloc(0x18);
+        e.call_log = Some(vec![]);
+        e.call(0x008c_65d0, &args![this, buffer]);
+        assert_eq!(calls_to_008c(&e, SAVE_FORM_ID), vec![vec![buffer, 0, 0]]);
+        assert!(calls_to_008c(&e, SAVE_DATA).is_empty());
+    }
+
+    #[test]
+    fn save_game_writes_the_package_and_its_data() {
+        let mut e = Engine::new();
+        let buffer = save_setup(&mut e, true);
+        // Package vtable: +0x54 saves, +0x15C accepts the version.
+        let mut slots = vec![0u32; 0x58];
+        slots[0x54 / 4] = 0x0310_2054;
+        slots[0x15c / 4] = 0x0310_215c;
+        e.put_vtable(0x0320_0000, &slots);
+        e.register(0x0310_2054, |_, _| Ret::default());
+        e.register(0x0310_215c, |_, a| (a[1] == 9).into_ret());
+        let package = e.mem.alloc(0x80);
+        e.mem.set_u32(package, 0x0320_0000);
+        // Data vtable: +8 type 3, +0xC saves.
+        e.put_vtable(0x0330_0000, &[0, 0, 0x0310_3008, 0x0310_300c]);
+        e.register(0x0310_3008, |_, _| 3u32.into_ret());
+        e.register(0x0310_300c, |_, _| Ret::default());
+        let data = e.mem.alloc(8);
+        e.mem.set_u32(data, 0x0330_0000);
+        let this = e.mem.alloc(0x18);
+        e.mem.set_u32(this, package);
+        e.mem.set_u32(this + 4, data);
+        e.mem.set_u32(this + 8, 0x0abc);
+        e.call_log = Some(vec![]);
+        e.call(0x008c_65d0, &args![this, buffer]);
+        assert_eq!(
+            calls_to_008c(&e, SAVE_FORM_ID),
+            vec![vec![buffer, package, 0], vec![buffer, 0x0abc, 0]]
+        );
+        assert_eq!(
+            calls_to_008c(&e, DATA_HANDLER_CHECK_00469860),
+            vec![vec![0x0400_0000, 0x33]]
+        );
+        assert_eq!(
+            saved_bytes(&e),
+            vec![
+                (1, 5),
+                (1, 3),
+                (4, this + 0xc),
+                (4, this + 0x10),
+                (4, this + 0x14)
+            ]
+        );
+        assert_eq!(calls_to_008c(&e, 0x0310_2054), vec![vec![package, buffer]]);
+        assert_eq!(calls_to_008c(&e, 0x0310_300c), vec![vec![data, buffer]]);
+    }
+
+    #[test]
+    fn save_game_marks_refused_packages_and_missing_data_with_ff() {
+        let mut e = Engine::new();
+        let buffer = save_setup(&mut e, true);
+        let mut slots = vec![0u32; 0x58];
+        slots[0x54 / 4] = 0x0310_2054;
+        slots[0x15c / 4] = 0x0310_215c;
+        e.put_vtable(0x0320_0000, &slots);
+        e.register(0x0310_2054, |_, _| Ret::default());
+        e.register(0x0310_215c, |_, _| false.into_ret());
+        let package = e.mem.alloc(0x80);
+        e.mem.set_u32(package, 0x0320_0000);
+        let this = e.mem.alloc(0x18);
+        e.mem.set_u32(this, package);
+        e.call_log = Some(vec![]);
+        e.call(0x008c_65d0, &args![this, buffer]);
+        let bytes = saved_bytes(&e);
+        assert_eq!(bytes[0], (1, 0xff));
+        assert_eq!(bytes[1], (1, 0xff));
+        assert!(calls_to_008c(&e, 0x0310_2054).is_empty());
+        // The data handler check failing skips the package's byte entirely.
+        let mut e = Engine::new();
+        let buffer = save_setup(&mut e, false);
+        let this = e.mem.alloc(0x18);
+        e.mem.set_u32(this, package);
+        e.call_log = Some(vec![]);
+        e.call(0x008c_65d0, &args![this, buffer]);
+        assert_eq!(saved_bytes(&e)[0], (1, 0xff));
+        assert_eq!(saved_bytes(&e).len(), 4);
     }
 }

@@ -83,6 +83,11 @@ pub mod prelude {
         x87_add, x87_div, x87_load32, x87_load64, x87_m32, x87_mul, x87_quiet, x87_quiet_bits,
         x87_round, x87_sqrt, x87_store32, x87_sub,
     };
+    pub use crate::x87::{
+        x87_f2xm1, x87_fcos, x87_fistp64, x87_fistp64_chop, x87_fpatan, x87_fprem, x87_fprem1,
+        x87_fptan, x87_frndint, x87_fscale, x87_fsin, x87_fsincos, x87_fyl2x, x87_fyl2xp1, X87Ext,
+        X87_STATUS_C2,
+    };
     pub use crate::Engine;
     pub use crate::{args, entry, layout};
 }

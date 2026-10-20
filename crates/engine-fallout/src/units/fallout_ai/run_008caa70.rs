@@ -34,13 +34,61 @@ pub fn fn_008caae0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 008cc6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: stores `value` in the word at `+0x8C`;
+/// `RET 4`.
+pub fn fn_008cc6d0(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0x8c, value);
+}
+
+// Translated from 008cc730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: does nothing with `this` and its four stack
+/// words (`RET 0x10`); returns no value.
+pub fn fn_008cc730(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+) {
+}
+
+// Translated from 008cdd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the word at `+0xA8`.
+pub fn fn_008cdd90(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0xa8)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x008c_ab00, fn_008cab00(Ptr)),
         entry!(0x008c_aab0, fn_008caab0(Ptr) -> Ptr),
         entry!(0x008c_aae0, fn_008caae0(Ptr) -> Ptr),
+        entry!(0x008c_c6d0, fn_008cc6d0(Ptr, u32)),
+        entry!(0x008c_c730, fn_008cc730(Ptr, u32, u32, u32, u32)),
+        entry!(0x008c_dd90, fn_008cdd90(Ptr) -> u32),
     ]
+}
+
+#[cfg(test)]
+mod b023_tests {
+    use super::*;
+
+    #[test]
+    fn setter_getter_and_the_empty_body() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xac);
+        e.call(0x008c_c6d0, &[this, 0x1234_5678]);
+        assert_eq!(e.mem.u32(this + 0x8c), 0x1234_5678);
+        e.mem.set_u32(this + 0xa8, 0x9abc);
+        assert_eq!(e.call(0x008c_dd90, &[this]).u32(), 0x9abc);
+        let before = e.mem.bytes(this, 0xac);
+        let r = e.call(0x008c_c730, &[this, 1, 2, 3, 4]);
+        assert_eq!(r, Ret::default());
+        assert_eq!(e.mem.bytes(this, 0xac), before);
+    }
 }
 
 #[cfg(test)]

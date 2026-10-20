@@ -205,7 +205,109 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0060_c480, fn_0060c480(Ptr, u32, u32)),
         entry!(0x0060_c490, fn_0060c490(Ptr, u32) -> u16),
         entry!(0x0060_c4a0, fn_0060c4a0(Ptr, u32)),
+        entry!(0x0060_bef0, fn_0060bef0(Ptr<crate::types::NiTArray>, u32)),
     ]
+}
+
+/// `00633c90`: an `NiPointer` constructed from a raw pointer (`thiscall`, `RET 4`;
+/// stores it and, when non-null, takes a reference through `0040f6e0`); answers
+/// `this`.
+const NI_POINTER_FROM_RAW: u32 = 0x0063_3c90;
+/// `00631820`: `NiPointer` "not equal" (`thiscall`, `RET 4`, the other
+/// `NiPointer`'s address); answers a `bool` in `AL`.
+const NI_POINTER_NOT_EQUAL: u32 = 0x0063_1820;
+/// `0045cec0`: the `NiPointer` destructor (releases through `00401970` when
+/// non-null).
+const NI_POINTER_DESTRUCT: u32 = 0x0045_cec0;
+/// `006e5cc0`: `NiPointer` assignment from another `NiPointer`'s address
+/// (`thiscall`, `RET 4`).
+const NI_POINTER_ASSIGN: u32 = 0x006e_5cc0;
+/// `005e0ba0`: allocates an array of `n` `NiPointer`s (`cdecl`, one word;
+/// the engine map names it `NiTNewInterface<NiPointer<NiAVObject>>::Allocate`).
+const NI_POINTER_ARRAY_ALLOCATE: u32 = 0x005e_0ba0;
+/// `004b0220`: frees such an array when non-null (`cdecl`, one word).
+const NI_POINTER_ARRAY_FREE: u32 = 0x004b_0220;
+
+/// Runs `body` with a stack `NiPointer` temporary built from null
+/// (`00633c90` with 0), passing the address `00633c90` answered, then
+/// destroys the temporary (`0045cec0`), as the exe does for each of its three
+/// temporaries.
+fn with_null_ni_pointer<R>(e: &mut Engine, body: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.with_stack(4, |e, temporary| {
+        let null = e.call(NI_POINTER_FROM_RAW, &args![temporary, 0u32]).u32();
+        let result = body(e, null);
+        e.call(NI_POINTER_DESTRUCT, &args![temporary]);
+        result
+    })
+}
+
+// Translated from 0060bef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. On an `NiTArray` of `NiPointer`s (layout
+/// [`crate::types::NiTArray`]) it changes the capacity to `max_size`
+/// (`thiscall`, `RET 4`): nothing when it is already `m_usMaxSize`. When the
+/// new capacity is below `m_usSize`, each slot from `max_size` up to
+/// `m_usSize` that is not null (compared with a null `NiPointer`
+/// temporary, `00631820`) is cleared (assigned a null temporary, `006e5cc0`)
+/// and `m_usESize` drops by 1; then `m_usSize = max_size`. `m_usMaxSize`
+/// takes the new capacity; for 0 the element pointer becomes null, otherwise
+/// a new array of that many is allocated (`005e0ba0`), the old slots
+/// `0..m_usSize` are assigned into it (`006e5cc0`) and the slots
+/// `m_usSize..m_usMaxSize` are assigned a null temporary. The old array is
+/// freed (`004b0220`).
+// Translation incomplete: 0060bef0 - the SEH frame (FS:[0], unwind of the three NiPointer temporaries; the cookie it stores at [EBP-0x10] is never checked) is not translated.
+pub fn fn_0060bef0(e: &mut Engine, this: Ptr<crate::types::NiTArray>, max_size: u32) {
+    use crate::types::NiTArray;
+    if max_size == u32::from(e.get(this, NiTArray::m_usMaxSize)) {
+        return;
+    }
+    let slot = |e: &Engine, index: u16| {
+        e.get(this, NiTArray::m_pBase)
+            .wrapping_add(u32::from(index).wrapping_mul(4))
+    };
+    if max_size < u32::from(e.get(this, NiTArray::m_usSize)) {
+        let mut index = max_size as u16;
+        while index < e.get(this, NiTArray::m_usSize) {
+            let occupied = with_null_ni_pointer(e, |e, null| {
+                let at = slot(e, index);
+                e.call(NI_POINTER_NOT_EQUAL, &args![at, null]).bool()
+            });
+            if occupied {
+                with_null_ni_pointer(e, |e, null| {
+                    let at = slot(e, index);
+                    e.call(NI_POINTER_ASSIGN, &args![at, null]);
+                });
+                let filled = e.get(this, NiTArray::m_usESize);
+                e.set(this, NiTArray::m_usESize, filled.wrapping_sub(1));
+            }
+            index = index.wrapping_add(1);
+        }
+        e.set(this, NiTArray::m_usSize, max_size as u16);
+    }
+    let old = e.get(this, NiTArray::m_pBase);
+    e.set(this, NiTArray::m_usMaxSize, max_size as u16);
+    if max_size == 0 {
+        e.set(this, NiTArray::m_pBase, 0);
+    } else {
+        let count = u32::from(e.get(this, NiTArray::m_usMaxSize));
+        let new = e.call(NI_POINTER_ARRAY_ALLOCATE, &args![count]).u32();
+        e.set(this, NiTArray::m_pBase, new);
+        let mut index: u16 = 0;
+        while index < e.get(this, NiTArray::m_usSize) {
+            let from = old.wrapping_add(u32::from(index).wrapping_mul(4));
+            let at = slot(e, index);
+            e.call(NI_POINTER_ASSIGN, &args![at, from]);
+            index = index.wrapping_add(1);
+        }
+        let mut index = e.get(this, NiTArray::m_usSize);
+        while index < e.get(this, NiTArray::m_usMaxSize) {
+            with_null_ni_pointer(e, |e, null| {
+                let at = slot(e, index);
+                e.call(NI_POINTER_ASSIGN, &args![at, null]);
+            });
+            index = index.wrapping_add(1);
+        }
+    }
+    e.call(NI_POINTER_ARRAY_FREE, &args![old]);
 }
 
 #[cfg(test)]
@@ -413,5 +515,102 @@ mod le81_thunk_tests {
     #[test]
     fn le81_thunk_0060c4a0() {
         check(0x0060_c4a0, 0x0060_8e00, 0x7c, &[0x77]);
+    }
+}
+
+#[cfg(test)]
+mod b025_tests {
+    use super::*;
+    use crate::types::NiTArray;
+
+    /// Doubles for the `NiPointer` helpers that act on memory as the exe's
+    /// bodies do (without reference counts), and an allocator from the heap.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(NI_POINTER_FROM_RAW, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            a[0].into_ret()
+        });
+        e.register(NI_POINTER_NOT_EQUAL, |e, a| {
+            u32::from(e.mem.u32(a[0]) != e.mem.u32(a[1])).into_ret()
+        });
+        e.register(NI_POINTER_DESTRUCT, |_, _| Ret::default());
+        e.register(NI_POINTER_ASSIGN, |e, a| {
+            let v = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], v);
+            a[0].into_ret()
+        });
+        e.register(NI_POINTER_ARRAY_ALLOCATE, |e, a| {
+            let p = e.mem.alloc(a[0] * 4);
+            for i in 0..a[0] {
+                e.mem.set_u32(p + i * 4, 0xdead);
+            }
+            p.into_ret()
+        });
+        e.register(NI_POINTER_ARRAY_FREE, |_, _| Ret::default());
+        e
+    }
+
+    fn array(e: &mut Engine, items: &[u32], max: u16) -> Ptr<NiTArray> {
+        let a = e.new_object::<NiTArray>();
+        let base = e.mem.alloc(u32::from(max) * 4);
+        for (i, v) in items.iter().enumerate() {
+            e.mem.set_u32(base + 4 * i as u32, *v);
+        }
+        e.set(a, NiTArray::m_pBase, base);
+        e.set(a, NiTArray::m_usMaxSize, max);
+        e.set(a, NiTArray::m_usSize, items.len() as u16);
+        e.set(
+            a,
+            NiTArray::m_usESize,
+            items.iter().filter(|v| **v != 0).count() as u16,
+        );
+        a
+    }
+
+    fn frees(e: &Engine) -> Vec<u32> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == NI_POINTER_ARRAY_FREE)
+            .map(|c| c.1[0])
+            .collect()
+    }
+
+    #[test]
+    fn fn_0060bef0_grows_shrinks_and_empties() {
+        let mut e = engine();
+        // Same capacity: nothing.
+        let a = array(&mut e, &[1, 2], 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0060_bef0, &args![a, 4u32]);
+        assert!(frees(&e).is_empty());
+        // Growing: old slots copied, new ones nulled, old array freed.
+        let old = e.get(a, NiTArray::m_pBase);
+        e.call(0x0060_bef0, &args![a, 6u32]);
+        let base = e.get(a, NiTArray::m_pBase);
+        assert_ne!(base, old);
+        assert_eq!(e.get(a, NiTArray::m_usMaxSize), 6);
+        let slots: Vec<u32> = (0..6).map(|i| e.mem.u32(base + 4 * i)).collect();
+        assert_eq!(slots, [1, 2, 0, 0, 0, 0]);
+        assert_eq!(frees(&e), [old]);
+        // Shrinking below the size: the cut non-null slots are cleared and
+        // uncounted, the size follows.
+        let a = array(&mut e, &[1, 0, 3, 4], 4);
+        e.call_log = Some(vec![]);
+        let old = e.get(a, NiTArray::m_pBase);
+        e.call(0x0060_bef0, &args![a, 1u32]);
+        assert_eq!(e.mem.u32(old + 8), 0);
+        assert_eq!(e.mem.u32(old + 12), 0);
+        assert_eq!(e.get(a, NiTArray::m_usESize), 1);
+        assert_eq!(e.get(a, NiTArray::m_usSize), 1);
+        assert_eq!(e.get(a, NiTArray::m_usMaxSize), 1);
+        assert_eq!(e.mem.u32(e.get(a, NiTArray::m_pBase)), 1);
+        // Zero: no array.
+        e.call(0x0060_bef0, &args![a, 0u32]);
+        assert_eq!(e.get(a, NiTArray::m_pBase), 0);
+        assert_eq!(e.get(a, NiTArray::m_usSize), 0);
+        assert_eq!(frees(&e).len(), 2);
     }
 }

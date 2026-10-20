@@ -26,11 +26,25 @@ pub fn fn_009cc4b0(e: &mut Engine, this: Ptr, value: u32) {
     e.call(STORE_TARGET_006ECD40, &args![this, value]);
 }
 
+// Translated from 009cdac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the float at +0x60 (loaded into ST0).
+pub fn fn_009cdac0(e: &mut Engine, this: Ptr) -> f32 {
+    x87_quiet(e.mem.f32(this.addr().wrapping_add(0x60)))
+}
+
+// Translated from 009cdae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the float at +0x64 (loaded into ST0).
+pub fn fn_009cdae0(e: &mut Engine, this: Ptr) -> f32 {
+    x87_quiet(e.mem.f32(this.addr().wrapping_add(0x64)))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x006ecd40, fn_006ecd40(Ptr, u32)),
         entry!(0x009c_c4b0, fn_009cc4b0(Ptr, u32)),
+        entry!(0x009c_dac0, fn_009cdac0(Ptr) -> f32),
+        entry!(0x009c_dae0, fn_009cdae0(Ptr) -> f32),
     ]
 }
 
@@ -62,5 +76,16 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, vec![0x1000u32, 0x2000]);
+    }
+
+    #[test]
+    fn fn_009cdac0_and_009cdae0_load_the_floats_at_60_and_64() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x68);
+        e.mem.set_f32(this + 0x60, 2.5);
+        e.mem.set_u32(this + 0x64, 0xff80_0001);
+        assert_eq!(e.call(0x009c_dac0, &args![this]).f32(), 2.5);
+        let loaded = e.call(0x009c_dae0, &args![this]).st0;
+        assert_eq!((loaded as f32).to_bits(), 0xffc0_0001);
     }
 }

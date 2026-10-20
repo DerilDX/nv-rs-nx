@@ -108,9 +108,132 @@ fn below_limit(e: &mut Engine, triple: u32) -> bool {
     scaled < limit
 }
 
+/// `00822510` (`ECX` = the source, one stack word), in `magicshaderhiteffect.cpp`'s range;
+/// answers a byte (`AL`) that, when nonzero, makes `00631540` do nothing.
+const SOURCE_TEST_00822510: u32 = 0x0082_2510;
+/// `0052aa80` (`ECX`, one stack word): whether the word at `this` differs from the value.
+const WORD_DIFFERS_0052AA80: u32 = 0x0052_aa80;
+/// The allocator (`00401000`, `cdecl`, one word: the size).
+const ALLOCATE: u32 = 0x0040_1000;
+/// `006317f0` (`ECX` = a new 8-byte block, one stack word): `00559a40(this, source)`, then a
+/// zero word at +4; answers `this`.
+const NODE_CTOR_006317F0: u32 = 0x0063_17f0;
+/// `NiPointer<..>::operator=` (`006e5cc0`, `ECX` = the pointer, one stack word: the source
+/// pointer's address).
+const NI_POINTER_ASSIGN: u32 = 0x006e_5cc0;
+
+// Translated from 00631540 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00631540 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00eeb0fb, state variable) is not translated
+/// Unnamed in the engine map. `thiscall`, `RET 4` (one stack word, `source`): nothing when
+/// `00822510` on `source` (with 0) answers nonzero. Otherwise, when the word at `this` is
+/// nonzero (`0052aa80` with 0), a new 8-byte node (`00401000`, made by `006317f0` from `this`,
+/// null when the allocation fails) takes the word at `this + 4` into its +4 and becomes the
+/// word at `this + 4`; in both cases `this` is then assigned `source` (`006e5cc0`).
+pub fn fn_00631540(e: &mut Engine, this: Ptr, source: Ptr) {
+    if e.call(SOURCE_TEST_00822510, &args![source, 0u32]).u8() != 0 {
+        return;
+    }
+    if e.call(WORD_DIFFERS_0052AA80, &args![this, 0u32]).u8() != 0 {
+        let block = e.call(ALLOCATE, &args![8u32]).u32();
+        let node = if block != 0 {
+            e.call(NODE_CTOR_006317F0, &args![block, this]).u32()
+        } else {
+            0
+        };
+        let previous = e.mem.u32(this.addr() + 4);
+        e.mem.set_u32(node + 4, previous);
+        e.mem.set_u32(this.addr() + 4, node);
+    }
+    e.call(NI_POINTER_ASSIGN, &args![this, source]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0063_1370, fn_00631370(Ptr, u32, u8, u8))]
+    vec![
+        entry!(0x0063_1370, fn_00631370(Ptr, u32, u8, u8)),
+        entry!(0x0063_1540, fn_00631540(Ptr, Ptr)),
+    ]
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn rig(test: u32, current: u32, block_ok: bool) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.register_double(SOURCE_TEST_00822510, move |_, _| test.into_ret());
+        e.register(WORD_DIFFERS_0052AA80, |e, a| {
+            (e.mem.u32(a[0]) != a[1]).into_ret()
+        });
+        let block = e.mem.alloc(8);
+        e.register_double(ALLOCATE, move |_, _| {
+            if block_ok { block } else { 0 }.into_ret()
+        });
+        e.register(NODE_CTOR_006317F0, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            e.mem.set_u32(a[0] + 4, 0);
+            a[0].into_ret()
+        });
+        e.register(NI_POINTER_ASSIGN, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this, current);
+        e.mem.set_u32(this + 4, 0x0777);
+        e.call_log = Some(vec![]);
+        (e, this, block)
+    }
+
+    #[test]
+    fn fn_00631540_keeps_the_old_value_in_a_node() {
+        let (mut e, this, block) = rig(0, 0x1234, true);
+        e.call(0x0063_1540, &args![this, 0x9000u32]);
+        assert_eq!(calls(&e, SOURCE_TEST_00822510), vec![vec![0x9000, 0]]);
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![8]]);
+        assert_eq!(calls(&e, NODE_CTOR_006317F0), vec![vec![block, this]]);
+        assert_eq!(e.mem.u32(block), 0x1234);
+        assert_eq!(e.mem.u32(block + 4), 0x0777);
+        assert_eq!(e.mem.u32(this + 4), block);
+        assert_eq!(calls(&e, NI_POINTER_ASSIGN), vec![vec![this, 0x9000]]);
+    }
+
+    #[test]
+    fn fn_00631540_without_a_value_only_assigns() {
+        let (mut e, this, _) = rig(0, 0, true);
+        e.call(0x0063_1540, &args![this, 0x9000u32]);
+        assert!(calls(&e, ALLOCATE).is_empty());
+        assert_eq!(e.mem.u32(this + 4), 0x0777);
+        assert_eq!(calls(&e, NI_POINTER_ASSIGN), vec![vec![this, 0x9000]]);
+    }
+
+    #[test]
+    fn fn_00631540_does_nothing_when_the_source_test_answers() {
+        // Only the low byte counts.
+        let (mut e, this, _) = rig(0x100, 0x1234, true);
+        e.call(0x0063_1540, &args![this, 0x9000u32]);
+        assert_eq!(calls(&e, ALLOCATE).len(), 1);
+        let (mut e, this, _) = rig(1, 0x1234, true);
+        e.call(0x0063_1540, &args![this, 0x9000u32]);
+        assert!(calls(&e, ALLOCATE).is_empty());
+        assert!(calls(&e, NI_POINTER_ASSIGN).is_empty());
+    }
+
+    #[test]
+    fn fn_00631540_with_a_failed_allocation_writes_at_null() {
+        let (mut e, this, _) = rig(0, 0x1234, false);
+        e.map(0, 0x10);
+        e.call(0x0063_1540, &args![this, 0x9000u32]);
+        assert!(calls(&e, NODE_CTOR_006317F0).is_empty());
+        assert_eq!(e.mem.u32(4), 0x0777);
+        assert_eq!(e.mem.u32(this + 4), 0);
+    }
 }
 
 #[cfg(test)]

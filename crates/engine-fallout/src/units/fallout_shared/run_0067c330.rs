@@ -12,9 +12,108 @@ pub fn fn_0067c490(e: &mut Engine, this: Ptr) {
     e.call(0x0067_ad70, &args![this]);
 }
 
+// Translated from 0067c3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPatrolPackageData` default constructor (the class of the vtable
+/// `010689e4` it stores, by its RTTI): the `TESPackageData` constructor
+/// (`0067ad20`), the vtable, the byte +0x4 = 1 and +0x5 = 0. Returns `this`.
+pub fn fn_0067c3f0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0067_ad20, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0106_89e4);
+    e.mem.set_u8(this.addr() + 4, 1);
+    e.mem.set_u8(this.addr() + 5, 0);
+    this
+}
+
+// Translated from 0067c420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPatrolPackageData` scalar deleting destructor: the destructor body
+/// [`fn_0067c490`], then the release `00401030` when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn fn_0067c420(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0067c490(e, this);
+    if flags & 1 != 0 {
+        e.call(0x0040_1030, &args![this]);
+    }
+    this
+}
+
+// Translated from 0067c450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPatrolPackageData` constructor from a 2-byte value passed in one
+/// stack word: the `TESPackageData` constructor (`0067ad20`), the vtable
+/// `010689e4`, then the word's low byte into +0x4 and its second byte into
+/// +0x5. Returns `this`.
+pub fn fn_0067c450(e: &mut Engine, this: Ptr, value: u32) -> Ptr {
+    e.call(0x0067_ad20, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0106_89e4);
+    e.mem.set_u8(this.addr() + 4, value as u8);
+    e.mem.set_u8(this.addr() + 5, (value >> 8) as u8);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0067_c490, fn_0067c490(Ptr))]
+    vec![
+        entry!(0x0067_c490, fn_0067c490(Ptr)),
+        entry!(0x0067_c3f0, fn_0067c3f0(Ptr) -> Ptr),
+        entry!(0x0067_c420, fn_0067c420(Ptr, u32) -> Ptr),
+        entry!(0x0067_c450, fn_0067c450(Ptr, u32) -> Ptr),
+    ]
+}
+
+#[cfg(test)]
+mod b028_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for callee in [0x0067_ad20, 0x0067_ad70, 0x0040_1030] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e
+    }
+
+    #[test]
+    fn fn_0067c3f0_sets_the_defaults() {
+        let mut e = engine();
+        let this = e.mem.alloc(8);
+        e.mem.write(this, &[0xcc; 8]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0067_c3f0, &args![this]).u32(), this);
+        assert!(e
+            .call_log
+            .take()
+            .unwrap()
+            .contains(&(0x0067_ad20, vec![this])));
+        assert_eq!(e.mem.u32(this), 0x0106_89e4);
+        assert_eq!(e.mem.bytes(this + 4, 4), vec![1, 0, 0xcc, 0xcc]);
+    }
+
+    #[test]
+    fn fn_0067c450_takes_the_two_bytes_of_the_word() {
+        let mut e = engine();
+        let this = e.mem.alloc(8);
+        e.mem.write(this, &[0xcc; 8]);
+        assert_eq!(
+            e.call(0x0067_c450, &args![this, 0x7766_0201u32]).u32(),
+            this
+        );
+        assert_eq!(e.mem.u32(this), 0x0106_89e4);
+        assert_eq!(e.mem.bytes(this + 4, 4), vec![1, 2, 0xcc, 0xcc]);
+    }
+
+    #[test]
+    fn fn_0067c420_destroys_and_releases_with_bit_0() {
+        let mut e = engine();
+        let this = e.mem.alloc(8);
+        for flags in [0u32, 1, 2, 3] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0067_c420, &args![this, flags]).u32(), this);
+            let log = e.call_log.take().unwrap();
+            assert!(log.contains(&(0x0067_ad70, vec![this])));
+            let releases = log.iter().filter(|c| c.0 == 0x0040_1030).count();
+            assert_eq!(releases, (flags & 1) as usize);
+            assert_eq!(e.mem.u32(this), 0x0106_89e4);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -212,6 +212,73 @@ pub fn ni_t_pointer_list_base_remove(e: &mut Engine, this: Ptr, result: Ptr, ele
     result
 }
 
+/// The list's remove-head `00b9e7c0` and remove-tail `00b9e850` (unit `shadowscenelight.cpp`,
+/// unnamed; `thiscall` on the list, one word: the address of the returned `NiPointer`) and its
+/// item release (`00e6e830`, `thiscall` on the list, the item; the engine map names it
+/// `NiTPointerMap<..>::DeleteItem`).
+const REMOVE_HEAD_00B9E7C0: u32 = 0x00b9_e7c0;
+const REMOVE_TAIL_00B9E850: u32 = 0x00b9_e850;
+const FREE_ITEM_00E6E830: u32 = 0x00e6_e830;
+
+// Translated from 00b9efa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerListBase<NiTPointerAllocator<unsigned int>,NiPointer<NiProperty> >::RemovePos`
+/// (engine map), `thiscall` with two stack words: the address of the returned `NiPointer` and
+/// the address of the position (an item pointer). At the head (+0) the position moves to the
+/// next item and `00b9e7c0` removes the head into the result; at the tail (+4) the position
+/// becomes null and `00b9e850` removes the tail into it. Otherwise the position moves to the
+/// next item, the neighbours are linked to each other, the item's element (+8) is held by a
+/// temporary `NiPointer` (count at +4 up), the item released (`00e6e830`), the list's count
+/// (+8) goes down, the result takes the element (held again) and the temporary lets it go
+/// (`InterlockedDecrement`, deleted through vtable slot +4 at 0). Answers the result's address.
+// Translation incomplete: 00b9efa0 - the C++ exception frame (FS:[0] chain, unwind state 1 for the temporary) is not translated.
+pub fn ni_t_pointer_list_base_remove_pos(
+    e: &mut Engine,
+    this: Ptr,
+    result: Ptr,
+    position: Ptr,
+) -> Ptr {
+    let list = this.addr();
+    let item = e.mem.u32(position.addr());
+    if item == e.mem.u32(list) {
+        let next = e.mem.u32(item);
+        e.mem.set_u32(position.addr(), next);
+        e.call(REMOVE_HEAD_00B9E7C0, &args![list, result]);
+        return result;
+    }
+    if item == e.mem.u32(list + 4) {
+        e.mem.set_u32(position.addr(), 0);
+        e.call(REMOVE_TAIL_00B9E850, &args![list, result]);
+        return result;
+    }
+    let previous = e.mem.u32(item + 4);
+    let next = e.mem.u32(item);
+    e.mem.set_u32(position.addr(), next);
+    if previous != 0 {
+        e.mem.set_u32(previous, next);
+    }
+    if next != 0 {
+        e.mem.set_u32(next + 4, previous);
+    }
+    let element = e.mem.u32(item + 8);
+    if element != 0 {
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![element + 4]);
+    }
+    e.call(FREE_ITEM_00E6E830, &args![list, item]);
+    let count = e.mem.u32(list + 8).wrapping_sub(1);
+    e.mem.set_u32(list + 8, count);
+    e.mem.set_u32(result.addr(), element);
+    if element != 0 {
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![element + 4]);
+        let left = e
+            .call(IMPORT_INTERLOCKED_DECREMENT, &args![element + 4])
+            .u32();
+        if left == 0 {
+            e.vcall(element, 4, &args![]);
+        }
+    }
+    result
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -228,6 +295,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x006529a0,
             bs_face_gen_manager_copy_face_gen_coord(u32, u32, u8, u8)
         ),
+        entry!(0x00b9_efa0, ni_t_pointer_list_base_remove_pos(Ptr, Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -554,5 +622,109 @@ mod remove_tests {
         e.mem.set_u32(element, 0);
         e.call(0x00b9_fcc0, &args![empty, result, element]);
         assert_eq!(e.mem.u32(result), 0);
+    }
+}
+
+#[cfg(test)]
+mod remove_pos_tests {
+    use super::*;
+
+    const DELETE: u32 = 0x0e20_0004;
+    const VTABLE: u32 = 0x0e21_0000;
+
+    /// A list of three items whose elements are reference-counted objects (count 1), a result
+    /// word and a position word.
+    fn engine() -> (Engine, u32, [u32; 3], [u32; 3], u32, u32) {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        for target in [
+            REMOVE_HEAD_00B9E7C0,
+            REMOVE_TAIL_00B9E850,
+            FREE_ITEM_00E6E830,
+            DELETE,
+        ] {
+            e.register(target, |_, _| Ret::default());
+        }
+        e.put_vtable(VTABLE, &[0, DELETE]);
+        e.call_log = Some(vec![]);
+        let list = e.mem.alloc(0xc);
+        let items = [e.mem.alloc(0xc), e.mem.alloc(0xc), e.mem.alloc(0xc)];
+        let elements = [e.mem.alloc(8), e.mem.alloc(8), e.mem.alloc(8)];
+        for i in 0..3 {
+            let next = if i < 2 { items[i + 1] } else { 0 };
+            let previous = if i > 0 { items[i - 1] } else { 0 };
+            e.mem.set_u32(items[i], next);
+            e.mem.set_u32(items[i] + 4, previous);
+            e.mem.set_u32(items[i] + 8, elements[i]);
+            e.mem.set_u32(elements[i], VTABLE);
+            e.mem.set_u32(elements[i] + 4, 1);
+        }
+        e.mem.set_u32(list, items[0]);
+        e.mem.set_u32(list + 4, items[2]);
+        e.mem.set_u32(list + 8, 3);
+        let result = e.mem.alloc(4);
+        let position = e.mem.alloc(4);
+        (e, list, items, elements, result, position)
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn remove_pos_unlinks_a_middle_item_and_returns_its_element() {
+        let (mut e, list, items, elements, result, position) = engine();
+        e.mem.set_u32(position, items[1]);
+        let answer = e.call(0x00b9_efa0, &args![list, result, position]).u32();
+        assert_eq!(answer, result);
+        assert_eq!(e.mem.u32(result), elements[1]);
+        // Held by the result: one more than before, the temporary's hold gone again.
+        assert_eq!(e.mem.u32(elements[1] + 4), 2);
+        assert_eq!(e.mem.u32(position), items[2]);
+        assert_eq!(e.mem.u32(items[0]), items[2]);
+        assert_eq!(e.mem.u32(items[2] + 4), items[0]);
+        assert_eq!(e.mem.u32(list + 8), 2);
+        assert_eq!(calls(&e, FREE_ITEM_00E6E830), vec![vec![list, items[1]]]);
+        assert!(calls(&e, DELETE).is_empty());
+    }
+
+    #[test]
+    fn remove_pos_hands_the_head_and_the_tail_to_the_helpers() {
+        let (mut e, list, items, _, result, position) = engine();
+        e.mem.set_u32(position, items[0]);
+        e.call(0x00b9_efa0, &args![list, result, position]);
+        assert_eq!(e.mem.u32(position), items[1]);
+        assert_eq!(calls(&e, REMOVE_HEAD_00B9E7C0), vec![vec![list, result]]);
+        e.mem.set_u32(position, items[2]);
+        e.call(0x00b9_efa0, &args![list, result, position]);
+        assert_eq!(e.mem.u32(position), 0);
+        assert_eq!(calls(&e, REMOVE_TAIL_00B9E850), vec![vec![list, result]]);
+        assert_eq!(e.mem.u32(list + 8), 3);
+        assert!(calls(&e, FREE_ITEM_00E6E830).is_empty());
+    }
+
+    #[test]
+    fn remove_pos_with_a_null_element_holds_nothing() {
+        let (mut e, list, items, _, result, position) = engine();
+        e.mem.set_u32(items[1] + 8, 0);
+        e.mem.set_u32(result, 0x55);
+        e.mem.set_u32(position, items[1]);
+        e.call(0x00b9_efa0, &args![list, result, position]);
+        assert_eq!(e.mem.u32(result), 0);
+        assert!(calls(&e, IMPORT_INTERLOCKED_INCREMENT).is_empty());
+        assert!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).is_empty());
     }
 }

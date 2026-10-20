@@ -55,9 +55,35 @@ pub fn ni_xenon_shader_declaration_create(
     Ptr::new(declaration)
 }
 
+/// The base constructor `00ee88b0` (no unit in the engine map; `thiscall`, no stack words)
+/// and the `NiD3DShaderDeclaration` vtable (`010ee7cc`; RTTI
+/// `.?AVNiD3DShaderDeclaration@@`).
+const SHADER_DECLARATION_BASE_00EE88B0: u32 = 0x00ee_88b0;
+const D3D_DECLARATION_VTABLE_010EE7CC: u32 = 0x010e_e7cc;
+
+// Translated from 00e78840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nixenonshaderdeclaration.cpp`): the
+/// `NiD3DShaderDeclaration` constructor (the vtable it stores has that class's RTTI),
+/// `thiscall`, no stack words. Runs the base constructor `00ee88b0`, clears the words +0x8 to
+/// +0x24 (`m_pkRenderer` to `m_pkStreamEntries`, Xbox PDB) and the byte +0x28 (`m_bModified`),
+/// stores the vtable `010ee7cc` and answers `this`.
+pub fn fn_00e78840(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(SHADER_DECLARATION_BASE_00EE88B0, &args![base]);
+    for offset in (0x8u32..=0x24).step_by(4) {
+        e.mem.set_u32(base + offset, 0);
+    }
+    e.mem.set_u8(base + 0x28, 0);
+    e.mem.set_u32(base, D3D_DECLARATION_VTABLE_010EE7CC);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e7_6700, ni_xenon_shader_declaration_create(Ptr, u32, u32) -> Ptr)]
+    vec![
+        entry!(0x00e7_6700, ni_xenon_shader_declaration_create(Ptr, u32, u32) -> Ptr),
+        entry!(0x00e7_8840, fn_00e78840(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -126,5 +152,29 @@ mod tests {
         let (mut e, renderer) = engine(1, false);
         assert_eq!(e.call(0x00e7_6700, &args![renderer, 5u32, 2u32]).u32(), 0);
         assert!(calls(&e, BASE_CONSTRUCT_00E78840).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod b000l_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e78840_clears_the_declaration() {
+        let mut e = Engine::new();
+        e.register(SHADER_DECLARATION_BASE_00EE88B0, |e, a| {
+            e.mem.set_u32(a[0], 0x0e40_0000);
+            a[0].into_ret()
+        });
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x2c);
+        e.mem.write(this, &[0xcc; 0x2c]);
+        assert_eq!(e.call(0x00e7_8840, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), D3D_DECLARATION_VTABLE_010EE7CC);
+        assert_eq!(e.mem.u32(this + 4), 0xcccc_cccc);
+        assert_eq!(e.mem.bytes(this + 8, 0x21), vec![0; 0x21]);
+        assert_eq!(e.mem.bytes(this + 0x29, 3), vec![0xcc; 3]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (SHADER_DECLARATION_BASE_00EE88B0, vec![this]));
     }
 }

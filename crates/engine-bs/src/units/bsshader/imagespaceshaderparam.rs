@@ -126,12 +126,44 @@ pub fn image_space_shader_param_init_constant_map(
     make_constant_group(e, base, pixel_count, (0x48, 0x44, 0x50));
 }
 
+// Translated from 00b8a7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespaceshaderparam.cpp`): the clean-up the constant map
+/// set-up (`00b8ab10`) starts with, `thiscall`, no stack words. The constant maps held at +0x4c
+/// and +0x50 are released (`InterlockedDecrement` on their +4, deleted through vtable slot +4
+/// at 0) and cleared; the register buffers at +0x3c and +0x44 are given back to the memory
+/// manager (`00aa4060` on `011f6238`) and cleared when set.
+pub fn fn_00b8a7e0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for slot in [0x4cu32, 0x50] {
+        let map = e.mem.u32(base + slot);
+        if map != 0 {
+            let left = e
+                .call(IMPORT_INTERLOCKED_DECREMENT, &args![map.wrapping_add(4)])
+                .u32();
+            if left == 0 {
+                e.vcall(map, 4, &args![]);
+            }
+            e.mem.set_u32(base + slot, 0);
+        }
+    }
+    for slot in [0x3cu32, 0x44] {
+        let buffer = e.mem.u32(base + slot);
+        if buffer != 0 {
+            e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, buffer]);
+            e.mem.set_u32(base + slot, 0);
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00b8_ab10,
-        image_space_shader_param_init_constant_map(Ptr, u32, u32)
-    )]
+    vec![
+        entry!(
+            0x00b8_ab10,
+            image_space_shader_param_init_constant_map(Ptr, u32, u32)
+        ),
+        entry!(0x00b8_a7e0, fn_00b8a7e0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -255,5 +287,51 @@ mod tests {
         e.call(0x00b8_ab10, &args![this, (-3i32) as u32, 0u32]);
         assert_eq!(e.mem.u32(this + 0x4c), 0);
         assert!(calls(&e, CONSTANT_MAP_CONSTRUCT).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod clean_up_tests {
+    use super::*;
+
+    const DELETE: u32 = 0x0f10_0004;
+    const VTABLE: u32 = 0x0f11_0000;
+
+    #[test]
+    fn fn_00b8a7e0_releases_the_maps_and_frees_the_buffers() {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.register(DELETE, |_, _| Ret::default());
+        e.put_vtable(VTABLE, &[0, DELETE]);
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x54);
+        let kept = e.mem.alloc(8);
+        e.mem.set_u32(kept, VTABLE);
+        e.mem.set_u32(kept + 4, 2);
+        let dropped = e.mem.alloc(8);
+        e.mem.set_u32(dropped, VTABLE);
+        e.mem.set_u32(dropped + 4, 1);
+        e.mem.set_u32(this + 0x4c, kept);
+        e.mem.set_u32(this + 0x50, dropped);
+        e.mem.set_u32(this + 0x3c, 0x0e00_1000);
+        e.mem.set_u32(this + 0x44, 0);
+        e.call(0x00b8_a7e0, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x4c), 0);
+        assert_eq!(e.mem.u32(this + 0x50), 0);
+        assert_eq!(e.mem.u32(this + 0x3c), 0);
+        assert_eq!(e.mem.u32(kept + 4), 1);
+        let log = e.call_log.take().unwrap();
+        let deleted: Vec<_> = log.iter().filter(|c| c.0 == DELETE).collect();
+        assert_eq!(deleted, vec![&(DELETE, vec![dropped])]);
+        let freed: Vec<_> = log.iter().filter(|c| c.0 == MEMORY_DEALLOCATE).collect();
+        assert_eq!(
+            freed,
+            vec![&(MEMORY_DEALLOCATE, vec![MEMORY_MANAGER, 0x0e00_1000])]
+        );
     }
 }

@@ -88,9 +88,60 @@ pub fn fn_004f9ec0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 004f9bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `this + 0xAC` (`ECX` only).
+pub fn fn_004f9bf0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0xac)
+}
+
+// Translated from 004f9db0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004f9db0 - the exception-unwinding frame (FS:[0]) and the security-cookie word it pushes are not translated.
+/// `BGSDebris` destructor body (the class of the vtables `01024834` and
+/// `01024818` it stores back, by their RTTI): frees the debris entries
+/// ([`fn_004f9e30`]), then the member destructor `0046ffb0` (+0x1C) and
+/// `TESForm::~TESForm` (`00483630`, engine map).
+pub fn fn_004f9db0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0102_4834);
+    e.mem.set_u32(this.addr() + 0x18, 0x0102_4818);
+    fn_004f9e30(e, this);
+    e.call(0x0046_ffb0, &args![this.addr() + 0x1c]);
+    e.call(0x0048_3630, &args![this]);
+}
+
+// Translated from 004f9e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties the debris entry list at `this + 0x1C`: while the head is not
+/// empty (`008256d0`), the head's entry (`006815c0`) has its model name
+/// (+0x4) freed (`00401030`) and is deleted ([`fn_004f9ec0`] with 1), and
+/// the head is removed (`0063f7b0`).
+pub fn fn_004f9e30(e: &mut Engine, this: Ptr) {
+    let head = this.addr() + 0x1c;
+    while !e.call(0x0082_56d0, &args![head]).bool() {
+        let slot = e.call(0x0068_15c0, &args![head]).u32();
+        let entry = e.mem.u32(slot);
+        if entry != 0 {
+            let name = e.mem.u32(entry + 4);
+            e.call(0x0040_1030, &args![name]);
+            fn_004f9ec0(e, Ptr::new(entry), 1);
+        }
+        e.call(0x0063_f7b0, &args![head]);
+    }
+}
+
+// Translated from 004f9ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of a debris entry: the member destructor `00488ff0` on
+/// `this + 8` (its texture list; Ghidra's library match name for this
+/// function is unrelated).
+pub fn fn_004f9ef0(e: &mut Engine, this: Ptr) {
+    e.call(0x0048_8ff0, &args![this.addr() + 8]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004f_9bf0, fn_004f9bf0(Ptr) -> u32),
+        entry!(0x004f_9db0, fn_004f9db0(Ptr)),
+        entry!(0x004f_9e30, fn_004f9e30(Ptr)),
+        entry!(0x004f_9ef0, fn_004f9ef0(Ptr)),
         entry!(0x004f_9cd0, fn_004f9cd0(Ptr) -> Ptr),
         entry!(0x004f_9c90, fn_004f9c90(Ptr, u32)),
         entry!(0x004f_9ca0, fn_004f9ca0(Ptr, u32) -> u16),
@@ -238,5 +289,103 @@ mod component_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod b028_tests {
+    use super::*;
+
+    #[test]
+    fn fn_004f9bf0_reads_0xac() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xb0);
+        e.mem.set_u32(this + 0xac, 0x1234);
+        assert_eq!(e.call(0x004f_9bf0, &args![this]).u32(), 0x1234);
+    }
+
+    #[test]
+    fn fn_004f9ef0_destroys_the_texture_list() {
+        let mut e = Engine::new();
+        e.register(0x0048_8ff0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x004f_9ef0, &args![0x4000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1..], [(0x0048_8ff0, vec![0x4008])]);
+    }
+
+    /// The list: the head (+0x1C) holds an entry and a next pointer; the
+    /// pop double moves the next node's words into the head.
+    fn list_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(0x0082_56d0, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0).into_ret()
+        });
+        e.register(0x0068_15c0, |_, a| a[0].into_ret());
+        e.register(0x0063_f7b0, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            let (item, after) = if next == 0 {
+                (0, 0)
+            } else {
+                (e.mem.u32(next), e.mem.u32(next + 4))
+            };
+            e.mem.set_u32(a[0], item);
+            e.mem.set_u32(a[0] + 4, after);
+            Ret::default()
+        });
+        for callee in [0x0040_1030, 0x0048_8ff0, 0x0046_ffb0, 0x0048_3630] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e
+    }
+
+    fn entry(e: &mut Engine, name: u32) -> u32 {
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u32(entry + 4, name);
+        entry
+    }
+
+    #[test]
+    fn fn_004f9e30_frees_every_entry() {
+        let mut e = list_engine();
+        let this = e.mem.alloc(0x30);
+        let first = entry(&mut e, 0x5001);
+        let second = entry(&mut e, 0x5002);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, second);
+        e.mem.set_u32(this + 0x1c, first);
+        e.mem.set_u32(this + 0x20, node);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_9e30, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let freed: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == 0x0040_1030)
+            .map(|c| c.1[0])
+            .collect();
+        // Each entry: its name, then the entry itself (deleting destructor).
+        assert_eq!(freed, vec![0x5001, first, 0x5002, second]);
+        let destroyed: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == 0x0048_8ff0)
+            .map(|c| c.1[0])
+            .collect();
+        assert_eq!(destroyed, vec![first + 8, second + 8]);
+        assert_eq!(log.iter().filter(|c| c.0 == 0x0063_f7b0).count(), 2);
+    }
+
+    #[test]
+    fn fn_004f9db0_restores_the_vtables_and_destroys_the_members() {
+        let mut e = list_engine();
+        let this = e.mem.alloc(0x30);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_9db0, &args![this]);
+        assert_eq!(e.mem.u32(this), 0x0102_4834);
+        assert_eq!(e.mem.u32(this + 0x18), 0x0102_4818);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[2..],
+            [(0x0046_ffb0, vec![this + 0x1c]), (0x0048_3630, vec![this])]
+        );
     }
 }

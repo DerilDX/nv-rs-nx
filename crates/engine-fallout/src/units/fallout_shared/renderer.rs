@@ -2186,6 +2186,730 @@ pub fn fn_004de080(e: &mut Engine) -> u8 {
     u8::from(e.global::<u8>(EYEFINITY_FLAG) != 0 && e.global::<u8>(EYEFINITY_SECOND_FLAG) != 0)
 }
 
+// ---- The Eyefinity query (batch b000s) -------------------------------------
+
+/// `004dd240` (this unit, called by address until it is translated): the
+/// address the query gives `ADL_Main_Control_Create` as its callback, and
+/// that it calls itself (`cdecl`, a size) for the blocks it fills.
+const ADL_ALLOCATE: u32 = 0x004d_d240;
+/// `004dd270` (this unit, called by address until it is translated;
+/// `stdcall`, the address of a pointer word): when the word is not null it
+/// passes the word's block to `00401030` and clears the word.
+const ADL_FREE_SLOT: u32 = 0x004d_d270;
+/// `00403d30` (`cdecl`: block, value, size), the fill the query uses on the
+/// blocks it gets.
+const FILL_BYTES: u32 = 0x0040_3d30;
+/// `"atiadlxx.dll"`, and `"atiadlxy.dll"` when that one does not load.
+const ADL_LIBRARY: u32 = 0x0102_18dc;
+const ADL_LIBRARY_FALLBACK: u32 = 0x0102_18cc;
+/// The names the query looks up in the library, in its order (read in
+/// Ghidra).
+const ADL_MAIN_CONTROL_CREATE: u32 = 0x0102_18b4;
+const ADL_MAIN_CONTROL_DESTROY: u32 = 0x0102_1898;
+const ADL_ADAPTER_NUMBER_OF_ADAPTERS_GET: u32 = 0x0102_1874;
+const ADL_ADAPTER_ADAPTER_INFO_GET: u32 = 0x0102_1858;
+const ADL_DISPLAY_SLS_MAP_INDEX_GET: u32 = 0x0102_183c;
+const ADL_DISPLAY_SLS_MAP_CONFIG_GET: u32 = 0x0102_181c;
+const ADL_DISPLAY_MODES_GET: u32 = 0x0102_1804;
+const ADL_DISPLAY_DISPLAY_MAP_CONFIG_GET: u32 = 0x0102_17e0;
+/// Bytes of one adapter record the adapter-info call fills: the adapter's
+/// index word at +4, the display index compared at +0x620.
+const ADAPTER_RECORD_SIZE: u32 = 0x624;
+/// Bytes of one entry of the array the query fills for its caller.
+const DISPLAY_ENTRY_SIZE: u32 = 0x2c;
+/// The query's stack frame below its frame pointer (`SUB ESP,0x10c`); the
+/// slots the code passes by address, named by their offset below the frame
+/// pointer as the disassembly addresses them.
+const QUERY_FRAME: u32 = 0x10c;
+const SLOT_ADAPTER_COUNT: u32 = 0x1c;
+const SLOT_ADAPTER_RECORDS: u32 = 0x74;
+const SLOT_DISPLAY_MAP_COUNT: u32 = 0x34;
+const SLOT_DISPLAY_MAPS: u32 = 0x18;
+const SLOT_TARGET_COUNT: u32 = 0xf8;
+const SLOT_TARGETS: u32 = 0x10;
+const SLOT_SLS_MAP_INDEX: u32 = 0x40;
+/// The 0x50-byte SLS map record (its first word cleared by the code, the
+/// other 0x4c bytes by `memset`); its words +0x10 (the rows: they divide
+/// the height) and +0x14 (the columns: they divide the width).
+const SLOT_SLS_MAP: u32 = 0xf0;
+const SLOT_SLS_MAP_ROWS: u32 = 0xe0;
+const SLOT_SLS_MAP_COLUMNS: u32 = 0xdc;
+const SLOT_SLS_TARGET_COUNT: u32 = 0x64;
+const SLOT_SLS_TARGETS: u32 = 0x98;
+const SLOT_NATIVE_MODE_COUNT: u32 = 0x94;
+const SLOT_NATIVE_MODES: u32 = 0x54;
+const SLOT_BEZEL_MODE_COUNT: u32 = 0x60;
+const SLOT_BEZEL_MODES: u32 = 0x84;
+const SLOT_TRANSIENT_MODE_COUNT: u32 = 0x0c;
+const SLOT_TRANSIENT_MODES: u32 = 0x3c;
+const SLOT_OFFSET_COUNT: u32 = 0x5c;
+const SLOT_OFFSETS: u32 = 0x2c;
+const SLOT_MODE_COUNT: u32 = 0x08;
+const SLOT_MODES: u32 = 0x70;
+
+// Translated from 004dd2a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`renderer.cpp`): `cdecl`, the address of a
+/// pointer word. Hands it to `004dd270` (which releases the word's block and
+/// clears it) and answers 1.
+pub fn fn_004dd2a0(e: &mut Engine, slot: Ptr) -> u32 {
+    e.call(ADL_FREE_SLOT, &args![slot]);
+    1
+}
+
+/// One bit per display target, as `SHL reg,CL` makes it (the count taken
+/// modulo 32).
+fn target_bit(target: i32) -> u32 {
+    1u32.wrapping_shl(target as u32)
+}
+
+// Translated from 004dd2c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`renderer.cpp`): the Eyefinity (ADL) query for
+/// one display, `cdecl`: display index, a 6-word description, the target
+/// count word and the word that receives the entry array. Answers 1 or 0.
+///
+/// A null description, count or array word answers 0. The ADL library
+/// (`atiadlxx.dll`, else `atiadlxy.dll`) is loaded and its eight entry
+/// points looked up; a missing library or entry point, a failing
+/// `ADL_Main_Control_Create` (given `004dd240` and 1),
+/// `ADL_Adapter_NumberOfAdapters_Get` or `ADL_Adapter_AdapterInfo_Get`, no
+/// adapters or no adapter block answer 0 at once (nothing released). The
+/// adapter whose record has the display index gets its display map
+/// (`ADL_Display_DisplayMapConfig_Get`, failing: result 0); with at least two
+/// targets its SLS map (`ADL_Display_SLSMapIndex_Get`; failing, or fewer
+/// targets, ends the search keeping result 1) and the map's configuration
+/// (`ADL_Display_SLSMapConfig_Get`, failing: 0). The target count must be the
+/// map's rows times columns (else 0). Per target, its modes
+/// (`ADL_Display_Modes_Get`; failing marks the target failed) are matched
+/// against the native modes, then the bezel modes (which sets the bezel
+/// flag); a matched target gets its entry (the array allocated and cleared on
+/// first use): its SLS column and row, its size (the mode's size divided by
+/// columns and rows, swapped when the mode's orientation is neither 0 nor
+/// 180), its position, its visible rectangle (from the SLS offsets for bezel
+/// modes, else the same), and +0x28 set for the target at the middle-left
+/// column (1 for 3 or 4 columns, 2 for 5 or 6, else 0) of the last row. Then
+/// the description (1, columns, rows, the width and height, 1 at +0x14 for
+/// bezel modes) and the count are written. Failed targets get entries
+/// derived from the first target that did not fail. Every ADL block is
+/// released (`004dd270`), `ADL_Main_Control_Destroy` runs (looked up again)
+/// and the library is freed; on failure the array is released, the count
+/// cleared and the description's first word cleared.
+///
+/// The "found" word (`EBP-4`), the rotated and bezel flags are never reset
+/// between targets, and the SLS-target and bezel-mode indexes keep their
+/// last values, as in the exe.
+pub fn fn_004dd2c0(
+    e: &mut Engine,
+    display_index: u32,
+    info: Ptr,
+    count_out: Ptr,
+    entries_out: Ptr,
+) -> i32 {
+    e.with_stack(QUERY_FRAME, |e, frame| {
+        let at = |offset: u32| frame.addr() + QUERY_FRAME - offset;
+        let word = |e: &Engine, offset: u32| e.mem.u32(at(offset));
+        // The code clears every local first; the frame is zero already except
+        // for the SLS map record, which it clears with memset.
+        e.call(MEMSET, &args![at(SLOT_SLS_MAP - 4), 0u32, 0x4cu32]);
+        if info.is_null() || count_out.is_null() || entries_out.is_null() {
+            return 0;
+        }
+        let mut module = e.call(IMPORT_LOAD_LIBRARY, &args![ADL_LIBRARY]).u32();
+        if module == 0 {
+            module = e
+                .call(IMPORT_LOAD_LIBRARY, &args![ADL_LIBRARY_FALLBACK])
+                .u32();
+        }
+        if module == 0 {
+            return 0;
+        }
+        let look_up =
+            |e: &mut Engine, name: u32| e.call(IMPORT_GET_PROC_ADDRESS, &args![module, name]).u32();
+        let create = look_up(e, ADL_MAIN_CONTROL_CREATE);
+        let destroy = look_up(e, ADL_MAIN_CONTROL_DESTROY);
+        let number_of_adapters = look_up(e, ADL_ADAPTER_NUMBER_OF_ADAPTERS_GET);
+        let adapter_info = look_up(e, ADL_ADAPTER_ADAPTER_INFO_GET);
+        let sls_map_index = look_up(e, ADL_DISPLAY_SLS_MAP_INDEX_GET);
+        let sls_map_config = look_up(e, ADL_DISPLAY_SLS_MAP_CONFIG_GET);
+        let display_modes = look_up(e, ADL_DISPLAY_MODES_GET);
+        let display_map_config = look_up(e, ADL_DISPLAY_DISPLAY_MAP_CONFIG_GET);
+        if [
+            create,
+            destroy,
+            number_of_adapters,
+            adapter_info,
+            sls_map_index,
+            sls_map_config,
+            display_modes,
+            display_map_config,
+        ]
+        .contains(&0)
+        {
+            return 0;
+        }
+        if e.call(create, &args![ADL_ALLOCATE, 1u32]).u32() != 0 {
+            return 0;
+        }
+        if e.call(number_of_adapters, &args![at(SLOT_ADAPTER_COUNT)])
+            .u32()
+            != 0
+        {
+            return 0;
+        }
+        if word(e, SLOT_ADAPTER_COUNT) == 0 {
+            return 0;
+        }
+        let records_size = word(e, SLOT_ADAPTER_COUNT).wrapping_mul(ADAPTER_RECORD_SIZE);
+        let records = e.call(ADL_ALLOCATE, &args![records_size]).u32();
+        e.mem.set_u32(at(SLOT_ADAPTER_RECORDS), records);
+        if records == 0 {
+            return 0;
+        }
+        let records_size = word(e, SLOT_ADAPTER_COUNT).wrapping_mul(ADAPTER_RECORD_SIZE);
+        e.call(FILL_BYTES, &args![records, 0u32, records_size]);
+        let records_size = word(e, SLOT_ADAPTER_COUNT).wrapping_mul(ADAPTER_RECORD_SIZE);
+        if e.call(adapter_info, &args![records, records_size]).u32() != 0 {
+            return 0;
+        }
+
+        let mut result: i32 = 1;
+        let mut found = 0u32;
+        let mut bezel = 0u32;
+        let mut rotated = 0u32;
+        let mut matched = 0u32;
+        let mut failed = 0u32;
+        let mut width = 0u32;
+        let mut height = 0u32;
+        let mut middle_column = 0u32;
+        let mut last_row = 0u32;
+        let mut entry = 0u32;
+        let mut sls_target: i32;
+        let mut bezel_mode: i32 = 0;
+        let target_display = |e: &Engine, target: i32| {
+            e.mem
+                .u32(word(e, SLOT_TARGETS).wrapping_add((target as u32).wrapping_mul(0x1c)))
+        };
+        let sls_record = |e: &Engine, index: i32| {
+            word(e, SLOT_SLS_TARGETS).wrapping_add((index as u32).wrapping_mul(0x70))
+        };
+        let columns = |e: &Engine| word(e, SLOT_SLS_MAP_COLUMNS);
+        let rows = |e: &Engine| word(e, SLOT_SLS_MAP_ROWS);
+
+        'search: {
+            let mut adapter_index: i32 = 0;
+            while adapter_index < word(e, SLOT_ADAPTER_COUNT) as i32 {
+                let record = word(e, SLOT_ADAPTER_RECORDS)
+                    .wrapping_add((adapter_index as u32).wrapping_mul(ADAPTER_RECORD_SIZE));
+                if e.mem.u32(record.wrapping_add(0x620)) != display_index {
+                    adapter_index += 1;
+                    continue;
+                }
+                let adapter = e.mem.u32(record.wrapping_add(4));
+                let status = e
+                    .call(
+                        display_map_config,
+                        &args![
+                            adapter,
+                            at(SLOT_DISPLAY_MAP_COUNT),
+                            at(SLOT_DISPLAY_MAPS),
+                            at(SLOT_TARGET_COUNT),
+                            at(SLOT_TARGETS),
+                            1u32
+                        ],
+                    )
+                    .u32();
+                if status != 0 {
+                    result = 0;
+                    break 'search;
+                }
+                if (word(e, SLOT_TARGET_COUNT) as i32) < 2 {
+                    break 'search;
+                }
+                let status = e
+                    .call(
+                        sls_map_index,
+                        &args![
+                            adapter,
+                            word(e, SLOT_TARGET_COUNT),
+                            word(e, SLOT_TARGETS),
+                            at(SLOT_SLS_MAP_INDEX)
+                        ],
+                    )
+                    .u32();
+                if status != 0 {
+                    break 'search;
+                }
+                let status = e
+                    .call(
+                        sls_map_config,
+                        &args![
+                            adapter,
+                            word(e, SLOT_SLS_MAP_INDEX),
+                            at(SLOT_SLS_MAP),
+                            at(SLOT_SLS_TARGET_COUNT),
+                            at(SLOT_SLS_TARGETS),
+                            at(SLOT_NATIVE_MODE_COUNT),
+                            at(SLOT_NATIVE_MODES),
+                            at(SLOT_BEZEL_MODE_COUNT),
+                            at(SLOT_BEZEL_MODES),
+                            at(SLOT_TRANSIENT_MODE_COUNT),
+                            at(SLOT_TRANSIENT_MODES),
+                            at(SLOT_OFFSET_COUNT),
+                            at(SLOT_OFFSETS),
+                            2u32
+                        ],
+                    )
+                    .u32();
+                if status != 0 {
+                    result = 0;
+                    break 'search;
+                }
+                if word(e, SLOT_TARGET_COUNT) != columns(e).wrapping_mul(rows(e)) {
+                    result = 0;
+                    break 'search;
+                }
+                // The switch on columns - 3 (jump table at 004de060, read in
+                // Ghidra): 0 and 1 give 1, 2 and 3 give 2, anything else 0.
+                middle_column = match columns(e).wrapping_sub(3) {
+                    0 | 1 => 1,
+                    2 | 3 => 2,
+                    _ => 0,
+                };
+                last_row = rows(e).wrapping_sub(1);
+                'targets: {
+                    let mut target: i32 = 0;
+                    while target < word(e, SLOT_TARGET_COUNT) as i32 {
+                        let bit = target_bit(target);
+                        e.call(ADL_FREE_SLOT, &args![at(SLOT_MODES)]);
+                        let display = target_display(e, target);
+                        let status = e
+                            .call(
+                                display_modes,
+                                &args![adapter, display, at(SLOT_MODE_COUNT), at(SLOT_MODES)],
+                            )
+                            .u32();
+                        if status != 0 {
+                            failed |= bit;
+                            target += 1;
+                            continue;
+                        }
+                        let modes = word(e, SLOT_MODES);
+                        let mode_width = |e: &Engine| e.mem.u32(modes.wrapping_add(0x1c));
+                        let mode_height = |e: &Engine| e.mem.u32(modes.wrapping_add(0x20));
+                        let mut native: i32 = 0;
+                        while native < word(e, SLOT_NATIVE_MODE_COUNT) as i32 {
+                            let record = word(e, SLOT_NATIVE_MODES)
+                                .wrapping_add((native as u32).wrapping_mul(0x50));
+                            if mode_width(e) == e.mem.u32(record.wrapping_add(0x28))
+                                && mode_height(e) == e.mem.u32(record.wrapping_add(0x2c))
+                            {
+                                matched |= bit;
+                                break;
+                            }
+                            native += 1;
+                        }
+                        if matched & bit == 0 {
+                            bezel_mode = 0;
+                            while bezel_mode < word(e, SLOT_BEZEL_MODE_COUNT) as i32 {
+                                let record = word(e, SLOT_BEZEL_MODES)
+                                    .wrapping_add((bezel_mode as u32).wrapping_mul(0x58));
+                                if mode_width(e) == e.mem.u32(record.wrapping_add(0x28))
+                                    && mode_height(e) == e.mem.u32(record.wrapping_add(0x2c))
+                                {
+                                    matched |= bit;
+                                    bezel = 1;
+                                    break;
+                                }
+                                bezel_mode += 1;
+                            }
+                        }
+                        if matched & bit != 0 {
+                            if e.mem.u32(entries_out.addr()) == 0 {
+                                let size =
+                                    word(e, SLOT_TARGET_COUNT).wrapping_mul(DISPLAY_ENTRY_SIZE);
+                                let block = e.call(ADL_ALLOCATE, &args![size]).u32();
+                                e.mem.set_u32(entries_out.addr(), block);
+                                if e.mem.u32(entries_out.addr()) == 0 {
+                                    result = 0;
+                                    break 'targets;
+                                }
+                                let size =
+                                    word(e, SLOT_TARGET_COUNT).wrapping_mul(DISPLAY_ENTRY_SIZE);
+                                let block = e.mem.u32(entries_out.addr());
+                                e.call(FILL_BYTES, &args![block, 0u32, size]);
+                            }
+                            sls_target = 0;
+                            while sls_target < word(e, SLOT_SLS_TARGET_COUNT) as i32 {
+                                let record = sls_record(e, sls_target);
+                                if target_display(e, target) == e.mem.u32(record.wrapping_add(8)) {
+                                    found = 1;
+                                    break;
+                                }
+                                sls_target += 1;
+                            }
+                            if found == 0 {
+                                result = 0;
+                                break 'targets;
+                            }
+                            width = mode_width(e);
+                            height = mode_height(e);
+                            let orientation = e.mem.u32(modes.wrapping_add(0x2c));
+                            if orientation != 0 && orientation != 0xb4 {
+                                rotated = 1;
+                            }
+                            entry = e
+                                .mem
+                                .u32(entries_out.addr())
+                                .wrapping_add((target as u32).wrapping_mul(DISPLAY_ENTRY_SIZE));
+                            let record = sls_record(e, sls_target);
+                            let column = e.mem.u32(record.wrapping_add(0x24));
+                            e.mem.set_u32(entry, column);
+                            let row = e.mem.u32(record.wrapping_add(0x28));
+                            e.mem.set_u32(entry.wrapping_add(4), row);
+                            let (across, down) = if rotated == 0 {
+                                (mode_width(e), mode_height(e))
+                            } else {
+                                (mode_height(e), mode_width(e))
+                            };
+                            let tile_width = (across as i32) / (columns(e) as i32);
+                            e.mem.set_u32(entry.wrapping_add(0x10), tile_width as u32);
+                            let tile_height = (down as i32) / (rows(e) as i32);
+                            e.mem.set_u32(entry.wrapping_add(0x14), tile_height as u32);
+                            let x = e
+                                .mem
+                                .u32(entry.wrapping_add(0x10))
+                                .wrapping_mul(e.mem.u32(record.wrapping_add(0x24)));
+                            e.mem.set_u32(entry.wrapping_add(8), x);
+                            let y = e
+                                .mem
+                                .u32(entry.wrapping_add(0x14))
+                                .wrapping_mul(e.mem.u32(record.wrapping_add(0x28)));
+                            e.mem.set_u32(entry.wrapping_add(0xc), y);
+                            if bezel == 1 {
+                                let bezel_record = word(e, SLOT_BEZEL_MODES)
+                                    .wrapping_add((bezel_mode as u32).wrapping_mul(0x58));
+                                let mut offset: i32 = 0;
+                                while offset < word(e, SLOT_OFFSET_COUNT) as i32 {
+                                    let record = word(e, SLOT_OFFSETS)
+                                        .wrapping_add((offset as u32).wrapping_mul(0x34));
+                                    if e.mem.u32(bezel_record.wrapping_add(8))
+                                        == e.mem.u32(record.wrapping_add(0x18))
+                                        && target_display(e, target)
+                                            == e.mem.u32(record.wrapping_add(8))
+                                    {
+                                        found = 1;
+                                        break;
+                                    }
+                                    offset += 1;
+                                }
+                                if found == 0 {
+                                    result = 0;
+                                    break 'targets;
+                                }
+                                let record = word(e, SLOT_OFFSETS)
+                                    .wrapping_add((offset as u32).wrapping_mul(0x34));
+                                for (to, from) in
+                                    [(0x20, 0x24), (0x24, 0x28), (0x18, 0x1c), (0x1c, 0x20)]
+                                {
+                                    let value = e.mem.u32(record.wrapping_add(from));
+                                    e.mem.set_u32(entry.wrapping_add(to), value);
+                                }
+                            } else {
+                                for i in 0..4 {
+                                    let value = e.mem.u32(entry.wrapping_add(8 + 4 * i));
+                                    e.mem.set_u32(entry.wrapping_add(0x18 + 4 * i), value);
+                                }
+                            }
+                            let record = sls_record(e, sls_target);
+                            if middle_column == e.mem.u32(record.wrapping_add(0x24))
+                                && last_row == e.mem.u32(record.wrapping_add(0x28))
+                            {
+                                e.mem.set_u32(entry.wrapping_add(0x28), 1);
+                            }
+                        }
+                        target += 1;
+                    }
+                }
+                if matched != 0 && result == 1 {
+                    let info = info.addr();
+                    e.mem.set_u32(info, 1);
+                    e.mem.set_u32(info.wrapping_add(4), columns(e));
+                    e.mem.set_u32(info.wrapping_add(8), rows(e));
+                    if rotated == 0 {
+                        e.mem.set_u32(info.wrapping_add(0xc), width);
+                        e.mem.set_u32(info.wrapping_add(0x10), height);
+                    } else {
+                        e.mem.set_u32(info.wrapping_add(0xc), height);
+                        e.mem.set_u32(info.wrapping_add(0x10), width);
+                    }
+                    if bezel == 1 {
+                        e.mem.set_u32(info.wrapping_add(0x14), 1);
+                    }
+                    e.mem.set_u32(count_out.addr(), word(e, SLOT_TARGET_COUNT));
+                }
+                break 'search;
+            }
+        }
+
+        if matched != 0 && failed != 0 {
+            let mut reference = 0u32;
+            let mut target: i32 = 0;
+            while target < word(e, SLOT_TARGET_COUNT) as i32 {
+                if target_bit(target) & failed == 0 {
+                    reference = e
+                        .mem
+                        .u32(entries_out.addr())
+                        .wrapping_add((target as u32).wrapping_mul(DISPLAY_ENTRY_SIZE));
+                    break;
+                }
+                target += 1;
+            }
+            if entry == 0 {
+                result = 0;
+            } else {
+                let reference_word =
+                    |e: &Engine, offset: u32| e.mem.u32(reference.wrapping_add(offset));
+                let mut target: i32 = 0;
+                while target < word(e, SLOT_TARGET_COUNT) as i32 {
+                    if target_bit(target) & failed == 0 {
+                        target += 1;
+                        continue;
+                    }
+                    sls_target = 0;
+                    while sls_target < word(e, SLOT_SLS_TARGET_COUNT) as i32 {
+                        let record = sls_record(e, sls_target);
+                        if target_display(e, target) == e.mem.u32(record.wrapping_add(8)) {
+                            found = 1;
+                            break;
+                        }
+                        sls_target += 1;
+                    }
+                    if found == 0 {
+                        result = 0;
+                        break;
+                    }
+                    entry = e
+                        .mem
+                        .u32(entries_out.addr())
+                        .wrapping_add((target as u32).wrapping_mul(DISPLAY_ENTRY_SIZE));
+                    let record = sls_record(e, sls_target);
+                    let column = e.mem.u32(record.wrapping_add(0x24));
+                    e.mem.set_u32(entry, column);
+                    let row = e.mem.u32(record.wrapping_add(0x28));
+                    e.mem.set_u32(entry.wrapping_add(4), row);
+                    let value = reference_word(e, 0x10);
+                    e.mem.set_u32(entry.wrapping_add(0x10), value);
+                    let value = reference_word(e, 0x14);
+                    e.mem.set_u32(entry.wrapping_add(0x14), value);
+                    let x =
+                        reference_word(e, 0x10).wrapping_mul(e.mem.u32(record.wrapping_add(0x24)));
+                    e.mem.set_u32(entry.wrapping_add(8), x);
+                    let y =
+                        reference_word(e, 0x14).wrapping_mul(e.mem.u32(record.wrapping_add(0x28)));
+                    e.mem.set_u32(entry.wrapping_add(0xc), y);
+                    if bezel == 1 {
+                        let value = reference_word(e, 0x20);
+                        e.mem.set_u32(entry.wrapping_add(0x20), value);
+                        let value = reference_word(e, 0x24);
+                        e.mem.set_u32(entry.wrapping_add(0x24), value);
+                        let column = e.mem.u32(record.wrapping_add(0x24));
+                        let visible_x = if column == 0 {
+                            0
+                        } else if column == columns(e).wrapping_sub(1) {
+                            width.wrapping_sub(reference_word(e, 0x20))
+                        } else {
+                            let spare =
+                                reference_word(e, 0x10).wrapping_sub(reference_word(e, 0x20));
+                            (((spare as i32) / 2) as u32)
+                                .wrapping_add(e.mem.u32(entry.wrapping_add(8)))
+                        };
+                        e.mem.set_u32(entry.wrapping_add(0x18), visible_x);
+                        let row = e.mem.u32(record.wrapping_add(0x28));
+                        let visible_y = if row == 0 {
+                            0
+                        } else if row == rows(e).wrapping_sub(1) {
+                            height.wrapping_sub(reference_word(e, 0x24))
+                        } else {
+                            let spare =
+                                reference_word(e, 0x14).wrapping_sub(reference_word(e, 0x24));
+                            (((spare as i32) / 2) as u32)
+                                .wrapping_add(e.mem.u32(entry.wrapping_add(0xc)))
+                        };
+                        e.mem.set_u32(entry.wrapping_add(0x1c), visible_y);
+                    } else {
+                        for i in 0..4 {
+                            let value = e.mem.u32(entry.wrapping_add(8 + 4 * i));
+                            e.mem.set_u32(entry.wrapping_add(0x18 + 4 * i), value);
+                        }
+                    }
+                    if middle_column == e.mem.u32(record.wrapping_add(0x24))
+                        && last_row == e.mem.u32(record.wrapping_add(0x28))
+                    {
+                        e.mem.set_u32(entry.wrapping_add(0x28), 1);
+                    }
+                    target += 1;
+                }
+            }
+        }
+
+        for slot in [
+            SLOT_MODES,
+            SLOT_SLS_TARGETS,
+            SLOT_NATIVE_MODES,
+            SLOT_BEZEL_MODES,
+            SLOT_TRANSIENT_MODES,
+            SLOT_OFFSETS,
+            SLOT_DISPLAY_MAPS,
+            SLOT_TARGETS,
+            SLOT_ADAPTER_RECORDS,
+        ] {
+            e.call(ADL_FREE_SLOT, &args![at(slot)]);
+        }
+        let destroy = e
+            .call(
+                IMPORT_GET_PROC_ADDRESS,
+                &args![module, ADL_MAIN_CONTROL_DESTROY],
+            )
+            .u32();
+        if destroy != 0 {
+            e.call(destroy, &args![]);
+        }
+        e.call(IMPORT_FREE_LIBRARY, &args![module]);
+        if result == 0 {
+            fn_004dd2a0(e, entries_out);
+            e.mem.set_u32(count_out.addr(), 0);
+            e.call(FILL_BYTES, &args![info, 0u32, 4u32]);
+        }
+        result
+    })
+}
+
+/// `EnumDisplayDevicesA` (import slot) and `printf` (`00ec9d4a`, `cdecl`).
+const IMPORT_ENUM_DISPLAY_DEVICES: u32 = 0x00fd_f2f0;
+const PRINTF: u32 = 0x00ec_9d4a;
+/// `"Eyefinity configuration query failed for display index %i.\n"`.
+const EYEFINITY_QUERY_FAILED: u32 = 0x0102_18ec;
+/// The byte `004de100` requires besides an Eyefinity description.
+const EYEFINITY_GATE_01189484: u32 = 0x0118_9484;
+/// The `float`s `004de100` sets: the description's width and height, their
+/// ratio, the copies of width and height (the width divided by 3 for three
+/// columns of one row when `011c70ee` is set), and the word that also gets
+/// that third.
+const EYEFINITY_TOTAL_WIDTH_0118948C: u32 = 0x0118_948c;
+const EYEFINITY_TOTAL_HEIGHT_01189490: u32 = 0x0118_9490;
+const EYEFINITY_RATIO_01189488: u32 = 0x0118_9488;
+const EYEFINITY_VIEW_WIDTH_01189494: u32 = 0x0118_9494;
+const EYEFINITY_VIEW_HEIGHT_01189498: u32 = 0x0118_9498;
+const EYEFINITY_THIRD_WIDTH_011C70F0: u32 = 0x011c_70f0;
+/// The flag set instead of `011c70ee` when the first entry's height
+/// (+0x14) is above its width (+0x10).
+const EYEFINITY_TALL_FLAG_011C70EF: u32 = 0x011c_70ef;
+/// The `double` 3.0 the width is divided by (`01021928`).
+const THREE_01021928: u32 = 0x0102_1928;
+/// `004de100`'s frame below its frame pointer (`SUB ESP,0x1d8`), the
+/// `DISPLAY_DEVICEA` at its bottom (`cb` 0x1a8, `StateFlags` at +0xa4), the
+/// description (6 words at `EBP-0x24`), the count (`EBP-8`) and the entry
+/// array word (`EBP-0xc`).
+const SETUP_FRAME: u32 = 0x1d8;
+const SETUP_DISPLAY_DEVICE: u32 = 0x1d8;
+const SETUP_INFO: u32 = 0x24;
+const SETUP_COUNT: u32 = 0x08;
+const SETUP_ENTRIES: u32 = 0x0c;
+
+// Translated from 004de100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`renderer.cpp`): the Eyefinity set-up
+/// `Renderer::Init` runs when `bEnableEyefinity` is set. The display index
+/// starts at -1 and, being -1, is replaced by the first display device
+/// (`EnumDisplayDevicesA(NULL, index, &device, 0)`, `cb` 0x1a8) whose state
+/// flags have bit 2, or stays -1 when the enumeration ends first. Then the
+/// query [`fn_004dd2c0`] runs for it. On success, when the description's
+/// first word is 1 and the byte at `01189484` is set: width and height as
+/// `float`s (`FILD`/`FSTP`), their copies, the ratio width / height, the flag
+/// `011c70ed`, `011c70ef` when the first entry is taller than wide else
+/// `011c70ee`, and with `011c70ee` set and a grid of 3 columns and 1 row the
+/// view width becomes width / 3.0 (also stored at `011c70f0`) and the view
+/// height is copied again. The entry array is released ([`fn_004dd2a0`]).
+/// On failure `printf` reports the display index.
+// Translation incomplete: 004de100 - the /GS stack cookie check (00ec408c) is not translated.
+pub fn fn_004de100(e: &mut Engine) {
+    e.with_stack(SETUP_FRAME, |e, frame| {
+        let at = |offset: u32| frame.addr() + SETUP_FRAME - offset;
+        let mut display = u32::MAX;
+        // The exe tests the index it has just set to -1.
+        if display == u32::MAX {
+            let mut index = 0u32;
+            let device = at(SETUP_DISPLAY_DEVICE);
+            e.mem.set_u32(device, 0x1a8);
+            loop {
+                let more = e
+                    .call(
+                        IMPORT_ENUM_DISPLAY_DEVICES,
+                        &args![0u32, index, device, 0u32],
+                    )
+                    .u32();
+                if more == 0 {
+                    break;
+                }
+                if e.mem.u32(device.wrapping_add(0xa4)) & 4 != 0 {
+                    display = index;
+                    break;
+                }
+                index = index.wrapping_add(1);
+            }
+        }
+        let info = at(SETUP_INFO);
+        let result = fn_004dd2c0(
+            e,
+            display,
+            Ptr::new(info),
+            Ptr::new(at(SETUP_COUNT)),
+            Ptr::new(at(SETUP_ENTRIES)),
+        );
+        if result != 1 {
+            e.call(PRINTF, &args![EYEFINITY_QUERY_FAILED, display]);
+            return;
+        }
+        if e.mem.u32(info) == 1 && e.global::<u8>(EYEFINITY_GATE_01189484) != 0 {
+            let total_width = x87_store32(f64::from(e.mem.u32(info.wrapping_add(0xc)) as i32));
+            e.set_global(EYEFINITY_TOTAL_WIDTH_0118948C, total_width);
+            let total_height = x87_store32(f64::from(e.mem.u32(info.wrapping_add(0x10)) as i32));
+            e.set_global(EYEFINITY_TOTAL_HEIGHT_01189490, total_height);
+            let copy = x87_quiet_bits(e.global::<u32>(EYEFINITY_TOTAL_WIDTH_0118948C));
+            e.set_global(EYEFINITY_VIEW_WIDTH_01189494, copy);
+            let copy = x87_quiet_bits(e.global::<u32>(EYEFINITY_TOTAL_HEIGHT_01189490));
+            e.set_global(EYEFINITY_VIEW_HEIGHT_01189498, copy);
+            let ratio = x87_div(
+                x87_load32(e.global::<u32>(EYEFINITY_TOTAL_WIDTH_0118948C)),
+                x87_m32(e.global::<u32>(EYEFINITY_TOTAL_HEIGHT_01189490)),
+            );
+            e.set_global(EYEFINITY_RATIO_01189488, x87_store32(ratio));
+            e.set_global(EYEFINITY_FLAG, 1u8);
+            let entries = e.mem.u32(at(SETUP_ENTRIES));
+            let entry_height = e.mem.u32(entries.wrapping_add(0x14)) as i32;
+            let entry_width = e.mem.u32(entries.wrapping_add(0x10)) as i32;
+            if entry_height > entry_width {
+                e.set_global(EYEFINITY_TALL_FLAG_011C70EF, 1u8);
+            } else {
+                e.set_global(EYEFINITY_SECOND_FLAG, 1u8);
+            }
+            if e.global::<u8>(EYEFINITY_SECOND_FLAG) != 0
+                && e.mem.u32(info.wrapping_add(4)) == 3
+                && e.mem.u32(info.wrapping_add(8)) == 1
+            {
+                let third = x87_div(
+                    x87_load32(e.global::<u32>(EYEFINITY_TOTAL_WIDTH_0118948C)),
+                    e.global::<f64>(THREE_01021928),
+                );
+                e.set_global(EYEFINITY_VIEW_WIDTH_01189494, x87_store32(third));
+                let copy = x87_quiet_bits(e.global::<u32>(EYEFINITY_TOTAL_HEIGHT_01189490));
+                e.set_global(EYEFINITY_VIEW_HEIGHT_01189498, copy);
+                let copy = x87_quiet_bits(e.global::<u32>(EYEFINITY_VIEW_WIDTH_01189494));
+                e.set_global(EYEFINITY_THIRD_WIDTH_011C70F0, copy);
+            }
+        }
+        fn_004dd2a0(e, Ptr::new(at(SETUP_ENTRIES)));
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2253,6 +2977,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004d_d220, fn_004dd220(Ptr) -> u32),
         entry!(0x004d_e070, fn_004de070() -> u8),
         entry!(0x004d_e080, fn_004de080() -> u8),
+        entry!(0x004d_d2a0, fn_004dd2a0(Ptr) -> u32),
+        entry!(0x004d_d2c0, fn_004dd2c0(u32, Ptr, Ptr, Ptr) -> i32),
+        entry!(0x004d_e100, fn_004de100()),
     ]
 }
 
@@ -4325,5 +5052,402 @@ mod display_mode_tests {
             calls_to(&e, STRING_COPY),
             vec![vec![ERROR_MESSAGE, MESSAGE_BAD_ADAPTER]]
         );
+    }
+}
+
+#[cfg(test)]
+mod b000s_tests {
+    use super::*;
+
+    const MODULE: u32 = 0x7000_0000;
+    /// Fake entry points the library double hands out, one per name.
+    const FAKE_CREATE: u32 = 0x7100_0000;
+    const FAKE_DESTROY: u32 = 0x7100_0010;
+    const FAKE_ADAPTER_COUNT: u32 = 0x7100_0020;
+    const FAKE_ADAPTER_INFO: u32 = 0x7100_0030;
+    const FAKE_SLS_INDEX: u32 = 0x7100_0040;
+    const FAKE_SLS_CONFIG: u32 = 0x7100_0050;
+    const FAKE_MODES: u32 = 0x7100_0060;
+    const FAKE_DISPLAY_MAP: u32 = 0x7100_0070;
+    const DISPLAY_INDEX: u32 = 2;
+    const ADAPTER: u32 = 7;
+    const BEZEL_ID: u32 = 0x33;
+
+    #[derive(Clone, Copy)]
+    struct Scenario {
+        bezel: bool,
+        failing_display: u32,
+        display_map_fails: bool,
+        rotated: bool,
+    }
+
+    const NATIVE: Scenario = Scenario {
+        bezel: false,
+        failing_display: 0,
+        display_map_fails: false,
+        rotated: false,
+    };
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn words(e: &Engine, at: u32, n: u32) -> Vec<u32> {
+        (0..n).map(|i| e.mem.u32(at + 4 * i)).collect()
+    }
+
+    fn put(e: &mut Engine, at: u32, values: &[(u32, u32)]) {
+        for (offset, value) in values {
+            e.mem.set_u32(at + offset, *value);
+        }
+    }
+
+    /// The mode the displays report: (width, height, orientation).
+    fn mode_of(s: Scenario) -> (u32, u32, u32) {
+        match (s.bezel, s.rotated) {
+            (true, _) => (6000, 1100, 0),
+            (false, true) => (1080, 5760, 90),
+            (false, false) => (5760, 1080, 0),
+        }
+    }
+
+    /// A three-display, one-row Eyefinity group behind the ADL doubles.
+    fn rig(s: Scenario) -> Engine {
+        let mut e = Engine::new();
+        e.register(MEMSET, |_, _| Ret::default());
+        e.register(FILL_BYTES, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
+        e.register(ADL_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(ADL_FREE_SLOT, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        e.register(IMPORT_LOAD_LIBRARY, |_, a| {
+            if a[0] == ADL_LIBRARY {
+                MODULE.into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        e.register(IMPORT_GET_PROC_ADDRESS, |_, a| {
+            match a[1] {
+                ADL_MAIN_CONTROL_CREATE => FAKE_CREATE,
+                ADL_MAIN_CONTROL_DESTROY => FAKE_DESTROY,
+                ADL_ADAPTER_NUMBER_OF_ADAPTERS_GET => FAKE_ADAPTER_COUNT,
+                ADL_ADAPTER_ADAPTER_INFO_GET => FAKE_ADAPTER_INFO,
+                ADL_DISPLAY_SLS_MAP_INDEX_GET => FAKE_SLS_INDEX,
+                ADL_DISPLAY_SLS_MAP_CONFIG_GET => FAKE_SLS_CONFIG,
+                ADL_DISPLAY_MODES_GET => FAKE_MODES,
+                ADL_DISPLAY_DISPLAY_MAP_CONFIG_GET => FAKE_DISPLAY_MAP,
+                _ => 0,
+            }
+            .into_ret()
+        });
+        e.register(IMPORT_FREE_LIBRARY, |_, _| Ret::default());
+        e.register(FAKE_CREATE, |_, _| 0u32.into_ret());
+        e.register(FAKE_DESTROY, |_, _| 0u32.into_ret());
+        e.register(FAKE_ADAPTER_COUNT, |e, a| {
+            e.mem.set_u32(a[0], 1);
+            0u32.into_ret()
+        });
+        e.register(FAKE_ADAPTER_INFO, |e, a| {
+            assert_eq!(a[1], ADAPTER_RECORD_SIZE);
+            e.mem.set_u32(a[0] + 4, ADAPTER);
+            e.mem.set_u32(a[0] + 0x620, DISPLAY_INDEX);
+            0u32.into_ret()
+        });
+        e.register_double(FAKE_DISPLAY_MAP, move |e, a| {
+            assert_eq!((a[0], a[5]), (ADAPTER, 1));
+            if s.display_map_fails {
+                return 1u32.into_ret();
+            }
+            let targets = e.mem.alloc(3 * 0x1c);
+            for t in 0..3 {
+                e.mem.set_u32(targets + t * 0x1c, 10 + t);
+            }
+            e.mem.set_u32(a[3], 3);
+            e.mem.set_u32(a[4], targets);
+            0u32.into_ret()
+        });
+        e.register(FAKE_SLS_INDEX, |e, a| {
+            assert_eq!((a[0], a[1]), (ADAPTER, 3));
+            e.mem.set_u32(a[3], 5);
+            0u32.into_ret()
+        });
+        e.register_double(FAKE_SLS_CONFIG, move |e, a| {
+            assert_eq!((a[0], a[1], a[13]), (ADAPTER, 5, 2));
+            put(e, a[2], &[(0x10, 1), (0x14, 3)]);
+            let sls = e.mem.alloc(3 * 0x70);
+            for t in 0..3 {
+                put(e, sls + t * 0x70, &[(8, 10 + t), (0x24, t), (0x28, 0)]);
+            }
+            e.mem.set_u32(a[3], 3);
+            e.mem.set_u32(a[4], sls);
+            let (width, height, _) = mode_of(s);
+            let native = e.mem.alloc(0x50);
+            if s.bezel {
+                put(e, native, &[(0x28, 1), (0x2c, 1)]);
+            } else {
+                put(e, native, &[(0x28, width), (0x2c, height)]);
+            }
+            e.mem.set_u32(a[5], 1);
+            e.mem.set_u32(a[6], native);
+            let bezel = e.mem.alloc(0x58);
+            put(e, bezel, &[(8, BEZEL_ID), (0x28, width), (0x2c, height)]);
+            e.mem.set_u32(a[7], u32::from(s.bezel));
+            e.mem.set_u32(a[8], bezel);
+            let offsets = e.mem.alloc(3 * 0x34);
+            for t in 0..3 {
+                let at = offsets + t * 0x34;
+                let x = 2000 * t + 5;
+                put(
+                    e,
+                    at,
+                    &[(8, 10 + t), (0x18, BEZEL_ID), (0x1c, x), (0x20, 6)],
+                );
+                put(e, at, &[(0x24, 1990), (0x28, 1090)]);
+            }
+            e.mem.set_u32(a[11], 3);
+            e.mem.set_u32(a[12], offsets);
+            0u32.into_ret()
+        });
+        e.register_double(FAKE_MODES, move |e, a| {
+            assert_eq!(a[0], ADAPTER);
+            if a[1] == s.failing_display {
+                return 1u32.into_ret();
+            }
+            let (width, height, orientation) = mode_of(s);
+            let mode = e.mem.alloc(0x30);
+            put(
+                e,
+                mode,
+                &[(0x1c, width), (0x20, height), (0x2c, orientation)],
+            );
+            e.mem.set_u32(a[3], mode);
+            0u32.into_ret()
+        });
+        e
+    }
+
+    /// Runs the query; answers (result, description, count, entries).
+    fn query(e: &mut Engine) -> (i32, Vec<u32>, u32, u32) {
+        let info = e.mem.alloc(0x18);
+        let count = e.mem.alloc(4);
+        let entries = e.mem.alloc(4);
+        let result = e
+            .call(0x004d_d2c0, &args![DISPLAY_INDEX, info, count, entries])
+            .i32();
+        (
+            result,
+            words(e, info, 6),
+            e.mem.u32(count),
+            e.mem.u32(entries),
+        )
+    }
+
+    #[test]
+    fn fn_004dd2a0_releases_the_slot_and_answers_1() {
+        let mut e = Engine::new();
+        e.register(ADL_FREE_SLOT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_d2a0, &args![0x1234u32]).u32(), 1);
+        assert_eq!(calls(&e, ADL_FREE_SLOT), vec![vec![0x1234]]);
+    }
+
+    #[test]
+    fn fn_004dd2c0_answers_0_without_outputs_or_library() {
+        let mut e = rig(NATIVE);
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x004d_d2c0, &args![2u32, 0x100u32, 0u32, 0x200u32])
+            .i32();
+        assert_eq!(result, 0);
+        assert!(calls(&e, IMPORT_LOAD_LIBRARY).is_empty());
+        assert_eq!(calls(&e, MEMSET).len(), 1);
+        e.register(IMPORT_LOAD_LIBRARY, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(query(&mut e).0, 0);
+        assert_eq!(
+            calls(&e, IMPORT_LOAD_LIBRARY),
+            vec![vec![ADL_LIBRARY], vec![ADL_LIBRARY_FALLBACK]]
+        );
+        assert!(calls(&e, IMPORT_FREE_LIBRARY).is_empty());
+    }
+
+    #[test]
+    fn fn_004dd2c0_fills_the_native_grid() {
+        let mut e = rig(NATIVE);
+        e.call_log = Some(vec![]);
+        let (result, info, count, entries) = query(&mut e);
+        assert_eq!(result, 1);
+        assert_eq!(info, vec![1, 3, 1, 5760, 1080, 0]);
+        assert_eq!(count, 3);
+        for t in 0..3 {
+            let flag = u32::from(t == 1);
+            let x = 1920 * t;
+            assert_eq!(
+                words(&e, entries + t * DISPLAY_ENTRY_SIZE, 11),
+                vec![t, 0, x, 0, 1920, 1080, x, 0, 1920, 1080, flag]
+            );
+        }
+        assert_eq!(calls(&e, FAKE_CREATE), vec![vec![ADL_ALLOCATE, 1]]);
+        // One release per target before its modes, then the nine blocks.
+        assert_eq!(calls(&e, ADL_FREE_SLOT).len(), 12);
+        assert_eq!(calls(&e, FAKE_DESTROY).len(), 1);
+        assert_eq!(calls(&e, IMPORT_FREE_LIBRARY), vec![vec![MODULE]]);
+    }
+
+    #[test]
+    fn fn_004dd2c0_swaps_a_rotated_mode() {
+        let mut e = rig(Scenario {
+            rotated: true,
+            ..NATIVE
+        });
+        let (result, info, _, entries) = query(&mut e);
+        assert_eq!(result, 1);
+        assert_eq!(info, vec![1, 3, 1, 5760, 1080, 0]);
+        assert_eq!(
+            words(&e, entries + DISPLAY_ENTRY_SIZE, 6),
+            vec![1, 0, 1920, 0, 1920, 1080]
+        );
+    }
+
+    #[test]
+    fn fn_004dd2c0_derives_a_failed_bezel_target_from_the_first_good_one() {
+        let mut e = rig(Scenario {
+            bezel: true,
+            failing_display: 12,
+            ..NATIVE
+        });
+        let (result, info, count, entries) = query(&mut e);
+        assert_eq!(result, 1);
+        assert_eq!(info, vec![1, 3, 1, 6000, 1100, 1]);
+        assert_eq!(count, 3);
+        assert_eq!(
+            words(&e, entries, 11),
+            vec![0, 0, 0, 0, 2000, 1100, 5, 6, 1990, 1090, 0]
+        );
+        assert_eq!(
+            words(&e, entries + DISPLAY_ENTRY_SIZE, 11),
+            vec![1, 0, 2000, 0, 2000, 1100, 2005, 6, 1990, 1090, 1]
+        );
+        // The last column: its visible x is the width less the reference's
+        // visible width; row 0 gives 0.
+        assert_eq!(
+            words(&e, entries + 2 * DISPLAY_ENTRY_SIZE, 11),
+            vec![2, 0, 4000, 0, 2000, 1100, 4010, 0, 1990, 1090, 0]
+        );
+    }
+
+    #[test]
+    fn fn_004dd2c0_failure_clears_the_outputs() {
+        let mut e = rig(Scenario {
+            display_map_fails: true,
+            ..NATIVE
+        });
+        e.call_log = Some(vec![]);
+        let info = e.mem.alloc(0x18);
+        e.mem.set_u32(info, 0xffff_ffff);
+        let count = e.mem.alloc(4);
+        e.mem.set_u32(count, 9);
+        let entries = e.mem.alloc(4);
+        let result = e
+            .call(0x004d_d2c0, &args![DISPLAY_INDEX, info, count, entries])
+            .i32();
+        assert_eq!(result, 0);
+        assert_eq!(e.mem.u32(count), 0);
+        assert_eq!(e.mem.u32(info), 0);
+        assert_eq!(calls(&e, FILL_BYTES).last(), Some(&vec![info, 0, 4]));
+        assert_eq!(calls(&e, ADL_FREE_SLOT).last(), Some(&vec![entries]));
+        assert_eq!(calls(&e, IMPORT_FREE_LIBRARY), vec![vec![MODULE]]);
+    }
+
+    fn map_globals(e: &mut Engine) {
+        e.map(0x0118_9480, 0x20);
+        e.map(0x011c_70e0, 0x20);
+        e.map(THREE_01021928, 8);
+        e.set_global(THREE_01021928, 3.0f64);
+    }
+
+    /// `EnumDisplayDevicesA` double: devices 0 to 2, only device 2 with
+    /// state bit 2.
+    fn enumerate_three(e: &mut Engine) {
+        e.register(IMPORT_ENUM_DISPLAY_DEVICES, |e, a| {
+            assert_eq!(e.mem.u32(a[2]), 0x1a8);
+            if a[1] > 2 {
+                return 0u32.into_ret();
+            }
+            e.mem.set_u32(a[2] + 0xa4, if a[1] == 2 { 5 } else { 0 });
+            1u32.into_ret()
+        });
+    }
+
+    #[test]
+    fn fn_004de100_reports_a_failed_query() {
+        let mut e = rig(NATIVE);
+        map_globals(&mut e);
+        enumerate_three(&mut e);
+        e.register(IMPORT_LOAD_LIBRARY, |_, _| 0u32.into_ret());
+        e.register(PRINTF, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x004d_e100, &args![]);
+        assert_eq!(calls(&e, IMPORT_ENUM_DISPLAY_DEVICES).len(), 3);
+        assert_eq!(calls(&e, PRINTF), vec![vec![EYEFINITY_QUERY_FAILED, 2]]);
+        // No device with the bit: the index stays -1.
+        e.register(IMPORT_ENUM_DISPLAY_DEVICES, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x004d_e100, &args![]);
+        assert_eq!(
+            calls(&e, PRINTF),
+            vec![vec![EYEFINITY_QUERY_FAILED, u32::MAX]]
+        );
+    }
+
+    #[test]
+    fn fn_004de100_sets_the_eyefinity_sizes() {
+        let mut e = rig(NATIVE);
+        map_globals(&mut e);
+        enumerate_three(&mut e);
+        e.set_global(EYEFINITY_GATE_01189484, 1u8);
+        e.call_log = Some(vec![]);
+        e.call(0x004d_e100, &args![]);
+        let float = |e: &Engine, at: u32| f32::from_bits(e.global::<u32>(at));
+        assert_eq!(float(&e, EYEFINITY_TOTAL_WIDTH_0118948C), 5760.0);
+        assert_eq!(float(&e, EYEFINITY_TOTAL_HEIGHT_01189490), 1080.0);
+        assert_eq!(
+            float(&e, EYEFINITY_RATIO_01189488),
+            (5760.0f64 / 1080.0) as f32
+        );
+        assert_eq!(float(&e, EYEFINITY_VIEW_WIDTH_01189494), 1920.0);
+        assert_eq!(float(&e, EYEFINITY_VIEW_HEIGHT_01189498), 1080.0);
+        assert_eq!(float(&e, EYEFINITY_THIRD_WIDTH_011C70F0), 1920.0);
+        assert_eq!(e.global::<u8>(EYEFINITY_FLAG), 1);
+        assert_eq!(e.global::<u8>(EYEFINITY_SECOND_FLAG), 1);
+        assert_eq!(e.global::<u8>(EYEFINITY_TALL_FLAG_011C70EF), 0);
+        // The entry array is released through its slot.
+        assert_eq!(calls(&e, ADL_FREE_SLOT).len(), 13);
+        assert!(calls(&e, PRINTF).is_empty());
+    }
+
+    #[test]
+    fn fn_004de100_without_the_gate_only_releases() {
+        let mut e = rig(NATIVE);
+        map_globals(&mut e);
+        enumerate_three(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x004d_e100, &args![]);
+        assert_eq!(e.global::<u32>(EYEFINITY_TOTAL_WIDTH_0118948C), 0);
+        assert_eq!(e.global::<u8>(EYEFINITY_FLAG), 0);
+        assert_eq!(calls(&e, ADL_FREE_SLOT).len(), 13);
     }
 }

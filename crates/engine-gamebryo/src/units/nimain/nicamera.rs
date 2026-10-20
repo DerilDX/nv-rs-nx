@@ -1502,9 +1502,39 @@ pub fn ni_camera_get_viewer_strings(e: &mut Engine, this: Ptr<NiCamera>, strings
     add_viewer_string(e, strings, text);
 }
 
+// Translated from 00a71430 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed (no Ghidra function; by its body the creation function of `NiCamera`; no
+/// arguments): a 0x114-byte block from `operator new`, constructed by [`fn_00a712f0`] (a
+/// tail jump), or null when the allocation fails.
+pub fn fn_00a71430(e: &mut Engine) -> Ptr<NiCamera> {
+    let block = e.call(NI_ALLOCATE, &args![NI_CAMERA_SIZE]).u32();
+    if block == 0 {
+        return Ptr::NULL;
+    }
+    fn_00a712f0(e, Ptr::new(block))
+}
+
+#[cfg(test)]
+mod b018_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00a71430_allocates_and_constructs_a_camera() {
+        let mut e = Engine::new();
+        e.register(NI_ALLOCATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a7_1430, &[]).u32(), 0);
+        assert_eq!(
+            e.call_log.take().unwrap(),
+            vec![(0x00a7_1430, vec![]), (NI_ALLOCATE, vec![NI_CAMERA_SIZE])]
+        );
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a7_1430, fn_00a71430() -> Ptr<NiCamera>),
         entry!(0x00a6fa30, fn_00a6fa30(Ptr, u32, u32, Ptr, Ptr, Ptr) -> bool),
         entry!(0x00a6faf0, ni_camera_set_view_frustum(Ptr<NiCamera>, Ptr)),
         entry!(0x00a6fb90, fn_00a6fb90(Ptr<NiCamera>, f32, bool)),
@@ -3058,6 +3088,20 @@ mod tests {
         let mut slots = vec![0u32; (SLOT_SET_BOUND / 4 + 1) as usize];
         slots[(SLOT_SET_BOUND / 4) as usize] = SET_BOUND_DOUBLE;
         e.put_vtable(NI_CAMERA_VTABLE, &slots);
+    }
+
+    #[test]
+    fn fn_00a71430_constructs_the_allocated_camera() {
+        let mut e = engine();
+        construction_doubles(&mut e);
+        let cam = camera(&mut e);
+        e.register_double(NI_ALLOCATE, move |_, _| eax(cam.addr()));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a7_1430, &[]).u32(), cam.addr());
+        assert_eq!(e.mem.u32(cam.addr()), NI_CAMERA_VTABLE);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (NI_ALLOCATE, vec![NI_CAMERA_SIZE]));
+        assert!(log.contains(&(AV_OBJECT_CONSTRUCT, vec![cam.addr()])));
     }
 
     #[test]

@@ -312,6 +312,38 @@ pub fn fn_00b9e7c0(e: &mut Engine, this: Ptr<NiTPointerList>, out: Ptr) -> Ptr {
     out
 }
 
+// Translated from 00b9e850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `BSShader/shadowscenelight.cpp`): removes the tail of an
+/// `NiTPointerList` of `NiPointer`s into an `NiPointer` the caller provides (the counterpart of
+/// `00b9e7c0`). `thiscall`, `RET 4`, one word (the out pointer). The tail item is unlinked (the
+/// tail takes its previous link; with a new tail that one's next link is cleared, otherwise the
+/// head is), its element is stored in the out pointer and held (`InterlockedIncrement` on its
+/// +4) when not null, the item is freed (`00e6e830`) and the count goes down by one. Answers
+/// the out pointer. An empty list is not checked (the tail's link is read from address 4).
+// Translation incomplete: 00b9e850 - the C++ exception frame (FS:[0] chain, unwind state 0 for the out pointer) is not translated.
+pub fn fn_00b9e850(e: &mut Engine, this: Ptr<NiTPointerList>, out: Ptr) -> Ptr {
+    let item = Ptr::<NiTListItem>::new(e.get(this, NiTPointerList::m_pkTail));
+    let previous = e.get(item, NiTListItem::m_pkPrev);
+    e.set(this, NiTPointerList::m_pkTail, previous);
+    if previous == 0 {
+        e.set(this, NiTPointerList::m_pkHead, 0);
+    } else {
+        e.set(Ptr::<NiTListItem>::new(previous), NiTListItem::m_pkNext, 0);
+    }
+    let element = e.get(item, NiTListItem::m_element);
+    e.mem.set_u32(out.addr(), element);
+    if element != 0 {
+        e.call(
+            IMPORT_INTERLOCKED_INCREMENT,
+            &args![element.wrapping_add(4)],
+        );
+    }
+    e.call(LIST_FREE_ITEM_00E6E830, &args![this, item]);
+    let count = e.get(this, NiTPointerList::m_uiCount).wrapping_sub(1);
+    e.set(this, NiTPointerList::m_uiCount, count);
+    out
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -324,6 +356,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00b9_fda0,
             shadow_scene_light_shadow_scene_light(Ptr<ShadowSceneLight>) -> Ptr<ShadowSceneLight>
         ),
+        entry!(0x00b9_e850, fn_00b9e850(Ptr<NiTPointerList>, Ptr) -> Ptr),
     ]
 }
 
@@ -600,5 +633,62 @@ mod tests {
             vec![vec![list, items[0]]]
         );
         assert_eq!(e.mem.bytes(list, 12), vec![0; 12]);
+    }
+}
+
+#[cfg(test)]
+mod remove_tail_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b9e850_moves_the_tail_element_out() {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) + 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(LIST_FREE_ITEM_00E6E830, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let list = e.mem.alloc(0xc);
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        let element = e.mem.alloc(8);
+        e.mem.set_u32(element + 4, 1);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(second + 4, first);
+        e.mem.set_u32(second + 8, element);
+        e.mem.set_u32(list, first);
+        e.mem.set_u32(list + 4, second);
+        e.mem.set_u32(list + 8, 2);
+        let out = e.mem.alloc(4);
+        assert_eq!(e.call(0x00b9_e850, &args![list, out]).u32(), out);
+        assert_eq!(e.mem.u32(out), element);
+        assert_eq!(e.mem.u32(element + 4), 2);
+        assert_eq!(e.mem.u32(list + 4), first);
+        assert_eq!(e.mem.u32(first), 0);
+        assert_eq!(e.mem.u32(list + 8), 1);
+        // The last item: the head is cleared and a null element is not held.
+        e.call(0x00b9_e850, &args![list, out]);
+        assert_eq!(e.mem.u32(out), 0);
+        assert_eq!(e.mem.u32(list), 0);
+        assert_eq!(e.mem.u32(list + 4), 0);
+        let log = e.call_log.take().unwrap();
+        let freed: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == LIST_FREE_ITEM_00E6E830)
+            .collect();
+        assert_eq!(
+            freed,
+            vec![
+                &(LIST_FREE_ITEM_00E6E830, vec![list, second]),
+                &(LIST_FREE_ITEM_00E6E830, vec![list, first])
+            ]
+        );
+        let held: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == IMPORT_INTERLOCKED_INCREMENT)
+            .collect();
+        assert_eq!(held.len(), 1);
     }
 }

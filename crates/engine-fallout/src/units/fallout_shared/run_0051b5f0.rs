@@ -87,9 +87,158 @@ pub fn fn_0051b860(e: &mut Engine, this: Ptr) -> f32 {
     x87_quiet(e.mem.f32(this.addr().wrapping_add(0x70)))
 }
 
+/// `004013e0` (`ECX`): whether form flag 8 is set (`AL`).
+const FORM_FLAG_8_SET: u32 = 0x0040_13e0;
+/// `00484ab0` (`ECX`, one stack word): sets or clears form flag 8.
+const SET_FORM_FLAG_8: u32 = 0x0048_4ab0;
+/// `BGSDestructibleObjectForm::InitItem` (engine map, `00478be0`, `ECX`, one stack word: the
+/// owning form).
+const DESTRUCTIBLE_INIT_ITEM: u32 = 0x0047_8be0;
+/// `00658930` (`ECX`): the 16-bit count at +0xa, zero-extended (here the seed array's size).
+const ARRAY_COUNT_00658930: u32 = 0x0065_8930;
+/// `00877a30` (`ECX` = an `NiTArray`, one stack word): the address of element `index`.
+const ARRAY_ELEMENT_00877A30: u32 = 0x0087_7a30;
+/// `operator delete` (`00401030`, `cdecl`, one word).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+
+// Translated from 0051b9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map: a constructor (`ECX`, no stack words) that runs the base constructor
+/// `0048e270` on `this`, stores the vtable `0102beb4` (RTTI `.?AVTESTexture1024@@`) and
+/// answers `this`.
+pub fn fn_0051b9b0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0048_e270, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0102_beb4);
+    this
+}
+
+// Translated from 0051b840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map, called from many classes (a folded setter): `ECX` and one stack float
+/// (`RET 4`), stored at `+0x6c` (`FLD`/`FSTP`, so a signalling NaN is stored quiet).
+pub fn fn_0051b840(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem
+        .set_f32(this.addr().wrapping_add(0x6c), x87_quiet(value));
+}
+
+// Translated from 0051b8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map, called from many classes (a folded setter): `ECX` and one stack float
+/// (`RET 4`), stored at `+0x84` (`FLD`/`FSTP`, so a signalling NaN is stored quiet).
+pub fn fn_0051b8c0(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem
+        .set_f32(this.addr().wrapping_add(0x84), x87_quiet(value));
+}
+
+// Translated from 0051b8e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map, called from many classes (a folded getter): the `float` at `+0x88`
+/// of `this` (`ECX`), returned in `ST0` (`FLD dword`, so a signalling NaN comes out quiet).
+pub fn fn_0051b8e0(e: &mut Engine, this: Ptr) -> f32 {
+    x87_quiet(e.mem.f32(this.addr().wrapping_add(0x88)))
+}
+
+// Translated from 0051b950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map: hands `this` (`ECX`) to `00489070` (the `TESModelTree` component's
+/// destructor in `0051b9d0`) and returns nothing.
+pub fn fn_0051b950(e: &mut Engine, this: Ptr) {
+    e.call(0x0048_9070, &args![this]);
+}
+
+// Translated from 0051b9d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0051b9d0 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00ef4aa4, state variable) is not translated
+/// The `TESObjectTREE` destructor (unnamed in the map; `ECX`, no stack words): stores the
+/// form's four vtables (`0102bc94` at +0, `0102bc6c` at +0x30, `0102bc4c` at +0x48,
+/// `0102bc38` at +0x54, all RTTI `.?AVTESObjectTREE@@`), then destroys the members and bases
+/// last first: `00483710` on `this`, `00473f00` on the seed array (+0x5c), `00475380` on
+/// +0x54, [`fn_0051b990`] on +0x48, [`fn_0051b950`] on +0x30, and `0050f7f0` on `this`.
+pub fn fn_0051b9d0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0102_bc94);
+    e.mem.set_u32(base + 0x30, 0x0102_bc6c);
+    e.mem.set_u32(base + 0x48, 0x0102_bc4c);
+    e.mem.set_u32(base + 0x54, 0x0102_bc38);
+    e.call(0x0048_3710, &args![this]);
+    e.call(0x0047_3f00, &args![base + 0x5c]);
+    e.call(0x0047_5380, &args![base + 0x54]);
+    fn_0051b990(e, Ptr::new(base + 0x48));
+    fn_0051b950(e, Ptr::new(base + 0x30));
+    e.call(0x0050_f7f0, &args![this]);
+}
+
+// Translated from 0051b900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `TESObjectTREE` scalar deleting destructor (its vtable `0102bc94`, slot +0x10; `ECX`
+/// and one stack word, `RET 4`): the destructor [`fn_0051b9d0`], then `operator delete` of
+/// `this` when bit 0 of `flags` is set; answers `this`.
+pub fn fn_0051b900(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0051b9d0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0051bb80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectTREE`'s vtable slot +0x88, the `InitItem` slot of the Xbox PDB's `TESForm`
+/// (`ECX`): unless form flag 8 is set (`004013e0`), the destructible component (+0x54)
+/// resolves (`BGSDestructibleObjectForm::InitItem` with the tree) and form flag 8 is set
+/// (`00484ab0` with 1).
+pub fn fn_0051bb80(e: &mut Engine, this: Ptr) {
+    if e.call(FORM_FLAG_8_SET, &args![this]).bool() {
+        return;
+    }
+    e.call(DESTRUCTIBLE_INIT_ITEM, &args![this.addr() + 0x54, this]);
+    e.call(SET_FORM_FLAG_8, &args![this, 1u32]);
+}
+
+// Translated from 0051ba90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectTREE`'s vtable slot +0x184 (`ECX`, one stack word, `RET 4`; its body matches the
+/// Xbox PDB's `GetIndexForSeed`, unconfirmed): the first index of the seed array (+0x5c, its
+/// count re-read through `00658930` each step) whose element is `seed`, as a byte; 0xff when
+/// none is.
+pub fn fn_0051ba90(e: &mut Engine, this: Ptr, seed: u32) -> u8 {
+    let seeds = this.addr() + 0x5c;
+    let mut index = 0u32;
+    while index < e.call(ARRAY_COUNT_00658930, &args![seeds]).u32() {
+        let element = e.call(ARRAY_ELEMENT_00877A30, &args![seeds, index]).u32();
+        if e.mem.u32(element) == seed {
+            return index as u8;
+        }
+        index += 1;
+    }
+    0xff
+}
+
+// Translated from 0051baf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectTREE`'s vtable slot +0x188 (`ECX`, one stack word, `RET 4`; its body matches the
+/// Xbox PDB's `GetSeedAtIndex`, unconfirmed): for index 0xff or an empty seed array (+0x5c,
+/// `00658930`), the answer of vtable slot +0x190; otherwise the seed at the index (the index
+/// taken modulo the count when it is not below it, as a byte), read through `00877a30`.
+pub fn fn_0051baf0(e: &mut Engine, this: Ptr, index: u8) -> u32 {
+    let seeds = this.addr() + 0x5c;
+    if index == 0xff || e.call(ARRAY_COUNT_00658930, &args![seeds]).u32() == 0 {
+        return e.vcall(this.addr(), 0x190, &args![]).u32();
+    }
+    let mut index = index;
+    if u32::from(index) >= e.call(ARRAY_COUNT_00658930, &args![seeds]).u32() {
+        let count = e.call(ARRAY_COUNT_00658930, &args![seeds]).u32();
+        index = (u32::from(index) % count) as u8;
+    }
+    let element = e
+        .call(ARRAY_ELEMENT_00877A30, &args![seeds, u32::from(index)])
+        .u32();
+    e.mem.u32(element)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0051_b9b0, fn_0051b9b0(Ptr) -> Ptr),
+        entry!(0x0051_b840, fn_0051b840(Ptr, f32)),
+        entry!(0x0051_b8c0, fn_0051b8c0(Ptr, f32)),
+        entry!(0x0051_b8e0, fn_0051b8e0(Ptr) -> f32),
+        entry!(0x0051_b950, fn_0051b950(Ptr)),
+        entry!(0x0051_b9d0, fn_0051b9d0(Ptr)),
+        entry!(0x0051_b900, fn_0051b900(Ptr, u32) -> Ptr),
+        entry!(0x0051_bb80, fn_0051bb80(Ptr)),
+        entry!(0x0051_ba90, fn_0051ba90(Ptr, u32) -> u8),
+        entry!(0x0051_baf0, fn_0051baf0(Ptr, u8) -> u32),
         entry!(0x0051_b860, fn_0051b860(Ptr) -> f32),
         entry!(0x0051_b990, fn_0051b990(Ptr)),
         entry!(0x0051_b6e0, fn_0051b6e0(Ptr) -> Ptr),
@@ -217,5 +366,181 @@ mod physics_work_ahead_tests {
             e.call(0x0051_b860, &args![this]).f32().to_bits(),
             0x7fc0_0001
         );
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_0051b9b0_runs_the_base_then_stores_the_vtable() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc);
+        e.register(0x0048_e270, |e, a| {
+            e.mem.set_u32(a[0], 0x1111);
+            a[0].into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0051_b9b0, &args![this]).u32(), this);
+        assert_eq!(calls(&e, 0x0048_e270), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), 0x0102_beb4);
+    }
+
+    #[test]
+    fn fn_0051b840_0051b8c0_0051b8e0_store_and_read_floats() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x90);
+        e.call(0x0051_b840, &args![this, 2.5f32]);
+        assert_eq!(e.mem.f32(this + 0x6c), 2.5);
+        e.call(0x0051_b8c0, &args![this, 0x7f80_0001u32]);
+        assert_eq!(e.mem.u32(this + 0x84), 0x7fc0_0001);
+        e.call(0x0051_b840, &args![this, 0xff80_0002u32]);
+        assert_eq!(e.mem.u32(this + 0x6c), 0xffc0_0002);
+        e.mem.set_f32(this + 0x88, -7.25);
+        assert_eq!(e.call(0x0051_b8e0, &args![this]).f32(), -7.25);
+        e.mem.set_u32(this + 0x88, 0x7f80_0003);
+        assert_eq!(
+            e.call(0x0051_b8e0, &args![this]).f32().to_bits(),
+            0x7fc0_0003
+        );
+        assert_eq!(e.mem.u32(this + 0x84), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn fn_0051b950_forwards_this() {
+        let mut e = Engine::new();
+        e.register(0x0048_9070, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0051_b950, &args![0x5000u32]);
+        assert_eq!(calls(&e, 0x0048_9070), vec![vec![0x5000]]);
+    }
+
+    fn destructor_rig() -> (Engine, u32) {
+        let mut e = Engine::new();
+        for addr in [
+            0x0048_3710,
+            0x0047_3f00,
+            0x0047_5380,
+            0x0040_2c40,
+            0x0048_9070,
+            0x0050_f7f0,
+            OPERATOR_DELETE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x94);
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    #[test]
+    fn fn_0051b9d0_destroys_last_first() {
+        let (mut e, this) = destructor_rig();
+        e.call(0x0051_b9d0, &args![this]);
+        let order: Vec<(u32, u32)> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .map(|c| (c.0, c.1[0]))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (0x0048_3710, this),
+                (0x0047_3f00, this + 0x5c),
+                (0x0047_5380, this + 0x54),
+                (0x0040_2c40, this + 0x48),
+                (0x0048_9070, this + 0x30),
+                (0x0050_f7f0, this),
+            ]
+        );
+        assert_eq!(e.mem.u32(this), 0x0102_bc94);
+        assert_eq!(e.mem.u32(this + 0x30), 0x0102_bc6c);
+        assert_eq!(e.mem.u32(this + 0x48), 0x0102_bc4c);
+        assert_eq!(e.mem.u32(this + 0x54), 0x0102_bc38);
+    }
+
+    #[test]
+    fn fn_0051b900_deletes_only_on_bit_0() {
+        let (mut e, this) = destructor_rig();
+        assert_eq!(e.call(0x0051_b900, &args![this, 2u32]).u32(), this);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(e.call(0x0051_b900, &args![this, 1u32]).u32(), this);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![this]]);
+        assert_eq!(calls(&e, 0x0050_f7f0).len(), 2);
+    }
+
+    #[test]
+    fn fn_0051bb80_resolves_once() {
+        let mut e = Engine::new();
+        e.register(FORM_FLAG_8_SET, |_, _| false.into_ret());
+        e.register(DESTRUCTIBLE_INIT_ITEM, |_, _| Ret::default());
+        e.register(SET_FORM_FLAG_8, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0051_bb80, &args![0x5000u32]);
+        assert_eq!(
+            calls(&e, DESTRUCTIBLE_INIT_ITEM),
+            vec![vec![0x5054, 0x5000]]
+        );
+        assert_eq!(calls(&e, SET_FORM_FLAG_8), vec![vec![0x5000, 1]]);
+        e.register(FORM_FLAG_8_SET, |_, _| true.into_ret());
+        e.call(0x0051_bb80, &args![0x5000u32]);
+        assert_eq!(calls(&e, DESTRUCTIBLE_INIT_ITEM).len(), 1);
+    }
+
+    /// A tree whose seed array (+0x5c: base pointer at +0x5c + 4, count at +0x5c + 0xa) holds
+    /// `seeds`; vtable slot +0x190 answers 0x777.
+    fn seed_rig(seeds: &[u32]) -> (Engine, u32) {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x94);
+        let base = e.mem.alloc(4 * seeds.len() as u32 + 4);
+        for (i, seed) in seeds.iter().enumerate() {
+            e.mem.set_u32(base + 4 * i as u32, *seed);
+        }
+        e.mem.set_u32(this + 0x60, base);
+        e.mem.set_u16(this + 0x66, seeds.len() as u16);
+        e.register(ARRAY_COUNT_00658930, |e, a| {
+            u32::from(e.mem.u16(a[0] + 0xa)).into_ret()
+        });
+        e.register(ARRAY_ELEMENT_00877A30, |e, a| {
+            (e.mem.u32(a[0] + 4) + a[1] * 4).into_ret()
+        });
+        e.put_vtable(0x0f00_9000, &[0; 0x65]);
+        e.mem.set_u32(0x0f00_9190, 0x0f00_9400);
+        e.register(0x0f00_9400, |_, _| 0x777u32.into_ret());
+        e.mem.set_u32(this, 0x0f00_9000);
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    #[test]
+    fn fn_0051ba90_finds_the_first_index_of_a_seed() {
+        let (mut e, this) = seed_rig(&[10, 20, 30, 20]);
+        assert_eq!(e.call(0x0051_ba90, &args![this, 20u32]).u32() & 0xff, 1);
+        assert_eq!(e.call(0x0051_ba90, &args![this, 30u32]).u32() & 0xff, 2);
+        assert_eq!(e.call(0x0051_ba90, &args![this, 99u32]).u32() & 0xff, 0xff);
+    }
+
+    #[test]
+    fn fn_0051baf0_answers_the_seed_at_an_index() {
+        let (mut e, this) = seed_rig(&[10, 20, 30]);
+        assert_eq!(e.call(0x0051_baf0, &args![this, 2u32]).u32(), 30);
+        // 7 % 3 = 1.
+        assert_eq!(e.call(0x0051_baf0, &args![this, 7u32]).u32(), 20);
+        assert_eq!(e.call(0x0051_baf0, &args![this, 0xffu32]).u32(), 0x777);
+        let (mut e, this) = seed_rig(&[]);
+        assert_eq!(e.call(0x0051_baf0, &args![this, 0u32]).u32(), 0x777);
+        assert!(calls(&e, ARRAY_ELEMENT_00877A30).is_empty());
     }
 }

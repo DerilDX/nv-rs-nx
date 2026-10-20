@@ -903,6 +903,70 @@ pub fn geometry_decal_shader_load_shaders(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// The pass array maker `00e80390` (unnamed; `cdecl`, the count: that many 0x68-byte passes
+/// after a count word) and `NiTSet<..>::Realloc` (`00a311e0`, `thiscall` on the set, one
+/// word: the new capacity).
+const NEW_PASSES_00E80390: u32 = 0x00e8_0390;
+const SET_REALLOC_00A311E0: u32 = 0x00a3_11e0;
+
+// Translated from 00e80420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `geometrydecalshader.cpp`): the pass pool's grow,
+/// `thiscall` on the pool (element array +0, capacity +4, count +8, block chain +0xc) with one
+/// stack word: the growth size. Allocates a 0xc-byte block from the memory manager (its +4 the
+/// growth size, +8 cleared, +0 the passes `00e80390` makes, or 0 for a growth of 0). Then for
+/// each new pass (its address in the block's array while the index is below the block's +4,
+/// else 0; the block's words read even when the allocation failed) the pool's set grows when
+/// full (`00a311e0` to twice the capacity, 1 when it is 0) and the pass is appended. Finally
+/// the block is linked in front of the chain at +0xc (its +8 takes the old head, written even
+/// through a null block).
+pub fn fn_00e80420(e: &mut Engine, this: Ptr, growth: u32) {
+    let base = this.addr();
+    let block = e
+        .call(
+            shader_inline::MEMORY_ALLOCATE,
+            &args![shader_inline::MEMORY_MANAGER, 0xcu32],
+        )
+        .u32();
+    if block != 0 {
+        e.mem.set_u32(block + 4, growth);
+        e.mem.set_u32(block + 8, 0);
+        if growth != 0 {
+            let passes = e.call(NEW_PASSES_00E80390, &args![growth]).u32();
+            e.mem.set_u32(block, passes);
+        } else {
+            e.mem.set_u32(block, 0);
+        }
+    }
+    let mut index = 0u32;
+    let mut offset = 0u32;
+    while index < growth {
+        let pass = if index < e.mem.u32(block.wrapping_add(4)) {
+            e.mem.u32(block).wrapping_add(offset)
+        } else {
+            0
+        };
+        let capacity = e.mem.u32(base + 4);
+        if e.mem.u32(base + 8) == capacity {
+            let size = if capacity != 0 {
+                capacity.wrapping_add(capacity)
+            } else {
+                1
+            };
+            e.call(SET_REALLOC_00A311E0, &args![base, size]);
+        }
+        let used = e.mem.u32(base + 8);
+        let elements = e.mem.u32(base);
+        e.mem
+            .set_u32(elements.wrapping_add(used.wrapping_mul(4)), pass);
+        e.mem.set_u32(base + 8, used.wrapping_add(1));
+        index += 1;
+        offset = offset.wrapping_add(0x68);
+    }
+    let chain = e.mem.u32(base + 0xc);
+    e.mem.set_u32(block.wrapping_add(8), chain);
+    e.mem.set_u32(base + 0xc, block);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -913,6 +977,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00bc_c0a0,
             geometry_decal_shader_create_shader() -> Ptr
         ),
+        entry!(0x00e8_0420, fn_00e80420(Ptr, u32)),
     ]
 }
 
@@ -1176,5 +1241,87 @@ mod constructor_and_loader_tests {
         assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![old]]);
         let cleared: Vec<u32> = calls(&e, MEMSET).iter().map(|a| a[2]).collect();
         assert_eq!(cleared, vec![0x2c, 0x2c]);
+    }
+}
+
+#[cfg(test)]
+mod pool_grow_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    /// A pool with an element array of `capacity` slots (all used); the realloc double moves
+    /// the elements into a new array of the asked capacity.
+    fn pool(e: &mut Engine, capacity: u32) -> u32 {
+        let pool = e.mem.alloc(0x10);
+        let elements = e.mem.alloc(4 * capacity.max(1));
+        for index in 0..capacity {
+            e.mem.set_u32(elements + 4 * index, 0x0e00_0000 + index);
+        }
+        e.mem.set_u32(pool, elements);
+        e.mem.set_u32(pool + 4, capacity);
+        e.mem.set_u32(pool + 8, capacity);
+        e.mem.set_u32(pool + 0xc, 0x0e10_0000);
+        e.register(SET_REALLOC_00A311E0, |e, a| {
+            let used = e.mem.u32(a[0] + 8);
+            let old = e.mem.u32(a[0]);
+            let new = e.mem.alloc(4 * a[1]);
+            for index in 0..used {
+                let element = e.mem.u32(old + 4 * index);
+                e.mem.set_u32(new + 4 * index, element);
+            }
+            e.mem.set_u32(a[0], new);
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e.register(NEW_PASSES_00E80390, |e, a| {
+            e.mem.alloc(0x68 * a[0]).into_ret()
+        });
+        pool
+    }
+
+    #[test]
+    fn fn_00e80420_appends_the_new_passes_and_links_the_block() {
+        let mut e = rig();
+        let pool = pool(&mut e, 2);
+        e.call(0x00e8_0420, &args![pool, 3u32]);
+        let block = e.mem.u32(pool + 0xc);
+        assert_eq!(e.mem.u32(block + 8), 0x0e10_0000);
+        assert_eq!(e.mem.u32(block + 4), 3);
+        let passes = e.mem.u32(block);
+        assert_eq!(calls(&e, NEW_PASSES_00E80390), vec![vec![3]]);
+        assert_eq!(
+            calls(&e, SET_REALLOC_00A311E0),
+            vec![vec![pool, 4], vec![pool, 8]]
+        );
+        assert_eq!(e.mem.u32(pool + 8), 5);
+        let elements = e.mem.u32(pool);
+        let held: Vec<u32> = (0..5).map(|i| e.mem.u32(elements + 4 * i)).collect();
+        assert_eq!(
+            held,
+            vec![
+                0x0e00_0000,
+                0x0e00_0001,
+                passes,
+                passes + 0x68,
+                passes + 0xd0
+            ]
+        );
+        assert_eq!(
+            calls(&e, shader_inline::MEMORY_ALLOCATE),
+            vec![vec![shader_inline::MEMORY_MANAGER, 0xc]]
+        );
+    }
+
+    #[test]
+    fn fn_00e80420_with_no_growth_links_an_empty_block() {
+        let mut e = rig();
+        let pool = pool(&mut e, 0);
+        e.call(0x00e8_0420, &args![pool, 0u32]);
+        let block = e.mem.u32(pool + 0xc);
+        assert_eq!(e.mem.u32(block), 0);
+        assert_eq!(e.mem.u32(block + 4), 0);
+        assert_eq!(e.mem.u32(block + 8), 0x0e10_0000);
+        assert!(calls(&e, NEW_PASSES_00E80390).is_empty());
+        assert!(calls(&e, SET_REALLOC_00A311E0).is_empty());
     }
 }

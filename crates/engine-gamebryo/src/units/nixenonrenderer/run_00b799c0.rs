@@ -96,9 +96,31 @@ pub fn fn_00b79b00(
     this
 }
 
+// Translated from 00b799c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b799c0`): `RemoveAll` of an `NiTObjectArray` of
+/// `NiPointer`s (base +4, size +0xa, element count +0xc), `thiscall`, no stack words. Each slot
+/// up to the size (read again each time) holding an object releases it (`InterlockedDecrement`
+/// on its +4, deleted through vtable slot +4 at 0) and is cleared; then the size and the element
+/// count become 0.
+// Translation incomplete: 00b799c0 - the C++ exception frame (FS:[0] chain, unwind state 0 for each slot's pointer) is not translated.
+pub fn fn_00b799c0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let mut index = 0u16;
+    while index < e.mem.u16(base + 0xa) {
+        let slot = e.mem.u32(base + 4).wrapping_add(u32::from(index) * 4);
+        ni_pointer_clear(e, slot);
+        index = index.wrapping_add(1);
+    }
+    e.mem.set_u16(base + 0xa, 0);
+    e.mem.set_u16(base + 0xc, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00b7_9b00, fn_00b79b00(Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr)]
+    vec![
+        entry!(0x00b7_9b00, fn_00b79b00(Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x00b7_99c0, fn_00b799c0(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -180,5 +202,46 @@ mod tests {
         let this = e.mem.alloc(0x90);
         e.call(0x00b7_9b00, &args![this, 0u32, 0u32, 0u32, 0u32]);
         assert_eq!(e.global::<f32>(FLOATS_011FD954), f32::INFINITY);
+    }
+}
+
+#[cfg(test)]
+mod remove_all_tests {
+    use super::*;
+
+    const DELETE: u32 = 0x0e00_0004;
+    const VTABLE: u32 = 0x0e01_0000;
+
+    #[test]
+    fn fn_00b799c0_releases_every_element() {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(DELETE, |_, _| Ret::default());
+        e.put_vtable(VTABLE, &[0, DELETE]);
+        e.call_log = Some(vec![]);
+        let objects = [e.mem.alloc(8), e.mem.alloc(8)];
+        e.mem.set_u32(objects[0], VTABLE);
+        e.mem.set_u32(objects[0] + 4, 1);
+        e.mem.set_u32(objects[1], VTABLE);
+        e.mem.set_u32(objects[1] + 4, 2);
+        let array = e.mem.alloc(0x10);
+        let elements = e.mem.alloc(0xc);
+        e.mem.set_u32(elements, objects[0]);
+        e.mem.set_u32(elements + 8, objects[1]);
+        e.mem.set_u32(array + 4, elements);
+        e.mem.set_u16(array + 0xa, 3);
+        e.mem.set_u16(array + 0xc, 2);
+        e.call(0x00b7_99c0, &args![array]);
+        assert_eq!(e.mem.bytes(elements, 0xc), vec![0; 0xc]);
+        assert_eq!(e.mem.u32(objects[1] + 4), 1);
+        assert_eq!(e.mem.u16(array + 0xa), 0);
+        assert_eq!(e.mem.u16(array + 0xc), 0);
+        let log = e.call_log.take().unwrap();
+        let deleted: Vec<_> = log.iter().filter(|c| c.0 == DELETE).collect();
+        assert_eq!(deleted, vec![&(DELETE, vec![objects[0]])]);
     }
 }

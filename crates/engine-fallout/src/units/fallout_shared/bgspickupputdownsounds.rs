@@ -141,12 +141,29 @@ pub fn bgs_pickup_putdown_sounds_init_item(
     );
 }
 
+// Translated from 0047b540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSPickupPutdownSounds::InitializeDataComponent` (Xbox PDB): no pickup
+/// and no putdown sound.
+pub fn bgs_pickup_putdown_sounds_initialize_data_component(
+    e: &mut Engine,
+    this: Ptr<BGSPickupPutdownSounds>,
+) {
+    e.set(this, BGSPickupPutdownSounds::pPickupSound, 0);
+    e.set(this, BGSPickupPutdownSounds::pPutdownSound, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x0047b6a0,
-        bgs_pickup_putdown_sounds_init_item(Ptr<BGSPickupPutdownSounds>, Ptr)
-    )]
+    vec![
+        entry!(
+            0x0047b6a0,
+            bgs_pickup_putdown_sounds_init_item(Ptr<BGSPickupPutdownSounds>, Ptr)
+        ),
+        entry!(
+            0x0047_b540,
+            bgs_pickup_putdown_sounds_initialize_data_component(Ptr<BGSPickupPutdownSounds>)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -302,5 +319,23 @@ mod tests {
             calls_to(&e, PRINT),
             vec![vec![PICKUP_MESSAGES.owner_name, 0x0100_0042, 0x0400_0000]]
         );
+    }
+}
+
+#[cfg(test)]
+mod b020_tests {
+    use super::*;
+
+    #[test]
+    fn b020_0047b540_clears_both_sounds() {
+        let mut e = Engine::new();
+        let this = e.new_object::<BGSPickupPutdownSounds>();
+        e.mem.set_u32(this.addr(), 0x77);
+        e.mem.set_u32(this.addr() + 4, 1);
+        e.mem.set_u32(this.addr() + 8, 2);
+        e.call(0x0047_b540, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), 0x77);
+        assert_eq!(e.mem.u32(this.addr() + 4), 0);
+        assert_eq!(e.mem.u32(this.addr() + 8), 0);
     }
 }

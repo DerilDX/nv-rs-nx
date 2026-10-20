@@ -38,12 +38,277 @@ pub fn fn_005119e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `BSStringT` copy constructor (`004047f0`, `thiscall`: the source).
+const STRING_COPY: u32 = 0x0040_47f0;
+/// `MapMarkerData::GetLocationName` (`00408da0`, engine map; `thiscall`).
+const GET_LOCATION_NAME: u32 = 0x0040_8da0;
+/// `TESIdleManager::SetUsedItem`, `SetUsedItemLevel`, `SetUsedItemActivate`
+/// (`00600900`, `00600920`, `00600940`, engine map; `cdecl`, one word).
+const SET_USED_ITEM: u32 = 0x0060_0900;
+const SET_USED_ITEM_LEVEL: u32 = 0x0060_0920;
+const SET_USED_ITEM_ACTIVATE: u32 = 0x0060_0940;
+/// `Actor::GetEyeLevel` (`008be940`, engine map; `thiscall`, ST0).
+const ACTOR_GET_EYE_LEVEL: u32 = 0x008b_e940;
+/// `MiddleHighProcess::GetSavedAcquireObject` (`008d8520`, engine map;
+/// `thiscall` on the actor).
+const GET_SAVED_ACQUIRE_OBJECT: u32 = 0x008d_8520;
+/// The player pointer (`011dea3c`) and the word `005113f0` stores the
+/// form's +0x80 in when the player activates (`011e0788`).
+const PLAYER: u32 = 0x011d_ea3c;
+const PLAYER_ACTIVATED_WORD: u32 = 0x011e_0788;
+/// `004fcbd0` (`thiscall` on the player, one word).
+const PLAYER_004FCBD0: u32 = 0x004f_cbd0;
+/// `PlayerCharacter::GetAnimation` (`00950a60`, `thiscall`, one word) and
+/// `Animation::ClearGroup` (`00496080`, `thiscall`, a word and a float).
+const PLAYER_GET_ANIMATION: u32 = 0x0095_0a60;
+const ANIMATION_CLEAR_GROUP: u32 = 0x0049_6080;
+/// `TESObjectREFR::IsAnOwner` (`005785e0`, `thiscall`, two words),
+/// `TESObjectREFR::GetOwner` (`00567790`, `thiscall`, no stack words) and
+/// `008c0ec0` (`thiscall` on the actor, three words; `actor.cpp`).
+const IS_AN_OWNER: u32 = 0x0057_85e0;
+const GET_OWNER: u32 = 0x0056_7790;
+const ACTOR_008C0EC0: u32 = 0x008c_0ec0;
+/// `00407820` (`thiscall`, no stack words): the form's sound (the object
+/// the sound code works on).
+const FORM_SOUND: u32 = 0x0040_7820;
+/// `004ef990` (no arguments): the word at `011c61c8`, the name the 3D node
+/// is asked for (slot +0x9C).
+const SOUND_NODE_NAME: u32 = 0x004e_f990;
+/// `0045bb80` (`thiscall`): a node's world position.
+const NODE_WORLD_POSITION: u32 = 0x0045_bb80;
+/// `004e75d0` (`thiscall`, one word, an out block) and `005e39b0`
+/// (`cdecl`, one word): the extra sound flags for the player.
+const SOUND_004E75D0: u32 = 0x004e_75d0;
+const SOUND_FLAGS_005E39B0: u32 = 0x005e_39b0;
+/// `BSAudio::QInstance` (`00453a70`), `BSAudio::GetSoundHandleByFilename`
+/// (`00ad7480`, `thiscall`: out handle, name, flags, sound),
+/// `BSSoundHandle::SetPosition` (`00ad8b60`, three floats),
+/// `SetObjectToFollow` (`00ad8f20`) and `Play` (`00ad8830`); `00483710` is an
+/// empty `thiscall` function (it returns at once), called on the handle
+/// here and on `this` in the destructor.
+const AUDIO_INSTANCE: u32 = 0x0045_3a70;
+const GET_SOUND_HANDLE_BY_FILENAME: u32 = 0x00ad_7480;
+const SOUND_SET_POSITION: u32 = 0x00ad_8b60;
+const SOUND_SET_OBJECT_TO_FOLLOW: u32 = 0x00ad_8f20;
+const SOUND_PLAY: u32 = 0x00ad_8830;
+const EMPTY_00483710: u32 = 0x0048_3710;
+/// `005d43c0` (`thiscall` on the player) and `0041a6a0` (`thiscall`, one
+/// word: the sound handle).
+const PLAYER_005D43C0: u32 = 0x005d_43c0;
+const EXTRA_0041A6A0: u32 = 0x0041_a6a0;
+/// `BGSOpenCloseForm::HandleActivate` (`0047a560`, `cdecl`, three words)
+/// and `GetOpenState` (`0047b250`, `cdecl`).
+const OPEN_CLOSE_HANDLE_ACTIVATE: u32 = 0x0047_a560;
+const OPEN_CLOSE_GET_OPEN_STATE: u32 = 0x0047_b250;
+/// `004fd3c0` (`thiscall`) and `008325b0` (`cdecl`, two words;
+/// `falloutradio.cpp`).
+const FORM_004FD3C0: u32 = 0x004f_d3c0;
+const RADIO_008325B0: u32 = 0x0083_25b0;
+/// The destructor's vtables and calls (`00483710` on `this`, `0048a490` on
+/// +0x18, `00483630` on `this`).
+const VTABLE_0102A0A4: u32 = 0x0102_a0a4;
+const VTABLE_0102A07C: u32 = 0x0102_a07c;
+const DESTRUCT_0048A490: u32 = 0x0048_a490;
+const DESTRUCT_00483630: u32 = 0x0048_3630;
+
+// Translated from 005110e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word, `RET 4`): copies the
+/// string at +0x88 into `result` (`004047f0`) and answers `result` (a string
+/// returned by value).
+pub fn fn_005110e0(e: &mut Engine, this: Ptr, result: Ptr) -> Ptr {
+    e.call(STRING_COPY, &args![result, this.addr() + 0x88]);
+    result
+}
+
+// Translation incomplete: 005113f0 - the FS:[0] exception frame (cleaning up the sound handle when a call throws) is not translated
+// Translated from 005113f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, five words, `RET 0x14`): a form's
+/// activation of `reference` by `activator`. When the activator is an actor
+/// (vtable +0x100): marks the used item (`TESIdleManager`), its level 1 when
+/// the reference's slot +0x218 answers true or the actor's eye height
+/// (`z + GetEyeLevel - slot +0x380`, as a float) is below the reference's
+/// `z` (ordered), and asks the actor's saved acquire object (slot +0x44 with
+/// the actor, 0, 3, 1, 0, 1); the marks are cleared again. A refusal with a
+/// script-like object at +0x80 answers false. The player succeeding stores
+/// +0x80 at `011e0788`, runs `004fcbd0(1)` and clears group 1 of both
+/// animations; an activator that does not own the reference gets
+/// `008c0ec0(reference, owner, -1)`. With a sound (`00407820`) it plays it at
+/// the reference's 3D node position (slot +0x1D0, the named node through
+/// slot +0x9C, else slot +0x1F4), following the 3D, flags `0x40000102` (plus
+/// the player's extra flags). The object at +0x80 then gets slot +0x124 with
+/// all five words, `BGSOpenCloseForm::HandleActivate(reference, activator,
+/// 0)` runs, and with `004fd3c0` the radio hook `008325b0` gets whether the
+/// reference is opening or open (states 1 and 2). Answers true.
+pub fn fn_005113f0(
+    e: &mut Engine,
+    this: Ptr,
+    reference: u32,
+    activator: u32,
+    flag: u8,
+    word_4: u32,
+    word_5: u32,
+) -> bool {
+    let at = this.addr();
+    let actor = if activator != 0 && e.vcall(activator, 0x100, &[]).bool() {
+        activator
+    } else {
+        0
+    };
+    let mut player_activated = false;
+    if actor != 0 {
+        e.call(SET_USED_ITEM, &args![at]);
+        e.call(SET_USED_ITEM_ACTIVATE, &args![1u32]);
+        let eye = e.call(ACTOR_GET_EYE_LEVEL, &args![actor]).f64();
+        let position = e.vcall(actor, 0x1f4, &[]).u32();
+        let sum = x87_add(x87_load32(e.mem.u32(position + 8)), eye);
+        let offset = e.vcall(actor, 0x380, &[]).f64();
+        let eye_height = x87_store32(x87_sub(sum, offset));
+        let position = e.vcall(reference, 0x1f4, &[]).u32();
+        let reference_z = x87_quiet_bits(e.mem.u32(position + 8));
+        let level = if e.vcall(reference, 0x218, &[]).bool()
+            || x87_load32(eye_height) < x87_load32(reference_z)
+        {
+            1u32
+        } else {
+            0
+        };
+        e.call(SET_USED_ITEM_LEVEL, &args![level]);
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![actor]).u32();
+        let accepted = e
+            .vcall(acquire, 0x44, &args![actor, 0u32, 3u32, 1u32, 0u32, 1u32])
+            .u8();
+        e.call(SET_USED_ITEM, &args![0u32]);
+        e.call(SET_USED_ITEM_ACTIVATE, &args![0u32]);
+        e.call(SET_USED_ITEM_LEVEL, &args![0xffff_ffffu32]);
+        if accepted == 0 && e.mem.u32(at + 0x80) != 0 {
+            return false;
+        }
+        if activator == e.mem.u32(PLAYER) && accepted != 0 {
+            let script = e.mem.u32(at + 0x80);
+            e.mem.set_u32(PLAYER_ACTIVATED_WORD, script);
+            let player = e.mem.u32(PLAYER);
+            e.call(PLAYER_004FCBD0, &args![player, 1u32]);
+            player_activated = true;
+            for first_person in [1u32, 0] {
+                let player = e.mem.u32(PLAYER);
+                let animation = e
+                    .call(PLAYER_GET_ANIMATION, &args![player, first_person])
+                    .u32();
+                e.call(ANIMATION_CLEAR_GROUP, &args![animation, 1u32, 0.0f32]);
+            }
+        }
+        if !e.call(IS_AN_OWNER, &args![reference, actor, 1u32]).bool() {
+            let owner = e.call(GET_OWNER, &args![reference]).u32();
+            e.call(
+                ACTOR_008C0EC0,
+                &args![actor, reference, owner, 0xffff_ffffu32],
+            );
+        }
+    }
+    if e.call(FORM_SOUND, &args![at]).u32() != 0 {
+        let mut node = 0u32;
+        if reference != 0 && e.vcall(reference, 0x1d0, &[]).u32() != 0 {
+            let root = e.vcall(reference, 0x1d0, &[]).u32();
+            let name = e.call(SOUND_NODE_NAME, &[]).u32();
+            node = e.vcall(root, 0x9c, &args![name]).u32();
+        }
+        let position = if node != 0 {
+            e.call(NODE_WORLD_POSITION, &args![node]).u32()
+        } else {
+            e.vcall(reference, 0x1f4, &[]).u32()
+        };
+        let point = [
+            e.mem.u32(position),
+            e.mem.u32(position + 4),
+            e.mem.u32(position + 8),
+        ];
+        let mut extra_flags = 0u32;
+        if player_activated {
+            extra_flags = e.with_stack(0x24, |e, block| {
+                let sound = e.call(FORM_SOUND, &args![at]).u32();
+                let info = e.call(SOUND_004E75D0, &args![sound, block]).u32();
+                let word = e.mem.u32(info + 4);
+                e.call(SOUND_FLAGS_005E39B0, &args![word]).u32()
+            });
+        }
+        let sound = e.call(FORM_SOUND, &args![at]).u32();
+        let flags = extra_flags | 0x4000_0102;
+        let named = e.call(FORM_SOUND, &args![at]).u32();
+        let name = fn_00511840(e, Ptr::new(named));
+        e.with_stack(0xc, |e, handle| {
+            let audio = e.call(AUDIO_INSTANCE, &[]).u32();
+            e.call(
+                GET_SOUND_HANDLE_BY_FILENAME,
+                &args![audio, handle, name, flags, sound],
+            );
+            if player_activated {
+                let player = e.mem.u32(PLAYER);
+                let list = e.call(PLAYER_005D43C0, &args![player]).u32();
+                e.call(EXTRA_0041A6A0, &args![list, handle]);
+            }
+            let [x, y, z] = point.map(x87_quiet_bits);
+            e.call(SOUND_SET_POSITION, &args![handle, x, y, z]);
+            let root = e.vcall(reference, 0x1d0, &[]).u32();
+            e.call(SOUND_SET_OBJECT_TO_FOLLOW, &args![handle, root]);
+            e.call(SOUND_PLAY, &args![handle, 0u32]);
+            e.call(EMPTY_00483710, &args![handle]);
+        });
+    }
+    let script = e.mem.u32(at + 0x80);
+    if script != 0 {
+        e.vcall(
+            script,
+            0x124,
+            &args![reference, activator, u32::from(flag), word_4, word_5],
+        );
+    }
+    e.call(
+        OPEN_CLOSE_HANDLE_ACTIVATE,
+        &args![reference, activator, 0u32],
+    );
+    if e.call(FORM_004FD3C0, &args![at]).u32() != 0 {
+        let state = e.call(OPEN_CLOSE_GET_OPEN_STATE, &args![reference]).u32();
+        let opening = u32::from(state == 1 || state == 2);
+        e.call(RADIO_008325B0, &args![reference, opening]);
+    }
+    true
+}
+
+// Translated from 00511840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`): `MapMarkerData::GetLocationName`
+/// (by the engine map's name for `00408da0`) on the member at +0x30.
+pub fn fn_00511840(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(GET_LOCATION_NAME, &args![this.addr() + 0x30]).u32()
+}
+
+// Translation incomplete: 00511a10 - the FS:[0] exception frame (running the remaining base destructors when one throws) is not translated
+// Translated from 00511a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the destructor body `005119e0` runs (the
+/// class of the form type 0x4D constructor `00511950`): stores the two
+/// vtables (`0102a0a4` at +0, `0102a07c` at +0x18), then `00483710` on
+/// `this`, `0048a490` on +0x18 and `00483630` on `this`.
+pub fn fn_00511a10(e: &mut Engine, this: Ptr) {
+    let at = this.addr();
+    e.mem.set_u32(at, VTABLE_0102A0A4);
+    e.mem.set_u32(at + 0x18, VTABLE_0102A07C);
+    e.call(EMPTY_00483710, &args![at]);
+    e.call(DESTRUCT_0048A490, &args![at + 0x18]);
+    e.call(DESTRUCT_00483630, &args![at]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0051_1950, fn_00511950(Ptr) -> Ptr),
         entry!(0x0051_1940, fn_00511940(Ptr, u32) -> u32),
         entry!(0x0051_19e0, fn_005119e0(Ptr, u32) -> Ptr),
+        entry!(0x005110e0, fn_005110e0(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x005113f0,
+            fn_005113f0(Ptr, u32, u32, u8, u32, u32) -> bool
+        ),
+        entry!(0x00511840, fn_00511840(Ptr) -> u32),
+        entry!(0x00511a10, fn_00511a10(Ptr)),
     ]
 }
 
@@ -128,5 +393,236 @@ mod le81_thunk_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod activation_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn string_and_location_name_helpers() {
+        let mut e = Engine::new();
+        e.register(STRING_COPY, |_, a| a[0].into_ret());
+        e.register(GET_LOCATION_NAME, |_, a| (a[0] + 1).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0051_10e0, &args![0x1000u32, 0x2000u32]).u32(),
+            0x2000
+        );
+        assert_eq!(calls_to(&e, STRING_COPY), vec![vec![0x2000, 0x1088]]);
+        assert_eq!(e.call(0x0051_1840, &args![0x1000u32]).u32(), 0x1031);
+    }
+
+    #[test]
+    fn destructor_body_stores_the_vtables() {
+        let mut e = Engine::new();
+        for address in [EMPTY_00483710, DESTRUCT_0048A490, DESTRUCT_00483630] {
+            e.register(address, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0x3c);
+        e.call_log = Some(vec![]);
+        e.call(0x0051_1a10, &args![this]);
+        assert_eq!(e.mem.u32(this), VTABLE_0102A0A4);
+        assert_eq!(e.mem.u32(this + 0x18), VTABLE_0102A07C);
+        let order: Vec<(u32, Vec<u32>)> = e.call_log.take().unwrap().into_iter().skip(1).collect();
+        assert_eq!(
+            order,
+            vec![
+                (EMPTY_00483710, vec![this]),
+                (DESTRUCT_0048A490, vec![this + 0x18]),
+                (DESTRUCT_00483630, vec![this]),
+            ]
+        );
+    }
+
+    /// An object whose vtable slots up to +0x400 are recording doubles at
+    /// `base + slot`, answering the value `answers` gives the slot (0
+    /// otherwise).
+    fn object(e: &mut Engine, base: u32, answers: Vec<(u32, u32)>) -> u32 {
+        let vtable = e.mem.alloc(0x400);
+        for slot in (0..0x400u32).step_by(4) {
+            e.mem.set_u32(vtable + slot, base + slot);
+            let value = answers
+                .iter()
+                .find(|(s, _)| *s == slot)
+                .map_or(0, |(_, v)| *v);
+            e.register_double(base + slot, move |_, _| value.into_ret());
+        }
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for address in [
+            SET_USED_ITEM,
+            SET_USED_ITEM_LEVEL,
+            SET_USED_ITEM_ACTIVATE,
+            PLAYER_004FCBD0,
+            ANIMATION_CLEAR_GROUP,
+            ACTOR_008C0EC0,
+            GET_SOUND_HANDLE_BY_FILENAME,
+            SOUND_SET_POSITION,
+            SOUND_SET_OBJECT_TO_FOLLOW,
+            SOUND_PLAY,
+            EMPTY_00483710,
+            EXTRA_0041A6A0,
+            OPEN_CLOSE_HANDLE_ACTIVATE,
+            RADIO_008325B0,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(ACTOR_GET_EYE_LEVEL, |_, _| 60.0f64.into_ret());
+        e.register(GET_OWNER, |_, _| 0x0077u32.into_ret());
+        e.register(IS_AN_OWNER, |_, _| Ret::default());
+        e.register(PLAYER_GET_ANIMATION, |_, a| (0x0a00 + a[1]).into_ret());
+        e.register(OPEN_CLOSE_GET_OPEN_STATE, |_, _| 2u32.into_ret());
+        e.register(FORM_004FD3C0, |_, _| 1u32.into_ret());
+        e.register(AUDIO_INSTANCE, |_, _| 0x0a0du32.into_ret());
+        e.register(GET_LOCATION_NAME, |_, _| 0x4e4du32.into_ret());
+        e.map(0x011d_e000, 0x3000);
+        e
+    }
+
+    #[test]
+    fn actor_activation_without_a_sound() {
+        let mut e = engine();
+        e.register(FORM_SOUND, |_, _| Ret::default());
+        // The actor at z 100 with a height offset of 10: eye height 150.
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position + 8, 100.0);
+        let actor = object(&mut e, 0x0030_0000, vec![(0x100, 1), (0x1f4, position)]);
+        e.register(0x0030_0380, |_, _| 10.0f64.into_ret());
+        // The reference at z 200: the eye is below it, level 1.
+        let reference_position = e.mem.alloc(12);
+        e.mem.set_f32(reference_position + 8, 200.0);
+        let reference = object(&mut e, 0x0031_0000, vec![(0x1f4, reference_position)]);
+        let acquire = object(&mut e, 0x0032_0000, vec![(0x44, 1)]);
+        e.register_double(GET_SAVED_ACQUIRE_OBJECT, move |_, _| acquire.into_ret());
+        let script = object(&mut e, 0x0033_0000, vec![]);
+        let this = e.mem.alloc(0x90);
+        e.mem.set_u32(this + 0x80, script);
+        e.call_log = Some(vec![]);
+        let done = e
+            .call(
+                0x0051_13f0,
+                &args![this, reference, actor, 0x101u32, 4u32, 5u32],
+            )
+            .bool();
+        assert!(done);
+        assert_eq!(
+            calls_to(&e, SET_USED_ITEM_LEVEL),
+            vec![vec![1], vec![0xffff_ffff]]
+        );
+        assert_eq!(
+            calls_to(&e, 0x0032_0044),
+            vec![vec![acquire, actor, 0, 3, 1, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_008C0EC0),
+            vec![vec![actor, reference, 0x77, 0xffff_ffff]]
+        );
+        assert_eq!(
+            calls_to(&e, 0x0033_0124),
+            vec![vec![script, reference, actor, 1, 4, 5]]
+        );
+        assert_eq!(
+            calls_to(&e, OPEN_CLOSE_HANDLE_ACTIVATE),
+            vec![vec![reference, actor, 0]]
+        );
+        assert_eq!(calls_to(&e, RADIO_008325B0), vec![vec![reference, 1]]);
+        assert!(calls_to(&e, PLAYER_004FCBD0).is_empty());
+        assert!(calls_to(&e, GET_SOUND_HANDLE_BY_FILENAME).is_empty());
+    }
+
+    #[test]
+    fn refused_activation_with_a_script_answers_false() {
+        let mut e = engine();
+        e.register(FORM_SOUND, |_, _| Ret::default());
+        let position = e.mem.alloc(12);
+        let actor = object(&mut e, 0x0030_0000, vec![(0x100, 1), (0x1f4, position)]);
+        let reference = object(&mut e, 0x0031_0000, vec![(0x1f4, position), (0x218, 1)]);
+        let acquire = object(&mut e, 0x0032_0000, vec![]);
+        e.register_double(GET_SAVED_ACQUIRE_OBJECT, move |_, _| acquire.into_ret());
+        let this = e.mem.alloc(0x90);
+        e.mem.set_u32(this + 0x80, 0x1234);
+        e.call_log = Some(vec![]);
+        let done = e
+            .call(
+                0x0051_13f0,
+                &args![this, reference, actor, 0u32, 0u32, 0u32],
+            )
+            .bool();
+        assert!(!done);
+        assert_eq!(
+            calls_to(&e, SET_USED_ITEM_LEVEL),
+            vec![vec![1], vec![0xffff_ffff]]
+        );
+        assert!(calls_to(&e, OPEN_CLOSE_HANDLE_ACTIVATE).is_empty());
+    }
+
+    #[test]
+    fn player_activation_plays_the_sound_at_the_reference() {
+        let mut e = engine();
+        let sound = e.mem.alloc(0x40);
+        e.register_double(FORM_SOUND, move |_, _| sound.into_ret());
+        e.register(SOUND_004E75D0, |e, a| {
+            e.mem.set_u32(a[1] + 4, 0x200);
+            a[1].into_ret()
+        });
+        e.register(SOUND_FLAGS_005E39B0, |_, a| (a[0] << 4).into_ret());
+        e.register(PLAYER_005D43C0, |_, _| 0x5d5du32.into_ret());
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, 1.0);
+        e.mem.set_f32(position + 4, 2.0);
+        e.mem.set_f32(position + 8, 3.0);
+        let player = object(&mut e, 0x0030_0000, vec![(0x100, 1), (0x1f4, position)]);
+        e.set_global(PLAYER, player);
+        let reference = object(&mut e, 0x0031_0000, vec![(0x1f4, position)]);
+        let acquire = object(&mut e, 0x0032_0000, vec![(0x44, 1)]);
+        e.register_double(GET_SAVED_ACQUIRE_OBJECT, move |_, _| acquire.into_ret());
+        e.register(IS_AN_OWNER, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0x90);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(
+                0x0051_13f0,
+                &args![this, reference, player, 0u32, 0u32, 0u32]
+            )
+            .bool());
+        assert_eq!(e.mem.u32(PLAYER_ACTIVATED_WORD), 0);
+        assert_eq!(calls_to(&e, PLAYER_004FCBD0), vec![vec![player, 1]]);
+        assert_eq!(
+            calls_to(&e, ANIMATION_CLEAR_GROUP),
+            vec![vec![0x0a01, 1, 0], vec![0x0a00, 1, 0]]
+        );
+        assert!(calls_to(&e, ACTOR_008C0EC0).is_empty());
+        let handle = calls_to(&e, GET_SOUND_HANDLE_BY_FILENAME);
+        assert_eq!(handle[0][0], 0x0a0d);
+        assert_eq!(&handle[0][2..], [0x4e4d, 0x4000_2102, sound]);
+        let handle = handle[0][1];
+        assert_eq!(calls_to(&e, EXTRA_0041A6A0), vec![vec![0x5d5d, handle]]);
+        assert_eq!(
+            calls_to(&e, SOUND_SET_POSITION),
+            vec![vec![
+                handle,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits()
+            ]]
+        );
+        assert_eq!(calls_to(&e, SOUND_PLAY), vec![vec![handle, 0]]);
     }
 }
