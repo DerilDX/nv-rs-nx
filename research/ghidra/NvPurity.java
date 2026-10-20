@@ -1,7 +1,7 @@
 // Purity facts: what each function touches besides its own stack, for the
 // automatic oracle check (docs/HANDOFF.md next task 10, #182).
 //
-// Args: out=<file.tsv>
+// Args: out=<file.tsv> [threads=N] [args=1|0]
 //
 // Read-only (run with -readOnly). Writes one row per function, sorted by
 // entry:
@@ -48,6 +48,22 @@
 //   consts_float the values x87/SSE instructions load from absolute
 //               addresses: f<8 hex> (dword) or d<16 hex> (qword), ','.
 //               Both are test inputs for the oracle check (boundaries).
+//   arg_access  from the decompiler's data flow, per input used as a
+//               pointer, what goes through it: input=items|input=items, inputs
+//               ecx, edx, s<n> (stack argument n bytes past the return
+//               address), eax, ebx, esi, edi, ebp (register arguments of
+//               whole-program optimized code); items u (eax..ebp: the value is
+//               used at all; ecx, edx: used other than as a call argument),
+//               r<off>.<size> / w<off>.<size> (load / store at
+//               a byte offset), r? / w? (offset unknown), c<off> (the pointer
+//               loaded from <off> is dereferenced), p<callee> (passed to a
+//               call, p? for an indirect one), e (the pointer itself is
+//               stored). Only for functions with indirect = imports = w_global
+//               = w_implicit = fs = 0 (args=0 skips it); "-" otherwise or when
+//               the decompiler gave no result.
+//   untracked_loads, untracked_stores  LOADs / STOREs whose address no input
+//               explains (pointers loaded from memory or returned by calls);
+//               -1 where arg_access is "-".
 //
 // A function is pure for the oracle check when it and every function it
 // calls (transitively) has indirect = imports = w_global = w_pointer =
@@ -96,7 +112,8 @@ public class NvPurity extends GhidraScript {
 
     @Override
     public void run() throws Exception {
-        Map<String, String> args = NvCommon.parseArgs(NAME, getScriptArgs(), Set.of("out"));
+        Map<String, String> args =
+            NvCommon.parseArgs(NAME, getScriptArgs(), Set.of("out", "threads", "args"));
         Path out = Paths.get(NvCommon.require(NAME, args, "out"));
         if (out.getParent() != null) {
             Files.createDirectories(out.getParent());
@@ -111,16 +128,42 @@ public class NvPurity extends GhidraScript {
         }
         int expected = fm.getFunctionCount() - externals;
 
+        int threads = NvCommon.intArg(NAME, args, "threads",
+            Math.min(8, Runtime.getRuntime().availableProcessors()), 1, 64);
+        boolean doArgs = NvCommon.flag(NAME, args, "args", true);
+
         List<String> lines = new ArrayList<>();
         lines.add("entry\tsize\tret_pop\tebp_frame\tcalls\ttail_calls\tindirect\timports\t"
             + "w_stack\tw_global\tw_pointer\tw_implicit\tr_pointer\tfs\treg_in\tstack_args\t"
-            + "consts_int\tconsts_float");
+            + "consts_int\tconsts_float\targ_access\tuntracked_loads\tuntracked_stores");
+        List<Function> order = new ArrayList<>();
+        List<String> base = new ArrayList<>();
         for (Function f : fm.getFunctions(true)) {
             monitor.checkCancelled();
             if (f.isExternal()) {
                 continue;
             }
-            lines.add(row(f, fm, listing));
+            order.add(f);
+            base.add(row(f, fm, listing));
+        }
+        // Second pass: the decompiler's data flow for the functions that could be checked
+        // (no indirect or imported calls, no stores to globals or implicit ones, no FS).
+        String[] argCols = new String[order.size()];
+        java.util.Arrays.fill(argCols, "-\t-1\t-1");
+        if (doArgs) {
+            List<Integer> todo = new ArrayList<>();
+            for (int i = 0; i < base.size(); i++) {
+                String[] c = base.get(i).split("\t", -1);
+                if (c[6].equals("0") && c[7].equals("0") && c[9].equals("0") && c[11].equals("0")
+                    && c[13].equals("0")) {
+                    todo.add(i);
+                }
+            }
+            println(NAME + ": data flow for " + todo.size() + " functions, threads=" + threads);
+            argAccessAll(order, todo, argCols, threads);
+        }
+        for (int i = 0; i < base.size(); i++) {
+            lines.add(base.get(i) + "\t" + argCols[i]);
         }
         int rows = lines.size() - 1;
         if (rows != expected) {
@@ -259,6 +302,514 @@ public class NvPurity extends GhidraScript {
             + "\t" + stackArgBytes(listing, body, ebpFrame)
             + "\t" + joinLongs(intConsts) + "\t" + String.join(",", floatConsts);
     }
+
+    // ---- per-argument accesses from the decompiler's data flow ----
+
+    private final List<ghidra.app.decompiler.DecompInterface> decompilers =
+        java.util.Collections.synchronizedList(new ArrayList<>());
+    private final ThreadLocal<ghidra.app.decompiler.DecompInterface> localDecompiler =
+        new ThreadLocal<>();
+    private ghidra.app.decompiler.DecompileOptions decompOptions;
+
+    /**
+     * The data-flow columns for the functions in {@code todo}. The decompiler only keeps
+     * computations that reach the return value, and it never infers a return in x87 ST0: a
+     * function returning a float there (with the usual DEFAULT prototype) is decompiled as
+     * returning EAX, and every load that only feeds the float is dropped as dead (00e37820 reads
+     * {@code this->p->v} for its result and showed only the read of {@code p}). So functions with
+     * x87 code are decompiled a second time with the return stored in ST0, inside a transaction
+     * that is always aborted, so the program is left as it was. Accesses are the union of the two
+     * passes, untracked counts the larger, and a function either pass failed on gets no result.
+     */
+    private void argAccessAll(List<Function> order, List<Integer> todo, String[] out, int threads)
+            throws Exception {
+        decompOptions = new ghidra.app.decompiler.DecompileOptions();
+        decompOptions.grabFromProgram(currentProgram);
+        String[] stored = new String[out.length];
+        argAccessPass(order, todo, stored, threads, "stored prototype");
+        String[] x87 = new String[out.length];
+        List<Integer> withX87 = new ArrayList<>();
+        for (int i : todo) {
+            if (usesX87(order.get(i))) {
+                withX87.add(i);
+            }
+        }
+        int tx = currentProgram.startTransaction(NAME + ": return overrides (always aborted)");
+        try {
+            returnInSt0(order, withX87);
+            argAccessPass(order, withX87, x87, threads, "return in ST0");
+        }
+        finally {
+            currentProgram.endTransaction(tx, false);
+        }
+        for (int i : todo) {
+            out[i] = mergeAccess(stored[i], x87[i]);
+        }
+    }
+
+    private void argAccessPass(List<Function> order, List<Integer> todo, String[] out, int threads,
+            String what) throws Exception {
+        println(NAME + ": data flow (" + what + ") for " + todo.size() + " functions");
+        java.util.concurrent.ExecutorService pool =
+            java.util.concurrent.Executors.newFixedThreadPool(threads);
+        try {
+            List<java.util.concurrent.Future<String>> futures = new ArrayList<>();
+            for (int i : todo) {
+                Function f = order.get(i);
+                futures.add(pool.submit(() -> argAccess(f)));
+            }
+            int next = Math.max(1, todo.size() / 10);
+            for (int k = 0; k < todo.size(); k++) {
+                monitor.checkCancelled();
+                out[todo.get(k)] = futures.get(k).get();
+                if (k + 1 >= next) {
+                    println(NAME + ": data flow (" + what + ") " + (k + 1) + "/" + todo.size());
+                    next += Math.max(1, todo.size() / 10);
+                }
+            }
+        }
+        finally {
+            pool.shutdownNow();
+            pool.awaitTermination(1, java.util.concurrent.TimeUnit.MINUTES);
+            // Fresh decompilers for the next pass, so none keeps a prototype from this one.
+            synchronized (decompilers) {
+                for (ghidra.app.decompiler.DecompInterface d : decompilers) {
+                    d.dispose();
+                }
+                decompilers.clear();
+            }
+        }
+    }
+
+    /**
+     * Gives the functions a {@code float10} return stored in ST0 (explicit storage: with the
+     * "unknown" convention most functions have, a float10 return would otherwise go through a
+     * hidden pointer).
+     */
+    private void returnInSt0(List<Function> order, List<Integer> which) throws Exception {
+        ghidra.program.model.listing.VariableStorage st0 = new ghidra.program.model.listing.VariableStorage(
+            currentProgram, currentProgram.getLanguage().getRegister("ST0"));
+        for (int i : which) {
+            Function f = order.get(i);
+            try {
+                f.setCustomVariableStorage(true);
+                f.setReturn(ghidra.program.model.data.Float10DataType.dataType, st0,
+                    ghidra.program.model.symbol.SourceType.USER_DEFINED);
+            }
+            catch (Exception ex) {
+                // left as stored; that pass then repeats the stored-prototype result
+            }
+        }
+    }
+
+    /** Whether the body has any x87 instruction (only then can it return in ST0). */
+    private boolean usesX87(Function f) {
+        for (Instruction ins : currentProgram.getListing().getInstructions(f.getBody(), true)) {
+            if (ins.getMnemonicString().toUpperCase().startsWith("F")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Union of the passes' arg_access items, the largest untracked counts; "-" if any failed. */
+    private static String mergeAccess(String... cols) {
+        java.util.TreeMap<String, java.util.TreeSet<String>> acc = new java.util.TreeMap<>();
+        long loads = 0, stores = 0;
+        for (String col : cols) {
+            if (col == null) {
+                continue; // not in that pass (no x87 code)
+            }
+            String[] c = col.split("\t", -1);
+            if (c[0].equals("-")) {
+                return "-\t-1\t-1";
+            }
+            for (String part : c[0].split("\\|")) {
+                if (part.isEmpty()) {
+                    continue;
+                }
+                int eq = part.indexOf('=');
+                for (String item : part.substring(eq + 1).split(",")) {
+                    add(acc, part.substring(0, eq), item);
+                }
+            }
+            loads = Math.max(loads, Long.parseLong(c[1]));
+            stores = Math.max(stores, Long.parseLong(c[2]));
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, java.util.TreeSet<String>> e : acc.entrySet()) {
+            if (sb.length() > 0) {
+                sb.append('|');
+            }
+            sb.append(e.getKey()).append('=').append(String.join(",", e.getValue()));
+        }
+        return sb + "\t" + loads + "\t" + stores;
+    }
+
+    private ghidra.app.decompiler.DecompInterface decompilerForThisThread() {
+        ghidra.app.decompiler.DecompInterface di = localDecompiler.get();
+        if (di == null) {
+            di = new ghidra.app.decompiler.DecompInterface();
+            di.setOptions(decompOptions);
+            di.toggleCCode(false);
+            di.toggleSyntaxTree(true);
+            di.setSimplificationStyle("decompile");
+            if (!di.openProgram(currentProgram)) {
+                String msg = di.getLastMessage();
+                di.dispose();
+                throw new IllegalStateException(NAME + ": cannot open decompiler: " + msg);
+            }
+            decompilers.add(di);
+            localDecompiler.set(di);
+        }
+        return di;
+    }
+
+    /**
+     * The three data-flow columns for one function: arg_access, untracked_loads, untracked_stores.
+     *
+     * arg_access lists, per input that is used as a pointer, what is done through it, as
+     * {@code <input>=<item>,<item>...} joined by {@code |}. Inputs: {@code ecx}, {@code edx},
+     * {@code s<n>} (the stack argument n bytes past the return address), and {@code eax},
+     * {@code ebx}, {@code esi}, {@code edi}, {@code ebp} (registers no standard convention passes
+     * arguments in, with the item {@code u} when the value is used at all; ECX and EDX get
+     * {@code u} when used other than as a call argument). Items:
+     * {@code r<off>.<size>} / {@code w<off>.<size>} a load / store at a byte offset from the
+     * argument; {@code r?} / {@code w?} at an offset the data flow can't pin down; {@code c<off>}
+     * the pointer loaded from {@code <off>} is itself dereferenced; {@code p<callee>} the pointer
+     * (or one derived from it) is passed to a call; {@code e} it is stored somewhere. An input that
+     * is never used as an address is not listed. untracked_loads / untracked_stores count LOAD /
+     * STORE operations whose address comes from none of the inputs (pointers loaded from memory,
+     * returned by calls). "-" and -1 when the decompiler gave no result.
+     */
+    private String argAccess(Function f) {
+        ghidra.app.decompiler.DecompileResults res;
+        try {
+            res = decompilerForThisThread().decompileFunction(f, 60, ghidra.util.task.TaskMonitor.DUMMY);
+        }
+        catch (Exception ex) {
+            return "-\t-1\t-1";
+        }
+        ghidra.program.model.pcode.HighFunction hf = res == null ? null : res.getHighFunction();
+        if (hf == null) {
+            return "-\t-1\t-1";
+        }
+        // varnode -> (input name, offset from it; null when unknown)
+        Map<ghidra.program.model.pcode.Varnode, String> owner = new java.util.HashMap<>();
+        Map<ghidra.program.model.pcode.Varnode, Long> offset = new java.util.HashMap<>();
+        java.util.ArrayDeque<ghidra.program.model.pcode.Varnode> work = new java.util.ArrayDeque<>();
+        java.util.TreeMap<String, java.util.TreeSet<String>> acc = new java.util.TreeMap<>();
+
+        java.util.Iterator<ghidra.program.model.pcode.PcodeOpAST> it = hf.getPcodeOps();
+        List<ghidra.program.model.pcode.PcodeOpAST> all = new ArrayList<>();
+        while (it.hasNext()) {
+            ghidra.program.model.pcode.PcodeOpAST op = it.next();
+            all.add(op);
+            for (ghidra.program.model.pcode.Varnode in : op.getInputs()) {
+                if (in == null || !in.isInput() || owner.containsKey(in)) {
+                    continue;
+                }
+                String name = inputName(in);
+                if (name != null) {
+                    owner.put(in, name);
+                    offset.put(in, 0L);
+                    work.add(in);
+                    // The decompiler drops idioms that name a register without using its value
+                    // (MOV EDI,EDI; LEA EBX,[EBX]; OR EAX,-1) and saved registers, so an input
+                    // left here is an argument (00df9ae0 takes its seed in EAX, #202).
+                    if (OTHER_REGS.contains(name.toUpperCase()) && in.getDescendants().hasNext()) {
+                        add(acc, name, "u");
+                    }
+                    // ECX/EDX used at all, as a number too (LEA [ECX*4] in 00d49c20), but not
+                    // when they only reach calls: the decompiler lets ECX flow into any callee
+                    // whose convention it doesn't know (_ftol2 and the like).
+                    if ((name.equals("ecx") || name.equals("edx")) && usedBeyondCalls(in)) {
+                        add(acc, name, "u");
+                    }
+                }
+            }
+        }
+        // Owner and offset of every varnode derived from an input, to a fixed point. A merge
+        // (MULTIEQUAL) keeps a known offset only when all its inputs come from the same input at
+        // the same offset: `p = arg; while (..) p = p->next;` merges the argument with a value
+        // loaded through it, so loads through p are not loads of the argument at a known offset.
+        int guard = 0;
+        boolean changed = true;
+        while (changed && guard < 100_000) {
+            while (!work.isEmpty() && guard++ < 100_000) {
+                ghidra.program.model.pcode.Varnode vn = work.poll();
+                String name = owner.get(vn);
+                Long o = offset.get(vn);
+                java.util.Iterator<ghidra.program.model.pcode.PcodeOp> ds = vn.getDescendants();
+                while (ds.hasNext()) {
+                    ghidra.program.model.pcode.PcodeOp d = ds.next();
+                    ghidra.program.model.pcode.Varnode outV = d.getOutput();
+                    switch (d.getOpcode()) {
+                        case PcodeOp.COPY:
+                        case PcodeOp.CAST:
+                        case PcodeOp.MULTIEQUAL:
+                            flow(outV, name, o, owner, offset, work);
+                            break;
+                        case PcodeOp.INDIRECT:
+                            if (d.getInput(0) == vn) {
+                                flow(outV, name, o, owner, offset, work);
+                            }
+                            break;
+                        case PcodeOp.INT_ADD:
+                        case PcodeOp.PTRSUB: {
+                            ghidra.program.model.pcode.Varnode other =
+                                d.getInput(0) == vn ? d.getInput(1) : d.getInput(0);
+                            Long n = other.isConstant() && o != null ? o + signed(other) : null;
+                            flow(outV, name, n, owner, offset, work);
+                            break;
+                        }
+                        case PcodeOp.INT_SUB:
+                            if (d.getInput(0) == vn && d.getInput(1).isConstant() && o != null) {
+                                flow(outV, name, o - signed(d.getInput(1)), owner, offset, work);
+                            }
+                            break;
+                        case PcodeOp.PTRADD: {
+                            if (d.getInput(0) != vn) {
+                                break;
+                            }
+                            ghidra.program.model.pcode.Varnode idx = d.getInput(1);
+                            ghidra.program.model.pcode.Varnode sz = d.getInput(2);
+                            Long n = idx.isConstant() && sz.isConstant() && o != null
+                                ? o + signed(idx) * signed(sz) : null;
+                            flow(outV, name, n, owner, offset, work);
+                            break;
+                        }
+                        default:
+                            break; // loads, stores, calls: recorded below from the final state
+                    }
+                }
+            }
+            changed = false;
+            for (ghidra.program.model.pcode.PcodeOpAST op : all) {
+                ghidra.program.model.pcode.Varnode outV = op.getOutput();
+                if (op.getOpcode() != PcodeOp.MULTIEQUAL || outV == null || offset.get(outV) == null) {
+                    continue;
+                }
+                String name = owner.get(outV);
+                Long o = offset.get(outV);
+                for (ghidra.program.model.pcode.Varnode in : op.getInputs()) {
+                    if (!name.equals(owner.get(in)) || !o.equals(offset.get(in))) {
+                        offset.put(outV, null);
+                        work.add(outV);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (guard >= 100_000) {
+            return "-\t-1\t-1";
+        }
+        // What is done through each input, from the final owners and offsets.
+        java.util.Map<ghidra.program.model.pcode.Varnode, String> loadedAt = new java.util.HashMap<>();
+        for (ghidra.program.model.pcode.PcodeOpAST d : all) {
+            ghidra.program.model.pcode.Varnode outV = d.getOutput();
+            switch (d.getOpcode()) {
+                case PcodeOp.LOAD: {
+                    ghidra.program.model.pcode.Varnode a = d.getInput(1);
+                    String name = owner.get(a);
+                    if (name == null) {
+                        break;
+                    }
+                    Long o = offset.get(a);
+                    add(acc, name, o == null ? "r?" : "r" + o + "." + outV.getSize());
+                    if (outV != null && o != null) {
+                        loadedAt.put(outV, name + "\u0000" + o);
+                    }
+                    break;
+                }
+                case PcodeOp.STORE: {
+                    ghidra.program.model.pcode.Varnode a = d.getInput(1);
+                    String name = owner.get(a);
+                    if (name != null) {
+                        Long o = offset.get(a);
+                        add(acc, name, o == null ? "w?" : "w" + o + "." + d.getInput(2).getSize());
+                    }
+                    String stored = owner.get(d.getInput(2));
+                    if (stored != null) {
+                        add(acc, stored, "e");
+                    }
+                    break;
+                }
+                case PcodeOp.CALL:
+                case PcodeOp.CALLIND:
+                    for (int k = 1; k < d.getNumInputs(); k++) {
+                        String name = owner.get(d.getInput(k));
+                        if (name != null) {
+                            ghidra.program.model.pcode.Varnode t = d.getInput(0);
+                            add(acc, name, "p" + (d.getOpcode() == PcodeOp.CALL
+                                ? String.format("%08x", t.getOffset()) : "?"));
+                        }
+                    }
+                    break;
+                default:
+                    break; // compares, null checks, returns: no memory access
+            }
+        }
+        // Pointers loaded from an argument and then dereferenced (one level), and the LOADs and
+        // STOREs whose address no input explains.
+        int untrackedLoads = 0, untrackedStores = 0;
+        for (ghidra.program.model.pcode.PcodeOpAST op : all) {
+            int oc = op.getOpcode();
+            if (oc != PcodeOp.LOAD && oc != PcodeOp.STORE) {
+                continue;
+            }
+            ghidra.program.model.pcode.Varnode a = op.getInput(1);
+            if (owner.containsKey(a)) {
+                continue;
+            }
+            String from = loadedAt.get(root(a));
+            if (from != null) {
+                String[] parts = from.split("\u0000");
+                add(acc, parts[0], "c" + parts[1]);
+            }
+            if (oc == PcodeOp.LOAD) {
+                untrackedLoads++;
+            }
+            else {
+                untrackedStores++;
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, java.util.TreeSet<String>> e : acc.entrySet()) {
+            if (sb.length() > 0) {
+                sb.append('|');
+            }
+            sb.append(e.getKey()).append('=').append(String.join(",", e.getValue()));
+        }
+        return sb + "\t" + untrackedLoads + "\t" + untrackedStores;
+    }
+
+    /**
+     * Whether a value reaches any operation other than a call argument, following copies, casts,
+     * merges and the INDIRECTs around calls.
+     */
+    private static boolean usedBeyondCalls(ghidra.program.model.pcode.Varnode start) {
+        java.util.ArrayDeque<ghidra.program.model.pcode.Varnode> todo = new java.util.ArrayDeque<>();
+        java.util.Set<ghidra.program.model.pcode.Varnode> seen = new java.util.HashSet<>();
+        todo.add(start);
+        while (!todo.isEmpty()) {
+            ghidra.program.model.pcode.Varnode v = todo.poll();
+            if (!seen.add(v)) {
+                continue;
+            }
+            java.util.Iterator<ghidra.program.model.pcode.PcodeOp> ds = v.getDescendants();
+            while (ds.hasNext()) {
+                ghidra.program.model.pcode.PcodeOp d = ds.next();
+                switch (d.getOpcode()) {
+                    case PcodeOp.COPY:
+                    case PcodeOp.CAST:
+                    case PcodeOp.MULTIEQUAL:
+                    case PcodeOp.INDIRECT:
+                        if (d.getOutput() != null) {
+                            todo.add(d.getOutput());
+                        }
+                        break;
+                    case PcodeOp.CALL:
+                    case PcodeOp.CALLIND:
+                        if (d.getInput(0) == v) {
+                            return true; // the call target itself
+                        }
+                        break;
+                    default:
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** The varnode an address was derived from by copies, casts and constant adds. */
+    private static ghidra.program.model.pcode.Varnode root(ghidra.program.model.pcode.Varnode v) {
+        for (int i = 0; i < 16 && v != null; i++) {
+            ghidra.program.model.pcode.PcodeOp def = v.getDef();
+            if (def == null) {
+                return v;
+            }
+            int oc = def.getOpcode();
+            if (oc == PcodeOp.COPY || oc == PcodeOp.CAST) {
+                v = def.getInput(0);
+            }
+            else if ((oc == PcodeOp.INT_ADD || oc == PcodeOp.PTRSUB) && def.getInput(1).isConstant()) {
+                v = def.getInput(0);
+            }
+            else {
+                return v;
+            }
+        }
+        return v;
+    }
+
+    private static void flow(ghidra.program.model.pcode.Varnode outV, String name, Long o,
+            Map<ghidra.program.model.pcode.Varnode, String> owner,
+            Map<ghidra.program.model.pcode.Varnode, Long> offset,
+            java.util.ArrayDeque<ghidra.program.model.pcode.Varnode> work) {
+        if (outV == null) {
+            return;
+        }
+        if (owner.containsKey(outV)) {
+            Long have = offset.get(outV);
+            if (have == null || (owner.get(outV).equals(name) && have.equals(o))) {
+                return; // already unknown, or reached again the same way
+            }
+            // two offsets (or two inputs) meet in a merge or a loop: the offset is unknown
+            offset.put(outV, null);
+            work.add(outV);
+            return;
+        }
+        owner.put(outV, name);
+        offset.put(outV, o);
+        work.add(outV);
+    }
+
+    private static void add(java.util.TreeMap<String, java.util.TreeSet<String>> acc, String name,
+            String item) {
+        acc.computeIfAbsent(name, k -> new java.util.TreeSet<>()).add(item);
+    }
+
+    private static long signed(ghidra.program.model.pcode.Varnode c) {
+        long v = c.getOffset();
+        int bits = 8 * c.getSize();
+        return bits >= 64 ? v : (v << (64 - bits)) >> (64 - bits);
+    }
+
+    /**
+     * ecx, edx, s<n> for a stack argument n bytes past the return address, or eax, ebx, esi, edi,
+     * ebp; null otherwise.
+     */
+    private String inputName(ghidra.program.model.pcode.Varnode in) {
+        Address a = in.getAddress();
+        if (a.isStackAddress()) {
+            long off = a.getOffset();
+            return off >= 4 ? "s" + (off - 4) : null;
+        }
+        if (a.isRegisterAddress()) {
+            Register r = currentProgram.getRegister(a, in.getSize());
+            if (r == null) {
+                return null;
+            }
+            Register b = r.getBaseRegister();
+            String n = (b == null ? r : b).getName().toUpperCase();
+            if (n.equals("ECX") || n.equals("RCX")) {
+                return "ecx";
+            }
+            if (n.equals("EDX") || n.equals("RDX")) {
+                return "edx";
+            }
+            if (OTHER_REGS.contains(n)) {
+                return n.toLowerCase();
+            }
+        }
+        return null;
+    }
+
+    /** Registers no standard convention passes arguments in (whole-program optimized code does). */
+    private static final java.util.Set<String> OTHER_REGS = java.util.Set.of("EAX", "EBX", "ESI", "EDI", "EBP");
 
     private static final int MAX_CONSTS = 32;
 

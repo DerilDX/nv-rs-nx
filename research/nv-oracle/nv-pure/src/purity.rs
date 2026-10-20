@@ -22,6 +22,76 @@ pub struct Facts {
     /// `i<decimal>`, `f<8 hex>` (float bits), `d<16 hex>` (double bits).
     /// Empty when the table predates the `consts_*` columns.
     pub consts: Vec<String>,
+    /// What goes through each input used as a pointer (`arg_access`), by
+    /// input name (`ecx`, `edx`, `s<n>`). `None` when the data flow was not
+    /// run for the function (or the table predates the column).
+    pub args: Option<BTreeMap<String, Access>>,
+    /// LOADs / STOREs whose address no input explains; -1 unknown.
+    pub untracked_loads: i64,
+    pub untracked_stores: i64,
+}
+
+/// The accesses through one pointer input (NvPurity `arg_access`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Access {
+    /// (byte offset from the pointer, size) of every load.
+    pub reads: Vec<(i64, u32)>,
+    /// (byte offset, size) of every store.
+    pub writes: Vec<(i64, u32)>,
+    /// A load or store at an offset the data flow can't pin down.
+    pub unknown: bool,
+    /// Offsets of pointer fields that are themselves dereferenced.
+    pub chases: Vec<i64>,
+    /// Callees the pointer (or one derived from it) is passed to; "?" for
+    /// an indirect call.
+    pub passed: Vec<String>,
+    /// The pointer itself is stored somewhere.
+    pub escapes: bool,
+    /// The input's value is used at all (recorded for the registers no
+    /// standard convention passes arguments in: eax, ebx, esi, edi, ebp).
+    pub used: bool,
+}
+
+impl Access {
+    /// Memory is read or written through the input (not only passed on or
+    /// compared).
+    pub fn dereferenced(&self) -> bool {
+        self.unknown || !self.reads.is_empty() || !self.writes.is_empty() || !self.chases.is_empty()
+    }
+}
+
+/// Parses one `arg_access` cell: `ecx=r4.4,w8.2|s0=r0.4,c12`.
+pub fn parse_access(cell: &str) -> Option<BTreeMap<String, Access>> {
+    if cell == "-" {
+        return None;
+    }
+    let mut out = BTreeMap::new();
+    for part in cell.split('|').filter(|p| !p.is_empty()) {
+        let (name, items) = part.split_once('=')?;
+        let mut a = Access::default();
+        for it in items.split(',').filter(|i| !i.is_empty()) {
+            let (kind, rest) = it.split_at(1);
+            match kind {
+                "r" | "w" if rest == "?" => a.unknown = true,
+                "r" | "w" => {
+                    let (off, size) = rest.split_once('.')?;
+                    let v = (off.parse().ok()?, size.parse().ok()?);
+                    if kind == "r" {
+                        a.reads.push(v);
+                    } else {
+                        a.writes.push(v);
+                    }
+                }
+                "c" => a.chases.push(rest.parse().ok()?),
+                "p" => a.passed.push(rest.to_string()),
+                "e" => a.escapes = true,
+                "u" => a.used = true,
+                _ => return None,
+            }
+        }
+        out.insert(name.to_string(), a);
+    }
+    Some(out)
 }
 
 impl Facts {
@@ -76,6 +146,9 @@ pub fn parse(text: &str) -> Result<BTreeMap<u32, Facts>, String> {
     );
     let c_ci = header.iter().position(|h| *h == "consts_int");
     let c_cf = header.iter().position(|h| *h == "consts_float");
+    let c_aa = header.iter().position(|h| *h == "arg_access");
+    let c_ul = header.iter().position(|h| *h == "untracked_loads");
+    let c_us = header.iter().position(|h| *h == "untracked_stores");
     let mut out = BTreeMap::new();
     for (n, l) in lines.enumerate() {
         let c: Vec<&str> = l.split('\t').collect();
@@ -130,6 +203,12 @@ pub fn parse(text: &str) -> Result<BTreeMap<u32, Facts>, String> {
                     k.extend(field(c_cf).iter().map(|v| v.to_string()));
                     k
                 },
+                args: match c_aa.and_then(|i| c.get(i)) {
+                    Some(cell) if *cell != "-" => Some(parse_access(cell).ok_or_else(bad)?),
+                    _ => None,
+                },
+                untracked_loads: c_ul.map(num).transpose()?.unwrap_or(-1),
+                untracked_stores: c_us.map(num).transpose()?.unwrap_or(-1),
             },
         );
     }
@@ -183,6 +262,22 @@ mod tests {
 00401020\t10\t4\t1\t\t\t0\t0\t1\t0\t0\t0\t0\t0\tECX\t4\n\
 00401040\t10\t0\t1\t00401060\t\t0\t0\t1\t0\t0\t0\t0\t0\t\t0\n\
 00401060\t10\t0\t1\t\t\t0\t0\t1\t0\t1\t0\t0\t0\t\t0\n";
+
+    #[test]
+    fn access_cells() {
+        let a = parse_access("ecx=c12,e,p00401000,r4.4,r8.2,w-4.1|s0=r?").unwrap();
+        let e = &a["ecx"];
+        assert_eq!(e.reads, vec![(4, 4), (8, 2)]);
+        assert_eq!(e.writes, vec![(-4, 1)]);
+        assert_eq!(e.chases, vec![12]);
+        assert_eq!(e.passed, vec!["00401000".to_string()]);
+        assert!(e.escapes && !e.unknown);
+        assert!(a["s0"].unknown);
+        let r = parse_access("eax=u|ecx=r0.4").unwrap();
+        assert!(r["eax"].used && !r["eax"].dereferenced() && !r["ecx"].used);
+        assert!(parse_access("-").is_none());
+        assert_eq!(parse_access("").unwrap().len(), 0);
+    }
 
     #[test]
     fn closure() {

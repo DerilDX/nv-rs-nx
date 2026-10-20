@@ -234,6 +234,14 @@ impl Mem {
         self.set_u8(a.wrapping_add(s.len() as u32), 0);
     }
 
+    /// The heap's current top: the next fresh address [`Mem::alloc`] hands
+    /// out (reused freed blocks lie below it). Tools that map their own memory
+    /// inside the heap range above it (the oracle check's buffer arena at
+    /// 0x30000000) check that the heap has not reached them.
+    pub fn heap_top(&self) -> u32 {
+        self.brk
+    }
+
     /// Allocates `size` bytes (8-byte aligned, zero-filled) on the heap.
     /// Freed blocks of the same rounded size are reused, newest first.
     pub fn alloc(&mut self, size: u32) -> u32 {

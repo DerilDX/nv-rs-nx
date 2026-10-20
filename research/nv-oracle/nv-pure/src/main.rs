@@ -4,7 +4,14 @@
 //! ```text
 //! nv-pure list --purity <purity.tsv> [--out <pure.tsv>]
 //! nv-pure check [--list <pure.tsv>] [--limit N] [--only addr,addr] [--count N]
+//!               [--exe-timeout S] [--slow-ms MS] [--rust-timeout S]
 //! ```
+//!
+//! Time limits: a vector nv-call hasn't finished in `--exe-timeout` seconds
+//! (default 10) is abandoned and nv-call restarted after it; one the exe took
+//! over `--slow-ms` (default 1000) is not run on the engine side; and the
+//! engine running one vector past `--rust-timeout` seconds (default 120)
+//! stops the check with an error naming it. All three are reported.
 //!
 //! `list` joins the exe's purity facts (research/ghidra/NvPurity.java, run on
 //! your own project) with the translation markers and `entry!` signatures
@@ -46,6 +53,7 @@ fn arg(args: &[String], name: &str) -> Option<String> {
 fn usage() -> ExitCode {
     eprintln!("usage: nv-pure list --purity <purity.tsv> [--out <pure.tsv>]");
     eprintln!("       nv-pure check [--list <pure.tsv>] [--limit N] [--only addr,...] [--count N]");
+    eprintln!("                     [--exe-timeout S] [--slow-ms MS] [--rust-timeout S]");
     ExitCode::from(2)
 }
 
@@ -119,11 +127,25 @@ fn cmd_check(args: &[String]) -> Result<ExitCode, String> {
     let out_dir = std::env::var_os("NV_ORACLE_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(check::default_out_dir);
+    let secs = |name: &str, default: u64| {
+        std::time::Duration::from_secs(
+            arg(args, name)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(default),
+        )
+    };
     let o = check::Options {
         exe: PathBuf::from(exe),
         nv_call,
         out_dir,
         per_function,
+        exe_timeout: secs("--exe-timeout", 10),
+        slow: std::time::Duration::from_millis(
+            arg(args, "--slow-ms")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1000),
+        ),
+        rust_timeout: secs("--rust-timeout", 120),
     };
     let r = check::run(&all, &o)?;
 

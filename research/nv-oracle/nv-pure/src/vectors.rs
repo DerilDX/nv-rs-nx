@@ -410,6 +410,307 @@ pub fn vector_line(id: &str, addr: u32, cc: &str, args: &[Val], ret: Ty) -> Stri
     )
 }
 
+/// nv-call's buffer arena (its default `--arena`), where both sides place the
+/// buffers pointer arguments point into. Inside the engine's heap range, far
+/// above where a fresh engine's bump allocator is (checked per vector).
+pub const ARENA: u32 = 0x3000_0000;
+
+/// Where nv-call puts each buffer of a vector: from the arena base, each
+/// 16-byte aligned after the previous one, in order (nv-call-engine `Arena`).
+pub fn buffer_addrs(bufs: &[crate::list::Buf]) -> Vec<u32> {
+    let mut used = 0u32;
+    bufs.iter()
+        .map(|b| {
+            let start = (used + 15) & !15;
+            used = start + b.size;
+            ARENA + start
+        })
+        .collect()
+}
+
+/// One vector of a function with pointer parameters: the argument values (a
+/// pointer parameter's `bits` are unused; it points into its buffer) and
+/// every buffer's contents, in the order of `Pure::bufs`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Case {
+    pub args: Vec<Val>,
+    pub bufs: Vec<Vec<u8>>,
+}
+
+/// Values for one field the exe reads, by its size: typed edges (integers
+/// and float/double bit patterns) and the function's own constants.
+fn field_pool(size: u32, consts: &[String]) -> Vec<u64> {
+    let mut v: Vec<u64> = match size {
+        1 => vec![0, 1, 2, 0x7f, 0x80, 0xff],
+        2 => vec![0, 1, 2, 0x7fff, 0x8000, 0xffff, 0x100],
+        4 => vec![
+            0,
+            1,
+            2,
+            3,
+            0xffff_ffff,
+            0x8000_0000,
+            0x7fff_ffff,
+            0x3f80_0000, // 1.0f
+            0xbf80_0000, // -1.0f
+            0x3fc0_0000, // 1.5f
+            0x3f00_0000, // 0.5f
+            0x7fc0_0000, // qNaN
+            0x7f80_0000, // inf
+            0x0000_0001, // denormal / 1
+        ],
+        8 => vec![
+            0,
+            1,
+            0x3ff0_0000_0000_0000,
+            0xbff0_0000_0000_0000,
+            0x3ff8_0000_0000_0000,
+            0x7ff8_0000_0000_0000,
+            0x7ff0_0000_0000_0000,
+            u64::MAX,
+        ],
+        _ => vec![0, 1],
+    };
+    let mask = if size >= 8 {
+        u64::MAX
+    } else {
+        (1u64 << (8 * size)) - 1
+    };
+    for t in consts {
+        let (kind, body) = t.split_at(1);
+        let extra: Vec<u64> = match (kind, size) {
+            ("i", _) => match body.parse::<i64>() {
+                Ok(c) => [c - 1, c, c + 1].iter().map(|&x| x as u64 & mask).collect(),
+                Err(_) => vec![],
+            },
+            ("f", 4) | ("d", 8) => u64::from_str_radix(body, 16).into_iter().collect(),
+            ("d", 4) => u64::from_str_radix(body, 16)
+                .map(|b| u64::from((f64::from_bits(b) as f32).to_bits()))
+                .into_iter()
+                .collect(),
+            ("f", 8) => u64::from_str_radix(body, 16)
+                .map(|b| (f32::from_bits(b as u32) as f64).to_bits())
+                .into_iter()
+                .collect(),
+            _ => vec![],
+        };
+        for x in extra {
+            if !v.contains(&x) {
+                v.push(x);
+            }
+        }
+    }
+    v
+}
+
+fn random_bytes(len: usize, r: &mut Rng) -> Vec<u8> {
+    (0..len).map(|_| (r.next() >> 56) as u8).collect()
+}
+
+/// Vectors for a function with pointer parameters (phase 1, #193). Buffer
+/// contents per vector: all zero, all 0xff, two seeded random fills, and
+/// "structured" fills where every field the exe reads takes, in turn, each
+/// value of its pool (typed edges and the function's constants), shifted per
+/// field so fields don't move in lockstep. Scalar parameters go through
+/// [`inputs`] as before, each list paired with one of the buffer fills.
+pub fn pointer_cases(
+    params: &[Ty],
+    bufs: &[crate::list::Buf],
+    count: usize,
+    seed: u64,
+    consts: &[String],
+) -> Vec<Case> {
+    let mut r = Rng::new(seed ^ 0x5bd1_e995);
+    let scalar_tys: Vec<Ty> = params.iter().copied().filter(|t| *t != Ty::Ptr).collect();
+    let lists = if scalar_tys.is_empty() {
+        vec![Vec::new()]
+    } else {
+        inputs(&scalar_tys, count, seed, consts)
+    };
+    let plain: Vec<Val> = scalar_tys
+        .iter()
+        .map(|&t| Val {
+            ty: t,
+            bits: match t {
+                Ty::F32 => 0x3fc0_0000,
+                Ty::F64 => 0x3ff8_0000_0000_0000,
+                _ => 3,
+            },
+        })
+        .collect();
+
+    let mut fills: Vec<Vec<Vec<u8>>> = Vec::new();
+    fills.push(bufs.iter().map(|b| vec![0u8; b.size as usize]).collect());
+    fills.push(bufs.iter().map(|b| vec![0xffu8; b.size as usize]).collect());
+    for _ in 0..2 {
+        fills.push(
+            bufs.iter()
+                .map(|b| random_bytes(b.size as usize, &mut r))
+                .collect(),
+        );
+    }
+    // The pointer arguments' own values (buffer address + bias): a 4-byte field
+    // may be compared with one of them (`if (this->procedure == procedure)`).
+    let pointers: Vec<u64> = buffer_addrs(bufs)
+        .iter()
+        .zip(bufs)
+        .map(|(a, b)| u64::from(a + b.bias))
+        .collect();
+    let pools: Vec<Vec<Vec<u64>>> = bufs
+        .iter()
+        .map(|b| {
+            b.fields
+                .iter()
+                .map(|&(_, z)| {
+                    let mut pool = field_pool(z, consts);
+                    if z == 4 {
+                        for &p in &pointers {
+                            if !pool.contains(&p) {
+                                pool.push(p);
+                            }
+                        }
+                    }
+                    pool
+                })
+                .collect()
+        })
+        .collect();
+    let rounds = pools
+        .iter()
+        .flatten()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0)
+        .min(32);
+    // Two passes: fields shifted against each other (each field sees every value
+    // while the others differ), then in lockstep (every field the same value, so
+    // comparisons between fields, or of several fields with one pointer, can be equal).
+    for (k, lockstep) in (0..rounds)
+        .map(|k| (k, false))
+        .chain((0..rounds).map(|k| (k, true)))
+    {
+        // The shift counts fields across all buffers, so the fields of two
+        // one-field buffers (compare(a, b)) differ in the shifted pass.
+        let mut field_no = 0usize;
+        let fill: Vec<Vec<u8>> = bufs
+            .iter()
+            .zip(&pools)
+            .map(|(b, ps)| {
+                let mut bytes = vec![0u8; b.size as usize];
+                for (&(off, z), pool) in b.fields.iter().zip(ps) {
+                    let value = pool[if lockstep { k } else { k + field_no } % pool.len()];
+                    field_no += 1;
+                    let at = i64::from(b.bias) + off;
+                    for i in 0..z as usize {
+                        if let Some(slot) =
+                            usize::try_from(at).ok().and_then(|a| bytes.get_mut(a + i))
+                        {
+                            *slot = (value >> (8 * i)) as u8;
+                        }
+                    }
+                }
+                bytes
+            })
+            .collect();
+        if !fills.contains(&fill) {
+            fills.push(fill);
+        }
+    }
+
+    let merge = |scalars: &[Val]| -> Vec<Val> {
+        let mut it = scalars.iter();
+        params
+            .iter()
+            .map(|&t| {
+                if t == Ty::Ptr {
+                    Val {
+                        ty: Ty::Ptr,
+                        bits: 0,
+                    }
+                } else {
+                    *it.next().expect("one scalar per non-pointer parameter")
+                }
+            })
+            .collect()
+    };
+    let mut out: Vec<Case> = fills
+        .iter()
+        .map(|f| Case {
+            args: merge(&plain),
+            bufs: f.clone(),
+        })
+        .collect();
+    for (i, l) in lists.iter().enumerate() {
+        let case = Case {
+            args: merge(l),
+            bufs: fills[i % fills.len()].clone(),
+        };
+        if !out.contains(&case) {
+            out.push(case);
+        }
+    }
+    out
+}
+
+/// One vector line with buffers: a pointer parameter becomes
+/// `ptr:b<j>+0x<bias>` (buffer `j` of `bufs`).
+pub fn vector_line_buffers(
+    id: &str,
+    addr: u32,
+    cc: &str,
+    case: &Case,
+    bufs: &[crate::list::Buf],
+    ret: Ty,
+) -> String {
+    let args: Vec<String> = case
+        .args
+        .iter()
+        .enumerate()
+        .map(|(k, v)| match bufs.iter().position(|b| b.param == k) {
+            Some(j) if v.ty == Ty::Ptr => format!("\"ptr:b{j}+0x{:x}\"", bufs[j].bias),
+            _ => format!("\"{}\"", v.nv_call()),
+        })
+        .collect();
+    let buffers: Vec<String> = bufs
+        .iter()
+        .zip(&case.bufs)
+        .enumerate()
+        .map(|(j, (b, init))| {
+            let hex: String = init.iter().map(|x| format!("{x:02x}")).collect();
+            format!("\"b{j}\":{{\"size\":{},\"init\":\"{hex}\"}}", b.size)
+        })
+        .collect();
+    format!(
+        "{{\"id\":\"{id}\",\"fn\":\"0x{addr:08x}\",\"cc\":\"{cc}\",\"args\":[{}],\"buffers\":{{{}}},\"ret\":\"{}\"}}",
+        args.join(","),
+        buffers.join(","),
+        nv_call_ret(ret)
+    )
+}
+
+/// A result line's buffers by name, after the call.
+pub type Buffers = Vec<(String, Vec<u8>)>;
+
+/// The buffers of a result line after the call: (id, [(name, bytes)]).
+pub fn parse_buffers(line: &str) -> Option<(String, Buffers)> {
+    let v = Value::parse(line)?;
+    if v.get("type")?.as_str()? != "result" {
+        return None;
+    }
+    let id = v.get("id")?.as_str()?.to_string();
+    let mut out = Vec::new();
+    if let Some(Value::Obj(kv)) = v.get("buffers") {
+        for (name, hex) in kv {
+            let h = hex.as_str()?;
+            let bytes = (0..h.len() / 2)
+                .map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok())
+                .collect::<Option<Vec<u8>>>()?;
+            out.push((name.clone(), bytes));
+        }
+    }
+    Some((id, out))
+}
+
 /// What the exe produced for one vector.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
@@ -518,6 +819,59 @@ mod tests {
         }
         .put(&mut w);
         assert_eq!(w, vec![0x5566_7788, 0x1122_3344, 0xffff_ffff]);
+    }
+
+    #[test]
+    fn pointer_vectors() {
+        use crate::list::Buf;
+        // a getter reading a byte at +4 and a float at +8 of `this`, plus one u32
+        let bufs = vec![Buf::from_reads(0, &[(4, 1), (8, 4)])];
+        let k = vec!["i6".to_string()];
+        let cases = pointer_cases(&[Ty::Ptr, Ty::U32], &bufs, 64, 9, &k);
+        assert!(
+            cases.iter().any(|c| c.bufs[0].iter().all(|&b| b == 0)),
+            "zero fill"
+        );
+        assert!(
+            cases.iter().any(|c| c.bufs[0][4] == 6),
+            "mined constant lands in the byte field"
+        );
+        assert!(
+            cases
+                .iter()
+                .any(|c| c.bufs[0][8..12] == 1.0f32.to_bits().to_le_bytes()),
+            "float edge in the float field"
+        );
+        assert!(cases
+            .iter()
+            .all(|c| c.args[0].ty == Ty::Ptr && c.args.len() == 2));
+        let line = vector_line_buffers("x_0", 0x0040_1170, "thiscall", &cases[0], &bufs, Ty::U8);
+        assert!(
+            line.contains("\"ptr:b0+0x0\"") && line.contains("\"b0\":{\"size\":"),
+            "{line}"
+        );
+        let res = r#"{"type":"result","id":"x_0","buffers":{"b0":"00ff10"}}"#;
+        assert_eq!(
+            parse_buffers(res),
+            Some(("x_0".into(), vec![("b0".into(), vec![0, 0xff, 0x10])]))
+        );
+    }
+
+    #[test]
+    fn two_buffers_differ() {
+        use crate::list::Buf;
+        // compare(a, b) over one u16 field each: the fields must be unequal in
+        // both orders in some vectors, and equal in others
+        let bufs = vec![Buf::from_reads(0, &[(0, 2)]), Buf::from_reads(1, &[(0, 2)])];
+        let cases = pointer_cases(&[Ty::Ptr, Ty::Ptr], &bufs, 16, 3, &[]);
+        let v = |c: &Case, j: usize| u16::from_le_bytes([c.bufs[j][0], c.bufs[j][1]]);
+        assert!(cases.iter().any(|c| v(c, 0) < v(c, 1)));
+        assert!(cases.iter().any(|c| v(c, 0) > v(c, 1)));
+        assert!(
+            cases.iter().filter(|c| v(c, 0) != v(c, 1)).count() >= 8,
+            "structured fills, not just the random ones"
+        );
+        assert!(cases.iter().any(|c| v(c, 0) == v(c, 1)));
     }
 
     #[test]

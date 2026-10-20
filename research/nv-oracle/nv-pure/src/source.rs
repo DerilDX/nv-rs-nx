@@ -78,10 +78,6 @@ impl Ty {
             _ => 1,
         }
     }
-
-    pub fn is_scalar(self) -> bool {
-        !matches!(self, Ty::Ptr | Ty::Void)
-    }
 }
 
 #[derive(Debug, Clone)]

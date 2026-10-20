@@ -2,6 +2,8 @@
 name = "nv-pure"
 version = "0.1.0"
 edition = "2021"
+# u32::is_multiple_of (1.87), Option::is_none_or (1.82).
+rust-version = "1.87"
 publish = false
 description = "Automatic oracle check: pure translations against the real CPU through nv-call (#182)"
 license = "GPL-3.0-or-later"
