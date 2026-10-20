@@ -6,7 +6,7 @@ use crate::prelude::*;
 
 use super::run_00df06a0::{
     addps, addss, maxps, movaps, movss_bits, movss_mem, mulps, parity_even, rcpps, shufps, splat0,
-    store_xmm, subps, sum3, unpckhps, Xmm, X87,
+    store_xmm, subps, unpckhps, Xmm, X87,
 };
 use crate::x87::rsqrt_estimate;
 
@@ -44,28 +44,37 @@ const BOX_SCALE: u32 = 0x011b_9490;
 /// 0xd2): the dot product (lane sum `x2 + (x1 + x0)`) of `(cross(m3, d1) + [a1 + 0x1b0]) -
 /// (cross(m4, d2) + [a2 + 0x1b0])` with the vector at `a5 + 0x10`; quieted by the `FLD`.
 pub fn fn_00df2510(e: &mut Engine, a1: Ptr, a2: Ptr, a3: Ptr, a4: Ptr, a5: Ptr) -> f32 {
+    // SSE arithmetic with the SSE choice of NaN (the shared `crate::sse` helpers): a NaN in
+    // the destination operand wins (quieted), else a NaN in the source (quieted); an invalid
+    // operation on two numbers gives the default NaN 0xffc00000.
+    use crate::sse::{addps as add, mulps as mul, subps as sub};
+    // MOVAPS XMM2,[a5]; MOVAPS XMM0,[a3]; MOVAPS XMM3,[a1+0x1c0]; SUBPS XMM1(=XMM2),XMM0.
     let point = movaps(e, a5.addr());
     let first = movaps(e, a3.addr());
     let m3 = movaps(e, a1.addr().wrapping_add(0x1c0));
-    let d1 = subps(point, first);
+    let d1 = sub(point, first);
     let second = movaps(e, a4.addr());
     let m4 = movaps(e, a2.addr().wrapping_add(0x1c0));
-    let d2 = subps(point, second);
+    let d2 = sub(point, second);
     let down = shufps(d1, d1, 0xd2);
     let up = shufps(d1, d1, 0xc9);
-    let forward = mulps(shufps(m3, m3, 0xc9), down);
-    let back = mulps(shufps(m3, m3, 0xd2), up);
+    let forward = mul(shufps(m3, m3, 0xc9), down);
+    let back = mul(shufps(m3, m3, 0xd2), up);
     let offset = movaps(e, a1.addr().wrapping_add(0x1b0));
     let down2 = shufps(d2, d2, 0xd2);
-    let cross = addps(subps(forward, back), offset);
-    let forward = mulps(shufps(m4, m4, 0xc9), down2);
+    let cross = add(sub(forward, back), offset);
+    let forward = mul(shufps(m4, m4, 0xc9), down2);
     let up2 = shufps(d2, d2, 0xc9);
-    let back = mulps(shufps(m4, m4, 0xd2), up2);
+    let back = mul(shufps(m4, m4, 0xd2), up2);
     let offset = movaps(e, a2.addr().wrapping_add(0x1b0));
-    let cross2 = addps(subps(forward, back), offset);
-    let diff = subps(cross, cross2);
+    let cross2 = add(sub(forward, back), offset);
+    let diff = sub(cross, cross2);
     let normal = movaps(e, a5.addr().wrapping_add(0x10));
-    x87_quiet(sum3(mulps(diff, normal)))
+    let product = mul(diff, normal);
+    // ADDSS XMM1(lane 1),XMM0(lane 0); ADDSS XMM2(lane 2),XMM1; MOVSS; FLD (quiets).
+    let first_two = crate::sse::add(product[1], product[0]);
+    let sum = crate::sse::add(product[2], first_two);
+    x87_quiet(sum)
 }
 
 // Translated from 00df25d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -908,6 +917,94 @@ mod tests {
         // cross((0,1,2), (3,3,1)) + (0,1,0) = (-5, 7, -3); the difference (2, 4, -3) . (1, 2, 3).
         let answer = e.call(0x00df_2510, &args![a1, a2, a3, a4, a5]).f32();
         assert_eq!(answer, 1.0);
+    }
+
+    type Words<'a> = &'a [(u32, u32)];
+
+    fn words(e: &mut Engine, size: u32, words: Words) -> u32 {
+        let at = e.mem.alloc(size);
+        for offset in (0..size).step_by(4) {
+            e.mem.set_u32(at + offset, 0);
+        }
+        for &(offset, word) in words {
+            e.mem.set_u32(at + offset, word);
+        }
+        at
+    }
+
+    #[test]
+    fn the_drift_keeps_the_sse_choice_of_nan() {
+        // Oracle vectors 00df2510_4 and 00df2510_12 (the words not listed are zero): the
+        // NaN of the destination operand wins at each SSE step; the exe answers 0xffffffca
+        // and 0x7fc00000.
+        let cases: [(Words, Words, Words, Words, Words, u32); 2] = [
+            (
+                &[
+                    (0x1b4, 1),
+                    (0x1b8, 2),
+                    (0x1c0, 3),
+                    (0x1c4, 0xffff_ffff),
+                    (0x1c8, 0x8000_0000),
+                ],
+                &[
+                    (0x1b0, 0x7fff_ffff),
+                    (0x1b4, 0x3f80_0000),
+                    (0x1b8, 0xbf80_0000),
+                    (0x1c0, 0x3fc0_0000),
+                    (0x1c4, 0x3f00_0000),
+                    (0x1c8, 0x7fc0_0000),
+                ],
+                &[(0, 0x7f80_0000), (4, 1), (8, 0xffff_ffd1)],
+                &[(0, 0xffff_ffd2), (4, 0xffff_ffd3), (8, 0xffff_ffc8)],
+                &[
+                    (0, 0xffff_ffc9),
+                    (4, 0xffff_ffca),
+                    (8, 0x54),
+                    (0x10, 0x55),
+                    (0x14, 0x56),
+                    (0x18, 0xffff_ffa9),
+                ],
+                0xffff_ffca,
+            ),
+            (
+                &[
+                    (0x1b0, 0xbf80_0000),
+                    (0x1b4, 0x3fc0_0000),
+                    (0x1b8, 0x3f00_0000),
+                    (0x1c0, 0x7fc0_0000),
+                    (0x1c4, 0x7f80_0000),
+                    (0x1c8, 1),
+                ],
+                &[
+                    (0x1b0, 0xffff_ffd1),
+                    (0x1b4, 0xffff_ffd2),
+                    (0x1b8, 0xffff_ffd3),
+                    (0x1c0, 0xffff_ffc8),
+                    (0x1c4, 0xffff_ffc9),
+                    (0x1c8, 0xffff_ffca),
+                ],
+                &[(0, 0x54), (4, 0x55), (8, 0x56)],
+                &[(0, 0xffff_ffa9), (4, 0xffff_ffaa), (8, 0xffff_ffab)],
+                &[
+                    (0, 0x3000_0000),
+                    (4, 0x3000_01e0),
+                    (8, 0x3000_03c0),
+                    (0x10, 0x3000_03e0),
+                    (0x14, 0x3000_0400),
+                ],
+                0x7fc0_0000,
+            ),
+        ];
+        for (w1, w2, w3, w4, w5, expected) in cases {
+            let mut e = Engine::new();
+            let a1 = words(&mut e, 0x1e0, w1);
+            let a2 = words(&mut e, 0x1e0, w2);
+            let a3 = words(&mut e, 0x20, w3);
+            let a4 = words(&mut e, 0x20, w4);
+            let a5 = words(&mut e, 0x30, w5);
+            let answer = e.call(0x00df_2510, &args![a1, a2, a3, a4, a5]).f32();
+            assert_eq!(answer.to_bits(), expected);
+        }
     }
 
     #[test]

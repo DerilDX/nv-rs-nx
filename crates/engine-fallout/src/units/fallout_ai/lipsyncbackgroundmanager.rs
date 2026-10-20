@@ -75,12 +75,319 @@ pub fn fn_00905c30(e: &mut Engine, this: Ptr) {
     e.call(0x00c3_cea0, &args![this]);
 }
 
+/// `LockFreeMap<TESObjectREFR*,NiPointer<QueuedReference>>`'s vtable (RTTI,
+/// read through its complete object locator; the name is cut at 64 bytes).
+const QUEUED_REFERENCE_MAP_VTABLE: u32 = 0x0101_747c;
+/// `LockFreeMap<AnimIdle*,NiPointer<QueuedAnimIdle>>`'s vtable (RTTI).
+const QUEUED_ANIM_IDLE_MAP_VTABLE: u32 = 0x0101_74cc;
+/// The `LockFreeMapIterator` vtable of `LockFreeMap<MobileObject*,
+/// NiPointer<LipTask>>` (RTTI).
+const LIP_TASK_MAP_ITERATOR_VTABLE: u32 = 0x0108_8640;
+/// `operator new` (cdecl(size)).
+const OPERATOR_NEW: u32 = 0x0040_1000;
+/// `operator delete` (cdecl(block)).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// `NiPointer` construction from a raw pointer (`00528cb0`, thiscall(raw)).
+const NI_POINTER_CONSTRUCT: u32 = 0x0052_8cb0;
+/// `NiPointer` destructor (`0044cbf0`, thiscall).
+const NI_POINTER_DESTRUCT: u32 = 0x0044_cbf0;
+/// The pointer a `NiPointer` holds (`00559450`, thiscall).
+const NI_POINTER_GET: u32 = 0x0055_9450;
+/// `BSTaskManager<__int64>::CancelTask` (engine map, thiscall(task, 0)).
+const TASK_MANAGER_CANCEL_TASK: u32 = 0x0044_ac40;
+/// The task manager `CancelTask` runs on (a pointer global).
+const TASK_MANAGER_POINTER: u32 = 0x0120_2d98;
+/// The map's removal of a mobile object's entry (`009060f0`,
+/// thiscall(mobile object)).
+const MAP_REMOVE_ENTRY: u32 = 0x0090_60f0;
+/// The map's iterator step (`00906570`, thiscall(iterator, key out,
+/// value out, 1), bool).
+const MAP_ITERATE: u32 = 0x0090_6570;
+/// The map's call after the cancel loop (`009064e0`, thiscall).
+const MAP_AFTER_CANCEL: u32 = 0x0090_64e0;
+/// The iterator's end test (`006ebde0`, thiscall, bool).
+const ITERATOR_AT_END: u32 = 0x006e_bde0;
+
+/// The constructor body `0044b750` and `0044ba10` share with `00906160`
+/// (each with its own vtable at `+0`): `0044d7f0(this)`, the vtable,
+/// `0096a2d0` on `+0x20`, then between the scope guard `00404eb0` ..
+/// `00404ee0` (id 6, mode 1, `ThreadSafeStructures.inl`, line 0x390):
+/// `+0x18` = 0, `+8` = `slots`, `+0xC` = `slots` words (size `slots * 4`,
+/// all ones on overflow; each cleared by `00401050` with `0044dee0`, null
+/// when the allocation failed), `+4` = `rows * 3 * 4` bytes (the first
+/// product wraps, the second gives all ones on overflow), `+0x10` =
+/// `extra`, `+0x14` = a 16-byte object from `006c73b0(object, rows)` (null
+/// when the allocation failed).
+fn lock_free_map_construct(
+    e: &mut Engine,
+    this: Ptr,
+    vtable: u32,
+    rows: u32,
+    slots: u32,
+    extra: u32,
+) -> Ptr {
+    let base = this.addr();
+    e.call(0x0044_d7f0, &args![this]);
+    e.mem.set_u32(base, vtable);
+    e.call(0x0096_a2d0, &args![base + 0x20]);
+    e.with_stack(4, |e, scope| {
+        e.call(
+            0x0040_4eb0,
+            &args![scope, 6u32, 1u32, 0x0101_73f8u32, 0x390u32],
+        );
+        e.mem.set_u32(base + 0x18, 0);
+        e.mem.set_u32(base + 8, slots);
+        let slot_count = e.mem.u32(base + 8);
+        let slot_bytes = slot_count as u64 * 4;
+        let slot_size = (slot_bytes as u32)
+            | if slot_bytes > u32::MAX as u64 {
+                u32::MAX
+            } else {
+                0
+            };
+        let slot_block = e.call(OPERATOR_NEW, &args![slot_size]).u32();
+        if slot_block != 0 {
+            e.call(
+                0x0040_1050,
+                &args![slot_block, 4u32, slot_count, 0x0044_dee0u32],
+            );
+        }
+        e.mem.set_u32(base + 0xc, slot_block);
+        let row_bytes = rows.wrapping_mul(3) as u64 * 4;
+        let row_size = (row_bytes as u32)
+            | if row_bytes > u32::MAX as u64 {
+                u32::MAX
+            } else {
+                0
+            };
+        let row_block = e.call(OPERATOR_NEW, &args![row_size]).u32();
+        e.mem.set_u32(base + 4, row_block);
+        e.mem.set_u32(base + 0x10, extra);
+        let object = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+        let built = if object != 0 {
+            e.call(0x006c_73b0, &args![object, rows]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(base + 0x14, built);
+        e.call(0x0040_4ee0, &args![scope]);
+    });
+    this
+}
+
+// Translated from 0044b730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LockFreeMap<MobileObject*,NiPointer<LipTask>>::DecrementCount` (Xbox
+/// PDB): `004019a0` (cdecl) on the count at `+0x18` (the engine map's
+/// `WaitForSingleObjectEx` name sits on that folded body).
+pub fn lock_free_map_decrement_count(e: &mut Engine, this: Ptr) {
+    e.call(0x0040_19a0, &args![this.addr().wrapping_add(0x18)]);
+}
+
+// Translated from 0044b750 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0044b750 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// The constructor of `LockFreeMap<TESObjectREFR*,NiPointer<QueuedReference>>`
+/// (its vtable `0101747c`; the body `00906160` has for the lip-task map):
+/// thiscall(`rows`, `slots`, `extra`), returns `this`.
+pub fn fn_0044b750(e: &mut Engine, this: Ptr, rows: u32, slots: u32, extra: u32) -> Ptr {
+    lock_free_map_construct(e, this, QUEUED_REFERENCE_MAP_VTABLE, rows, slots, extra)
+}
+
+// Translated from 0044b8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The map's iteration step (thiscall(iterator, value out, key, keep
+/// going), bool): under the lock at `+0x20` (`0040fbf0(0)` .. `0040fba0`),
+/// nothing when the iterator is at its end (`006ebde0`); otherwise, from
+/// the iterator's bucket index (`+4`) and entry (`+8`), the lookup through
+/// `00449f80(this)` is `0044e550` (then `0044de40(iterator, 1)`) when
+/// `0044de20` says no, else `0044e680`. On a hit the iterator's entry goes
+/// to `*out`; on a miss the index moves on, and the walk ends at the
+/// bucket count (`0044ddc0`, then `0044de80(iterator, 1)`) or when
+/// `keep_going` is 0, else continues after `0044de40(iterator, 0)`. A hit
+/// is finally checked with `00528bb0(00449f80(this), *out)`.
+pub fn fn_0044b8d0(
+    e: &mut Engine,
+    this: Ptr,
+    iterator: Ptr,
+    out: Ptr,
+    key: u32,
+    keep_going: u8,
+) -> bool {
+    let lock = this.addr().wrapping_add(0x20);
+    e.call(0x0040_fbf0, &args![lock, 0u32]);
+    let iter = iterator.addr();
+    let mut found = false;
+    if !e.call(ITERATOR_AT_END, &args![iter]).bool() {
+        // `MOV ECX,1; TEST ECX,ECX; JZ`: the loop condition is constant.
+        loop {
+            if !e.call(0x0044_de20, &args![iter]).bool() {
+                let index = e.mem.u32(iter.wrapping_add(4));
+                let buckets = e.call(0x0044_9f80, &args![this]).u32();
+                found = e
+                    .call(
+                        0x0044_e550,
+                        &args![buckets, index, iter.wrapping_add(8), key],
+                    )
+                    .bool();
+                e.call(0x0044_de40, &args![iter, 1u32]);
+            } else {
+                let index = e.mem.u32(iter.wrapping_add(4));
+                let buckets = e.call(0x0044_9f80, &args![this]).u32();
+                found = e
+                    .call(
+                        0x0044_e680,
+                        &args![buckets, index, iter.wrapping_add(8), key],
+                    )
+                    .bool();
+            }
+            if found {
+                let entry = e.mem.u32(iter.wrapping_add(8));
+                e.mem.set_u32(out.addr(), entry);
+                break;
+            }
+            let index = e.mem.u32(iter.wrapping_add(4)).wrapping_add(1);
+            e.mem.set_u32(iter.wrapping_add(4), index);
+            let count = e.call(0x0044_ddc0, &args![this]).u32();
+            if e.mem.u32(iter.wrapping_add(4)) >= count {
+                e.call(0x0044_de80, &args![iter, 1u32]);
+                break;
+            }
+            if keep_going == 0 {
+                break;
+            }
+            e.call(0x0044_de40, &args![iter, 0u32]);
+        }
+    }
+    if found {
+        let value = e.mem.u32(out.addr());
+        let buckets = e.call(0x0044_9f80, &args![this]).u32();
+        found = e.call(0x0052_8bb0, &args![buckets, value]).bool();
+    }
+    e.call(0x0040_fba0, &args![lock]);
+    found
+}
+
+// Translated from 0044ba10 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0044ba10 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// The constructor of `LockFreeMap<AnimIdle*,NiPointer<QueuedAnimIdle>>`
+/// (its vtable `010174cc`; the same body as `0044b750`): thiscall(`rows`,
+/// `slots`, `extra`), returns `this`.
+pub fn fn_0044ba10(e: &mut Engine, this: Ptr, rows: u32, slots: u32, extra: u32) -> Ptr {
+    lock_free_map_construct(e, this, QUEUED_ANIM_IDLE_MAP_VTABLE, rows, slots, extra)
+}
+
+// Translated from 0044bbc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LockFreeMap<MobileObject*,NiPointer<LipTask>>::IncrementCount` (Xbox
+/// PDB): `0040b460` (cdecl) on the count at `+0x18`.
+pub fn lock_free_map_increment_count(e: &mut Engine, this: Ptr) {
+    e.call(0x0040_b460, &args![this.addr().wrapping_add(0x18)]);
+}
+
+// Translated from 0063fa90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LipTask::scalar deleting destructor` (Xbox PDB): the destructor body
+/// (`00905c30`), then `operator delete(this)` when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn lip_task_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00905c30(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00905e50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00905e50 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// Cancels every lip task of the map: with a stack iterator (`00906690`),
+/// while it is not at its end, each step (`00906570(iterator, key, task, 1)`
+/// into a stack mobile-object word and a stack `NiPointer` built empty by
+/// `00528cb0`) that gives an entry removes it (`009060f0(key)`) and cancels
+/// its task (`BSTaskManager::CancelTask(task, 0)` on the manager at
+/// `01202d98`); the `NiPointer` is released (`0044cbf0`) after each step.
+/// Then the iterator's destructor (`00906110`) and `009064e0(this)`.
+pub fn fn_00905e50(e: &mut Engine, this: Ptr) {
+    e.with_stack(0x10, |e, iterator| {
+        fn_00906690(e, iterator);
+        while !e.call(ITERATOR_AT_END, &args![iterator]).bool() {
+            e.with_stack(4, |e, key| {
+                e.with_stack(4, |e, task| {
+                    e.mem.set_u32(key.addr(), 0);
+                    e.call(NI_POINTER_CONSTRUCT, &args![task, 0u32]);
+                    let found = e
+                        .call(MAP_ITERATE, &args![this, iterator, key, task, 1u32])
+                        .bool();
+                    if found {
+                        let mobile = e.mem.u32(key.addr());
+                        e.call(MAP_REMOVE_ENTRY, &args![this, mobile]);
+                        let raw = e.call(NI_POINTER_GET, &args![task]).u32();
+                        let manager = e.global::<u32>(TASK_MANAGER_POINTER);
+                        e.call(TASK_MANAGER_CANCEL_TASK, &args![manager, raw, 0u32]);
+                    }
+                    e.call(NI_POINTER_DESTRUCT, &args![task]);
+                });
+            });
+        }
+        fn_00906110(e, iterator);
+    });
+    e.call(MAP_AFTER_CANCEL, &args![this]);
+}
+
+// Translated from 00906050 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00906050 - C++ exception unwinding (FS:[0] frame state) is not translated.
+/// `LipSyncBackgroundManager::CancelLipFile` (Xbox PDB): looks the mobile
+/// object up through the map's virtual `+8` (into a stack `NiPointer` built
+/// empty); when found, removes its entry (`009060f0`) and cancels its task
+/// (`BSTaskManager::CancelTask(task, 0)` on the manager at `01202d98`).
+/// The `NiPointer` is released at the end.
+pub fn lip_sync_background_manager_cancel_lip_file(e: &mut Engine, this: Ptr, mobile: u32) {
+    e.with_stack(4, |e, task| {
+        e.call(NI_POINTER_CONSTRUCT, &args![task, 0u32]);
+        if e.vcall(this.addr(), 8, &args![mobile, task]).bool() {
+            e.call(MAP_REMOVE_ENTRY, &args![this, mobile]);
+            let raw = e.call(NI_POINTER_GET, &args![task]).u32();
+            let manager = e.global::<u32>(TASK_MANAGER_POINTER);
+            e.call(TASK_MANAGER_CANCEL_TASK, &args![manager, raw, 0u32]);
+        }
+        e.call(NI_POINTER_DESTRUCT, &args![task]);
+    });
+}
+
+// Translated from 00906110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The lip-task map iterator's destructor body: stores its vtable.
+pub fn fn_00906110(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), LIP_TASK_MAP_ITERATOR_VTABLE);
+}
+
+// Translated from 00906690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The lip-task map iterator's constructor: its vtable, `+4` and `+8`
+/// cleared, the byte at `+0xC` cleared. Returns `this`.
+pub fn fn_00906690(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), LIP_TASK_MAP_ITERATOR_VTABLE);
+    e.mem.set_u32(this.addr() + 4, 0);
+    e.mem.set_u32(this.addr() + 8, 0);
+    e.mem.set_u8(this.addr() + 0xc, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0090_5c30, fn_00905c30(Ptr)),
         entry!(0x0090_5e30, fn_00905e30(Ptr) -> Ptr),
         entry!(0x0090_6160, fn_00906160(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x0044_b730, lock_free_map_decrement_count(Ptr)),
+        entry!(0x0044_b750, fn_0044b750(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x0044_b8d0, fn_0044b8d0(Ptr, Ptr, Ptr, u32, u8) -> bool),
+        entry!(0x0044_ba10, fn_0044ba10(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x0044_bbc0, lock_free_map_increment_count(Ptr)),
+        entry!(
+            0x0063_fa90,
+            lip_task_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0090_5e50, fn_00905e50(Ptr)),
+        entry!(
+            0x0090_6050,
+            lip_sync_background_manager_cancel_lip_file(Ptr, u32)
+        ),
+        entry!(0x0090_6110, fn_00906110(Ptr)),
+        entry!(0x0090_6690, fn_00906690(Ptr) -> Ptr),
     ]
 }
 
@@ -209,5 +516,307 @@ mod process_list_tests {
         assert_eq!(e.mem.u32(this + 0xc), 0);
         assert_eq!(e.mem.u32(this + 4), 0);
         assert_eq!(e.mem.u32(this + 0x14), 0);
+    }
+}
+
+#[cfg(test)]
+mod b016_tests {
+    use super::*;
+
+    type CallLog = [(u32, Vec<u32>)];
+
+    fn calls(log: &CallLog, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn quiet(e: &mut Engine, addresses: &[u32]) {
+        for address in addresses {
+            e.register(*address, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn counts_go_through_the_word_at_0x18() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[0x0040_19a0, 0x0040_b460]);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_b730, &args![0x1000u32]);
+        e.call(0x0044_bbc0, &args![0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, 0x0040_19a0), vec![vec![0x1018]]);
+        assert_eq!(calls(&log, 0x0040_b460), vec![vec![0x2018]]);
+    }
+
+    fn constructor_doubles(e: &mut Engine) {
+        quiet(
+            e,
+            &[
+                0x0044_d7f0,
+                0x0096_a2d0,
+                0x0040_4eb0,
+                0x0040_4ee0,
+                0x0040_1050,
+            ],
+        );
+        e.register(0x006c_73b0, |_, a| (a[0] + 0x1000).into_ret());
+        e.register(OPERATOR_NEW, |e, _| e.mem.alloc(0x100).into_ret());
+    }
+
+    #[test]
+    fn map_constructors_store_their_own_vtables() {
+        for (address, vtable) in [
+            (0x0044_b750u32, QUEUED_REFERENCE_MAP_VTABLE),
+            (0x0044_ba10, QUEUED_ANIM_IDLE_MAP_VTABLE),
+        ] {
+            let mut e = Engine::new();
+            constructor_doubles(&mut e);
+            let this = e.mem.alloc(0x40);
+            e.call_log = Some(vec![]);
+            let back = e.call(address, &args![this, 2u32, 3u32, 7u32]).u32();
+            let log = e.call_log.take().unwrap();
+            assert_eq!(back, this);
+            assert_eq!(e.mem.u32(this), vtable);
+            assert_eq!(
+                calls(&log, OPERATOR_NEW)
+                    .iter()
+                    .map(|w| w[0])
+                    .collect::<Vec<_>>(),
+                vec![12, 24, 0x10]
+            );
+            let slots = e.mem.u32(this + 0xc);
+            assert_eq!(
+                calls(&log, 0x0040_1050),
+                vec![vec![slots, 4, 3, 0x0044_dee0]]
+            );
+            assert_eq!(e.mem.u32(this + 8), 3);
+            assert_eq!(e.mem.u32(this + 0x10), 7);
+            let object = e.mem.u32(this + 0x14);
+            assert_eq!(calls(&log, 0x006c_73b0), vec![vec![object - 0x1000, 2]]);
+            let guard = calls(&log, 0x0040_4eb0);
+            assert_eq!(guard[0][1..], [6, 1, 0x0101_73f8, 0x390]);
+        }
+    }
+
+    #[test]
+    fn map_constructor_with_failed_allocations() {
+        let mut e = Engine::new();
+        constructor_doubles(&mut e);
+        e.register(OPERATOR_NEW, |_, _| Ret::default());
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x0044_b750,
+            &args![this, 0x4000_0000u32, 0x4000_0000u32, 1u32],
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, OPERATOR_NEW)
+                .iter()
+                .map(|w| w[0])
+                .collect::<Vec<_>>(),
+            vec![u32::MAX, u32::MAX, 0x10]
+        );
+        assert!(calls(&log, 0x0040_1050).is_empty());
+        assert!(calls(&log, 0x006c_73b0).is_empty());
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+    }
+
+    /// Doubles for the iteration step; `0044ddc0` gives 2 buckets.
+    fn iteration_doubles(e: &mut Engine) {
+        quiet(
+            e,
+            &[
+                0x0040_fbf0,
+                0x0040_fba0,
+                ITERATOR_AT_END,
+                0x0044_de20,
+                0x0044_de40,
+                0x0044_de80,
+                0x0044_e550,
+                0x0044_e680,
+            ],
+        );
+        e.register(0x0044_9f80, |_, a| (a[0] + 0x100).into_ret());
+        e.register(0x0044_ddc0, |_, _| 2u32.into_ret());
+        e.register(0x0052_8bb0, |_, _| 1u32.into_ret());
+    }
+
+    #[test]
+    fn iteration_step_finds_an_entry() {
+        let mut e = Engine::new();
+        iteration_doubles(&mut e);
+        e.register(0x0044_e550, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0x40);
+        let iterator = e.mem.alloc(0x10);
+        e.mem.set_u32(iterator + 8, 0x0e0e);
+        let out = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        let found = e
+            .call(0x0044_b8d0, &args![this, iterator, out, 0x55u32, 1u32])
+            .bool();
+        let log = e.call_log.take().unwrap();
+        assert!(found);
+        assert_eq!(e.mem.u32(out), 0x0e0e);
+        assert_eq!(
+            calls(&log, 0x0044_e550),
+            vec![vec![this + 0x100, 0, iterator + 8, 0x55]]
+        );
+        assert_eq!(calls(&log, 0x0044_de40), vec![vec![iterator, 1]]);
+        assert_eq!(calls(&log, 0x0052_8bb0), vec![vec![this + 0x100, 0x0e0e]]);
+        assert_eq!(calls(&log, 0x0040_fbf0), vec![vec![this + 0x20, 0]]);
+        assert_eq!(calls(&log, 0x0040_fba0), vec![vec![this + 0x20]]);
+    }
+
+    #[test]
+    fn iteration_step_walks_to_the_end_or_stops() {
+        let mut e = Engine::new();
+        iteration_doubles(&mut e);
+        // 0044de20 says yes: the 0044e680 lookup, never a hit.
+        e.register(0x0044_de20, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0x40);
+        let iterator = e.mem.alloc(0x10);
+        let out = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        let found = e
+            .call(0x0044_b8d0, &args![this, iterator, out, 0x55u32, 1u32])
+            .bool();
+        let log = e.call_log.take().unwrap();
+        assert!(!found);
+        // Index 0, then 1; at 2 the walk ends.
+        assert_eq!(calls(&log, 0x0044_e680).len(), 2);
+        assert_eq!(calls(&log, 0x0044_de40), vec![vec![iterator, 0]]);
+        assert_eq!(calls(&log, 0x0044_de80), vec![vec![iterator, 1]]);
+        assert_eq!(e.mem.u32(iterator + 4), 2);
+        assert!(calls(&log, 0x0052_8bb0).is_empty());
+
+        // Without keep-going: one lookup.
+        e.mem.set_u32(iterator + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0044_b8d0, &args![this, iterator, out, 0x55u32, 0u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, 0x0044_e680).len(), 1);
+        assert!(calls(&log, 0x0044_de80).is_empty());
+
+        // At its end: nothing but the lock.
+        e.register(ITERATOR_AT_END, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0044_b8d0, &args![this, iterator, out, 0x55u32, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls(&log, 0x0044_de20).is_empty());
+        assert_eq!(calls(&log, 0x0040_fba0).len(), 1);
+    }
+
+    #[test]
+    fn lip_task_deleting_destructor() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[0x00c3_cea0, OPERATOR_DELETE]);
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0063_fa90, &args![0x5000u32, 0u32]).u32();
+        e.call(0x0063_fa90, &args![0x5000u32, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(back, 0x5000);
+        assert_eq!(calls(&log, 0x00c3_cea0).len(), 2);
+        assert_eq!(calls(&log, OPERATOR_DELETE), vec![vec![0x5000]]);
+    }
+
+    fn cancel_doubles(e: &mut Engine) {
+        quiet(
+            e,
+            &[
+                NI_POINTER_CONSTRUCT,
+                NI_POINTER_DESTRUCT,
+                TASK_MANAGER_CANCEL_TASK,
+                MAP_REMOVE_ENTRY,
+                MAP_AFTER_CANCEL,
+            ],
+        );
+        e.register(NI_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.map(0x0120_2000, 0x1000);
+        e.set_global(TASK_MANAGER_POINTER, 0x0abc_0000u32);
+    }
+
+    #[test]
+    fn cancel_all_cancels_each_found_task() {
+        let mut e = Engine::new();
+        cancel_doubles(&mut e);
+        // Two steps, the first finds mobile 0x77 with task 0x88; then the end.
+        e.register_double(ITERATOR_AT_END, {
+            let mut step = 0;
+            move |_, _| {
+                step += 1;
+                ((step > 2) as u32).into_ret()
+            }
+        });
+        e.register_double(MAP_ITERATE, {
+            let mut step = 0;
+            move |e, a| {
+                step += 1;
+                if step == 1 {
+                    e.mem.set_u32(a[2], 0x77);
+                    e.mem.set_u32(a[3], 0x88);
+                }
+                ((step == 1) as u32).into_ret()
+            }
+        });
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_5e50, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let iterate = calls(&log, MAP_ITERATE);
+        assert_eq!(iterate.len(), 2);
+        assert_eq!(iterate[0][0], this);
+        assert_eq!(iterate[0][4], 1);
+        assert_eq!(calls(&log, MAP_REMOVE_ENTRY), vec![vec![this, 0x77]]);
+        assert_eq!(
+            calls(&log, TASK_MANAGER_CANCEL_TASK),
+            vec![vec![0x0abc_0000, 0x88, 0]]
+        );
+        assert_eq!(calls(&log, NI_POINTER_DESTRUCT).len(), 2);
+        assert_eq!(calls(&log, MAP_AFTER_CANCEL), vec![vec![this]]);
+    }
+
+    #[test]
+    fn cancel_lip_file_cancels_a_found_task() {
+        let mut e = Engine::new();
+        cancel_doubles(&mut e);
+        e.register(0x0012_3400, |e, a| {
+            e.mem.set_u32(a[2], 0x99);
+            ((a[1] == 0x66) as u32).into_ret()
+        });
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable + 8, 0x0012_3400);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this, vtable);
+        e.call_log = Some(vec![]);
+        e.call(0x0090_6050, &args![this, 0x66u32]);
+        e.call(0x0090_6050, &args![this, 0x67u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, MAP_REMOVE_ENTRY), vec![vec![this, 0x66]]);
+        assert_eq!(
+            calls(&log, TASK_MANAGER_CANCEL_TASK),
+            vec![vec![0x0abc_0000, 0x99, 0]]
+        );
+        assert_eq!(calls(&log, NI_POINTER_DESTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn iterator_constructor_and_destructor() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        for offset in (0..0x10).step_by(4) {
+            e.mem.set_u32(this + offset, 0xffff_ffff);
+        }
+        let back = e.call(0x0090_6690, &args![this]).u32();
+        assert_eq!(back, this);
+        assert_eq!(e.mem.u32(this), LIP_TASK_MAP_ITERATOR_VTABLE);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 0xffff_ff00);
+        e.mem.set_u32(this, 0);
+        e.call(0x0090_6110, &args![this]);
+        assert_eq!(e.mem.u32(this), LIP_TASK_MAP_ITERATOR_VTABLE);
     }
 }

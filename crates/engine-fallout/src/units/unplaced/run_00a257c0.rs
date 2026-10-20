@@ -170,7 +170,125 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a2_62d0, fn_00a262d0(u32, u32) -> u32),
         entry!(0x00a2_6310, fn_00a26310(u32, u32, u32)),
         entry!(0x00a2_69f0, fn_00a269f0(u32, i32)),
+        entry!(0x00a2_6520, fn_00a26520(u32, u32, u32, u32)),
     ]
+}
+
+/// The double 2.0 the half period is divided by.
+const TWO: u32 = 0x0101_1590;
+
+/// `FISTP dword` with the rounding control set to chop (`OR 0xC00`): the
+/// truncated value, or the integer indefinite 0x80000000 for NaN and values
+/// out of range; the code keeps its low 16 bits.
+fn chop_low_word(value: f64) -> u16 {
+    let whole = value.trunc();
+    let word = if whole.is_nan() || whole < i32::MIN as f64 || whole > i32::MAX as f64 {
+        0x8000_0000
+    } else {
+        whole as i32 as u32
+    };
+    word as u16
+}
+
+/// `ST0 > ST1` as `FLD ST1; FLD ST0; FCOMPP; FNSTSW; TEST AH,0x41; JNZ`
+/// decides it: false for an unordered pair.
+fn above(st0: f64, st1: f64) -> bool {
+    st0 > st1
+}
+
+// Translated from 00a26520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Steps one channel of the 0x40-byte object (thiscall: channel `which`,
+/// the two 16-bit levels at `state`, elapsed `value`): channel 0 is the
+/// words +0x0C..+0x18 with the block at +0x04, channel 1 +0x20..+0x2C with
+/// the block at +0x08 (as `00a26310` attaches them). Nothing happens while
+/// the channel's length (+0) is 0. The channel's time (+0x0C) advances by
+/// `value`; past the length both channels' length and time are cleared and
+/// both levels set to 0. Otherwise, with the block's period (+0x0C), its
+/// half (`period / 2.0`, a float) and the phase (`time % period`, a float),
+/// the channel's level comes from the block's kind (+0x04) and amount (+0):
+/// kind 1 a square wave (the amount past half the period, 0 before); kind 3
+/// a triangle (the amount scaled by the phase's distance into the half);
+/// kind 2 computes a ramp from the time against the half, then takes the
+/// kind-1 level, which replaces it; any other kind the amount. Channel 1
+/// with the block's byte +0x10 set takes the mirrored forms. The level is
+/// stored in the channel's half of `state`.
+pub fn fn_00a26520(e: &mut Engine, this: u32, which: u32, state: u32, value: u32) {
+    let (channel, block) = if which == 0 {
+        (this + 0xc, e.mem.u32(this + 4))
+    } else {
+        (this + 0x20, e.mem.u32(this + 8))
+    };
+    if e.mem.u32(channel) == 0 {
+        return;
+    }
+    let time = e.mem.u32(channel + 0xc).wrapping_add(value);
+    e.mem.set_u32(channel + 0xc, time);
+    if e.mem.u32(channel + 0xc) >= e.mem.u32(channel) {
+        e.mem.set_u32(this + 0x20, 0);
+        e.mem.set_u32(this + 0x2c, 0);
+        e.mem.set_u32(this + 0xc, 0);
+        e.mem.set_u32(this + 0x18, 0);
+        e.mem.set_u16(state, 0);
+        e.mem.set_u16(state + 2, 0);
+        return;
+    }
+    let period = e.mem.u32(block + 0xc);
+    let half = x87_store32(x87_div(f64::from(period), e.mem.f64(TWO)));
+    let phase = x87_store32(f64::from(e.mem.u32(channel + 0xc) % e.mem.u32(block + 0xc)));
+    let mirrored = which != 0 && e.mem.u8(block + 0x10) != 0;
+    // FILD qword of the block's amount (a zero-extended word).
+    let amount = |e: &Engine| f64::from(e.mem.u32(block));
+    // phase / half, and (phase - half) / half.
+    let rising = || x87_div(x87_load32(phase), x87_m32(half));
+    let falling = || x87_div(x87_sub(x87_load32(phase), x87_m32(half)), x87_m32(half));
+    // The square wave: kind 1, and kind 2 after its ramp.
+    let square = |e: &Engine| {
+        // `TEST AH,5; JP`: the amount (or 0, mirrored) only when half <
+        // phase; an unordered pair takes the other branch.
+        let past_half = x87_load32(half) < x87_load32(phase);
+        if past_half != mirrored {
+            e.mem.u16(block)
+        } else {
+            0
+        }
+    };
+    let level = match e.mem.u32(block + 4) {
+        1 => square(e),
+        2 => {
+            let time = f64::from(e.mem.u32(channel + 0xc));
+            let ramp = if !mirrored {
+                if above(x87_load32(half), time) {
+                    x87_mul(amount(e), rising())
+                } else {
+                    x87_mul(amount(e), x87_sub(1.0, falling()))
+                }
+            } else if above(x87_load32(half), time) {
+                x87_mul(amount(e), x87_sub(1.0, rising()))
+            } else {
+                let unit = x87_div(x87_load32(half), x87_m32(half));
+                x87_mul(amount(e), x87_sub(x87_m32(phase), unit))
+            };
+            // The ramp's level is stored, then replaced by the square wave.
+            let _replaced = chop_low_word(ramp);
+            square(e)
+        }
+        3 => {
+            let up = above(x87_load32(half), x87_load32(phase));
+            let scaled = match (mirrored, up) {
+                (false, true) => x87_mul(amount(e), rising()),
+                (false, false) => x87_mul(amount(e), falling()),
+                (true, true) => x87_mul(amount(e), x87_sub(1.0, rising())),
+                (true, false) => x87_mul(amount(e), x87_sub(1.0, falling())),
+            };
+            chop_low_word(scaled)
+        }
+        _ => e.mem.u16(block),
+    };
+    if which == 0 {
+        e.mem.set_u16(state, level);
+    } else {
+        e.mem.set_u16(state + 2, level);
+    }
 }
 
 /// Method `00a26520` of the object at +0x1B80 (thiscall: channel, state,
@@ -428,5 +546,100 @@ mod tests {
         assert_eq!(e.mem.u32(this + 0x30), 0);
         assert_eq!(e.mem.u16(block + 0x1a), 0x0405);
         assert_eq!(e.mem.u16(block + 0x20), 0x0405);
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+
+    /// The object with one block (amount 64, period 80) on both channels,
+    /// channel lengths 1000 and the given kind and mirror byte; returns the
+    /// object and a zeroed state.
+    fn setup(e: &mut Engine, kind: u32, mirror: u8) -> (u32, u32) {
+        e.map(0x0101_1000, 0x1000);
+        e.mem.set_f64(TWO, 2.0);
+        let block = e.mem.alloc(0x24);
+        e.mem.set_u32(block, 64);
+        e.mem.set_u32(block + 4, kind);
+        e.mem.set_u32(block + 0xc, 80);
+        e.mem.set_u8(block + 0x10, mirror);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 4, block);
+        e.mem.set_u32(this + 8, block);
+        e.mem.set_u32(this + 0xc, 1000);
+        e.mem.set_u32(this + 0x20, 1000);
+        let state = e.mem.alloc(4);
+        (this, state)
+    }
+
+    /// The level channel `which` gets after advancing its time to `time`.
+    fn level(kind: u32, mirror: u8, which: u32, time: u32) -> u16 {
+        let mut e = Engine::new();
+        let (this, state) = setup(&mut e, kind, mirror);
+        e.mem.set_u32(state, 0xffff_ffff);
+        e.call(0x00a2_6520, &[this, which, state, time]);
+        let time_slot = if which == 0 { this + 0x18 } else { this + 0x2c };
+        assert_eq!(e.mem.u32(time_slot), time);
+        // Only the channel's own half of the state changes.
+        let other = if which == 0 { state + 2 } else { state };
+        assert_eq!(e.mem.u16(other), 0xffff);
+        e.mem.u16(state + which * 2)
+    }
+
+    #[test]
+    fn kinds_give_square_triangle_and_flat_levels() {
+        // Kind 3: phase 10 of half 40 rises to a quarter; phase 50 falls.
+        assert_eq!(level(3, 0, 0, 10), 16);
+        assert_eq!(level(3, 0, 0, 50), 16);
+        assert_eq!(level(3, 1, 1, 10), 48);
+        assert_eq!(level(3, 1, 1, 50), 48);
+        // Channel 0 ignores the mirror byte.
+        assert_eq!(level(3, 1, 0, 10), 16);
+        // Kind 1: the amount past half the period (mirrored: before it).
+        assert_eq!(level(1, 0, 0, 10), 0);
+        assert_eq!(level(1, 0, 0, 50), 64);
+        assert_eq!(level(1, 1, 1, 10), 64);
+        assert_eq!(level(1, 1, 1, 50), 0);
+        // Kind 2 ends with the square wave.
+        assert_eq!(level(2, 0, 0, 10), 0);
+        assert_eq!(level(2, 0, 0, 50), 64);
+        assert_eq!(level(2, 1, 1, 10), 64);
+        assert_eq!(level(2, 1, 1, 50), 0);
+        // Other kinds: the amount.
+        assert_eq!(level(7, 0, 0, 10), 64);
+        assert_eq!(level(7, 1, 1, 50), 64);
+        // The phase wraps with the period: time 90 is phase 10.
+        assert_eq!(level(3, 0, 0, 90), 16);
+    }
+
+    #[test]
+    fn idle_channels_wait_and_finished_ones_reset_both() {
+        let mut e = Engine::new();
+        let (this, state) = setup(&mut e, 3, 0);
+        e.mem.set_u32(this + 0xc, 0);
+        e.mem.set_u32(state, 0x1234_5678);
+        e.call(0x00a2_6520, &[this, 0, state, 10]);
+        assert_eq!(e.mem.u32(this + 0x18), 0);
+        assert_eq!(e.mem.u32(state), 0x1234_5678);
+        // Channel 1 reaches its length: both channels' length and time and
+        // both levels are cleared.
+        e.mem.set_u32(this + 0xc, 1000);
+        e.mem.set_u32(this + 0x18, 5);
+        e.mem.set_u32(this + 0x2c, 990);
+        e.call(0x00a2_6520, &[this, 1, state, 10]);
+        for off in [0xc, 0x18, 0x20, 0x2c] {
+            assert_eq!(e.mem.u32(this + off), 0, "+{off:#x}");
+        }
+        assert_eq!(e.mem.u32(state), 0);
+    }
+
+    #[test]
+    fn chop_truncates_and_marks_out_of_range() {
+        assert_eq!(chop_low_word(16.9), 16);
+        assert_eq!(chop_low_word(-1.5), 0xffff);
+        assert_eq!(chop_low_word(f64::NAN), 0);
+        assert_eq!(chop_low_word(3.0e10), 0);
+        assert_eq!(chop_low_word(70000.0), 70000u32 as u16);
     }
 }

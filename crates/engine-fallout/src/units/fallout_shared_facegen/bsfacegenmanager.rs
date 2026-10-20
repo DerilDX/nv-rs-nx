@@ -150,9 +150,72 @@ pub fn fn_00658bb0(e: &mut Engine, this: Ptr) {
     e.call(0x0065_8d30, &args![this]);
 }
 
+/// `NiTPointerListBase<..,NiPointer<NiProperty>>::RemovePos` (`00b9efa0`, unnamed in the
+/// engine map; `thiscall` on the list: the address of the returned `NiPointer`, the address of
+/// the position).
+const REMOVE_POSITION_00B9EFA0: u32 = 0x00b9_efa0;
+/// Imported `InterlockedIncrement` / `InterlockedDecrement` (import slots).
+const IMPORT_INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+const IMPORT_INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+
+// Translated from 00b9fcc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerListBase<NiTPointerAllocator<unsigned int>,NiPointer<NiProperty> >::Remove`
+/// (engine map), `thiscall` with two stack words: the address of the returned `NiPointer`
+/// and the address of the element to remove. Walks the list from its head (+0; items: next
+/// +0, element +8) for an item holding the element. When one is found it is removed through
+/// `00b9efa0` (with a temporary `NiPointer` and the position) and the result is the removed
+/// element, the temporary released afterwards (`InterlockedDecrement` on its +4, deleted
+/// through vtable slot +4 at 0); otherwise the result is the element asked for. The result is
+/// stored in the returned pointer with its count at +4 incremented when not null. Answers the
+/// returned pointer's address.
+// Translation incomplete: 00b9fcc0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the temporary) is not translated.
+pub fn ni_t_pointer_list_base_remove(e: &mut Engine, this: Ptr, result: Ptr, element: Ptr) -> Ptr {
+    let wanted = e.mem.u32(element.addr());
+    let mut item = e.mem.u32(this.addr());
+    let found = loop {
+        if item == 0 {
+            break 0;
+        }
+        let next = e.mem.u32(item);
+        if wanted == e.mem.u32(item + 8) {
+            break item;
+        }
+        item = next;
+    };
+    e.with_stack(8, |e, locals| {
+        let temporary = locals.addr();
+        let position = temporary + 4;
+        e.mem.set_u32(position, found);
+        let source = if found != 0 {
+            e.call(REMOVE_POSITION_00B9EFA0, &args![this, temporary, position])
+                .u32()
+        } else {
+            element.addr()
+        };
+        let value = e.mem.u32(source);
+        e.mem.set_u32(result.addr(), value);
+        if value != 0 {
+            e.call(IMPORT_INTERLOCKED_INCREMENT, &args![value + 4]);
+        }
+        if found != 0 {
+            let removed = e.mem.u32(temporary);
+            if removed != 0 {
+                let left = e
+                    .call(IMPORT_INTERLOCKED_DECREMENT, &args![removed + 4])
+                    .u32();
+                if left == 0 {
+                    e.vcall(removed, 4, &args![]);
+                }
+            }
+        }
+    });
+    result
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b9_fcc0, ni_t_pointer_list_base_remove(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x0065_8bb0, fn_00658bb0(Ptr)),
         entry!(0x00653290, fn_00653290(Ptr, u32) -> Ptr),
         entry!(0x00486b50, is_keys_equal(Ptr, u32, u32) -> bool),
@@ -393,5 +456,103 @@ mod coord_tests {
             0x0106_5870,
             "the vtable was stored before the call"
         );
+    }
+}
+
+#[cfg(test)]
+mod remove_tests {
+    use super::*;
+
+    const DELETE: u32 = 0x0ec0_0000;
+    const VTABLE: u32 = 0x0ec1_0000;
+
+    /// A list of three items holding objects with count 1, and the engine.
+    fn list() -> (Engine, u32, Vec<u32>, Vec<u32>) {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(DELETE, |_, _| Ret::default());
+        e.put_vtable(VTABLE, &[0, DELETE]);
+        // The removal hands the item's element over to the temporary.
+        e.register(REMOVE_POSITION_00B9EFA0, |e, a| {
+            let item = e.mem.u32(a[2]);
+            let element = e.mem.u32(item + 8);
+            e.mem.set_u32(a[1], element);
+            a[1].into_ret()
+        });
+        let objects: Vec<u32> = (0..3)
+            .map(|_| {
+                let object = e.mem.alloc(8);
+                e.mem.set_u32(object, VTABLE);
+                e.mem.set_u32(object + 4, 1);
+                object
+            })
+            .collect();
+        let items: Vec<u32> = (0..3).map(|_| e.mem.alloc(0xc)).collect();
+        for index in 0..3 {
+            let next = if index < 2 { items[index + 1] } else { 0 };
+            e.mem.set_u32(items[index], next);
+            e.mem.set_u32(items[index] + 8, objects[index]);
+        }
+        let this = e.mem.alloc(0xc);
+        e.mem.set_u32(this, items[0]);
+        e.call_log = Some(vec![]);
+        (e, this, items, objects)
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn remove_takes_the_found_item_out_and_answers_its_element() {
+        let (mut e, this, _, objects) = list();
+        let element = e.mem.alloc(4);
+        e.mem.set_u32(element, objects[1]);
+        let result = e.mem.alloc(4);
+        assert_eq!(
+            e.call(0x00b9_fcc0, &args![this, result, element]).u32(),
+            result
+        );
+        assert_eq!(e.mem.u32(result), objects[1]);
+        let removed = calls(&e, REMOVE_POSITION_00B9EFA0);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0][0], this);
+        // The result holds one more reference, the temporary's is dropped again.
+        assert_eq!(e.mem.u32(objects[1] + 4), 1);
+        assert!(calls(&e, DELETE).is_empty());
+    }
+
+    #[test]
+    fn remove_answers_the_element_asked_for_when_it_is_not_in_the_list() {
+        let (mut e, this, _, _) = list();
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(other, VTABLE);
+        e.mem.set_u32(other + 4, 5);
+        let element = e.mem.alloc(4);
+        e.mem.set_u32(element, other);
+        let result = e.mem.alloc(4);
+        e.call(0x00b9_fcc0, &args![this, result, element]);
+        assert_eq!(e.mem.u32(result), other);
+        assert_eq!(e.mem.u32(other + 4), 6);
+        assert!(calls(&e, REMOVE_POSITION_00B9EFA0).is_empty());
+        assert!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).is_empty());
+        // An empty list behaves the same; a null element gives a null result.
+        let empty = e.mem.alloc(0xc);
+        e.mem.set_u32(element, 0);
+        e.call(0x00b9_fcc0, &args![empty, result, element]);
+        assert_eq!(e.mem.u32(result), 0);
     }
 }

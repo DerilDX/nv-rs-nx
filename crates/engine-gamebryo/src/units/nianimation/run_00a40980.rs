@@ -13,9 +13,28 @@ pub fn fn_00a40a00(e: &mut Engine, this: Ptr, stream: Ptr) -> bool {
     e.call(JUMP_TARGET_00A40A00, &args![this, stream]).bool()
 }
 
+/// `00a36890` (`thiscall`): `NiBlendInterpolator`'s default constructor.
+const BLEND_INTERPOLATOR_CONSTRUCT: u32 = 0x00a3_6890;
+/// `NiBlendTransformInterpolator`'s vtable (by its RTTI type descriptor).
+const NI_BLEND_TRANSFORM_INTERPOLATOR_VTABLE: u32 = 0x0109_750c;
+
+// Translated from 00a409b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (by its body `NiBlendTransformInterpolator`'s default
+/// constructor): `NiBlendInterpolator`'s default constructor (`00a36890`), then the vtable
+/// `0109750c`. Answers `this`.
+pub fn fn_00a409b0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(BLEND_INTERPOLATOR_CONSTRUCT, &args![this]);
+    e.mem
+        .set_u32(this.addr(), NI_BLEND_TRANSFORM_INTERPOLATOR_VTABLE);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a4_0a00, fn_00a40a00(Ptr, Ptr) -> bool)]
+    vec![
+        entry!(0x00a4_0a00, fn_00a40a00(Ptr, Ptr) -> bool),
+        entry!(0x00a4_09b0, fn_00a409b0(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -39,5 +58,19 @@ mod tests {
         assert_eq!(hits[0].1, args![0x1000u32, 0x2000u32]);
         e.register(TARGET, |_, _| Ret::default());
         assert_eq!(e.call(THUNK, &args![0x1000u32, 0x2000u32]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00a409b0_constructs_the_base_and_stores_the_vtable() {
+        let mut e = Engine::new();
+        e.register(BLEND_INTERPOLATOR_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0x1234);
+            e.mem.set_u32(a[0] + 4, 0x5678);
+            a[0].into_ret()
+        });
+        let this = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x00a4_09b0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), NI_BLEND_TRANSFORM_INTERPOLATOR_VTABLE);
+        assert_eq!(e.mem.u32(this + 4), 0x5678);
     }
 }

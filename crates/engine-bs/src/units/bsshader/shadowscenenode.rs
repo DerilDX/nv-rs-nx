@@ -10,6 +10,18 @@ const ARRAY_REALLOCATE: u32 = 0x00cb_9ce0;
 /// The virtual slot (byte offset) that allocates a block of the requested number of elements.
 const SLOT_ALLOCATE: u32 = 0x04;
 
+/// `NiTPointerListBase<NiTPointerAllocator<unsigned int>,NiPointer<NiPSysModifier>>::RemoveAll`
+/// (Xbox PDB name of `00e74d40`, `thiscall`, no stack words): the jump target of `00b5c7c0`.
+const LIST_REMOVE_ALL_00E74D40: u32 = 0x00e7_4d40;
+
+// Translated from 00b5c7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `BSShader/shadowscenenode.cpp`; Ghidra made no function
+/// of it, read with `disassemble_bytes`): a 5-byte jump to `00e74d40` (the `NiTPointerList`
+/// of `NiPointer`s' `RemoveAll`), passing on `this` (`ECX`); no stack words.
+pub fn fn_00b5c7c0(e: &mut Engine, this: Ptr) {
+    e.call(LIST_REMOVE_ALL_00E74D40, &args![this]);
+}
+
 // Translated from 00b5c360 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`shadowscenenode.cpp`). `__fastcall`: reserves the next slot of a
 /// `BSSimpleArray`-shaped array (vtable, buffer at +4, count at +8, capacity at +0xc) and answers
@@ -317,6 +329,7 @@ pub fn shadow_scene_node_shadow_scene_node(
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b5_c7c0, fn_00b5c7c0(Ptr)),
         entry!(0x00b5_c360, fn_00b5c360(Ptr) -> u32),
         entry!(
             0x00b5_e0f0,
@@ -584,5 +597,25 @@ mod b000_tests {
         let bound = e.get(this, ShadowSceneNode::m_kWorldBound);
         assert_eq!(e.mem.f32(bound + 0xc), 1.0);
         assert_eq!(e.mem.u32(bound), 0);
+    }
+}
+
+#[cfg(test)]
+mod b000f_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b5c7c0_jumps_to_the_list_remove_all() {
+        let mut e = Engine::new();
+        e.register(LIST_REMOVE_ALL_00E74D40, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_c7c0, &args![0x1000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == LIST_REMOVE_ALL_00E74D40)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, [0x1000]);
     }
 }

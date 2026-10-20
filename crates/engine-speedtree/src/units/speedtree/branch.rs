@@ -980,9 +980,15 @@ pub fn c_idv_branch_is_blossom(
 /// once (arithmetic) and offset by `0x1FC00000`, and read back as the float result.
 pub fn fn_00b14230(e: &mut Engine, this: Ptr<CVec3>) -> f32 {
     let base = this.addr();
-    let (x, y, z) = (ld(e, base), ld(e, base + 4), ld(e, base + 8));
-    let sum = (z * z + (y * y + x * x)) as f32;
-    let bits = ((sum.to_bits() as i32) >> 1).wrapping_add(0x1FC0_0000) as u32;
+    let (x, y, z) = (e.mem.u32(base), e.mem.u32(base + 4), e.mem.u32(base + 8));
+    // FLD z; FMUL z; FLD y; FMUL y; FLD x; FMUL x; FADDP; FADDP: each step with the
+    // x87 choice of NaN (two NaNs with equal significands give the positive one).
+    let zz = x87_mul(x87_load32(z), x87_m32(z));
+    let yy = x87_mul(x87_load32(y), x87_m32(y));
+    let xx = x87_mul(x87_load32(x), x87_m32(x));
+    let sum = x87_add(zz, x87_add(yy, xx));
+    // FSTP dword, then SAR 1 and ADD 0x1FC00000 on the stored bits.
+    let bits = ((x87_store32(sum) as i32) >> 1).wrapping_add(0x1FC0_0000) as u32;
     x87_quiet(f32::from_bits(bits))
 }
 
@@ -3334,6 +3340,19 @@ mod tests {
         let mut e = engine();
         let v = block(&mut e, &[3.0, 4.0, 0.0]);
         assert_eq!(e.call(0x00b1_4230, &args![v]).f32(), 5.125);
+    }
+
+    #[test]
+    fn approximate_length_of_two_nans_keeps_the_positive_one() {
+        // Oracle vector 00b14230_8: x = -qNaN 0xffffffff, y = -0, z = +qNaN 0x7fffffff.
+        // The two NaN sums tie on the significand, so the x87 keeps the positive one:
+        // the exe returns 0x5fbfffff.
+        let mut e = engine();
+        let v = block(&mut e, &[0.0, 0.0, 0.0]);
+        e.mem.set_u32(v, 0xffff_ffff);
+        e.mem.set_u32(v + 4, 0x8000_0000);
+        e.mem.set_u32(v + 8, 0x7fff_ffff);
+        assert_eq!(e.call(0x00b1_4230, &args![v]).f32().to_bits(), 0x5fbf_ffff);
     }
 
     #[test]

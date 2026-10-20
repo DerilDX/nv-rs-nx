@@ -219,6 +219,252 @@ pub fn fn_0051d1b0(_e: &mut Engine, _this: Ptr) -> u32 {
     0x0120_0444
 }
 
+/// `00a5ecb0` (`NiMain/ninode.cpp`, `thiscall`, one word): the `NiNode`
+/// constructor body the billboard constructors run first.
+const NI_NODE_CONSTRUCT: u32 = 0x00a5_ecb0;
+/// The vtable `0102bf44` (RTTI `.?AVNiBillboardNode@@`).
+const BILLBOARD_NODE_VTABLE: u32 = 0x0102_bf44;
+/// `NiBillboardNode`'s flag word (`u16`; the low three bits are the mode,
+/// bit 3 a flag) and its float at `+0xb0`.
+const BILLBOARD_FLAGS_OFFSET: u32 = 0xac;
+const BILLBOARD_FLOAT_OFFSET: u32 = 0xb0;
+/// `00aa1460` (`cdecl`: block, size): gives back a block of the given size.
+const FREE_SIZED: u32 = 0x00aa_1460;
+/// `00a5d3a0` (`NiMain/niobject.cpp`, `thiscall`): the base constructor
+/// `BSTextureSet`'s constructor runs.
+const NI_OBJECT_CONSTRUCT: u32 = 0x00a5_d3a0;
+/// The vtables `0102c0ec` (RTTI `.?AVBSTextureSet@@`) and `0102c04c` (RTTI
+/// `.?AVBSShaderTextureSet@@`).
+const TEXTURE_SET_VTABLE: u32 = 0x0102_c0ec;
+const SHADER_TEXTURE_SET_VTABLE: u32 = 0x0102_c04c;
+/// `00ec782f` (`cdecl`: array, element size, count, constructor,
+/// destructor): the compiler's array constructor helper.
+const ARRAY_CONSTRUCT: u32 = 0x00ec_782f;
+/// `00ec5fce` (`eh vector destructor iterator`, `cdecl`: array, element
+/// size, count, destructor).
+const ARRAY_DESTRUCT: u32 = 0x00ec_5fce;
+/// The 8-byte string's constructor (`004037b0`) and destructor (`004037d0`),
+/// passed to the array helpers by address.
+const STRING_CONSTRUCT: u32 = 0x0040_37b0;
+const STRING_DESTRUCT: u32 = 0x0040_37d0;
+/// `004a7090` (`thiscall`): the base destructor `BSShaderTextureSet`'s
+/// destructor ends with.
+const TEXTURE_SET_BASE_DESTRUCT: u32 = 0x004a_7090;
+/// Where `BSShaderTextureSet`'s six strings start, and their size and count.
+const TEXTURE_NAMES_OFFSET: u32 = 0x8;
+const TEXTURE_NAME_SIZE: u32 = 8;
+const TEXTURE_NAME_COUNT: u32 = 6;
+/// The text `GetBillboardTextureFilename` starts the name with (`0102bed0`).
+const BILLBOARD_TEXTURE_PREFIX: u32 = 0x0102_bed0;
+/// The model component's virtual slot that answers the model's file name.
+const SLOT_MODEL_NAME: u32 = 0x14;
+/// The three doubles `0051d250` compares the two `BNAM` floats with.
+const BNAM_LOWER: u32 = 0x0101_2060;
+const BNAM_FIRST_UPPER: u32 = 0x0101_79e0;
+const BNAM_SECOND_UPPER: u32 = 0x0102_c188;
+
+/// The address `offset` bytes into the object at `object`.
+fn field_addr(object: Ptr, offset: u32) -> u32 {
+    object.addr().wrapping_add(offset)
+}
+
+// Translated from 0051cf00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0051cf00 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// An `NiBillboardNode` constructor (unnamed in the engine map; `thiscall`,
+/// plain `RET`): runs the `NiNode` constructor body `00a5ecb0` with 0, stores
+/// the `NiBillboardNode` vtable `0102bf44`, clears the flag word at `+0xac`
+/// and stores 0.0 at `+0xb0`, then sets the mode bits to 1 (`0051d000`) and
+/// flag bit 3 (`0051d060` with 1). Returns `this`.
+pub fn fn_0051cf00(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(NI_NODE_CONSTRUCT, &args![this, 0u32]);
+    e.mem.set_u32(this.addr(), BILLBOARD_NODE_VTABLE);
+    e.mem.set_u16(field_addr(this, BILLBOARD_FLAGS_OFFSET), 0);
+    // FLDZ; FSTP float.
+    e.mem
+        .set_u32(field_addr(this, BILLBOARD_FLOAT_OFFSET), x87_store32(0.0));
+    fn_0051d000(e, this, 1);
+    fn_0051d060(e, this, 1);
+    this
+}
+
+// Translated from 0051d000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): sets the low three bits
+/// of the billboard flag word at `+0xac` to `mode` (`0051d020` with mask 7,
+/// shift 0).
+pub fn fn_0051d000(e: &mut Engine, this: Ptr, mode: u16) {
+    fn_0051d020(e, this, mode, 7, 0);
+}
+
+// Translated from 0051d020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 0xc`): the flag word at
+/// `+0xac` becomes `(flags & !mask) | (value << shift)`, kept to 16 bits; the
+/// shift count is taken modulo 32 as `SHL` does.
+pub fn fn_0051d020(e: &mut Engine, this: Ptr, value: u16, mask: u16, shift: u16) {
+    let at = field_addr(this, BILLBOARD_FLAGS_OFFSET);
+    let kept = u32::from(e.mem.u16(at)) & !u32::from(mask);
+    let bits = u32::from(value) << (u32::from(shift) & 31);
+    e.mem.set_u16(at, (kept | bits) as u16);
+}
+
+// Translated from 0051d060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): sets (`on` non-zero) or
+/// clears bit 3 of the flag word at `+0xac` (`0051d080` with 8).
+pub fn fn_0051d060(e: &mut Engine, this: Ptr, on: u8) {
+    fn_0051d080(e, this, on, 8);
+}
+
+// Translated from 0051d080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 8`): ORs `bits` into the flag
+/// word at `+0xac` when `on` is non-zero, clears them otherwise.
+pub fn fn_0051d080(e: &mut Engine, this: Ptr, on: u8, bits: u16) {
+    let at = field_addr(this, BILLBOARD_FLAGS_OFFSET);
+    let flags = e.mem.u16(at);
+    if on != 0 {
+        e.mem.set_u16(at, flags | bits);
+    } else {
+        e.mem.set_u16(at, flags & !bits);
+    }
+}
+
+// Translated from 0051d190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `BSTextureSet` constructor (unnamed in the engine map; `thiscall`, plain
+/// `RET`): runs the base constructor `00a5d3a0` and stores the vtable
+/// `0102c0ec` (RTTI `.?AVBSTextureSet@@`). Returns `this`.
+pub fn fn_0051d190(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(NI_OBJECT_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr(), TEXTURE_SET_VTABLE);
+    this
+}
+
+// Translated from 0051d0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0051d0d0 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// `BSShaderTextureSet::BSShaderTextureSet` (Xbox PDB; `thiscall`, plain
+/// `RET`): the `BSTextureSet` constructor (`0051d190`), the vtable `0102c04c`,
+/// then the array helper `00ec782f` constructs the six 8-byte strings at
+/// `+0x8` (constructor `004037b0`, destructor `004037d0`). Returns `this`.
+pub fn bs_shader_texture_set_bs_shader_texture_set(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_0051d190(e, this);
+    e.mem.set_u32(this.addr(), SHADER_TEXTURE_SET_VTABLE);
+    e.call(
+        ARRAY_CONSTRUCT,
+        &args![
+            field_addr(this, TEXTURE_NAMES_OFFSET),
+            TEXTURE_NAME_SIZE,
+            TEXTURE_NAME_COUNT,
+            STRING_CONSTRUCT,
+            STRING_DESTRUCT
+        ],
+    );
+    this
+}
+
+// Translated from 0051cf90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBillboardNode::GetRTTI` (Xbox PDB; `thiscall`, plain `RET`): answers
+/// the constant address `011f4aa0` without reading `this`.
+pub fn ni_billboard_node_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x011f_4aa0
+}
+
+// Translated from 0051d160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderTextureSet::scalar deleting destructor` (Xbox PDB; `thiscall`,
+/// `RET 4`): the destructor `0051d1c0`, then, when bit 0 of `flags` is set,
+/// gives the 0x38-byte object back (`00aa1460`). Returns `this`.
+pub fn bs_shader_texture_set_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_0051d1c0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_SIZED, &args![this, 0x38u32]);
+    }
+    this
+}
+
+// Translated from 0051d1c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0051d1c0 - the C++ exception-unwinding frame (FS:[0]) is not translated.
+/// The `BSShaderTextureSet` destructor (unnamed in the engine map;
+/// `thiscall`, plain `RET`): destroys the six 8-byte strings at `+0x8` with
+/// the array helper `00ec5fce` (destructor `004037d0`), then runs the base
+/// destructor `004a7090`.
+pub fn fn_0051d1c0(e: &mut Engine, this: Ptr) {
+    e.call(
+        ARRAY_DESTRUCT,
+        &args![
+            field_addr(this, TEXTURE_NAMES_OFFSET),
+            TEXTURE_NAME_SIZE,
+            TEXTURE_NAME_COUNT,
+            STRING_DESTRUCT
+        ],
+    );
+    e.call(TEXTURE_SET_BASE_DESTRUCT, &args![this]);
+}
+
+// Translated from 0051c3b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectTREE::GetBillboardTextureFilename` (Xbox PDB; `thiscall`,
+/// `RET 4`): writes into `buffer` the text at `0102bed0`, then the model's
+/// file name (virtual slot `0x14` of the model component at `this + 0x30`)
+/// up to its first `.` or its end; when it stopped at a `.` it appends
+/// `.dds`. The result is terminated with a zero byte.
+pub fn tes_object_tree_get_billboard_texture_filename(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    let mut out = buffer.addr();
+    let mut prefix = BILLBOARD_TEXTURE_PREFIX;
+    while e.mem.u8(prefix) != 0 {
+        let byte = e.mem.u8(prefix);
+        e.mem.set_u8(out, byte);
+        prefix = prefix.wrapping_add(1);
+        out = out.wrapping_add(1);
+    }
+    let mut name = e
+        .vcall(field_addr(this, MODEL_OFFSET), SLOT_MODEL_NAME, &[])
+        .u32();
+    while e.mem.u8(name) != b'.' && e.mem.u8(name) != 0 {
+        let byte = e.mem.u8(name);
+        e.mem.set_u8(out, byte);
+        name = name.wrapping_add(1);
+        out = out.wrapping_add(1);
+    }
+    if e.mem.u8(name) == b'.' {
+        for byte in *b".dds" {
+            e.mem.set_u8(out, byte);
+            out = out.wrapping_add(1);
+        }
+    }
+    e.mem.set_u8(out, 0);
+}
+
+// Translated from 0051d250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, plain `RET`): tests the two `BNAM`
+/// floats at `+0x8c` and `+0x90` against the doubles at `01012060` (lower),
+/// `010179e0` and `0102c188` (uppers). False when the first is above the
+/// lower and at most its upper; otherwise true unless the second is above
+/// the lower and at most its upper. A NaN compares as the exe's flag tests
+/// do: it is never "above" nor "at most".
+pub fn fn_0051d250(e: &mut Engine, this: Ptr) -> bool {
+    let lower: f64 = e.global(BNAM_LOWER);
+    let first = x87_load32(e.mem.u32(field_addr(this, BNAM_OFFSET)));
+    if first > lower && first <= e.global::<f64>(BNAM_FIRST_UPPER) {
+        return false;
+    }
+    let second = x87_load32(e.mem.u32(field_addr(this, BNAM_SECOND_OFFSET)));
+    if !(second > lower) {
+        return true;
+    }
+    !(second <= e.global::<f64>(BNAM_SECOND_UPPER))
+}
+
+// Translated from 0051cfa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBillboardNode::scalar deleting destructor` (Xbox PDB; `thiscall`,
+/// `RET 4`): the destructor `0051cfe0`, then, when bit 0 of `flags` is set,
+/// gives the 0xb4-byte object back (`00aa1460`). Returns `this`.
+pub fn ni_billboard_node_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0051cfe0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_SIZED, &args![this, 0xb4u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -226,6 +472,28 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0051_d1b0, fn_0051d1b0(Ptr) -> u32),
         entry!(0x0051_cfe0, fn_0051cfe0(Ptr)),
         entry!(0x0051_bbc0, tes_object_tree_load(Ptr, Ptr) -> bool),
+        entry!(0x0051_cf00, fn_0051cf00(Ptr) -> Ptr),
+        entry!(0x0051_d000, fn_0051d000(Ptr, u16)),
+        entry!(0x0051_d020, fn_0051d020(Ptr, u16, u16, u16)),
+        entry!(0x0051_d060, fn_0051d060(Ptr, u8)),
+        entry!(0x0051_d080, fn_0051d080(Ptr, u8, u16)),
+        entry!(0x0051_d190, fn_0051d190(Ptr) -> Ptr),
+        entry!(0x0051_d0d0, bs_shader_texture_set_bs_shader_texture_set(Ptr) -> Ptr),
+        entry!(0x0051_cf90, ni_billboard_node_get_rtti(Ptr) -> u32),
+        entry!(
+            0x0051_d160,
+            bs_shader_texture_set_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0051_d1c0, fn_0051d1c0(Ptr)),
+        entry!(
+            0x0051_c3b0,
+            tes_object_tree_get_billboard_texture_filename(Ptr, Ptr)
+        ),
+        entry!(0x0051_d250, fn_0051d250(Ptr) -> bool),
+        entry!(
+            0x0051_cfa0,
+            ni_billboard_node_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -540,5 +808,206 @@ mod constant_getter_tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x0051_d1b0, &args![0x1000u32]).u32(), 0x0120_0444);
         assert_eq!(e.call(0x0051_d1b0, &args![0u32]).u32(), 0x0120_0444);
+    }
+}
+
+#[cfg(test)]
+mod b015_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn noop(e: &mut Engine, addrs: &[u32]) {
+        for a in addrs {
+            e.register(*a, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn billboard_constructor_sets_vtable_mode_one_and_flag_bit_3() {
+        let mut e = Engine::new();
+        noop(&mut e, &[NI_NODE_CONSTRUCT]);
+        let node: Ptr = Ptr::new(e.mem.alloc(0xb4));
+        e.mem.set_u16(node.addr() + 0xac, 0xfff0);
+        e.mem.set_u32(node.addr() + 0xb0, 0x7fc0_0000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0051_cf00, &args![node]).u32(), node.addr());
+        assert_eq!(calls_to(&e, NI_NODE_CONSTRUCT), vec![vec![node.addr(), 0]]);
+        assert_eq!(e.mem.u32(node.addr()), BILLBOARD_NODE_VTABLE);
+        assert_eq!(e.mem.u16(node.addr() + 0xac), 0x9);
+        assert_eq!(e.mem.u32(node.addr() + 0xb0), 0);
+    }
+
+    #[test]
+    fn mode_setter_replaces_the_low_three_bits() {
+        let mut e = Engine::new();
+        let node: Ptr = Ptr::new(e.mem.alloc(0xb4));
+        e.mem.set_u16(node.addr() + 0xac, 0xff0f);
+        e.call(0x0051_d000, &args![node, 0x0002u32]);
+        assert_eq!(e.mem.u16(node.addr() + 0xac), 0xff0a);
+    }
+
+    #[test]
+    fn masked_setter_shifts_modulo_32_and_keeps_16_bits() {
+        let mut e = Engine::new();
+        let node: Ptr = Ptr::new(e.mem.alloc(0xb4));
+        e.mem.set_u16(node.addr() + 0xac, 0xffff);
+        e.call(0x0051_d020, &args![node, 0x3u32, 0x00f0u32, 4u32]);
+        assert_eq!(e.mem.u16(node.addr() + 0xac), 0xff3f);
+        // A shift of 36 is 4 for SHL; bits shifted past 16 are lost.
+        e.mem.set_u16(node.addr() + 0xac, 0);
+        e.call(0x0051_d020, &args![node, 0xf001u32, 0u32, 36u32]);
+        assert_eq!(e.mem.u16(node.addr() + 0xac), 0x0010);
+    }
+
+    #[test]
+    fn flag_bit_3_setter_and_bit_helper_set_and_clear() {
+        let mut e = Engine::new();
+        let node: Ptr = Ptr::new(e.mem.alloc(0xb4));
+        e.mem.set_u16(node.addr() + 0xac, 0x0101);
+        e.call(0x0051_d060, &args![node, 0x100u32]);
+        // Only the low byte of the flag counts: 0x100 is "off".
+        assert_eq!(e.mem.u16(node.addr() + 0xac), 0x0101);
+        e.call(0x0051_d060, &args![node, 1u32]);
+        assert_eq!(e.mem.u16(node.addr() + 0xac), 0x0109);
+        e.call(0x0051_d080, &args![node, 0u32, 0x0101u32]);
+        assert_eq!(e.mem.u16(node.addr() + 0xac), 0x0008);
+        e.call(0x0051_d080, &args![node, 7u32, 0x8000u32]);
+        assert_eq!(e.mem.u16(node.addr() + 0xac), 0x8008);
+    }
+
+    #[test]
+    fn texture_set_constructor_runs_the_base_and_sets_its_vtable() {
+        let mut e = Engine::new();
+        noop(&mut e, &[NI_OBJECT_CONSTRUCT]);
+        let set: Ptr = Ptr::new(e.mem.alloc(0x38));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0051_d190, &args![set]).u32(), set.addr());
+        assert_eq!(calls_to(&e, NI_OBJECT_CONSTRUCT), vec![vec![set.addr()]]);
+        assert_eq!(e.mem.u32(set.addr()), TEXTURE_SET_VTABLE);
+    }
+
+    #[test]
+    fn shader_texture_set_constructor_builds_six_strings() {
+        let mut e = Engine::new();
+        noop(&mut e, &[NI_OBJECT_CONSTRUCT, ARRAY_CONSTRUCT]);
+        let set: Ptr = Ptr::new(e.mem.alloc(0x38));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0051_d0d0, &args![set]).u32(), set.addr());
+        assert_eq!(e.mem.u32(set.addr()), SHADER_TEXTURE_SET_VTABLE);
+        assert_eq!(calls_to(&e, NI_OBJECT_CONSTRUCT).len(), 1);
+        assert_eq!(
+            calls_to(&e, ARRAY_CONSTRUCT),
+            vec![vec![set.addr() + 8, 8, 6, 0x0040_37b0, 0x0040_37d0]]
+        );
+    }
+
+    #[test]
+    fn billboard_rtti_is_a_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0051_cf90, &args![0u32]).u32(), 0x011f_4aa0);
+    }
+
+    #[test]
+    fn shader_texture_set_destructors_free_on_flag_bit_0() {
+        let mut e = Engine::new();
+        noop(
+            &mut e,
+            &[ARRAY_DESTRUCT, TEXTURE_SET_BASE_DESTRUCT, FREE_SIZED],
+        );
+        let set: Ptr = Ptr::new(e.mem.alloc(0x38));
+        for (flags, frees) in [(0u32, false), (2, false), (3, true)] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0051_d160, &args![set, flags]).u32(), set.addr());
+            assert_eq!(
+                calls_to(&e, ARRAY_DESTRUCT),
+                vec![vec![set.addr() + 8, 8, 6, 0x0040_37d0]]
+            );
+            assert_eq!(
+                calls_to(&e, TEXTURE_SET_BASE_DESTRUCT),
+                vec![vec![set.addr()]]
+            );
+            let freed = calls_to(&e, FREE_SIZED);
+            if frees {
+                assert_eq!(freed, vec![vec![set.addr(), 0x38]]);
+            } else {
+                assert!(freed.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn billboard_deleting_destructor_frees_0xb4_bytes_on_flag_bit_0() {
+        let mut e = Engine::new();
+        noop(&mut e, &[0x00a5_e930, FREE_SIZED]);
+        for (flags, frees) in [(0u32, false), (1, true)] {
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0051_cfa0, &args![0x5000u32, flags]).u32(), 0x5000);
+            assert_eq!(calls_to(&e, 0x00a5_e930), vec![vec![0x5000]]);
+            assert_eq!(calls_to(&e, FREE_SIZED).len(), usize::from(frees));
+        }
+    }
+
+    fn texture_name(model_name: &[u8]) -> Vec<u8> {
+        let mut e = Engine::new();
+        e.map(BILLBOARD_TEXTURE_PREFIX, 0x10);
+        e.mem.set_cstr(BILLBOARD_TEXTURE_PREFIX, b"Trees/");
+        let tree: Ptr = Ptr::new(e.mem.alloc(0x100));
+        e.put_vtable(0x0090_0000, &[0, 0, 0, 0, 0, 0x0090_1000]);
+        e.mem.set_u32(tree.addr() + 0x30, 0x0090_0000);
+        let name = e.mem.alloc(0x40);
+        e.mem.set_cstr(name, model_name);
+        e.register_double(0x0090_1000, move |_, _| name.into_ret());
+        let buffer = e.mem.alloc(0x80);
+        e.mem.write(buffer, &[0xaa; 0x80]);
+        e.call(0x0051_c3b0, &args![tree, buffer]);
+        e.mem.cstr(buffer)
+    }
+
+    #[test]
+    fn billboard_texture_name_swaps_the_extension_for_dds() {
+        assert_eq!(
+            texture_name(b"Joshua01.nif"),
+            b"Trees/Joshua01.dds".to_vec()
+        );
+        assert_eq!(texture_name(b"a.b.nif"), b"Trees/a.dds".to_vec());
+        // No dot: the name is copied whole, without an extension.
+        assert_eq!(texture_name(b"Plain"), b"Trees/Plain".to_vec());
+    }
+
+    #[test]
+    fn bnam_test_follows_the_flag_tests() {
+        let mut e = Engine::new();
+        for (addr, value) in [
+            (BNAM_LOWER, 0.0f64),
+            (BNAM_FIRST_UPPER, 10.0),
+            (BNAM_SECOND_UPPER, 20.0),
+        ] {
+            e.map(addr, 8);
+            e.set_global(addr, value);
+        }
+        let tree: Ptr = Ptr::new(e.mem.alloc(0x100));
+        let mut check = |first: f32, second: f32| {
+            e.mem.set_f32(tree.addr() + 0x8c, first);
+            e.mem.set_f32(tree.addr() + 0x90, second);
+            e.call(0x0051_d250, &args![tree]).bool()
+        };
+        // First in (0, 10]: false whatever the second is.
+        assert!(!check(5.0, 100.0));
+        assert!(!check(10.0, 100.0));
+        // First outside: true unless the second is in (0, 20].
+        assert!(!check(11.0, 20.0));
+        assert!(check(11.0, 0.0));
+        assert!(check(0.0, 21.0));
+        assert!(check(f32::NAN, f32::NAN));
+        assert!(!check(f32::NAN, 1.0));
     }
 }

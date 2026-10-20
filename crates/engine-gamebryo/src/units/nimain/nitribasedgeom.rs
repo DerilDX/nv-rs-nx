@@ -39,11 +39,27 @@ pub fn ni_tri_based_geom_get_viewer_strings(e: &mut Engine, this: Ptr, strings: 
     });
 }
 
+/// `NiGeometry::NiGeometry` (engine map, `00a804e0`, `thiscall`, `RET 4`: the model data).
+const NI_GEOMETRY_CONSTRUCT: u32 = 0x00a8_04e0;
+/// `NiTriBasedGeom`'s vtable (`0109ed94`, named by its RTTI locator).
+const NI_TRI_BASED_GEOM_VTABLE: u32 = 0x0109_ed94;
+
+// Translated from 00a89720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriBasedGeom::NiTriBasedGeom` (Xbox PDB): `thiscall`, `RET 4`, one word (the model
+/// data). Runs `NiGeometry::NiGeometry` (`00a804e0`) with it, sets the class's vtable
+/// (`0109ed94`) and answers `this`.
+pub fn ni_tri_based_geom_ni_tri_based_geom(e: &mut Engine, this: Ptr, model_data: Ptr) -> Ptr {
+    e.call(NI_GEOMETRY_CONSTRUCT, &args![this, model_data]);
+    e.mem.set_u32(this.addr(), NI_TRI_BASED_GEOM_VTABLE);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a89780, ni_tri_based_geom_get_rtti() -> Ptr),
         entry!(0x00a897c0, ni_tri_based_geom_get_viewer_strings(Ptr, Ptr)),
+        entry!(0x00a8_9720, ni_tri_based_geom_ni_tri_based_geom(Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -108,5 +124,25 @@ mod tests {
             assert_eq!(&set.1[..2], [strings, size]);
             assert_eq!(stored.get(), 0x7777_0001);
         }
+    }
+
+    #[test]
+    fn ni_tri_based_geom_ni_tri_based_geom_runs_the_base_then_sets_the_vtable() {
+        let mut e = Engine::new();
+        e.register(NI_GEOMETRY_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0x1111);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0xc4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a8_9720, &args![this, 0x5000u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        let base: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == NI_GEOMETRY_CONSTRUCT)
+            .collect();
+        assert_eq!(base.len(), 1);
+        assert_eq!(base[0].1, [this, 0x5000]);
+        assert_eq!(e.mem.u32(this), NI_TRI_BASED_GEOM_VTABLE);
     }
 }

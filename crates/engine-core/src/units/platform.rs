@@ -357,6 +357,17 @@ fn get_current_thread_id(_e: &mut Engine) -> u32 {
 // Platform: replaces KERNEL32.DLL Sleep (import)
 fn sleep(_e: &mut Engine, _ms: u32) {}
 
+// Platform: replaces KERNEL32.DLL GetLastError (import): the thread's
+// last-error code, which only SetLastError changes here (one thread).
+fn get_last_error(e: &mut Engine) -> u32 {
+    e.kernel.last_error
+}
+
+// Platform: replaces KERNEL32.DLL SetLastError (import)
+fn set_last_error(e: &mut Engine, code: u32) {
+    e.kernel.last_error = code;
+}
+
 // Platform: replaces KERNEL32.DLL GetTickCount and WINMM.DLL timeGetTime (imports)
 fn tick_count(e: &mut Engine) -> u32 {
     e.clock_ms
@@ -454,6 +465,8 @@ pub struct Kernel {
     /// The in-memory files behind `BSFile`s ([`open_memory_file`]), by the
     /// `BSFile`'s address.
     files: std::collections::BTreeMap<u32, MemoryFile>,
+    /// The thread's last-error code (`GetLastError`/`SetLastError`).
+    last_error: u32,
 }
 
 impl Kernel {
@@ -1022,6 +1035,8 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, get_current_thread_id() -> u32).1,
         ),
         (k, "Sleep", entry!(0, sleep(u32)).1),
+        (k, "GetLastError", entry!(0, get_last_error() -> u32).1),
+        (k, "SetLastError", entry!(0, set_last_error(u32)).1),
         (k, "GetTickCount", entry!(0, tick_count() -> u32).1),
         ("WINMM.dll", "timeGetTime", entry!(0, tick_count() -> u32).1),
         (

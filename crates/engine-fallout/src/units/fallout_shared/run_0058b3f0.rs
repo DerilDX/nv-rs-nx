@@ -23,11 +23,70 @@ pub fn fn_0058b420(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `NiFormArray`'s vtable (`010326fc`; its RTTI locator names `NiFormArray`).
+const NI_FORM_ARRAY_VTABLE: u32 = 0x0103_26fc;
+/// The base array constructor (`004701d0`, `thiscall(a, b)`).
+const ARRAY_BASE_CONSTRUCT: u32 = 0x0047_01d0;
+/// Returns the word at +0xC of its `this` (`0084e3a0`).
+const ARRAY_COUNT: u32 = 0x0084_e3a0;
+/// `NiFormArray::GetFormAt` (`004d6170`, Xbox PDB; `thiscall(index)`).
+const NI_FORM_ARRAY_GET_FORM_AT: u32 = 0x004d_6170;
+/// `__RTDynamicCast` (`00ec43fb`, `cdecl(object, vfdelta, source type,
+/// target type, is reference)`).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// The type descriptors of `TESForm` (`01183028`) and `BGSCameraPath`
+/// (`0118c268`), read from their decorated names.
+const TES_FORM_TYPE: u32 = 0x0118_3028;
+const BGS_CAMERA_PATH_TYPE: u32 = 0x0118_c268;
+/// The array pointer both readers below test (+0x2C of their `this`).
+const FORM_ARRAY: u32 = 0x2c;
+
+// Translated from 0058b3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor: builds the array base (`004701d0(this, 0, 1)`), then sets
+/// `NiFormArray`'s vtable (`010326fc`). Returns `this`.
+pub fn fn_0058b3f0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(ARRAY_BASE_CONSTRUCT, &args![this, 0u32, 1u32]);
+    e.mem.set_u32(this.addr(), NI_FORM_ARRAY_VTABLE);
+    this
+}
+
+// Translated from 0058b600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The count (`0084e3a0`) of the array at +0x2C, or 0 when it is null.
+pub fn fn_0058b600(e: &mut Engine, this: Ptr) -> u32 {
+    let array = e.mem.u32(this.addr() + FORM_ARRAY);
+    if array != 0 {
+        return e.call(ARRAY_COUNT, &args![array]).u32();
+    }
+    0
+}
+
+// Translated from 0058b630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The form at `index` of the array at +0x2C (`NiFormArray::GetFormAt`),
+/// dynamically cast from `TESForm` to `BGSCameraPath`; null when the array
+/// is null.
+pub fn fn_0058b630(e: &mut Engine, this: Ptr, index: u32) -> Ptr {
+    let array = e.mem.u32(this.addr() + FORM_ARRAY);
+    if array == 0 {
+        return Ptr::NULL;
+    }
+    let form = e
+        .call(NI_FORM_ARRAY_GET_FORM_AT, &args![array, index])
+        .u32();
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, TES_FORM_TYPE, BGS_CAMERA_PATH_TYPE, 0u32],
+    )
+    .ptr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0058_b450, fn_0058b450(Ptr)),
         entry!(0x0058_b420, fn_0058b420(Ptr, u32) -> Ptr),
+        entry!(0x0058_b3f0, fn_0058b3f0(Ptr) -> Ptr),
+        entry!(0x0058_b600, fn_0058b600(Ptr) -> u32),
+        entry!(0x0058_b630, fn_0058b630(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -82,5 +141,69 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod form_array_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn at_0058b3f0_builds_the_base_and_sets_the_vtable() {
+        let mut e = Engine::new();
+        e.register(ARRAY_BASE_CONSTRUCT, |_, _| Ret::default());
+        let this: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0058_b3f0, &args![this]).u32();
+        assert_eq!(back, this.addr());
+        assert_eq!(e.mem.u32(this.addr()), NI_FORM_ARRAY_VTABLE);
+        assert_eq!(
+            calls_to(&e, ARRAY_BASE_CONSTRUCT),
+            vec![vec![this.addr(), 0, 1]]
+        );
+    }
+
+    #[test]
+    fn at_0058b600_counts_the_array_or_returns_zero() {
+        let mut e = Engine::new();
+        e.register(ARRAY_COUNT, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        let this: Ptr = Ptr::new(e.mem.alloc(0x30));
+        assert_eq!(e.call(0x0058_b600, &args![this]).u32(), 0);
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 0xc, 7);
+        e.mem.set_u32(this.addr() + FORM_ARRAY, array);
+        assert_eq!(e.call(0x0058_b600, &args![this]).u32(), 7);
+    }
+
+    #[test]
+    fn at_0058b630_casts_the_form_at_the_index() {
+        let mut e = Engine::new();
+        e.register(NI_FORM_ARRAY_GET_FORM_AT, |_, a| (0x7000 + a[1]).into_ret());
+        e.register(RT_DYNAMIC_CAST, |_, a| (a[0] + 1).into_ret());
+        let this: Ptr = Ptr::new(e.mem.alloc(0x30));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0058_b630, &args![this, 3u32]).u32(), 0);
+        assert!(calls_to(&e, NI_FORM_ARRAY_GET_FORM_AT).is_empty());
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(this.addr() + FORM_ARRAY, array);
+        assert_eq!(e.call(0x0058_b630, &args![this, 3u32]).u32(), 0x7004);
+        assert_eq!(
+            calls_to(&e, NI_FORM_ARRAY_GET_FORM_AT),
+            vec![vec![array, 3]]
+        );
+        assert_eq!(
+            calls_to(&e, RT_DYNAMIC_CAST),
+            vec![vec![0x7003, 0, TES_FORM_TYPE, BGS_CAMERA_PATH_TYPE, 0]]
+        );
     }
 }

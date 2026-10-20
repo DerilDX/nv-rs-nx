@@ -794,9 +794,20 @@ pub fn bs_texture_palette_remove_texture_ov2(e: &mut Engine, path: u32) -> bool 
     removed
 }
 
+// Translated from 00a61590 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// The `BSTexMap` constructor the vector constructor runs per size class
+/// (Ghidra made no function of it; disassembled from its bytes): zeroes the
+/// first 0xB24 bytes (`memset`) and the word at `+0xB24`, returns `this`.
+pub fn fn_00a61590(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(MEMSET, &args![this, 0u32, 0xb24u32]);
+    e.mem.set_u32(this.addr().wrapping_add(0xb24), 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a6_1590, fn_00a61590(Ptr) -> Ptr),
         entry!(0x00a614d0, fn_00a614d0(u32, u32) -> bool),
         entry!(0x00a61530, bs_tex_map_key_to_hash_index(u32) -> u32),
         entry!(0x00a615c0, fn_00a615c0(Ptr<BSEntryMap>)),
@@ -1417,5 +1428,23 @@ mod tests {
         assert!(!bs_texture_palette_remove_texture_ov2(&mut f.e, path));
         assert_eq!(f.e.mem.u32(ADD_CRIT), 0);
         assert_eq!(f.e.mem.u32(ADD_CRIT + 4), 0);
+    }
+}
+
+#[cfg(test)]
+mod tex_map_constructor_tests {
+    use super::*;
+
+    #[test]
+    fn tex_map_constructor_clears_the_map() {
+        let mut e = Engine::new();
+        e.register(MEMSET, |_, _| Ret::default());
+        let map = e.mem.alloc(MAP_SIZE);
+        e.mem.set_u32(map + 0xb24, 9);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a6_1590, &args![map]).u32(), map);
+        assert_eq!(e.mem.u32(map + 0xb24), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (MEMSET, vec![map, 0, 0xb24]));
     }
 }

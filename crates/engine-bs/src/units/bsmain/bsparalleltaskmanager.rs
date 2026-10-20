@@ -136,14 +136,226 @@ fn thread_at(e: &mut Engine, this: Ptr<BSParallelTaskManager>, index: u32) -> u3
     e.mem.u32(threads.wrapping_add(index.wrapping_mul(4)))
 }
 
+/// `MemoryManager::Deallocate` (Xbox PDB): `thiscall(block)`.
+const MEMORY_FREE: u32 = 0x00aa_4060;
+/// `DoThreadSetup` (engine map, cdecl(Havok thread memory)).
+const DO_THREAD_SETUP: u32 = 0x00c8_0130;
+/// `DoThreadShutdown` (engine map, cdecl(Havok thread memory)).
+const DO_THREAD_SHUTDOWN: u32 = 0x00c8_0240;
+/// `BSLinearTaskThread`'s destructor body (`008c77c0`, thiscall).
+const LINEAR_TASK_THREAD_DESTRUCTOR: u32 = 0x008c_77c0;
+/// The thread call the manager's destructor makes first (`008c74b0`,
+/// thiscall, `ailineartaskthreadmanager.cpp`).
+const LINEAR_TASK_THREAD_CALL_8C74B0: u32 = 0x008c_74b0;
+/// Import slot of `ReleaseSemaphore` (stdcall(handle, count, previous)).
+const RELEASE_SEMAPHORE: u32 = 0x00fd_f1b4;
+/// Import slot of `InterlockedIncrement` (stdcall(address)).
+const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+/// Import slot of `InterlockedDecrement` (stdcall(address)).
+const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+/// Import slot of `WaitForSingleObject` (stdcall(handle, timeout)).
+const WAIT_FOR_SINGLE_OBJECT: u32 = 0x00fd_f1c8;
+/// The task function `00c44c90` hands to `00c44c40`.
+const SPLIT_TASK: u32 = 0x00c4_4d90;
+
+/// `BSParallelTaskThread` fields on the PC (the Xbox PDB's offsets less
+/// 0x10): `BSThread::m_ThreadID` (Xbox `+0x34`).
+const THREAD_ID: u32 = 0x24;
+/// `BSLinearTaskThread::StartProcessing` (`BSSemaphore`, Xbox `+0x40`):
+/// its `iCount`, then `hSemaphore` at +4.
+const START_PROCESSING: u32 = 0x30;
+/// `BSLinearTaskThread::FinishedProcessing` (Xbox `+0x4C`).
+const FINISHED_PROCESSING: u32 = 0x3c;
+/// `BSParallelTaskThread::HavokThreadMemory` (Xbox `+0x60`): router, stack
+/// buffer, thread id.
+const HAVOK_THREAD_MEMORY: u32 = 0x50;
+
+// Translated from 00c448f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSParallelTaskThread::OnStartup` (Xbox PDB): clears the Havok thread
+/// memory's router and stack buffer, copies the thread id into it and runs
+/// `DoThreadSetup` on it.
+pub fn bs_parallel_task_thread_on_startup(e: &mut Engine, this: Ptr) {
+    let memory = this.addr().wrapping_add(HAVOK_THREAD_MEMORY);
+    e.mem.set_u32(memory, 0);
+    e.mem.set_u32(memory.wrapping_add(4), 0);
+    let id = e.mem.u32(this.addr().wrapping_add(THREAD_ID));
+    e.mem.set_u32(memory.wrapping_add(8), id);
+    e.call(DO_THREAD_SETUP, &args![memory]);
+}
+
+// Translated from 00c44940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSParallelTaskThread::OnShutdown` (Xbox PDB): `DoThreadShutdown` on the
+/// Havok thread memory.
+pub fn bs_parallel_task_thread_on_shutdown(e: &mut Engine, this: Ptr) {
+    let memory = this.addr().wrapping_add(HAVOK_THREAD_MEMORY);
+    e.call(DO_THREAD_SHUTDOWN, &args![memory]);
+}
+
+// Translated from 00c44960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSParallelTaskThread::RunLinearTasks` (Xbox PDB): runs the manager's
+/// task (`BSParallelTaskManager::RunTask` on `pManager`).
+pub fn bs_parallel_task_thread_run_linear_tasks(e: &mut Engine, this: Ptr) {
+    let manager = e.mem.u32(this.addr().wrapping_add(THREAD_MANAGER));
+    bs_parallel_task_manager_run_task(e, Ptr::new(manager));
+}
+
+// Translated from 00c44b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The manager's destructor body: for the one thread, calls `008c74b0` on
+/// it, waits for its `FinishedProcessing` semaphore (infinite timeout) and
+/// decrements its count, deletes it (virtual `+0` with 1) when it is not
+/// null and clears its slot; then frees the thread array.
+pub fn fn_00c44b70(e: &mut Engine, this: Ptr<BSParallelTaskManager>) {
+    let mut index = 0u32;
+    while index < THREAD_COUNT {
+        let thread = thread_at(e, this, index);
+        e.call(LINEAR_TASK_THREAD_CALL_8C74B0, &args![thread]);
+        let thread = thread_at(e, this, index);
+        let semaphore = thread.wrapping_add(FINISHED_PROCESSING);
+        let handle = e.mem.u32(semaphore.wrapping_add(4));
+        e.call(WAIT_FOR_SINGLE_OBJECT, &args![handle, u32::MAX]);
+        e.call(INTERLOCKED_DECREMENT, &args![semaphore]);
+        let thread = thread_at(e, this, index);
+        if thread != 0 {
+            e.vcall(thread, 0, &args![1u32]);
+        }
+        let threads = e.get(this, BSParallelTaskManager::pThreads);
+        e.mem
+            .set_u32(threads.wrapping_add(index.wrapping_mul(4)), 0);
+        index += 1;
+    }
+    let threads = e.get(this, BSParallelTaskManager::pThreads);
+    e.call(MEMORY_FREE, &args![MEMORY_MANAGER, threads]);
+}
+
+// Translated from 00c44c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `function(data)` on every thread and this one: sets `bRunningTask`,
+/// stores the function and its data, starts the threads (`00c44cd0`), runs
+/// the task here (`RunTask`), waits for the threads (`00c44d30`) and clears
+/// `bRunningTask`.
+pub fn fn_00c44c40(e: &mut Engine, this: Ptr<BSParallelTaskManager>, function: u32, data: u32) {
+    e.set(this, BSParallelTaskManager::bRunningTask, true);
+    e.set(this, BSParallelTaskManager::pTaskFunc, function);
+    e.set(this, BSParallelTaskManager::pData, data);
+    fn_00c44cd0(e, this);
+    bs_parallel_task_manager_run_task(e, this);
+    fn_00c44d30(e, this);
+    e.set(this, BSParallelTaskManager::bRunningTask, false);
+}
+
+// Translated from 00c44c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the split task `00c44d90` on `work` across the threads
+/// (`00c44c40(00c44d90, work)`).
+pub fn fn_00c44c90(e: &mut Engine, this: Ptr<BSParallelTaskManager>, work: u32) {
+    fn_00c44c40(e, this, SPLIT_TASK, work);
+}
+
+// Translated from 00c44cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSParallelTaskManager::RunTask` (Xbox PDB): `pTaskFunc(pData)` (cdecl).
+pub fn bs_parallel_task_manager_run_task(e: &mut Engine, this: Ptr<BSParallelTaskManager>) {
+    let data = e.get(this, BSParallelTaskManager::pData);
+    let function = e.get(this, BSParallelTaskManager::pTaskFunc);
+    e.call(function, &args![data]);
+}
+
+// Translated from 00c44cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Starts the threads: for the one thread, releases its `StartProcessing`
+/// semaphore once and increments its count.
+pub fn fn_00c44cd0(e: &mut Engine, this: Ptr<BSParallelTaskManager>) {
+    let mut index = 0u32;
+    while index < THREAD_COUNT {
+        let thread = thread_at(e, this, index);
+        let semaphore = thread.wrapping_add(START_PROCESSING);
+        let handle = e.mem.u32(semaphore.wrapping_add(4));
+        e.call(RELEASE_SEMAPHORE, &args![handle, 1u32, 0u32]);
+        e.call(INTERLOCKED_INCREMENT, &args![semaphore]);
+        index += 1;
+    }
+}
+
+// Translated from 00c44d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Waits for the threads: for the one thread, waits for its
+/// `FinishedProcessing` semaphore (infinite timeout) and decrements its
+/// count.
+pub fn fn_00c44d30(e: &mut Engine, this: Ptr<BSParallelTaskManager>) {
+    let mut index = 0u32;
+    while index < THREAD_COUNT {
+        let thread = thread_at(e, this, index);
+        let semaphore = thread.wrapping_add(FINISHED_PROCESSING);
+        let handle = e.mem.u32(semaphore.wrapping_add(4));
+        e.call(WAIT_FOR_SINGLE_OBJECT, &args![handle, u32::MAX]);
+        e.call(INTERLOCKED_DECREMENT, &args![semaphore]);
+        index += 1;
+    }
+}
+
+// Translated from 00c44d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The split task (cdecl(work)): `work` holds a function, its data, an item
+/// count and a shared counter (+0, +4, +8, +0xC). Each runner takes the next
+/// item with `InterlockedIncrement` on the counter and calls
+/// `function(data, item)` (cdecl) for items below the count, until the
+/// taken item reaches the count.
+pub fn fn_00c44d90(e: &mut Engine, work: Ptr) {
+    let work = work.addr();
+    let mut item = 0u32;
+    while item < e.mem.u32(work.wrapping_add(8)) {
+        let taken = e
+            .call(INTERLOCKED_INCREMENT, &args![work.wrapping_add(0xc)])
+            .u32();
+        item = taken.wrapping_sub(1);
+        if item < e.mem.u32(work.wrapping_add(8)) {
+            let data = e.mem.u32(work.wrapping_add(4));
+            let function = e.mem.u32(work);
+            e.call(function, &args![data, item]);
+        }
+    }
+}
+
+// Translated from 00c44df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSParallelTaskThread::scalar deleting destructor` (Xbox PDB): the
+/// `BSLinearTaskThread` destructor body (`008c77c0`), then frees `this` when
+/// bit 0 of `flags` is set. Returns `this`.
+pub fn bs_parallel_task_thread_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(LINEAR_TASK_THREAD_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00c44980,
-        bs_parallel_task_manager_constructor(
-            Ptr<BSParallelTaskManager>,
-        ) -> Ptr<BSParallelTaskManager>
-    )]
+    vec![
+        entry!(
+            0x00c44980,
+            bs_parallel_task_manager_constructor(
+                Ptr<BSParallelTaskManager>,
+            ) -> Ptr<BSParallelTaskManager>
+        ),
+        entry!(0x00c4_48f0, bs_parallel_task_thread_on_startup(Ptr)),
+        entry!(0x00c4_4940, bs_parallel_task_thread_on_shutdown(Ptr)),
+        entry!(0x00c4_4960, bs_parallel_task_thread_run_linear_tasks(Ptr)),
+        entry!(0x00c4_4b70, fn_00c44b70(Ptr<BSParallelTaskManager>)),
+        entry!(
+            0x00c4_4c40,
+            fn_00c44c40(Ptr<BSParallelTaskManager>, u32, u32)
+        ),
+        entry!(0x00c4_4c90, fn_00c44c90(Ptr<BSParallelTaskManager>, u32)),
+        entry!(
+            0x00c4_4cb0,
+            bs_parallel_task_manager_run_task(Ptr<BSParallelTaskManager>)
+        ),
+        entry!(0x00c4_4cd0, fn_00c44cd0(Ptr<BSParallelTaskManager>)),
+        entry!(0x00c4_4d30, fn_00c44d30(Ptr<BSParallelTaskManager>)),
+        entry!(0x00c4_4d90, fn_00c44d90(Ptr)),
+        entry!(
+            0x00c4_4df0,
+            bs_parallel_task_thread_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -237,5 +449,202 @@ mod tests {
         // The calls still go to the (null) pointer read back from the array.
         assert_eq!(calls(&log, THREAD_INITIALIZE)[0][0], 0);
         assert_eq!(calls(&log, THREAD_SET_PRIORITY), vec![vec![0, 0xf]]);
+    }
+
+    /// A manager with one thread (0x5C bytes, its semaphore handles 0x11
+    /// and 0x22) and the synchronisation imports doubled.
+    fn manager_with_thread(e: &mut Engine) -> (Ptr<BSParallelTaskManager>, u32) {
+        for addr in [
+            RELEASE_SEMAPHORE,
+            INTERLOCKED_INCREMENT,
+            INTERLOCKED_DECREMENT,
+            WAIT_FOR_SINGLE_OBJECT,
+            MEMORY_FREE,
+            LINEAR_TASK_THREAD_CALL_8C74B0,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let manager: Ptr<BSParallelTaskManager> = e.new_object();
+        let threads = e.mem.alloc(4);
+        let thread = e.mem.alloc(0x5c);
+        e.mem.set_u32(thread + START_PROCESSING + 4, 0x11);
+        e.mem.set_u32(thread + FINISHED_PROCESSING + 4, 0x22);
+        e.mem.set_u32(thread + THREAD_MANAGER, manager.addr());
+        e.mem.set_u32(threads, thread);
+        e.set(manager, BSParallelTaskManager::pThreads, threads);
+        (manager, thread)
+    }
+
+    #[test]
+    fn on_startup_and_shutdown_set_up_the_havok_memory() {
+        let mut e = engine();
+        e.register(DO_THREAD_SETUP, |_, _| Ret::default());
+        e.register(DO_THREAD_SHUTDOWN, |_, _| Ret::default());
+        let thread = e.mem.alloc(0x5c);
+        e.mem.set_u32(thread + THREAD_ID, 0x99);
+        e.mem.set_u32(thread + 0x50, 7);
+        e.mem.set_u32(thread + 0x54, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_48f0, &args![thread]);
+        e.call(0x00c4_4940, &args![thread]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(thread + 0x50), 0);
+        assert_eq!(e.mem.u32(thread + 0x54), 0);
+        assert_eq!(e.mem.u32(thread + 0x58), 0x99);
+        assert_eq!(calls(&log, DO_THREAD_SETUP), vec![vec![thread + 0x50]]);
+        assert_eq!(calls(&log, DO_THREAD_SHUTDOWN), vec![vec![thread + 0x50]]);
+    }
+
+    #[test]
+    fn run_linear_tasks_runs_the_managers_task() {
+        let mut e = engine();
+        let (manager, thread) = manager_with_thread(&mut e);
+        e.register(0x0012_3450, |_, _| Ret::default());
+        e.set(manager, BSParallelTaskManager::pTaskFunc, 0x0012_3450);
+        e.set(manager, BSParallelTaskManager::pData, 0x777);
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_4960, &args![thread]);
+        e.call(0x00c4_4cb0, &args![manager]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, 0x0012_3450), vec![vec![0x777], vec![0x777]]);
+    }
+
+    #[test]
+    fn destructor_stops_deletes_and_frees() {
+        let mut e = engine();
+        let (manager, thread) = manager_with_thread(&mut e);
+        e.register(0x0012_3460, |_, _| Ret::default());
+        let vtable = e.mem.alloc(4);
+        e.mem.set_u32(vtable, 0x0012_3460);
+        e.mem.set_u32(thread, vtable);
+        let threads = e.get(manager, BSParallelTaskManager::pThreads);
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_4b70, &args![manager]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, LINEAR_TASK_THREAD_CALL_8C74B0),
+            vec![vec![thread]]
+        );
+        assert_eq!(
+            calls(&log, WAIT_FOR_SINGLE_OBJECT),
+            vec![vec![0x22, u32::MAX]]
+        );
+        assert_eq!(
+            calls(&log, INTERLOCKED_DECREMENT),
+            vec![vec![thread + 0x3c]]
+        );
+        assert_eq!(calls(&log, 0x0012_3460), vec![vec![thread, 1]]);
+        assert_eq!(e.mem.u32(threads), 0);
+        assert_eq!(
+            calls(&log, MEMORY_FREE),
+            vec![vec![MEMORY_MANAGER, threads]]
+        );
+    }
+
+    #[test]
+    fn running_a_task_starts_runs_and_waits() {
+        let mut e = engine();
+        let (manager, thread) = manager_with_thread(&mut e);
+        e.register(0x0012_3470, |e, a| {
+            // The flag is set while the task runs.
+            let manager = Ptr::<BSParallelTaskManager>::new(e.mem.u32(a[0]));
+            assert!(e.get(manager, BSParallelTaskManager::bRunningTask));
+            Ret::default()
+        });
+        let data = e.mem.alloc(4);
+        e.mem.set_u32(data, manager.addr());
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_4c40, &args![manager, 0x0012_3470u32, data]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, RELEASE_SEMAPHORE), vec![vec![0x11, 1, 0]]);
+        assert_eq!(
+            calls(&log, INTERLOCKED_INCREMENT),
+            vec![vec![thread + 0x30]]
+        );
+        assert_eq!(calls(&log, 0x0012_3470), vec![vec![data]]);
+        assert_eq!(
+            calls(&log, WAIT_FOR_SINGLE_OBJECT),
+            vec![vec![0x22, u32::MAX]]
+        );
+        assert!(!e.get(manager, BSParallelTaskManager::bRunningTask));
+        assert_eq!(
+            e.get(manager, BSParallelTaskManager::pTaskFunc),
+            0x0012_3470
+        );
+        assert_eq!(e.get(manager, BSParallelTaskManager::pData), data);
+    }
+
+    #[test]
+    fn split_run_hands_the_split_task_and_its_work() {
+        let mut e = engine();
+        let (manager, _) = manager_with_thread(&mut e);
+        e.register(SPLIT_TASK, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_4c90, &args![manager, 0x4444u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, SPLIT_TASK), vec![vec![0x4444]]);
+    }
+
+    #[test]
+    fn start_and_wait_touch_each_threads_semaphores() {
+        let mut e = engine();
+        let (manager, thread) = manager_with_thread(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_4cd0, &args![manager]);
+        e.call(0x00c4_4d30, &args![manager]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, RELEASE_SEMAPHORE), vec![vec![0x11, 1, 0]]);
+        assert_eq!(
+            calls(&log, INTERLOCKED_INCREMENT),
+            vec![vec![thread + 0x30]]
+        );
+        assert_eq!(
+            calls(&log, WAIT_FOR_SINGLE_OBJECT),
+            vec![vec![0x22, u32::MAX]]
+        );
+        assert_eq!(
+            calls(&log, INTERLOCKED_DECREMENT),
+            vec![vec![thread + 0x3c]]
+        );
+    }
+
+    #[test]
+    fn split_task_takes_items_until_the_count() {
+        let mut e = engine();
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let value = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], value);
+            value.into_ret()
+        });
+        e.register(0x0012_3480, |_, _| Ret::default());
+        let work = e.mem.alloc(16);
+        e.mem.set_u32(work, 0x0012_3480);
+        e.mem.set_u32(work + 4, 0xabc);
+        e.mem.set_u32(work + 8, 3);
+        // Another runner already took item 0.
+        e.mem.set_u32(work + 12, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00c4_4d90, &args![work]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, 0x0012_3480),
+            vec![vec![0xabc, 1], vec![0xabc, 2]]
+        );
+        // The last increment takes item 3, which ends the loop.
+        assert_eq!(calls(&log, INTERLOCKED_INCREMENT).len(), 3);
+    }
+
+    #[test]
+    fn deleting_destructor_frees_only_with_bit_0() {
+        let mut e = engine();
+        e.register(LINEAR_TASK_THREAD_DESTRUCTOR, |_, _| Ret::default());
+        e.register(MEMORY_FREE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let back = e.call(0x00c4_4df0, &args![0x5000u32, 0u32]).u32();
+        e.call(0x00c4_4df0, &args![0x5000u32, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(back, 0x5000);
+        assert_eq!(calls(&log, LINEAR_TASK_THREAD_DESTRUCTOR).len(), 2);
+        assert_eq!(calls(&log, MEMORY_FREE), vec![vec![MEMORY_MANAGER, 0x5000]]);
     }
 }

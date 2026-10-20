@@ -1263,9 +1263,144 @@ fn attenuation_pixels(e: &mut Engine, pixel_data: u32) {
     }
 }
 
+/// `BSTexturePalette::GetTexture_ov2` (engine map, `00a61b90`, `cdecl`: name, the
+/// `NiPointer` to fill) and `BSTexturePalette::SetTexture` (`00a61c50`, `cdecl`: texture,
+/// word).
+const TEXTURE_PALETTE_GET_TEXTURE: u32 = 0x00a6_1b90;
+const TEXTURE_PALETTE_SET_TEXTURE: u32 = 0x00a6_1c50;
+/// The file finder object (`011f81dc`) and its look-up `00afe0d0` (engine map unit
+/// `BSSystem/filefinder.cpp`, `thiscall`, four words: name, 0, 6, 2).
+const FILE_FINDER_011F81DC: u32 = 0x011f_81dc;
+const FILE_FINDER_FIND_00AFE0D0: u32 = 0x00af_e0d0;
+/// The four-byte stack name made from the file name (`00438170`, `thiscall`, `RET 4`: the
+/// text; it answers the name's address) and its clean-up (`004381b0`, `thiscall`).
+const NAME_MAKE_00438170: u32 = 0x0043_8170;
+const NAME_CLEAN_UP_004381B0: u32 = 0x0043_81b0;
+/// The cube texture maker `00a60f60` (engine map unit `NiMain/nisourcecubemap.cpp`, `cdecl`:
+/// the name's address, the renderer, format preferences).
+const SOURCE_CUBE_MAP_FROM_FILE_00A60F60: u32 = 0x00a6_0f60;
+/// The `NiPointer` assignment `0066b0d0` (`thiscall` on the pointer, `RET 4`).
+const NI_POINTER_ASSIGN_0066B0D0: u32 = 0x0066_b0d0;
+/// The kind test `00653290` (`thiscall` on the object, `RET 4`: an `NiRTTI` record; answers
+/// the object or 0) and the record it is given (`011f444c`, in `.bss`).
+const KIND_TEST_00653290: u32 = 0x0065_3290;
+const RTTI_RECORD_011F444C: u32 = 0x011f_444c;
+/// The two messages formatted for a texture without mipmaps (`010ad830`, with the name;
+/// `010ad7d8`, "... NOTASOURCETEXTURE") and the stack buffer's size.
+const NO_MIPMAPS_MESSAGE_010AD830: u32 = 0x010a_d830;
+const NO_MIPMAPS_PLAIN_MESSAGE_010AD7D8: u32 = 0x010a_d7d8;
+const MESSAGE_BYTES: u32 = 500;
+
+// Translated from 00b55840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderManager::GetTexture` (engine map). `cdecl`, five words: the file name, whether to
+/// load a texture the palette does not have (byte), the `NiPointer` to fill, whether to refuse
+/// a texture without mipmaps (byte), and whether it is a cube map (byte).
+///
+/// Without a name the pointer is released and cleared. Otherwise the palette fills it
+/// (`00a61b90`); without the load byte that is all. When it stayed null and the file finder
+/// (`011f81dc`) exists and finds the file (`00afe0d0` with 0, 6, 2), a stack name is made
+/// from the file name (`00438170`), the texture made from it (cube: `00a60f60` with the
+/// renderer `011f9508` and the preferences `011a9598`; else `NiSourceTexture::Create`
+/// `00a5fd70` with the preferences, 1, 0), assigned to the pointer (`0066b0d0`), the name
+/// cleaned up (`004381b0`), and a texture that came out given to the palette
+/// (`BSTexturePalette::SetTexture`, `00a61c50`, with 0). Then, with the mipmap byte and a
+/// texture: the texture is kind-tested against the record at `011f444c` (`00653290`); when
+/// its renderer data (+0x24) is set and that data's vtable slot +0x98 answers at most 1
+/// (unsigned), a message is formatted into a 500-byte stack buffer (`00406d00`, with the
+/// kind-tested object's +0x34 when it passed, else the plain message; nothing reads the
+/// buffer) and the texture is released and the pointer cleared.
+// Translation incomplete: 00b55840 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 around the stack name) and the /GS cookie check (00ec408c) are not translated.
+pub fn bs_shader_manager_get_texture(
+    e: &mut Engine,
+    name: Ptr,
+    load_missing: bool,
+    texture: Ptr,
+    refuse_without_mipmaps: bool,
+    cube: bool,
+) {
+    let slot = texture.addr();
+    if !name.is_null() {
+        e.call(TEXTURE_PALETTE_GET_TEXTURE, &args![name, texture]);
+        if !load_missing {
+            return;
+        }
+        let finder = e.global::<u32>(FILE_FINDER_011F81DC);
+        if e.mem.u32(slot) == 0
+            && finder != 0
+            && e.call(
+                FILE_FINDER_FIND_00AFE0D0,
+                &args![finder, name, 0u32, 6u32, 2u32],
+            )
+            .u32()
+                != 0
+        {
+            e.with_stack(4, |e, local| {
+                let made = e.call(NAME_MAKE_00438170, &args![local, name]).u32();
+                let object = if cube {
+                    let renderer = e.global::<u32>(GLOBAL_011F9508);
+                    e.call(
+                        SOURCE_CUBE_MAP_FROM_FILE_00A60F60,
+                        &args![made, renderer, FORMAT_PREFS_011A9598],
+                    )
+                    .u32()
+                } else {
+                    e.call(
+                        SOURCE_TEXTURE_FROM_FILE,
+                        &args![made, FORMAT_PREFS_011A9598, 1u32, 0u32],
+                    )
+                    .u32()
+                };
+                e.call(NI_POINTER_ASSIGN_0066B0D0, &args![texture, object]);
+                e.call(NAME_CLEAN_UP_004381B0, &args![local]);
+            });
+            let held = e.mem.u32(slot);
+            if held != 0 {
+                e.call(TEXTURE_PALETTE_SET_TEXTURE, &args![held, 0u32]);
+            }
+        }
+        if !refuse_without_mipmaps || e.mem.u32(slot) == 0 {
+            return;
+        }
+        let held = e.mem.u32(slot);
+        let source = e
+            .call(KIND_TEST_00653290, &args![held, RTTI_RECORD_011F444C])
+            .u32();
+        let renderer_data = e.mem.u32(e.mem.u32(slot).wrapping_add(0x24));
+        if renderer_data == 0 {
+            return;
+        }
+        if e.vcall(renderer_data, 0x98, &args![]).u32() > 1 {
+            return;
+        }
+        e.with_stack(MESSAGE_BYTES, |e, buffer| {
+            if source != 0 {
+                let text = e.mem.u32(source.wrapping_add(0x34));
+                e.call(
+                    FORMAT_00406D00,
+                    &args![buffer, MESSAGE_BYTES, NO_MIPMAPS_MESSAGE_010AD830, text],
+                );
+            } else {
+                e.call(
+                    FORMAT_00406D00,
+                    &args![buffer, MESSAGE_BYTES, NO_MIPMAPS_PLAIN_MESSAGE_010AD7D8],
+                );
+            }
+        });
+    }
+    let held = e.mem.u32(slot);
+    if held != 0 {
+        release_ni_pointer(e, held);
+        e.mem.set_u32(slot, 0);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00b5_5840,
+            bs_shader_manager_get_texture(Ptr, bool, Ptr, bool, bool)
+        ),
         entry!(0x00b5_5bb0, fn_00b55bb0()),
         entry!(0x00b5_5560, bs_shader_manager_get_shader(u32) -> Ptr),
         entry!(0x00b4_f1a0, bs_shader_manager_register_streamables()),
@@ -2019,5 +2154,300 @@ mod b000c_tests {
         e.call(0x00b5_4110, &args![node, other]);
         assert_eq!(calls(&e, 0x0f00_2000), vec![vec![fog]]);
         assert_eq!(e.mem.u32(node + 0x134), other);
+    }
+}
+
+#[cfg(test)]
+mod b000f_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    const DELETE: u32 = 0x0f00_2004;
+    const LEVELS: u32 = 0x0f00_2098;
+
+    /// A texture object (vtable with slot +4 `DELETE` and +0x98 `LEVELS`, its own renderer
+    /// data at +0x24 using the same vtable), held `count` times.
+    fn texture(e: &mut Engine, count: u32, with_data: bool) -> u32 {
+        let mut slots = vec![0u32; 0x27];
+        slots[1] = DELETE;
+        slots[0x26] = LEVELS;
+        e.put_vtable(0x0f00_1000, &slots);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object, 0x0f00_1000);
+        e.mem.set_u32(object + 4, count);
+        if with_data {
+            let data = e.mem.alloc(8);
+            e.mem.set_u32(data, 0x0f00_1000);
+            e.mem.set_u32(object + 0x24, data);
+        }
+        e.mem.set_u32(object + 0x34, 0x5150);
+        object
+    }
+
+    /// Doubles for every callee; the palette leaves the pointer as it is, the finder answers
+    /// `found`, the makers answer `made`, the mipmap count is `levels`.
+    fn rig(found: u32, made: u32, levels: u32, kind_ok: bool) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_8000, 0x2000);
+        e.set_global(FILE_FINDER_011F81DC, 0x0f00_9000u32);
+        e.set_global(GLOBAL_011F9508, 0x0f00_9100u32);
+        e.register(TEXTURE_PALETTE_GET_TEXTURE, |_, _| Ret::default());
+        e.register(TEXTURE_PALETTE_SET_TEXTURE, |_, _| Ret::default());
+        e.register_double(FILE_FINDER_FIND_00AFE0D0, move |_, _| found.into_ret());
+        e.register(NAME_MAKE_00438170, |_, a| (a[0] + 0x100).into_ret());
+        e.register(NAME_CLEAN_UP_004381B0, |_, _| Ret::default());
+        e.register_double(SOURCE_CUBE_MAP_FROM_FILE_00A60F60, move |_, _| {
+            made.into_ret()
+        });
+        e.register_double(SOURCE_TEXTURE_FROM_FILE, move |_, _| made.into_ret());
+        e.register(NI_POINTER_ASSIGN_0066B0D0, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register_double(KIND_TEST_00653290, move |_, a| {
+            if kind_ok { a[0] } else { 0 }.into_ret()
+        });
+        e.register_double(LEVELS, move |_, _| levels.into_ret());
+        e.register(FORMAT_00406D00, |_, _| Ret::default());
+        e.register(DELETE, |_, _| Ret::default());
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn get_texture_loads_a_missing_texture_from_its_file() {
+        for cube in [false, true] {
+            let mut e = rig(1, 0, 2, true);
+            let made = texture(&mut e, 1, true);
+            e.register_double(SOURCE_CUBE_MAP_FROM_FILE_00A60F60, move |_, _| {
+                made.into_ret()
+            });
+            e.register_double(SOURCE_TEXTURE_FROM_FILE, move |_, _| made.into_ret());
+            let slot = e.mem.alloc(4);
+            e.call_log = Some(vec![]);
+            e.call(
+                0x00b5_5840,
+                &args![0x7000u32, 1u32, slot, 1u32, u32::from(cube)],
+            );
+            assert_eq!(
+                calls(&e, TEXTURE_PALETTE_GET_TEXTURE),
+                vec![vec![0x7000, slot]]
+            );
+            assert_eq!(
+                calls(&e, FILE_FINDER_FIND_00AFE0D0),
+                vec![vec![0x0f00_9000, 0x7000, 0, 6, 2]]
+            );
+            let name = calls(&e, NAME_MAKE_00438170);
+            assert_eq!(name[0][1], 0x7000);
+            let local = name[0][0];
+            if cube {
+                assert_eq!(
+                    calls(&e, SOURCE_CUBE_MAP_FROM_FILE_00A60F60),
+                    vec![vec![local + 0x100, 0x0f00_9100, FORMAT_PREFS_011A9598]]
+                );
+                assert!(calls(&e, SOURCE_TEXTURE_FROM_FILE).is_empty());
+            } else {
+                assert_eq!(
+                    calls(&e, SOURCE_TEXTURE_FROM_FILE),
+                    vec![vec![local + 0x100, FORMAT_PREFS_011A9598, 1, 0]]
+                );
+            }
+            assert_eq!(
+                calls(&e, NI_POINTER_ASSIGN_0066B0D0),
+                vec![vec![slot, made]]
+            );
+            assert_eq!(calls(&e, NAME_CLEAN_UP_004381B0), vec![vec![local]]);
+            assert_eq!(calls(&e, TEXTURE_PALETTE_SET_TEXTURE), vec![vec![made, 0]]);
+            // Two mipmap levels: kept.
+            assert_eq!(
+                calls(&e, KIND_TEST_00653290),
+                vec![vec![made, RTTI_RECORD_011F444C]]
+            );
+            assert!(calls(&e, FORMAT_00406D00).is_empty());
+            assert_eq!(e.mem.u32(slot), made);
+        }
+    }
+
+    #[test]
+    fn get_texture_refuses_a_texture_without_mipmaps() {
+        for kind_ok in [true, false] {
+            let mut e = rig(0, 0, 1, kind_ok);
+            let held = texture(&mut e, 1, true);
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, held);
+            e.call_log = Some(vec![]);
+            e.call(0x00b5_5840, &args![0x7000u32, 1u32, slot, 1u32, 0u32]);
+            // Already there: nothing looked up.
+            assert!(calls(&e, FILE_FINDER_FIND_00AFE0D0).is_empty());
+            let message = calls(&e, FORMAT_00406D00);
+            assert_eq!(message.len(), 1);
+            if kind_ok {
+                assert_eq!(&message[0][1..], [500, NO_MIPMAPS_MESSAGE_010AD830, 0x5150]);
+            } else {
+                assert_eq!(&message[0][1..], [500, NO_MIPMAPS_PLAIN_MESSAGE_010AD7D8]);
+            }
+            assert_eq!(calls(&e, DELETE), vec![vec![held]]);
+            assert_eq!(e.mem.u32(slot), 0);
+        }
+    }
+
+    #[test]
+    fn get_texture_keeps_what_the_checks_do_not_reach() {
+        // Without the load byte: only the palette.
+        let mut e = rig(1, 0, 0, true);
+        let held = texture(&mut e, 1, true);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, held);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_5840, &args![0x7000u32, 0u32, slot, 1u32, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+        assert_eq!(e.mem.u32(slot), held);
+        // Without the mipmap byte, or without renderer data: kept.
+        for (refuse, with_data) in [(0u32, true), (1, false)] {
+            let mut e = rig(1, 0, 0, true);
+            let held = texture(&mut e, 1, with_data);
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, held);
+            e.call_log = Some(vec![]);
+            e.call(0x00b5_5840, &args![0x7000u32, 1u32, slot, refuse, 0u32]);
+            assert!(calls(&e, LEVELS).is_empty());
+            assert!(calls(&e, DELETE).is_empty());
+            assert_eq!(e.mem.u32(slot), held);
+        }
+        // No file finder, or the file is not found: the pointer stays null.
+        for (finder, found) in [(0u32, 1u32), (0x0f00_9000, 0)] {
+            let mut e = rig(found, 0, 0, true);
+            e.set_global(FILE_FINDER_011F81DC, finder);
+            let slot = e.mem.alloc(4);
+            e.call_log = Some(vec![]);
+            e.call(0x00b5_5840, &args![0x7000u32, 1u32, slot, 1u32, 0u32]);
+            assert!(calls(&e, NAME_MAKE_00438170).is_empty());
+            assert_eq!(
+                calls(&e, FILE_FINDER_FIND_00AFE0D0).len(),
+                usize::from(finder != 0)
+            );
+            assert!(calls(&e, KIND_TEST_00653290).is_empty());
+        }
+        // Found but the maker answers none: the palette is not told.
+        let mut e = rig(1, 0, 0, true);
+        let slot = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_5840, &args![0x7000u32, 1u32, slot, 1u32, 0u32]);
+        assert!(calls(&e, TEXTURE_PALETTE_SET_TEXTURE).is_empty());
+        assert!(calls(&e, KIND_TEST_00653290).is_empty());
+    }
+
+    #[test]
+    fn get_texture_without_a_name_releases_the_pointer() {
+        let mut e = rig(1, 0, 0, true);
+        let held = texture(&mut e, 2, true);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, held);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_5840, &args![0u32, 1u32, slot, 1u32, 0u32]);
+        assert!(calls(&e, TEXTURE_PALETTE_GET_TEXTURE).is_empty());
+        assert!(calls(&e, DELETE).is_empty());
+        assert_eq!(e.mem.u32(held + 4), 1);
+        assert_eq!(e.mem.u32(slot), 0);
+    }
+}
+
+/// Test support for the shader creators that `GetShader` (`00b55560`) calls (each in its own
+/// unit file): an engine where the renderer, `NiXenonShaderDeclaration::Create`, the Ni
+/// allocation, the shader's constructor and every slot of the declarations' and the shader's
+/// vtables are doubles, so a test can compare a creator's whole call sequence.
+#[cfg(test)]
+pub(crate) mod creator_rig {
+    use crate::prelude::*;
+
+    /// `NiXenonShaderDeclaration::Create` (engine map, `00e76700`, `cdecl`: renderer, entry
+    /// count, stream count) and the Ni allocation (`00aa13e0`, `cdecl`: size).
+    const DECLARATION_CREATE: u32 = 0x00e7_6700;
+    const NI_ALLOCATE: u32 = 0x00aa_13e0;
+    /// The renderer word (`011f9508`) and the value the rig puts there.
+    pub(crate) const RENDERER_GLOBAL: u32 = 0x011f_9508;
+    pub(crate) const RENDERER: u32 = 0x0f50_0000;
+    /// The declarations the rig's `Create` answers, in order (0x100 bytes apart).
+    pub(crate) const DECLARATION_0: u32 = 0x0f60_0000;
+    pub(crate) const DECLARATION_1: u32 = 0x0f60_0100;
+    /// The block the rig's allocation answers.
+    pub(crate) const SHADER: u32 = 0x0f70_0000;
+    /// The word where the rig's constructor double notes the thread's allocation context.
+    pub(crate) const CONTEXT_SEEN: u32 = 0x0f80_0000;
+    const DECLARATION_VTABLE: u32 = 0x0f10_0000;
+    const SHADER_VTABLE: u32 = 0x0f20_0000;
+    const DECLARATION_SLOTS: u32 = 0x0f30_0000;
+    const SHADER_SLOTS: u32 = 0x0f40_0000;
+    const SLOTS: u32 = 0x100;
+
+    /// The double behind a declaration's vtable slot at byte offset `offset`.
+    pub(crate) fn declaration_slot(offset: u32) -> u32 {
+        DECLARATION_SLOTS + offset
+    }
+
+    /// The double behind the shader's vtable slot at byte offset `offset`.
+    pub(crate) fn shader_slot(offset: u32) -> u32 {
+        SHADER_SLOTS + offset
+    }
+
+    /// The rig: `constructor` (the shader's, at its address) sets the shader's vtable, notes
+    /// the allocation context and answers `this`; every address of `direct` is a no-op.
+    pub(crate) fn rig(constructor: u32, direct: &[u32]) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        e.set_global(RENDERER_GLOBAL, RENDERER);
+        e.map(DECLARATION_0, 0x1000);
+        e.map(SHADER, 0x1000);
+        e.map(CONTEXT_SEEN, 4);
+        let declaration_slots: Vec<u32> = (0..SLOTS).map(|i| DECLARATION_SLOTS + 4 * i).collect();
+        let shader_slots: Vec<u32> = (0..SLOTS).map(|i| SHADER_SLOTS + 4 * i).collect();
+        e.put_vtable(DECLARATION_VTABLE, &declaration_slots);
+        e.put_vtable(SHADER_VTABLE, &shader_slots);
+        for target in declaration_slots.iter().chain(&shader_slots).chain(direct) {
+            e.register(*target, |_, _| Ret::default());
+        }
+        let mut made = 0u32;
+        e.register_double(DECLARATION_CREATE, move |e, _| {
+            let declaration = DECLARATION_0 + 0x100 * made;
+            made += 1;
+            e.mem.set_u32(declaration, DECLARATION_VTABLE);
+            declaration.into_ret()
+        });
+        e.register(NI_ALLOCATE, |_, _| SHADER.into_ret());
+        e.register(constructor, |e, a| {
+            e.mem.set_u32(a[0], SHADER_VTABLE);
+            let tls = e.tls();
+            let context = e.mem.u32(tls + 0x2b4);
+            e.mem.set_u32(CONTEXT_SEEN, context);
+            a[0].into_ret()
+        });
+        e
+    }
+
+    /// Runs the creator at `creator` with the thread's allocation context at 0x99 and answers
+    /// its result and the calls it made (without the top-level one). Checks the context is
+    /// back to 0x99 afterwards.
+    pub(crate) fn run(e: &mut Engine, creator: u32) -> (u32, Vec<(u32, Vec<u32>)>) {
+        let tls = e.tls();
+        e.mem.set_u32(tls + 0x2b4, 0x99);
+        e.call_log = Some(vec![]);
+        let answer = e.call(creator, &[]).u32();
+        assert_eq!(e.mem.u32(tls + 0x2b4), 0x99);
+        let mut log = e.call_log.take().unwrap();
+        log.remove(0);
+        (answer, log)
     }
 }

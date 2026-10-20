@@ -231,9 +231,8 @@ folder.
   the CRT's static initialisers, so a function reading a table the game fills at
   start-up (the 512-entry sine tables) returns 0 on both sides; such matches are
   listed in `coverage.tsv`.
-- **One FPU mode.** Vectors run with control word 0x027F (53-bit), the engine's
-  model; results that depend on the game thread's actual precision mode are not
-  compared across modes.
+- **One FPU mode per run.** `check` runs with control word 0x027F (53-bit) unless
+  `--fpcw` gives another (see "x87 precision" below).
 
 ## Running it
 
@@ -252,6 +251,35 @@ $env:NV_ORACLE_EXE = '<path to the unpacked FalloutNV.exe 1.4.0.525>'
 cargo run --release -- check            # all listed functions
 cargo run --release -- check --limit 50 # the pilot
 cargo run --release -- check --only 00ec62c0,00a01a20
+```
+
+## x87 precision
+
+The game's main thread runs at control word 0x007F (24-bit precision) after
+Direct3D created the renderer's device; the engine models that per thread
+(`crates/engine-core/src/x87.rs`, "Precision control").
+
+- `check --fpcw 0x007F` runs both sides under that word: nv-call loads it before
+  every call, and every engine gets it as its main thread's control word
+  (`crt::set_x87_control_word`). Translations that compute through the x87
+  helpers follow it; translations in plain `f64` stay at 53-bit and show up as
+  mismatches, which is the list of what still has to move to the helpers.
+- `x87 [--count N]` (default 2000 random vectors per case) checks the helpers
+  themselves and helper-built models of five pure x87 functions (`00c5d300`,
+  `004b3ab0`, `00646d00`, `00646d40`, `00647920`) against the CPU. The helpers
+  run through one-instruction stubs (`FADD`/`FSUB`/`FMUL`/`FDIV` with a `double`
+  or `float` memory operand after an `FLD qword` or `FLD dword`, `FSQRT`, and
+  `FMUL` by 1 for `x87_round`), our own code that nv-call maps from a snapshot
+  file at 0x20000000; inputs are every pair of an edge list (rounding ties,
+  values just off a tie by sticky bits only, values beyond the float range,
+  float denormals, infinities, NaNs) plus random floats, doubles and
+  constructed near-ties. Helpers run at 0x027F, 0x007F, 0x047F, 0x087F and
+  0x0C7F; the functions at 0x027F and 0x007F. Output in the out folder:
+  `x87-failures.tsv`, `x87-vectors.jsonl`, `x87-results.jsonl`.
+
+```powershell
+cargo run --release -- x87
+cargo run --release -- check --fpcw 0x007F
 ```
 
 `NV_CALL` overrides the nv-call.exe path (default:

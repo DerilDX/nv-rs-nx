@@ -100,9 +100,51 @@ pub fn ni_d3d_shader_factory_sdm_init(e: &mut Engine) {
     }
 }
 
+/// Imported `InterlockedDecrement` (import slot).
+const IMPORT_INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+/// The recursive lock of the shared item free list (`011c5f80`: owner, count at +4), taken
+/// by `0040fbf0` (`thiscall`, one word the function does not read) and released inline.
+const FREE_LIST_LOCK_011C5F80: u32 = 0x011c_5f80;
+const LOCK_ACQUIRE_0040FBF0: u32 = 0x0040_fbf0;
+/// The head of the free list (`011c5f58`).
+const FREE_LIST_HEAD_011C5F58: u32 = 0x011c_5f58;
+
+// Translated from 00e6e830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<char const *,NiPointer<NiShaderLibrary> >::DeleteItem` (engine map, from the
+/// vtable; the body fits), `thiscall` with one stack word, the item (next +0, key +4, value
+/// +8); `this` is not read. Releases the value's reference (`InterlockedDecrement` on its
+/// count at +4, deleted through its vtable slot +4 when that answers 0) and clears it; then,
+/// under the free-list lock `011c5f80` (`0040fbf0` with 0), clears the key, links the item in
+/// front of the free list at `011c5f58` and releases the lock inline (the count at
+/// `011c5f84` decremented, the owner cleared when it reaches 0).
+pub fn ni_t_pointer_map_delete_item(e: &mut Engine, _this: Ptr, item: Ptr) {
+    let item = item.addr();
+    let value = e.mem.u32(item + 8);
+    if value != 0 {
+        let left = e
+            .call(IMPORT_INTERLOCKED_DECREMENT, &args![value + 4])
+            .u32();
+        if left == 0 {
+            e.vcall(value, 4, &args![]);
+        }
+        e.mem.set_u32(item + 8, 0);
+    }
+    e.call(LOCK_ACQUIRE_0040FBF0, &args![FREE_LIST_LOCK_011C5F80, 0u32]);
+    e.mem.set_u32(item + 4, 0);
+    let head = e.global::<u32>(FREE_LIST_HEAD_011C5F58);
+    e.mem.set_u32(item, head);
+    let count = e.global::<u32>(FREE_LIST_LOCK_011C5F80 + 4).wrapping_sub(1);
+    e.set_global::<u32>(FREE_LIST_LOCK_011C5F80 + 4, count);
+    e.set_global::<u32>(FREE_LIST_HEAD_011C5F58, item);
+    if count == 0 {
+        e.set_global::<u32>(FREE_LIST_LOCK_011C5F80, 0);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e6_e830, ni_t_pointer_map_delete_item(Ptr, Ptr)),
         entry!(0x00e9_2cf0, fn_00e92cf0(Ptr) -> Ptr),
         entry!(0x00e9_2e60, ni_d3d_shader_factory_sdm_init()),
     ]
@@ -189,5 +231,84 @@ mod start_up_tests {
         e.call(0x00e9_2e60, &args![]);
         assert_eq!(e.mem.u32(FACTORY_SLOT), 0);
         assert_eq!(calls_to(&e, EMPTY_CALL), vec![vec![0x010f_0d40]]);
+    }
+}
+
+#[cfg(test)]
+mod delete_item_tests {
+    use super::*;
+
+    const VALUE_DELETE: u32 = 0x0e20_0000;
+
+    fn engine(left: u32) -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011c_5000, 0x1000);
+        e.register_double(IMPORT_INTERLOCKED_DECREMENT, move |_, _| left.into_ret());
+        e.register(LOCK_ACQUIRE_0040FBF0, |e, a| {
+            e.mem.set_u32(a[0], 0x77);
+            let count = e.mem.u32(a[0] + 4) + 1;
+            e.mem.set_u32(a[0] + 4, count);
+            Ret::default()
+        });
+        e.register(VALUE_DELETE, |_, _| Ret::default());
+        e.put_vtable(0x0e10_0000, &[0, VALUE_DELETE]);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn delete_item_releases_the_value_and_frees_the_item() {
+        let mut e = engine(0);
+        let value = e.mem.alloc(8);
+        e.mem.set_u32(value, 0x0e10_0000);
+        let item = e.mem.alloc(0xc);
+        e.mem.set_u32(item, 0x1234);
+        e.mem.set_u32(item + 4, 0x5678);
+        e.mem.set_u32(item + 8, value);
+        e.set_global::<u32>(FREE_LIST_HEAD_011C5F58, 0x4444);
+        e.call(0x00e6_e830, &args![0x9999u32, item]);
+        assert_eq!(
+            calls(&e, IMPORT_INTERLOCKED_DECREMENT),
+            vec![vec![value + 4]]
+        );
+        assert_eq!(calls(&e, VALUE_DELETE), vec![vec![value]]);
+        assert_eq!(
+            calls(&e, LOCK_ACQUIRE_0040FBF0),
+            vec![vec![FREE_LIST_LOCK_011C5F80, 0]]
+        );
+        assert_eq!(e.mem.u32(item), 0x4444);
+        assert_eq!(e.mem.u32(item + 4), 0);
+        assert_eq!(e.mem.u32(item + 8), 0);
+        assert_eq!(e.global::<u32>(FREE_LIST_HEAD_011C5F58), item);
+        assert_eq!(e.global::<u32>(FREE_LIST_LOCK_011C5F80 + 4), 0);
+        assert_eq!(e.global::<u32>(FREE_LIST_LOCK_011C5F80), 0);
+    }
+
+    #[test]
+    fn delete_item_keeps_a_referenced_value_and_a_held_lock() {
+        let mut e = engine(1);
+        e.set_global::<u32>(FREE_LIST_LOCK_011C5F80 + 4, 1);
+        let value = e.mem.alloc(8);
+        let item = e.mem.alloc(0xc);
+        e.mem.set_u32(item + 8, value);
+        e.call(0x00e6_e830, &args![0u32, item]);
+        assert!(calls(&e, VALUE_DELETE).is_empty());
+        assert_eq!(e.mem.u32(item + 8), 0);
+        assert_eq!(e.global::<u32>(FREE_LIST_LOCK_011C5F80 + 4), 1);
+        assert_eq!(e.global::<u32>(FREE_LIST_LOCK_011C5F80), 0x77);
+        // Without a value nothing is released.
+        let mut e = engine(0);
+        let item = e.mem.alloc(0xc);
+        e.call(0x00e6_e830, &args![0u32, item]);
+        assert!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).is_empty());
+        assert_eq!(e.global::<u32>(FREE_LIST_HEAD_011C5F58), item);
     }
 }

@@ -125,7 +125,205 @@ pub fn fn_00aa4ee0(e: &mut Engine, this: Ptr<BSTimer>, now: u32) {
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00aa4ee0, fn_00aa4ee0(Ptr<BSTimer>, u32))]
+    vec![
+        entry!(0x00aa4ee0, fn_00aa4ee0(Ptr<BSTimer>, u32)),
+        entry!(
+            0x00aa_4db0,
+            bs_timer_set_global_time_multiplier(Ptr<BSTimer>, u32, u32)
+        ),
+        entry!(0x00aa_4e40, fn_00aa4e40()),
+        entry!(0x00aa_5040, bs_timer_enable(Ptr<BSTimer>)),
+    ]
+}
+
+/// The float `SetGlobalTimeMultiplier` always stores the new value in and `00aa4e40` moves
+/// `fGlobalTimeMultiplier` towards (`011ac3a4`; by its use the Xbox PDB static
+/// `fGlobalTimeMultiplierTarget`, the address not confirmed by a name), and the float rate
+/// of that move (`011ac3ac`).
+const GLOBAL_TIME_MULTIPLIER_TARGET: u32 = 0x011a_c3a4;
+const GLOBAL_TIME_MULTIPLIER_RATE: u32 = 0x011a_c3ac;
+/// `GetTickCount` (KERNEL32 import slot).
+const GET_TICK_COUNT_IMPORT: u32 = 0x00fd_f060;
+/// `bUseGlobalTimeMultiplierTarget` (Xbox PDB, `+0x1c`; not in the layout above).
+const USE_TARGET: u32 = 0x1c;
+
+// Translated from 00aa4db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTimer::SetGlobalTimeMultiplier` (Xbox PDB; `thiscall`, `RET 8`: the float `value`
+/// as its bits and a byte `immediate`): the target (`011ac3a4`) becomes `value`. With
+/// `bUseGlobalTimeMultiplierTarget` set, `fGlobalTimeMultiplier` follows only when
+/// `immediate` is set. Without it, when the multiplier differs from `value` (`FUCOMPP`,
+/// unordered counts as different) `fDelta` is divided by the old multiplier, the
+/// multiplier becomes `value` and `fDelta` is multiplied by it. Every copy goes through the
+/// x87 stack.
+pub fn bs_timer_set_global_time_multiplier(
+    e: &mut Engine,
+    this: Ptr<BSTimer>,
+    value: u32,
+    immediate: u32,
+) {
+    e.mem
+        .set_u32(GLOBAL_TIME_MULTIPLIER_TARGET, x87_quiet_bits(value));
+    if e.mem.u8(this.addr() + USE_TARGET) != 0 {
+        if immediate & 0xff != 0 {
+            let target = x87_quiet_bits(e.mem.u32(GLOBAL_TIME_MULTIPLIER_TARGET));
+            e.mem.set_u32(GLOBAL_TIME_MULTIPLIER, target);
+        }
+        return;
+    }
+    let multiplier = x87_load32(e.mem.u32(GLOBAL_TIME_MULTIPLIER));
+    if multiplier == x87_load32(value) {
+        return;
+    }
+    let delta = x87_load32(e.get(this, BSTimer::fDelta).to_bits());
+    let divided = x87_div(delta, x87_m32(e.mem.u32(GLOBAL_TIME_MULTIPLIER)));
+    e.set(this, BSTimer::fDelta, f32::from_bits(x87_store32(divided)));
+    e.mem.set_u32(GLOBAL_TIME_MULTIPLIER, x87_quiet_bits(value));
+    let delta = x87_load32(e.get(this, BSTimer::fDelta).to_bits());
+    let product = x87_mul(delta, x87_m32(e.mem.u32(GLOBAL_TIME_MULTIPLIER)));
+    e.set(this, BSTimer::fDelta, f32::from_bits(x87_store32(product)));
+}
+
+// Translated from 00aa4e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bstimer.cpp`; no argument): moves
+/// `fGlobalTimeMultiplier` towards the target at `011ac3a4` by the rate at `011ac3ac`: below
+/// the target it is multiplied by `rate + 1` and capped at the target; above it (ordered)
+/// by `1 - rate` and raised back to the target when it falls below. Equal or unordered:
+/// unchanged.
+pub fn fn_00aa4e40(e: &mut Engine) {
+    let target = |e: &Engine| x87_load32(e.mem.u32(GLOBAL_TIME_MULTIPLIER_TARGET));
+    let multiplier = |e: &Engine| x87_load32(e.mem.u32(GLOBAL_TIME_MULTIPLIER));
+    let rate = x87_load32(e.mem.u32(GLOBAL_TIME_MULTIPLIER_RATE));
+    // FLD mult; FLD target; FCOMPP; TEST AH,0x41; JNZ: falls through when target > mult.
+    if target(e) > multiplier(e) {
+        let factor = x87_add(rate, 1.0);
+        let grown = x87_mul(factor, x87_m32(e.mem.u32(GLOBAL_TIME_MULTIPLIER)));
+        e.mem.set_u32(GLOBAL_TIME_MULTIPLIER, x87_store32(grown));
+        // TEST AH,5; JP: capped when target < mult.
+        if target(e) < multiplier(e) {
+            let capped = x87_quiet_bits(e.mem.u32(GLOBAL_TIME_MULTIPLIER_TARGET));
+            e.mem.set_u32(GLOBAL_TIME_MULTIPLIER, capped);
+        }
+        return;
+    }
+    // TEST AH,5; JP: only target < mult goes on.
+    if !(target(e) < multiplier(e)) {
+        return;
+    }
+    // FLD rate; FLD1; FSUBRP (DE E1): 1 - rate.
+    let factor = x87_sub(1.0, rate);
+    let shrunk = x87_mul(factor, x87_m32(e.mem.u32(GLOBAL_TIME_MULTIPLIER)));
+    e.mem.set_u32(GLOBAL_TIME_MULTIPLIER, x87_store32(shrunk));
+    // TEST AH,0x41; JNZ: raised to the target when target > mult.
+    if target(e) > multiplier(e) {
+        let raised = x87_quiet_bits(e.mem.u32(GLOBAL_TIME_MULTIPLIER_TARGET));
+        e.mem.set_u32(GLOBAL_TIME_MULTIPLIER, raised);
+    }
+}
+
+// Translated from 00aa5040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTimer::Enable` (Xbox PDB; `ECX` only): with a non-zero disable counter, counts it
+/// down; when it reaches zero, `iLastTime` and `iFirstTime` become `GetTickCount()` minus
+/// themselves (turning the times saved by `Disable` back into tick values).
+pub fn bs_timer_enable(e: &mut Engine, this: Ptr<BSTimer>) {
+    let counter = e.get(this, BSTimer::cDisableCounter);
+    if counter == 0 {
+        return;
+    }
+    e.set(this, BSTimer::cDisableCounter, counter.wrapping_sub(1));
+    if e.get(this, BSTimer::cDisableCounter) != 0 {
+        return;
+    }
+    let now = e.call(GET_TICK_COUNT_IMPORT, &args![]).u32();
+    let last = now.wrapping_sub(e.get(this, BSTimer::iLastTime));
+    e.set(this, BSTimer::iLastTime, last);
+    let first = now.wrapping_sub(e.get(this, BSTimer::iFirstTime));
+    e.set(this, BSTimer::iFirstTime, first);
+}
+
+#[cfg(test)]
+mod b012_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011a_c000, 0x1000);
+        e.register(GET_TICK_COUNT_IMPORT, |_, _| 5000u32.into_ret());
+        e
+    }
+
+    #[test]
+    fn setting_the_multiplier_rescales_the_delta() {
+        let mut e = engine();
+        let this: Ptr<BSTimer> = Ptr::new(e.mem.alloc(0x20));
+        e.mem.set_f32(GLOBAL_TIME_MULTIPLIER, 2.0);
+        e.set(this, BSTimer::fDelta, 0.5);
+        e.call(0x00aa_4db0, &args![this, 3.0f32.to_bits(), 0u32]);
+        assert_eq!(e.mem.f32(GLOBAL_TIME_MULTIPLIER_TARGET), 3.0);
+        assert_eq!(e.mem.f32(GLOBAL_TIME_MULTIPLIER), 3.0);
+        assert_eq!(e.get(this, BSTimer::fDelta), 0.75);
+        // The same value: nothing changes.
+        e.call(0x00aa_4db0, &args![this, 3.0f32.to_bits(), 0u32]);
+        assert_eq!(e.get(this, BSTimer::fDelta), 0.75);
+    }
+
+    #[test]
+    fn with_a_target_only_an_immediate_call_sets_the_multiplier() {
+        let mut e = engine();
+        let this: Ptr<BSTimer> = Ptr::new(e.mem.alloc(0x20));
+        e.mem.set_u8(this.addr() + USE_TARGET, 1);
+        e.mem.set_f32(GLOBAL_TIME_MULTIPLIER, 1.0);
+        e.call(0x00aa_4db0, &args![this, 0.5f32.to_bits(), 0x100u32]);
+        assert_eq!(e.mem.f32(GLOBAL_TIME_MULTIPLIER_TARGET), 0.5);
+        assert_eq!(e.mem.f32(GLOBAL_TIME_MULTIPLIER), 1.0);
+        e.call(0x00aa_4db0, &args![this, 0.25f32.to_bits(), 1u32]);
+        assert_eq!(e.mem.f32(GLOBAL_TIME_MULTIPLIER), 0.25);
+    }
+
+    #[test]
+    fn the_multiplier_moves_towards_the_target() {
+        let mut e = engine();
+        e.mem.set_f32(GLOBAL_TIME_MULTIPLIER_RATE, 0.5);
+        // Below: times 1.5, capped.
+        e.mem.set_f32(GLOBAL_TIME_MULTIPLIER, 1.0);
+        e.mem.set_f32(GLOBAL_TIME_MULTIPLIER_TARGET, 2.0);
+        e.call(0x00aa_4e40, &args![]);
+        assert_eq!(e.mem.f32(GLOBAL_TIME_MULTIPLIER), 1.5);
+        e.call(0x00aa_4e40, &args![]);
+        assert_eq!(e.mem.f32(GLOBAL_TIME_MULTIPLIER), 2.0);
+        // Above: times 0.5, raised back to the target.
+        e.mem.set_f32(GLOBAL_TIME_MULTIPLIER, 4.0);
+        e.mem.set_f32(GLOBAL_TIME_MULTIPLIER_TARGET, 1.0);
+        e.call(0x00aa_4e40, &args![]);
+        assert_eq!(e.mem.f32(GLOBAL_TIME_MULTIPLIER), 2.0);
+        e.mem.set_f32(GLOBAL_TIME_MULTIPLIER_TARGET, 1.5);
+        e.call(0x00aa_4e40, &args![]);
+        assert_eq!(e.mem.f32(GLOBAL_TIME_MULTIPLIER), 1.5);
+        // Equal or NaN: unchanged.
+        e.call(0x00aa_4e40, &args![]);
+        assert_eq!(e.mem.f32(GLOBAL_TIME_MULTIPLIER), 1.5);
+        e.mem.set_f32(GLOBAL_TIME_MULTIPLIER_TARGET, f32::NAN);
+        e.call(0x00aa_4e40, &args![]);
+        assert_eq!(e.mem.f32(GLOBAL_TIME_MULTIPLIER), 1.5);
+    }
+
+    #[test]
+    fn enabling_restores_the_tick_values_at_zero() {
+        let mut e = engine();
+        let this: Ptr<BSTimer> = Ptr::new(e.mem.alloc(0x20));
+        e.set(this, BSTimer::cDisableCounter, 2);
+        e.set(this, BSTimer::iLastTime, 100);
+        e.set(this, BSTimer::iFirstTime, 300);
+        e.call(0x00aa_5040, &args![this]);
+        assert_eq!(e.get(this, BSTimer::cDisableCounter), 1);
+        assert_eq!(e.get(this, BSTimer::iLastTime), 100);
+        e.call(0x00aa_5040, &args![this]);
+        assert_eq!(e.get(this, BSTimer::cDisableCounter), 0);
+        assert_eq!(e.get(this, BSTimer::iLastTime), 4900);
+        assert_eq!(e.get(this, BSTimer::iFirstTime), 4700);
+        // Already enabled: nothing.
+        e.call(0x00aa_5040, &args![this]);
+        assert_eq!(e.get(this, BSTimer::iLastTime), 4900);
+    }
 }
 
 #[cfg(test)]

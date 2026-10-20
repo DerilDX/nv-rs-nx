@@ -169,7 +169,101 @@ pub fn bgs_movable_static_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x004fbc70, bgs_movable_static_load(Ptr, Ptr) -> bool)]
+    vec![
+        entry!(0x004fbc70, bgs_movable_static_load(Ptr, Ptr) -> bool),
+        entry!(0x004f_bb70, bgs_movable_static_init_item(Ptr)),
+        entry!(0x004f_bf00, fn_004fbf00(Ptr, u32)),
+    ]
+}
+
+/// `004013e0` (thiscall, bool): when true, `InitItem` does nothing.
+const FORM_TEST_4013E0: u32 = 0x0040_13e0;
+/// `BGSDestructibleObjectForm::InitItem` (Xbox PDB; thiscall(form)).
+const DESTRUCTIBLE_INIT_ITEM: u32 = 0x0047_8be0;
+/// `TESModelTextureSwap::InitItem` (Xbox PDB; thiscall(form)).
+const TEXTURE_SWAP_INIT_ITEM: u32 = 0x0048_aa80;
+/// `TESForm::GetFile` (Xbox PDB; thiscall(index)).
+const TES_FORM_GET_FILE: u32 = 0x0048_4e60;
+/// `TESForm::AddCompileIndex` (Xbox PDB; cdecl(form id address, file)).
+const TES_FORM_ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
+/// The form lookup by id (`004839c0`, cdecl(id)).
+const LOOKUP_FORM_BY_ID: u32 = 0x0048_39c0;
+/// `__RTDynamicCast` (cdecl(object, offset, source type, target type, is
+/// reference)) and its two type descriptors here (not read here).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const CAST_SOURCE_TYPE: u32 = 0x0118_3028;
+const CAST_TARGET_TYPE: u32 = 0x0118_32fc;
+/// The form's id (`0084e3a0`, thiscall).
+const FORM_ID_84E3A0: u32 = 0x0084_e3a0;
+/// The form's virtual slot giving its editor id (no words).
+const SLOT_GET_EDITOR_ID: u32 = 0x130;
+/// The warning printer (`005b5e40`, cdecl(format, ...)).
+const WARNING: u32 = 0x005b_5e40;
+/// `"MASTERFILE: Could not find looping sound (%08X) for movable static
+/// '%s' (%08X)."`.
+const LOOPING_SOUND_WARNING: u32 = 0x0102_4e98;
+/// `00484ab0` (`tesform.cpp`, thiscall(flag)).
+const TES_FORM_SET_FLAG_484AB0: u32 = 0x0048_4ab0;
+/// The looping sound's form id, then the sound, at `this + 0x58`.
+const LOOPING_SOUND: u32 = 0x58;
+
+// Translated from 004fbb70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSMovableStatic::InitItem` (Xbox PDB): nothing when `004013e0` says
+/// so; else the destructible form (`this - 8`) and the texture swap
+/// (`this + 0x30`) are initialised with the form (`this`, null when `this`
+/// is exactly 0x14, the code's base adjustment), the looping-sound form id
+/// at `+0x58` (when not 0) is resolved like `BGSTalkingActivator`'s voice
+/// type (compile index, lookup, `__RTDynamicCast`) with a `MASTERFILE`
+/// warning when that gives null, and `00484ab0(1)` ends it.
+pub fn bgs_movable_static_init_item(e: &mut Engine, this: Ptr) {
+    if e.call(FORM_TEST_4013E0, &args![this]).bool() {
+        return;
+    }
+    let base = this.addr();
+    let form = if base == OBJECT_OFFSET { 0 } else { base };
+    e.call(
+        DESTRUCTIBLE_INIT_ITEM,
+        &args![base.wrapping_sub(DESTRUCTIBLE_BACKWARD), form],
+    );
+    let form = if base == OBJECT_OFFSET { 0 } else { base };
+    e.call(
+        TEXTURE_SWAP_INIT_ITEM,
+        &args![base.wrapping_add(MODEL_OFFSET), form],
+    );
+    let sound_id = e.mem.u32(base.wrapping_add(LOOPING_SOUND));
+    if sound_id != 0 {
+        e.with_stack(4, |e, id| {
+            e.mem.set_u32(id.addr(), sound_id);
+            let file = e.call(TES_FORM_GET_FILE, &args![this, u32::MAX]).u32();
+            e.call(TES_FORM_ADD_COMPILE_INDEX, &args![id, file]);
+            let id_value = e.mem.u32(id.addr());
+            let found = e.call(LOOKUP_FORM_BY_ID, &args![id_value]).u32();
+            let sound = e
+                .call(
+                    RT_DYNAMIC_CAST,
+                    &args![found, 0u32, CAST_SOURCE_TYPE, CAST_TARGET_TYPE, 0u32],
+                )
+                .u32();
+            e.mem.set_u32(base.wrapping_add(LOOPING_SOUND), sound);
+            if e.mem.u32(base.wrapping_add(LOOPING_SOUND)) == 0 {
+                let form_id = e.call(FORM_ID_84E3A0, &args![this]).u32();
+                let name = e.vcall(base, SLOT_GET_EDITOR_ID, &args![]).u32();
+                let id_value = e.mem.u32(id.addr());
+                e.call(
+                    WARNING,
+                    &args![LOOPING_SOUND_WARNING, id_value, name, form_id],
+                );
+            }
+        });
+    }
+    e.call(TES_FORM_SET_FLAG_484AB0, &args![this, 1u32]);
+}
+
+// Translated from 004fbf00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` at `this + 0x6C` (the looping sound, with `this` the
+/// object `Load` passes at `this - 0x14`).
+pub fn fn_004fbf00(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr().wrapping_add(0x6c), value);
 }
 
 #[cfg(test)]
@@ -335,5 +429,113 @@ mod tests {
             calls_to(&log, UNPACK_TEXTURE_SWAP),
             vec![vec![this + 0x30, data[0][1], 20, 7]]
         );
+    }
+}
+
+#[cfg(test)]
+mod b016_tests {
+    use super::*;
+
+    type CallLog = [(u32, Vec<u32>)];
+
+    fn calls(log: &CallLog, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for address in [
+            FORM_TEST_4013E0,
+            DESTRUCTIBLE_INIT_ITEM,
+            TEXTURE_SWAP_INIT_ITEM,
+            TES_FORM_ADD_COMPILE_INDEX,
+            TES_FORM_SET_FLAG_484AB0,
+            WARNING,
+            LOOKUP_FORM_BY_ID,
+            RT_DYNAMIC_CAST,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(TES_FORM_GET_FILE, |_, _| 0x0f11_e000u32.into_ret());
+        e.register(FORM_ID_84E3A0, |_, _| 0x0abcu32.into_ret());
+        e.register(0x0012_3130, |_, _| 0x0ed1_0000u32.into_ret());
+        e
+    }
+
+    fn form(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x200);
+        e.mem.set_u32(vtable + SLOT_GET_EDITOR_ID, 0x0012_3130);
+        let this = e.mem.alloc(0x80);
+        e.mem.set_u32(this, vtable);
+        this
+    }
+
+    #[test]
+    fn init_item_initialises_components_and_resolves_the_sound() {
+        let mut e = engine();
+        e.register(LOOKUP_FORM_BY_ID, |_, a| (a[0] + 0x1000).into_ret());
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        let this = form(&mut e);
+        e.mem.set_u32(this + 0x58, 0x77);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_bb70, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, DESTRUCTIBLE_INIT_ITEM),
+            vec![vec![this - 8, this]]
+        );
+        assert_eq!(
+            calls(&log, TEXTURE_SWAP_INIT_ITEM),
+            vec![vec![this + 0x30, this]]
+        );
+        assert_eq!(
+            calls(&log, RT_DYNAMIC_CAST),
+            vec![vec![0x1077, 0, CAST_SOURCE_TYPE, CAST_TARGET_TYPE, 0]]
+        );
+        assert_eq!(e.mem.u32(this + 0x58), 0x1077);
+        assert!(calls(&log, WARNING).is_empty());
+        assert_eq!(calls(&log, TES_FORM_SET_FLAG_484AB0), vec![vec![this, 1]]);
+    }
+
+    #[test]
+    fn init_item_warns_or_skips() {
+        let mut e = engine();
+        let this = form(&mut e);
+        e.mem.set_u32(this + 0x58, 0x77);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_bb70, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, WARNING),
+            vec![vec![LOOPING_SOUND_WARNING, 0x77, 0x0ed1_0000, 0x0abc]]
+        );
+        e.register(FORM_TEST_4013E0, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x004f_bb70, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls(&log, DESTRUCTIBLE_INIT_ITEM).is_empty());
+        assert!(calls(&log, TES_FORM_SET_FLAG_484AB0).is_empty());
+    }
+
+    #[test]
+    fn init_item_with_this_at_0x14_passes_null_forms() {
+        let mut e = engine();
+        e.map(0, 0x1000);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_bb70, &args![0x14u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, DESTRUCTIBLE_INIT_ITEM), vec![vec![0x0c, 0]]);
+        assert_eq!(calls(&log, TEXTURE_SWAP_INIT_ITEM), vec![vec![0x44, 0]]);
+    }
+
+    #[test]
+    fn sound_setter_stores_at_0x6c() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x80);
+        e.call(0x004f_bf00, &args![this, 9u32]);
+        assert_eq!(e.mem.u32(this + 0x6c), 9);
     }
 }

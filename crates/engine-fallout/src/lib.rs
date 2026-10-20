@@ -51,6 +51,6 @@ pub mod units;
 
 // The core, re-exported so the unit files reach it as `crate::...`, as in the
 // single crate the engine was before the split.
-pub use engine_core::{abi, exe, mem, prelude, ptr, static_exit, static_init, types, x87};
+pub use engine_core::{abi, exe, mem, prelude, ptr, sse, static_exit, static_init, types, x87};
 pub use engine_core::{args, entry, layout};
 pub use engine_core::{AbiFn, Engine, Field, Inline, Layout, Mem, Ptr, Ret, Scalar};

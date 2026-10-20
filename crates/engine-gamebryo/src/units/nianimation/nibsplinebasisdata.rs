@@ -39,6 +39,108 @@ pub fn ni_b_spline_basis_data_get_viewer_strings(e: &mut Engine, this: Ptr, stri
     });
 }
 
+/// The `NiBSplineBasisData` vtable (RTTI `.?AVNiBSplineBasisData@@`).
+const B_SPLINE_BASIS_DATA_VTABLE: u32 = 0x0109_9f24;
+/// `00aa13e0` (`cdecl`, one word): allocates; `00aa1460` (`cdecl`, `(block, size)`): the
+/// sized delete.
+const ALLOCATE: u32 = 0x00aa_13e0;
+const SIZED_DELETE: u32 = 0x00aa_1460;
+/// `00a5d3a0` / `00a5d3d0` (`thiscall`, unit `niobject.cpp`): the `NiObject` constructor
+/// and destructor bodies; `00a5d450` (`thiscall`, `RET 8`): its member copy;
+/// `NiObject::LoadBinary` (`00a5d610`, `thiscall`, `RET 4`).
+const OBJECT_CONSTRUCTOR: u32 = 0x00a5_d3a0;
+const OBJECT_DESTRUCTOR: u32 = 0x00a5_d3d0;
+const OBJECT_COPY_MEMBERS: u32 = 0x00a5_d450;
+const OBJECT_LOAD_BINARY: u32 = 0x00a5_d610;
+/// The float a new basis starts its `+0x1c` field with (`01012054`, read as the game does).
+const INITIAL_PARAMETER: u32 = 0x0101_2054;
+
+// Translated from 00a62660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineBasisData::GetDegree3Basis` (Xbox PDB; `ECX` only): the address of the
+/// basis inside the object, `this + 8`.
+pub fn ni_b_spline_basis_data_get_degree3_basis(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr().wrapping_add(8))
+}
+
+// Translated from 00a52b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No function in Ghidra's project (read from the bytes; the class factory of
+/// `NiBSplineBasisData`, `cdecl`, no argument): allocates 0x28 bytes (`00aa13e0`); a null
+/// block answers null. Otherwise the `NiObject` constructor runs on it, the vtable
+/// `01099f24` is set, the float at `01012054` is copied to `+0x1c` through the x87 stack,
+/// and the words at `+0x08` and `+0x20` become 0 and the one at `+0x24` 3. Answers the
+/// object.
+pub fn fn_00a52b60(e: &mut Engine) -> Ptr {
+    let block = e.call(ALLOCATE, &args![0x28u32]).u32();
+    if block == 0 {
+        return Ptr::NULL;
+    }
+    e.call(OBJECT_CONSTRUCTOR, &args![block]);
+    let parameter = x87_quiet_bits(e.mem.u32(INITIAL_PARAMETER));
+    e.mem.set_u32(block, B_SPLINE_BASIS_DATA_VTABLE);
+    e.mem.set_u32(block + 0x1c, parameter);
+    e.mem.set_u32(block + 8, 0);
+    e.mem.set_u32(block + 0x20, 0);
+    e.mem.set_u32(block + 0x24, 3);
+    Ptr::new(block)
+}
+
+// Translated from 00a52b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineBasisData::CreateClone` (Xbox PDB; `thiscall`, `RET 4`): a new object built
+/// as `00a52b60` builds it (null when the allocation fails), the `NiObject` member copy
+/// (`00a5d450`) from `this` to it with `cloning`, then the eight words at `+0x08..+0x28`
+/// of `this` copied over (`REP MOVSD`; written even to a null clone, as the exe does).
+/// Answers the clone.
+pub fn ni_b_spline_basis_data_create_clone(e: &mut Engine, this: Ptr, cloning: u32) -> Ptr {
+    let clone = fn_00a52b60(e).addr();
+    e.call(OBJECT_COPY_MEMBERS, &args![this, clone, cloning]);
+    for word in 0..8 {
+        let at = 8 + 4 * word;
+        let value = e.mem.u32(this.addr().wrapping_add(at));
+        e.mem.set_u32(clone.wrapping_add(at), value);
+    }
+    Ptr::new(clone)
+}
+
+// Translated from 00a52be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineBasisData::_scalar_deleting_destructor_` (Xbox PDB; `thiscall`, `RET 4`):
+/// sets the vtable, runs the `NiObject` destructor body (`00a5d3d0`) and, when bit 0 of
+/// `flags` is set, the sized delete of 0x28 bytes. Answers `this`.
+pub fn ni_b_spline_basis_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.mem.set_u32(this.addr(), B_SPLINE_BASIS_DATA_VTABLE);
+    e.call(OBJECT_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 0x28u32]);
+    }
+    this
+}
+
+// Translated from 00a52c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBSplineBasisData::LoadBinary` (Xbox PDB; `thiscall`, `RET 4`):
+/// `NiObject::LoadBinary`, then the stream's reader (`stream + 0x24c`) reads one 4-byte
+/// word into `+0x08` through the function pointer at its `+8` (`cdecl`
+/// `(reader, this + 8, 4, &4, 1)`, the count slot being the stack slot of the stream
+/// argument); the answer is added to the reader's word at `+4`.
+pub fn ni_b_spline_basis_data_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(OBJECT_LOAD_BINARY, &args![this, stream]);
+    let reader = e.mem.u32(stream.addr() + 0x24c);
+    let read_function = e.mem.u32(reader + 8);
+    let destination = this.addr().wrapping_add(8);
+    let read = e.with_stack(4, |e, count| {
+        e.mem.set_u32(count.addr(), 4);
+        e.call(
+            read_function,
+            &args![reader, destination, 4u32, count, 1u32],
+        )
+        .u32()
+    });
+    let total = e.mem.u32(reader + 4).wrapping_add(read);
+    e.mem.set_u32(reader + 4, total);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -47,6 +149,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00a52c90,
             ni_b_spline_basis_data_get_viewer_strings(Ptr, Ptr)
         ),
+        entry!(0x00a6_2660, ni_b_spline_basis_data_get_degree3_basis(Ptr) -> Ptr),
+        entry!(0x00a5_2b60, fn_00a52b60() -> Ptr),
+        entry!(0x00a5_2b00, ni_b_spline_basis_data_create_clone(Ptr, u32) -> Ptr),
+        entry!(
+            0x00a5_2be0,
+            ni_b_spline_basis_data_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00a5_2c10, ni_b_spline_basis_data_load_binary(Ptr, Ptr)),
     ]
 }
 
@@ -114,5 +224,102 @@ mod tests {
             assert_eq!(&set.1[..2], [strings, size]);
             assert_eq!(stored.get(), 0x7777_0001);
         }
+    }
+}
+
+#[cfg(test)]
+mod basis_data_tests {
+    use super::*;
+    use crate::units::nimain::nimainsdm::test_support::{calls_to, engine_with_counting};
+
+    fn engine() -> Engine {
+        let mut e = engine_with_counting();
+        e.map(0x0101_2000, 0x1000);
+        e.mem.set_u32(INITIAL_PARAMETER, 0xbf80_0000);
+        e.register(OBJECT_CONSTRUCTOR, |_, a| a[0].into_ret());
+        e.register(OBJECT_DESTRUCTOR, |_, _| Ret::default());
+        e.register(OBJECT_COPY_MEMBERS, |_, _| Ret::default());
+        e.register(OBJECT_LOAD_BINARY, |_, _| Ret::default());
+        e.register(SIZED_DELETE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn the_degree3_basis_is_inside_the_object() {
+        let mut e = engine();
+        assert_eq!(e.call(0x00a6_2660, &args![0x5000u32]).u32(), 0x5008);
+    }
+
+    #[test]
+    fn the_factory_builds_a_basis_with_its_defaults() {
+        let mut e = engine();
+        let object = e.call(0x00a5_2b60, &args![]).u32();
+        assert_ne!(object, 0);
+        assert_eq!(calls_to(&e, OBJECT_CONSTRUCTOR), vec![vec![object]]);
+        assert_eq!(e.mem.u32(object), B_SPLINE_BASIS_DATA_VTABLE);
+        assert_eq!(e.mem.u32(object + 0x1c), 0xbf80_0000);
+        assert_eq!(e.mem.u32(object + 8), 0);
+        assert_eq!(e.mem.u32(object + 0x20), 0);
+        assert_eq!(e.mem.u32(object + 0x24), 3);
+        e.register(ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a5_2b60, &args![]).u32(), 0);
+    }
+
+    #[test]
+    fn a_clone_copies_the_eight_words() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x28);
+        for word in 0..8 {
+            e.mem.set_u32(this + 8 + 4 * word, 0x100 + word);
+        }
+        let clone = e.call(0x00a5_2b00, &args![this, 9u32]).u32();
+        assert_ne!(clone, 0);
+        assert_eq!(
+            calls_to(&e, OBJECT_COPY_MEMBERS),
+            vec![vec![this, clone, 9]]
+        );
+        for word in 0..8 {
+            assert_eq!(e.mem.u32(clone + 8 + 4 * word), 0x100 + word);
+        }
+        assert_eq!(e.mem.u32(clone), B_SPLINE_BASIS_DATA_VTABLE);
+    }
+
+    #[test]
+    fn the_deleting_destructor_deletes_only_on_bit_0() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x28);
+        assert_eq!(e.call(0x00a5_2be0, &args![this, 2u32]).u32(), this);
+        assert!(calls_to(&e, SIZED_DELETE).is_empty());
+        e.call(0x00a5_2be0, &args![this, 1u32]);
+        assert_eq!(calls_to(&e, SIZED_DELETE), vec![vec![this, 0x28]]);
+        assert_eq!(calls_to(&e, OBJECT_DESTRUCTOR), vec![vec![this]; 2]);
+        assert_eq!(e.mem.u32(this), B_SPLINE_BASIS_DATA_VTABLE);
+    }
+
+    #[test]
+    fn loading_reads_one_word_through_the_reader() {
+        let mut e = engine();
+        const READ: u32 = 0x0300_0000;
+        e.register(READ, |e, a| {
+            assert_eq!(e.mem.u32(a[3]), 4);
+            e.mem.set_u32(a[1], 0x77);
+            4u32.into_ret()
+        });
+        let reader = e.mem.alloc(0xc);
+        e.mem.set_u32(reader + 4, 0x10);
+        e.mem.set_u32(reader + 8, READ);
+        let stream = e.mem.alloc(0x250);
+        e.mem.set_u32(stream + 0x24c, reader);
+        let this = e.mem.alloc(0x28);
+        e.call(0x00a5_2c10, &args![this, stream]);
+        assert_eq!(calls_to(&e, OBJECT_LOAD_BINARY), vec![vec![this, stream]]);
+        assert_eq!(e.mem.u32(this + 8), 0x77);
+        assert_eq!(e.mem.u32(reader + 4), 0x14);
+        let reads = calls_to(&e, READ);
+        assert_eq!(
+            (reads[0][0], reads[0][1], reads[0][2], reads[0][4]),
+            (reader, this + 8, 4, 1)
+        );
     }
 }

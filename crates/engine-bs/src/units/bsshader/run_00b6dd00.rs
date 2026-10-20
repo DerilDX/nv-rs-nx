@@ -52,8 +52,8 @@ const LIST_CONSTRUCT_00B998E0: u32 = 0x00b9_98e0;
 const LIST_DESTRUCT_00B5C7C0: u32 = 0x00b5_c7c0;
 /// `NiTPointerListBase<..>::RemoveAll` (engine map, `00e74d40`, `thiscall` on a list).
 const LIST_REMOVE_ALL: u32 = 0x00e7_4d40;
-/// The texture query `00b6c2c0` (`thiscall`, eight stack words: the renderer, a texture kind
-/// and six out-parameter addresses).
+/// The texture query `00b6c2c0` (`stdcall`, `RET 0x20`: eight stack words, the renderer, a
+/// texture kind and six out-parameter addresses; it does not read `ECX`).
 const TEXTURE_QUERY_00B6C2C0: u32 = 0x00b6_c2c0;
 /// The object at `011f4748` whose vtable slot +0x94 (three words) the code calls.
 const OBJECT_011F4748: u32 = 0x011f_4748;
@@ -136,7 +136,6 @@ pub fn fn_00b6dd80(e: &mut Engine, this: Ptr) -> Ptr {
         e.call(
             TEXTURE_QUERY_00B6C2C0,
             &args![
-                this,
                 renderer,
                 0x2bu32,
                 local(LOCAL_1C),
@@ -200,7 +199,6 @@ pub fn fn_00b6dd80(e: &mut Engine, this: Ptr) -> Ptr {
             e.call(
                 TEXTURE_QUERY_00B6C2C0,
                 &args![
-                    this,
                     renderer,
                     4u32,
                     local(LOCAL_2C),
@@ -511,9 +509,112 @@ pub fn fn_00b6e450(e: &mut Engine, this: Ptr, renderer: u32) {
     });
 }
 
+/// The `NiPointer` constructor from a pointer `00633c90` (`thiscall` on the pointer, one word)
+/// and the `NiPointer` destructor `0045cec0` (`thiscall` on the pointer).
+const NI_POINTER_FROM_00633C90: u32 = 0x0063_3c90;
+const NI_POINTER_DESTRUCT_0045CEC0: u32 = 0x0045_cec0;
+
+// Translated from 00b6e110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6dd00`): a rendered texture of a kind, `thiscall` on the
+/// texture manager with five stack words (`RET 0x14`): the renderer, the kind, extra flags, a
+/// word that must be 0 (else 0 is answered at once) and a last word. Kinds 0x2b, 0x11, 9, 0x16
+/// and 0x13 (the switch's byte map at `00b6e428` and jump table at `00b6e410`, read in
+/// Ghidra) take the first texture of their free list (+0x0, +0xc, +0x18, +0x24, +0x30) when
+/// its count (+8 of the list) is not 0: an `NiPointer` made from it (`00633c90`, in the
+/// fourth argument's slot) is added to the in-use list (+0x3c, +0x48, +0x54, +0x60, +0x6c,
+/// `00c1b4a0`) and released (`0045cec0`), the free list's first entry is taken into another
+/// stack slot (`00b9e7c0`) and released, and the texture is answered. Every other case asks
+/// `00b6c2c0` (`stdcall`: renderer, kind, then the addresses of width, height, format, a word,
+/// the flags and the fourth argument's slot) and answers
+/// `BSTextureManager::BorrowRenderedTexture` (`00b6d5e0`) with the renderer, width, height,
+/// the flags or'ed with the extra flags, format, the word, the kind, the slot's word, 0 and
+/// the last word.
+// Translation incomplete: 00b6e110 - the C++ exception frame (FS:[0] chain, unwind states 0 to 4 for the temporary pointers) is not translated.
+pub fn fn_00b6e110(
+    e: &mut Engine,
+    this: Ptr,
+    renderer: u32,
+    kind: u32,
+    extra_flags: u32,
+    must_be_zero: u32,
+    last: u32,
+) -> u32 {
+    if must_be_zero != 0 {
+        return 0;
+    }
+    let base = this.addr();
+    // The frame: locals at +0x10..+0x24, the argument slots at +0x38..+0x48.
+    e.with_stack(0x4c, |e, frame| {
+        let frame = frame.addr();
+        let argument_slot = |index: u32| frame + 0x34 + 4 * index;
+        for (index, word) in [renderer, kind, extra_flags, must_be_zero, last]
+            .iter()
+            .enumerate()
+        {
+            e.mem.set_u32(argument_slot(index as u32 + 1), *word);
+        }
+        // The arms of the switch: the free list, the in-use list and the argument whose slot
+        // receives the taken pointer (0: a local).
+        let taken_case = match kind {
+            0x2b => Some((0x0u32, 0x3cu32, 2u32)),
+            0x11 => Some((0xc, 0x48, 1)),
+            9 => Some((0x18, 0x54, 5)),
+            0x16 => Some((0x24, 0x60, 3)),
+            0x13 => Some((0x30, 0x6c, 0)),
+            _ => None,
+        };
+        if let Some((free_list, used_list, slot)) = taken_case {
+            if e.mem.u32(base + free_list + 8) != 0 {
+                let head = e.mem.u32(base + free_list);
+                let texture = e.mem.u32(head + 8);
+                let temporary = argument_slot(4);
+                e.call(NI_POINTER_FROM_00633C90, &args![temporary, texture]);
+                e.call(LIST_ADD_00C1B4A0, &args![base + used_list, temporary]);
+                e.call(NI_POINTER_DESTRUCT_0045CEC0, &args![temporary]);
+                let taken = if slot == 0 {
+                    frame + 0x10
+                } else {
+                    argument_slot(slot)
+                };
+                e.call(LIST_TAKE_00B9E7C0, &args![base + free_list, taken]);
+                e.call(NI_POINTER_DESTRUCT_0045CEC0, &args![taken]);
+                return texture;
+            }
+        }
+        let (width, height, format, word, flags) = (
+            frame + 0x24,
+            frame + 0x20,
+            frame + 0x18,
+            frame + 0x14,
+            frame + 0x1c,
+        );
+        let slot = argument_slot(4);
+        e.call(
+            TEXTURE_QUERY_00B6C2C0,
+            &args![renderer, kind, width, height, format, word, flags, slot],
+        );
+        let made_flags = e.mem.u32(flags) | e.mem.u32(argument_slot(3));
+        let words = [
+            base,
+            renderer,
+            e.mem.u32(width),
+            e.mem.u32(height),
+            made_flags,
+            e.mem.u32(format),
+            e.mem.u32(word),
+            kind,
+            e.mem.u32(slot),
+            0,
+            e.mem.u32(argument_slot(5)),
+        ];
+        e.call(BORROW_RENDERED_TEXTURE, &words).u32()
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b6_e110, fn_00b6e110(Ptr, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00b6_dd80, fn_00b6dd80(Ptr) -> Ptr),
         entry!(0x00b6_e450, fn_00b6e450(Ptr, u32)),
     ]
@@ -594,14 +695,14 @@ mod tests {
         e.register(FORMAT_SLOT_94, |_, a| (a[1] + 0x100).into_ret());
         e.register_double(TEXTURE_QUERY_00B6C2C0, move |e, a| {
             // (kind 0x2b: 1000 x 500; kind 4: 700 x 900), the format word last.
-            let (width, height) = if a[2] == 0x2b {
+            let (width, height) = if a[1] == 0x2b {
                 (1000, 500)
             } else {
                 (700, 900)
             };
-            e.mem.set_u32(a[3], width);
-            e.mem.set_u32(a[4], height);
-            e.mem.set_u32(a[8], format);
+            e.mem.set_u32(a[2], width);
+            e.mem.set_u32(a[3], height);
+            e.mem.set_u32(a[7], format);
             Ret::default()
         });
         e.register_double(MAKE_00A9FE90, |e, a| {
@@ -646,7 +747,8 @@ mod tests {
         );
         let query = calls(&e, TEXTURE_QUERY_00B6C2C0);
         assert_eq!(query.len(), 1);
-        assert_eq!(&query[0][..3], &[this, renderer, 0x2b]);
+        assert_eq!(query[0].len(), 8);
+        assert_eq!(&query[0][..2], &[renderer, 0x2b]);
         // Width max(1000, 800), height max(500, 600), format word 0x15 + 0x100.
         assert_eq!(
             calls(&e, MAKE_00A9FE90),
@@ -680,7 +782,8 @@ mod tests {
         assert_eq!(e.mem.u32(this + 0xa8), 0x0bf0_0000);
         let query = calls(&e, TEXTURE_QUERY_00B6C2C0);
         assert_eq!(query.len(), 2);
-        assert_eq!(query[1][2], 4);
+        assert_eq!(query[1].len(), 8);
+        assert_eq!(query[1][1], 4);
     }
 
     #[test]
@@ -827,5 +930,106 @@ mod tests {
         assert_eq!(e.mem.u32(texture + 0x2c), 0x11);
         assert_eq!(e.mem.u32(texture + 4), 1);
         assert_eq!(calls(&e, 0x0f00_5094)[1], vec![inner]);
+    }
+}
+
+#[cfg(test)]
+mod rendered_texture_tests {
+    use super::*;
+
+    const RENDERER: u32 = 0x0f10_0000;
+    const MADE: u32 = 0x0f20_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn engine() -> (Engine, u32) {
+        let mut e = Engine::new();
+        for addr in [
+            NI_POINTER_FROM_00633C90,
+            LIST_ADD_00C1B4A0,
+            NI_POINTER_DESTRUCT_0045CEC0,
+            LIST_TAKE_00B9E7C0,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(TEXTURE_QUERY_00B6C2C0, |e, a| {
+            for (index, value) in [0x400u32, 0x300, 0x15, 7, 0x10, 0x99].iter().enumerate() {
+                e.mem.set_u32(a[2 + index], *value);
+            }
+            Ret::default()
+        });
+        e.register(BORROW_RENDERED_TEXTURE, |_, _| MADE.into_ret());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x78);
+        (e, this)
+    }
+
+    fn get(e: &mut Engine, this: u32, kind: u32, zero: u32) -> u32 {
+        e.call(
+            0x00b6_e110,
+            &args![this, RENDERER, kind, 0x100u32, zero, 0x55u32],
+        )
+        .u32()
+    }
+
+    #[test]
+    fn fn_00b6e110_takes_a_free_texture_of_a_listed_kind() {
+        for (kind, free_list, used_list) in [
+            (0x2bu32, 0u32, 0x3cu32),
+            (0x11, 0xc, 0x48),
+            (9, 0x18, 0x54),
+            (0x16, 0x24, 0x60),
+            (0x13, 0x30, 0x6c),
+        ] {
+            let (mut e, this) = engine();
+            let head = e.mem.alloc(0xc);
+            e.mem.set_u32(head + 8, 0x0f30_0000);
+            e.mem.set_u32(this + free_list, head);
+            e.mem.set_u32(this + free_list + 8, 1);
+            assert_eq!(get(&mut e, this, kind, 0), 0x0f30_0000);
+            let made = calls(&e, NI_POINTER_FROM_00633C90);
+            assert_eq!(made.len(), 1);
+            assert_eq!(made[0][1], 0x0f30_0000);
+            assert_eq!(
+                calls(&e, LIST_ADD_00C1B4A0),
+                vec![vec![this + used_list, made[0][0]]]
+            );
+            let taken = calls(&e, LIST_TAKE_00B9E7C0);
+            assert_eq!(taken.len(), 1);
+            assert_eq!(taken[0][0], this + free_list);
+            assert_eq!(calls(&e, NI_POINTER_DESTRUCT_0045CEC0).len(), 2);
+            assert!(calls(&e, BORROW_RENDERED_TEXTURE).is_empty());
+        }
+    }
+
+    #[test]
+    fn fn_00b6e110_borrows_otherwise() {
+        // An empty free list, then a kind without a list.
+        for kind in [0x2bu32, 3] {
+            let (mut e, this) = engine();
+            assert_eq!(get(&mut e, this, kind, 0), MADE);
+            let query = calls(&e, TEXTURE_QUERY_00B6C2C0);
+            assert_eq!(query.len(), 1);
+            assert_eq!(query[0][..2], [RENDERER, kind]);
+            assert_eq!(
+                calls(&e, BORROW_RENDERED_TEXTURE),
+                vec![vec![
+                    this, RENDERER, 0x400, 0x300, 0x110, 0x15, 7, kind, 0x99, 0, 0x55
+                ]]
+            );
+        }
+    }
+
+    #[test]
+    fn fn_00b6e110_answers_0_for_a_nonzero_fourth_word() {
+        let (mut e, this) = engine();
+        assert_eq!(get(&mut e, this, 3, 1), 0);
+        assert!(calls(&e, TEXTURE_QUERY_00B6C2C0).is_empty());
     }
 }

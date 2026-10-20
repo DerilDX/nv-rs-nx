@@ -2078,9 +2078,22 @@ pub fn ni_t_fixed_string_map_delete_item(e: &mut Engine, _this: Ptr, item: Ptr) 
     e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, item]);
 }
 
+// Translated from 00a2f6c0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; by its body the creation
+/// function of `NiControllerManager`): allocates 0x7c bytes (`operator new`) and, when that
+/// succeeds, runs the default constructor (`00a2eed0`) on them. Answers the object, or null.
+pub fn fn_00a2f6c0(e: &mut Engine) -> Ptr<NiControllerManager> {
+    let block = e.call(OPERATOR_NEW, &args![0x7cu32]).u32();
+    if block == 0 {
+        return Ptr::new(0);
+    }
+    fn_00a2eed0(e, Ptr::new(block))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a2_f6c0, fn_00a2f6c0() -> Ptr<NiControllerManager>),
         entry!(0x00a2e1e0, ni_av_object_palette_get_rtti() -> Ptr),
         entry!(0x00a2ede0, ni_default_av_object_palette_get_rtti() -> Ptr),
         entry!(0x00a2ef80, ni_controller_manager_scalar_deleting_destructor(Ptr, u32) -> Ptr),
@@ -4190,5 +4203,20 @@ mod tests {
         assert_eq!(e.call(0x00a2ef80, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x7c]]);
         assert_eq!(calls_to(&e, 0x00a2_ebb0), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn create_object_00a2f6c0_constructs_a_new_manager_or_answers_null() {
+        let mut e = setup();
+        constructor_doubles(&mut e);
+        let object = e.call(0x00a2_f6c0, &args![]).u32();
+        assert_ne!(object, 0);
+        assert_eq!(e.mem.u32(object), NI_CONTROLLER_MANAGER_VTABLE);
+        assert_eq!(calls_to(&e, OPERATOR_NEW)[0], vec![0x7c]);
+        assert_eq!(calls_to(&e, TIME_CONTROLLER_CONSTRUCT), vec![vec![object]]);
+        e.register(OPERATOR_NEW, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a2_f6c0, &args![]).u32(), 0);
+        assert!(calls_to(&e, TIME_CONTROLLER_CONSTRUCT).is_empty());
     }
 }

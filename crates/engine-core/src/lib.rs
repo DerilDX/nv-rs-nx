@@ -13,7 +13,7 @@
 //! game's.
 //!
 //! This crate holds the model ([`Engine`], [`Mem`], [`abi`], [`ptr`],
-//! [`x87`], [`types`], [`exe`], the static initializer and `atexit` tables)
+//! [`x87`], [`sse`], [`types`], [`exe`], the static initializer and `atexit` tables)
 //! and the units every other part calls (`units/crt.rs`, `units/platform.rs`).
 //! The other units are in the part crates (`crates/engine-<part>`), and the
 //! `engine` crate assembles them: [`Engine::new`] registers this crate's
@@ -63,6 +63,7 @@ mod engine;
 pub mod exe;
 pub mod mem;
 pub mod ptr;
+pub mod sse;
 pub mod static_exit;
 pub mod static_init;
 pub mod types;

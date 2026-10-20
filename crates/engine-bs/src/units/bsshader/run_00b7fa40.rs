@@ -227,13 +227,72 @@ pub fn fn_00b7fd50(e: &mut Engine, this: Ptr) -> u32 {
         .u32()
 }
 
+/// The free `00aa10f0` (`cdecl`, block).
+const FREE_00AA10F0: u32 = 0x00aa_10f0;
+/// The map's base clean-up `00b7fbe0` (`thiscall`, no stack words).
+const MAP_BASE_CLEAN_UP_00B7FBE0: u32 = 0x00b7_fbe0;
+
+// Translated from 00b7fc50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`): the clean-up of the shader package's string
+/// map (`this` is the package's +8). `thiscall`, no stack words. Sets the map's vtable
+/// `010af6cc`; when the byte at +0x10 (the package's +0x18) is set, walks every bucket of the
+/// array at +8 (count at +4, read again after each bucket) and, for each entry of a
+/// bucket's chain (next entry at +0), frees the entry's word at +4 (`00aa10f0`). Then runs
+/// the base clean-up `00b7fbe0` and answers what it answers (`EAX`).
+// Translation incomplete: 00b7fc50 - the C++ exception frame (FS:[0] chain, unwind state 0 around the walk) is not translated.
+pub fn fn_00b7fc50(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    e.mem.set_u32(base, MAP_VTABLE_010AF6CC);
+    if e.mem.u8(base.wrapping_add(0x10)) != 0 && e.mem.u32(base.wrapping_add(4)) != 0 {
+        let mut index = 0u32;
+        loop {
+            let buckets = e.mem.u32(base.wrapping_add(8));
+            let mut entry = e.mem.u32(buckets.wrapping_add(index.wrapping_mul(4)));
+            while entry != 0 {
+                let key = e.mem.u32(entry.wrapping_add(4));
+                entry = e.mem.u32(entry);
+                e.call(FREE_00AA10F0, &args![key]);
+            }
+            index = index.wrapping_add(1);
+            if index >= e.mem.u32(base.wrapping_add(4)) {
+                break;
+            }
+        }
+    }
+    e.call(MAP_BASE_CLEAN_UP_00B7FBE0, &args![base]).u32()
+}
+
+/// The map's derived vtable stored first by the base clean-up (`010af6b0`; no RTTI locator
+/// before it).
+const MAP_VTABLE_010AF6B0: u32 = 0x010a_f6b0;
+/// The hash map's `RemoveAll` (`00b601a0`, unnamed; `thiscall`, no stack words).
+const MAP_REMOVE_ALL_00B601A0: u32 = 0x00b6_01a0;
+
+// Translated from 00b7fbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`): the base clean-up of the shader package's
+/// string map, `thiscall`, no stack words. Sets the vtable `010af6b0` and empties the map
+/// (`00b601a0`), sets the vtable `010ade18` and empties it again, then frees the bucket array
+/// at +8 (`00aa10f0`) and answers what the free answers (`EAX`).
+// Translation incomplete: 00b7fbe0 - the C++ exception frame (FS:[0] chain, unwind state 0 between the two vtables) is not translated.
+pub fn fn_00b7fbe0(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    e.mem.set_u32(base, MAP_VTABLE_010AF6B0);
+    e.call(MAP_REMOVE_ALL_00B601A0, &args![base]);
+    e.mem.set_u32(base, MAP_VTABLE_010ADE18);
+    e.call(MAP_REMOVE_ALL_00B601A0, &args![base]);
+    let buckets = e.mem.u32(base.wrapping_add(8));
+    e.call(FREE_00AA10F0, &args![buckets]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b7_fbe0, fn_00b7fbe0(Ptr) -> u32),
         entry!(0x00b7_faf0, fn_00b7faf0() -> u32),
         entry!(0x00b7_ff40, fn_00b7ff40(Ptr, i32) -> Ptr),
         entry!(0x00b7_fe40, fn_00b7fe40(Ptr, Ptr) -> bool),
         entry!(0x00b7_fd50, fn_00b7fd50(Ptr) -> u32),
+        entry!(0x00b7_fc50, fn_00b7fc50(Ptr) -> u32),
     ]
 }
 
@@ -481,5 +540,89 @@ mod tests {
         e.call(0x00b7_fd50, &args![this]);
         assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
         assert_eq!(calls(&e, MAP_CLEAN_UP_00B7FC50).len(), 1);
+    }
+
+    /// A map with three buckets: bucket 0 holds two entries (keys 0x10, 0x11), bucket 1 is
+    /// empty, bucket 2 holds one (key 0x20).
+    fn map_rig(owns: u8) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.register(FREE_00AA10F0, |_, _| Ret::default());
+        e.register(MAP_BASE_CLEAN_UP_00B7FBE0, |_, _| 0x77u32.into_ret());
+        let map = e.mem.alloc(0x14);
+        let buckets = e.mem.alloc(0xc);
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        let third = e.mem.alloc(0xc);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 4, 0x10);
+        e.mem.set_u32(second + 4, 0x11);
+        e.mem.set_u32(third + 4, 0x20);
+        e.mem.set_u32(buckets, first);
+        e.mem.set_u32(buckets + 8, third);
+        e.mem.set_u32(map, 0x1234);
+        e.mem.set_u32(map + 4, 3);
+        e.mem.set_u32(map + 8, buckets);
+        e.mem.set_u8(map + 0x10, owns);
+        (e, map)
+    }
+
+    #[test]
+    fn fn_00b7fc50_frees_every_key_when_the_map_owns_them() {
+        let (mut e, map) = map_rig(1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b7_fc50, &args![map]).u32(), 0x77);
+        assert_eq!(e.mem.u32(map), MAP_VTABLE_010AF6CC);
+        assert_eq!(
+            calls(&e, FREE_00AA10F0),
+            vec![vec![0x10], vec![0x11], vec![0x20]]
+        );
+        assert_eq!(calls(&e, MAP_BASE_CLEAN_UP_00B7FBE0), vec![vec![map]]);
+    }
+
+    #[test]
+    fn fn_00b7fc50_frees_nothing_when_the_map_does_not_own_its_keys() {
+        let (mut e, map) = map_rig(0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_fc50, &args![map]);
+        assert!(calls(&e, FREE_00AA10F0).is_empty());
+        assert_eq!(calls(&e, MAP_BASE_CLEAN_UP_00B7FBE0).len(), 1);
+        // No buckets: nothing walked either.
+        let (mut e, map) = map_rig(1);
+        e.mem.set_u32(map + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_fc50, &args![map]);
+        assert!(calls(&e, FREE_00AA10F0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod base_clean_up_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00b7fbe0_empties_the_map_under_both_vtables_and_frees_the_buckets() {
+        const SEEN: u32 = 0x0e50_0000;
+        let mut e = Engine::new();
+        e.map(SEEN, 0x10);
+        e.register(MAP_REMOVE_ALL_00B601A0, |e, a| {
+            let count = e.mem.u32(SEEN);
+            let vtable = e.mem.u32(a[0]);
+            e.mem.set_u32(SEEN + 4 + 4 * count, vtable);
+            e.mem.set_u32(SEEN, count + 1);
+            Ret::default()
+        });
+        e.register(FREE_00AA10F0, |_, _| 0x5au32.into_ret());
+        e.call_log = Some(vec![]);
+        let map = e.mem.alloc(0x14);
+        e.mem.set_u32(map + 8, 0x0e60_0000);
+        assert_eq!(e.call(0x00b7_fbe0, &args![map]).u32(), 0x5a);
+        assert_eq!(e.mem.u32(SEEN), 2);
+        assert_eq!(e.mem.u32(SEEN + 4), MAP_VTABLE_010AF6B0);
+        assert_eq!(e.mem.u32(SEEN + 8), MAP_VTABLE_010ADE18);
+        assert_eq!(e.mem.u32(map), MAP_VTABLE_010ADE18);
+        let log = e.call_log.take().unwrap();
+        let freed: Vec<_> = log.iter().filter(|c| c.0 == FREE_00AA10F0).collect();
+        assert_eq!(freed.len(), 1);
+        assert_eq!(freed[0].1, vec![0x0e60_0000]);
     }
 }

@@ -33,12 +33,125 @@ pub fn fn_0044a420(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The vector's words (an `std::vector` of words, MSVC layout): the
+/// allocator at +8, first +0xC, last +0x10, end of storage +0x14.
+const ALLOCATOR: u32 = 0x8;
+const FIRST: u32 = 0xc;
+const LAST: u32 = 0x10;
+const END: u32 = 0x14;
+/// The iterator constructor (`0065e000`, `thiscall (iterator, pointer,
+/// vector)`), the iterator from a position (`0065ded0`, `thiscall (vector,
+/// &result, position, vector word)`), the iterator compare (`0065dfd0`,
+/// `thiscall (iterator, other)`, answers a byte), the element move
+/// (`0044d600`, `cdecl (from, to, destination)`, answers the new end), the
+/// element destruction (`0065f2b0`, `thiscall (vector, from, to)`), the
+/// length error (`0065f640`), the allocator's allocate (`0044abd0`,
+/// `thiscall (allocator, count)`) and its `max_size` (`0044abf0`).
+const ITERATOR_CONSTRUCT: u32 = 0x0065_e000;
+const ITERATOR_AT: u32 = 0x0065_ded0;
+const ITERATOR_DIFFERS: u32 = 0x0065_dfd0;
+const MOVE_ELEMENTS: u32 = 0x0044_d600;
+const DESTROY_ELEMENTS: u32 = 0x0065_f2b0;
+const LENGTH_ERROR: u32 = 0x0065_f640;
+const ALLOCATE: u32 = 0x0044_abd0;
+const ALLOCATOR_MAX_SIZE: u32 = 0x0044_abf0;
+
+// Translated from 0044a170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`std::vector::begin` shape): constructs the
+/// iterator at `result` from the first element and the vector (`0065e000`)
+/// and answers `result`.
+pub fn fn_0044a170(e: &mut Engine, this: Ptr, result: Ptr) -> Ptr {
+    let first = e.mem.u32(this.addr().wrapping_add(FIRST));
+    e.call(ITERATOR_CONSTRUCT, &args![result, first, this]);
+    result
+}
+
+// Translated from 0044a1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`std::vector::erase(first, last)` shape): makes
+/// iterators of the two positions (`0065ded0`, each from its two words);
+/// when they differ (`0065dfd0`) moves the elements after the range down
+/// (`0044d600`), destroys the left-over tail (`0065f2b0`) and moves the end;
+/// answers `result` holding the first iterator.
+pub fn fn_0044a1a0(
+    e: &mut Engine,
+    this: Ptr,
+    result: Ptr,
+    first_word_1: u32,
+    first_word_2: u32,
+    last_word_1: u32,
+    last_word_2: u32,
+) -> Ptr {
+    e.with_stack(0x10, |e, frame| {
+        let first = frame.addr() + 8;
+        let last = frame.addr();
+        e.call(ITERATOR_AT, &args![this, first, first_word_1, first_word_2]);
+        e.call(ITERATOR_AT, &args![this, last, last_word_1, last_word_2]);
+        if e.call(ITERATOR_DIFFERS, &args![first, last]).u8() != 0 {
+            let end = e.mem.u32(this.addr() + LAST);
+            let new_end = e
+                .call(
+                    MOVE_ELEMENTS,
+                    &args![e.mem.u32(last + 4), end, e.mem.u32(first + 4)],
+                )
+                .u32();
+            let end = e.mem.u32(this.addr() + LAST);
+            e.call(DESTROY_ELEMENTS, &args![this, new_end, end]);
+            e.mem.set_u32(this.addr() + LAST, new_end);
+        }
+        let words = [e.mem.u32(first), e.mem.u32(first + 4)];
+        e.mem.set_u32(result.addr(), words[0]);
+        e.mem.set_u32(result.addr() + 4, words[1]);
+    });
+    result
+}
+
+// Translated from 0044a2c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`std::vector::max_size` shape): the
+/// allocator's (`0044abf0` on `this + 8`).
+pub fn fn_0044a2c0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(
+        ALLOCATOR_MAX_SIZE,
+        &args![this.addr().wrapping_add(ALLOCATOR)],
+    )
+    .u32()
+}
+
+// Translated from 0044a240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`std::vector::_Buy` shape): clears first,
+/// last and end; false for a count of 0; above `max_size` the length error
+/// (`0065f640`, which throws; the exe answers true after it); otherwise
+/// storage for `count` words from the allocator (`0044abd0`) with last at
+/// its start and end `count` words on. Answers true.
+pub fn fn_0044a240(e: &mut Engine, this: Ptr, count: u32) -> bool {
+    let at = |offset: u32| this.addr().wrapping_add(offset);
+    e.mem.set_u32(at(FIRST), 0);
+    e.mem.set_u32(at(LAST), 0);
+    e.mem.set_u32(at(END), 0);
+    if count == 0 {
+        return false;
+    }
+    if fn_0044a2c0(e, this) < count {
+        e.call(LENGTH_ERROR, &args![]);
+        return true;
+    }
+    let storage = e.call(ALLOCATE, &args![at(ALLOCATOR), count]).u32();
+    e.mem.set_u32(at(FIRST), storage);
+    e.mem.set_u32(at(LAST), storage);
+    e.mem
+        .set_u32(at(END), storage.wrapping_add(count.wrapping_mul(4)));
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0044_a380, fn_0044a380(Ptr) -> Ptr),
         entry!(0x0044_a3a0, fn_0044a3a0(Ptr, u32) -> Ptr),
         entry!(0x0044_a420, fn_0044a420(Ptr, u32) -> Ptr),
+        entry!(0x0044a170, fn_0044a170(Ptr, Ptr) -> Ptr),
+        entry!(0x0044a1a0, fn_0044a1a0(Ptr, Ptr, u32, u32, u32, u32) -> Ptr),
+        entry!(0x0044a2c0, fn_0044a2c0(Ptr) -> u32),
+        entry!(0x0044a240, fn_0044a240(Ptr, u32) -> bool),
     ]
 }
 
@@ -111,5 +224,105 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod b014_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn begin_builds_the_iterator_from_the_first_element() {
+        let mut e = Engine::new();
+        e.register(ITERATOR_CONSTRUCT, |_, _| Ret::default());
+        let this = e.mem.alloc(0x18);
+        e.mem.set_u32(this + FIRST, 0x4444);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0044a170, &args![this, 0x9000u32]).u32(), 0x9000);
+        assert_eq!(
+            calls(&e, ITERATOR_CONSTRUCT),
+            vec![vec![0x9000, 0x4444, this]]
+        );
+    }
+
+    #[test]
+    fn erase_moves_the_tail_down_when_the_range_is_not_empty() {
+        for differs in [true, false] {
+            let mut e = Engine::new();
+            // An iterator is (vector, position): the position is the second word.
+            e.register(ITERATOR_AT, |e, a| {
+                e.mem.set_u32(a[1], a[2]);
+                e.mem.set_u32(a[1] + 4, a[3]);
+                Ret::default()
+            });
+            e.map(0x7300_0000, 4);
+            e.mem.set_u32(0x7300_0000, u32::from(differs));
+            e.register(ITERATOR_DIFFERS, |e, _| e.mem.u32(0x7300_0000).into_ret());
+            e.register(MOVE_ELEMENTS, |_, a| (a[2] + (a[1] - a[0])).into_ret());
+            e.register(DESTROY_ELEMENTS, |_, _| Ret::default());
+            let this = e.mem.alloc(0x18);
+            e.mem.set_u32(this + LAST, 0x1040);
+            let result = e.mem.alloc(8);
+            e.call_log = Some(vec![]);
+            let r = e
+                .call(
+                    0x0044a1a0,
+                    &args![this, result, this, 0x1010u32, this, 0x1020u32],
+                )
+                .u32();
+            assert_eq!(r, result);
+            assert_eq!((e.mem.u32(result), e.mem.u32(result + 4)), (this, 0x1010));
+            if differs {
+                assert_eq!(calls(&e, MOVE_ELEMENTS), vec![vec![0x1020, 0x1040, 0x1010]]);
+                assert_eq!(
+                    calls(&e, DESTROY_ELEMENTS),
+                    vec![vec![this, 0x1030, 0x1040]]
+                );
+                assert_eq!(e.mem.u32(this + LAST), 0x1030);
+            } else {
+                assert!(calls(&e, MOVE_ELEMENTS).is_empty());
+                assert_eq!(e.mem.u32(this + LAST), 0x1040);
+            }
+        }
+    }
+
+    #[test]
+    fn buy_allocates_the_storage() {
+        let mut e = Engine::new();
+        e.register(ALLOCATOR_MAX_SIZE, |_, _| 100u32.into_ret());
+        e.register(ALLOCATE, |_, _| 0x5000u32.into_ret());
+        e.register(LENGTH_ERROR, |_, _| Ret::default());
+        let this = e.mem.alloc(0x18);
+        e.mem.set_u32(this + FIRST, 1);
+        assert!(!e.call(0x0044a240, &args![this, 0u32]).bool());
+        assert_eq!(e.mem.u32(this + FIRST), 0);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0044a240, &args![this, 3u32]).bool());
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![this + 8, 3]]);
+        assert_eq!(calls(&e, ALLOCATOR_MAX_SIZE), vec![vec![this + 8]]);
+        assert_eq!(
+            (
+                e.mem.u32(this + FIRST),
+                e.mem.u32(this + LAST),
+                e.mem.u32(this + END)
+            ),
+            (0x5000, 0x5000, 0x500c)
+        );
+        // Above max_size: the length error, nothing allocated.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0044a240, &args![this, 101u32]).bool());
+        assert_eq!(calls(&e, LENGTH_ERROR).len(), 1);
+        assert!(calls(&e, ALLOCATE).is_empty());
+        assert_eq!(e.mem.u32(this + FIRST), 0);
     }
 }

@@ -65,11 +65,28 @@ pub fn fn_0044a0a0(e: &mut Engine, this: Ptr) -> u32 {
     })
 }
 
+/// `std::vector<unsigned long>::_Tidy` (engine map, `0065f240`) and the
+/// base destructor run after it (`0065cfb0`), both `thiscall`.
+const TIDY: u32 = 0x0065_f240;
+const BASE_DESTRUCT: u32 = 0x0065_cfb0;
+
+// Translated from 0044a040 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0044a040 - the exception-unwinding frame (FS:[0]) is not translated.
+/// The engine map gives it no name (the destructor matching `00449fd0`):
+/// `_Tidy` (`0065f240`) on `this`, then the base destructor `0065cfb0`. The
+/// exception-unwinding frame (and the cookie word it stores, which nothing
+/// checks) is not translated.
+pub fn fn_0044a040(e: &mut Engine, this: Ptr) {
+    e.call(TIDY, &args![this]);
+    e.call(BASE_DESTRUCT, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00449fd0, fn_00449fd0(Ptr) -> Ptr),
         entry!(0x0044a0a0, fn_0044a0a0(Ptr) -> u32),
+        entry!(0x0044a040, fn_0044a040(Ptr)),
     ]
 }
 
@@ -145,5 +162,25 @@ mod tests {
         results.dedup();
         assert_eq!(results.len(), 3);
         assert!(results.windows(2).all(|w| w[1] - w[0] >= 8));
+    }
+}
+
+#[cfg(test)]
+mod b014_tests {
+    use super::*;
+
+    #[test]
+    fn destructor_tidies_then_runs_the_base() {
+        let mut e = Engine::new();
+        e.register(TIDY, |_, _| Ret::default());
+        e.register(BASE_DESTRUCT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0044a040, &args![0x1000u32]);
+        let log = e.call_log.take().unwrap();
+        let order: Vec<(u32, Vec<u32>)> = log.into_iter().skip(1).collect();
+        assert_eq!(
+            order,
+            vec![(TIDY, vec![0x1000]), (BASE_DESTRUCT, vec![0x1000])]
+        );
     }
 }

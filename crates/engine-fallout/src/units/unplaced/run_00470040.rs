@@ -177,7 +177,149 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0047_03b0, fn_004703b0(Ptr, u32) -> Ptr),
         entry!(0x0047_03e0, fn_004703e0(Ptr, u32) -> Ptr),
         entry!(0x0047_0410, fn_00470410(Ptr, u32) -> Ptr),
+        entry!(0x0047_0040, fn_00470040(Ptr, u16, u16) -> Ptr),
+        entry!(0x0047_0070, fn_00470070(Ptr)),
+        entry!(0x0047_00a0, fn_004700a0(Ptr, u16, u16) -> Ptr),
+        entry!(0x0047_0110, fn_00470110(Ptr)),
+        entry!(0x0047_0140, fn_00470140(Ptr, Ptr) -> u32),
+        entry!(0x0047_04e0, fn_004704e0(Ptr, u16, u16) -> Ptr),
+        entry!(0x0047_0550, fn_00470550(Ptr, u16, u16) -> Ptr),
+        entry!(0x0047_05c0, fn_004705c0(Ptr) -> u32),
     ]
+}
+
+/// `NiTPrimitiveArray<TESObjectCELL*>`'s vtable (RTTI).
+const CELL_PRIMITIVE_ARRAY_VTABLE: u32 = 0x0101_9a1c;
+/// `NiTArray<TESObjectCELL*,NiTMallocInterface<..>>`'s vtable (RTTI).
+const CELL_ARRAY_VTABLE: u32 = 0x0101_9a14;
+/// `NiTArray<BGSAddonNode*,NiTMallocInterface<..>>`'s vtable (RTTI).
+const ADDON_NODE_ARRAY_VTABLE: u32 = 0x0101_9a24;
+/// `NiTPrimitiveArray<BGSAddonNode*>`'s vtable (RTTI).
+const ADDON_NODE_PRIMITIVE_ARRAY_VTABLE: u32 = 0x0101_9a2c;
+/// `NiTLargeArray<TESForm*,NiTMallocInterface<..>>`'s vtable (RTTI).
+const FORM_LARGE_ARRAY_VTABLE: u32 = 0x0101_9a34;
+/// `NiTMallocInterface` allocation of `count` elements (`0096afc0`, cdecl).
+const MALLOC_ALLOCATE: u32 = 0x0096_afc0;
+/// `NiTMallocInterface` release (`004ede70`, cdecl(block)).
+const MALLOC_DEALLOCATE: u32 = 0x004e_de70;
+/// `NiTLargeArray::SetAtGrow` shape (`00864240`, thiscall(index, item
+/// address)).
+const LARGE_ARRAY_SET_AT_GROW: u32 = 0x0086_4240;
+/// `006f99e0` (`bgsdistanttreeblock.cpp`, thiscall), on `this + 8`.
+const CALL_6F99E0: u32 = 0x006f_99e0;
+
+/// The `NiTArray` constructor body `004704e0` and `00470550` share (each
+/// with its own vtable): `m_usMaxSize` and `m_usGrowBy` from the arguments,
+/// size and used size cleared, and `m_pBase` allocated for `max_size`
+/// elements (null for 0).
+fn ni_t_array_construct(
+    e: &mut Engine,
+    this: Ptr,
+    vtable: u32,
+    max_size: u16,
+    grow_by: u16,
+) -> Ptr {
+    let array: Ptr<crate::types::NiTArray> = this.cast();
+    e.mem.set_u32(this.addr(), vtable);
+    e.set(array, crate::types::NiTArray::m_usMaxSize, max_size);
+    e.set(array, crate::types::NiTArray::m_usGrowBy, grow_by);
+    e.set(array, crate::types::NiTArray::m_usSize, 0);
+    e.set(array, crate::types::NiTArray::m_usESize, 0);
+    let max = e.get(array, crate::types::NiTArray::m_usMaxSize);
+    if max as i32 > 0 {
+        let base = e.call(MALLOC_ALLOCATE, &args![u32::from(max)]).u32();
+        e.set(array, crate::types::NiTArray::m_pBase, base);
+    } else {
+        e.set(array, crate::types::NiTArray::m_pBase, 0);
+    }
+    this
+}
+
+// Translated from 00470040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPrimitiveArray<TESObjectCELL*>`'s constructor: the `NiTArray` one
+/// (`004704e0`) with `max_size` and `grow_by`, then its own vtable.
+/// Returns `this`.
+pub fn fn_00470040(e: &mut Engine, this: Ptr, max_size: u16, grow_by: u16) -> Ptr {
+    fn_004704e0(e, this, max_size, grow_by);
+    e.mem.set_u32(this.addr(), CELL_PRIMITIVE_ARRAY_VTABLE);
+    this
+}
+
+// Translated from 00470070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body of `NiTArray<BGSAddonNode*,..>` (its vtable stored
+/// again): releases `m_pBase` (`004ede70`).
+pub fn fn_00470070(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ADDON_NODE_ARRAY_VTABLE);
+    let base = e.mem.u32(this.addr() + 4);
+    e.call(MALLOC_DEALLOCATE, &args![base]);
+}
+
+// Translated from 004700a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPrimitiveArray<BGSAddonNode*>`'s constructor: the `NiTArray` one
+/// (`00470550`), then its own vtable. Returns `this`.
+pub fn fn_004700a0(e: &mut Engine, this: Ptr, max_size: u16, grow_by: u16) -> Ptr {
+    fn_00470550(e, this, max_size, grow_by);
+    e.mem
+        .set_u32(this.addr(), ADDON_NODE_PRIMITIVE_ARRAY_VTABLE);
+    this
+}
+
+// Translated from 00470110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body of `NiTLargeArray<TESForm*,..>` (its vtable stored
+/// again): releases the element block at `+4` (`004ede70`).
+pub fn fn_00470110(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), FORM_LARGE_ARRAY_VTABLE);
+    let base = e.mem.u32(this.addr() + 4);
+    e.call(MALLOC_DEALLOCATE, &args![base]);
+}
+
+// Translated from 00470140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `*item` to the first empty slot of the large array (block `+4`,
+/// size `+0xC`, used count `+0x10`): -1 for a null item; the slot index
+/// after storing it and counting it; when no slot is empty, the result of
+/// `00864240(size, item)` (adding it at the end).
+pub fn fn_00470140(e: &mut Engine, this: Ptr, item: Ptr) -> u32 {
+    let value = e.mem.u32(item.addr());
+    if value == 0 {
+        return u32::MAX;
+    }
+    let base = this.addr();
+    let mut index = 0u32;
+    while index < e.mem.u32(base + 0xc) {
+        let slot = e.mem.u32(base + 4).wrapping_add(index.wrapping_mul(4));
+        if e.mem.u32(slot) == 0 {
+            let value = e.mem.u32(item.addr());
+            e.mem.set_u32(slot, value);
+            let used = e.mem.u32(base + 0x10).wrapping_add(1);
+            e.mem.set_u32(base + 0x10, used);
+            return index;
+        }
+        index = index.wrapping_add(1);
+    }
+    let size = e.mem.u32(base + 0xc);
+    e.call(LARGE_ARRAY_SET_AT_GROW, &args![this, size, item])
+        .u32()
+}
+
+// Translated from 004704e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<TESObjectCELL*,NiTMallocInterface<..>>`'s constructor
+/// (thiscall(max size, grow by)). Returns `this`.
+pub fn fn_004704e0(e: &mut Engine, this: Ptr, max_size: u16, grow_by: u16) -> Ptr {
+    ni_t_array_construct(e, this, CELL_ARRAY_VTABLE, max_size, grow_by)
+}
+
+// Translated from 00470550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<BGSAddonNode*,NiTMallocInterface<..>>`'s constructor
+/// (thiscall(max size, grow by)). Returns `this`.
+pub fn fn_00470550(e: &mut Engine, this: Ptr, max_size: u16, grow_by: u16) -> Ptr {
+    ni_t_array_construct(e, this, ADDON_NODE_ARRAY_VTABLE, max_size, grow_by)
+}
+
+// Translated from 004705c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `006f99e0` on `this + 8`, its result passed through (`EAX`).
+pub fn fn_004705c0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(CALL_6F99E0, &args![this.addr().wrapping_add(8)])
+        .u32()
 }
 
 #[cfg(test)]
@@ -446,5 +588,117 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod b016_tests {
+    use super::*;
+    use crate::types::NiTArray;
+
+    type CallLog = [(u32, Vec<u32>)];
+
+    fn calls(log: &CallLog, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(MALLOC_ALLOCATE, |_, a| (0x0010_0000 + a[0]).into_ret());
+        e.register(MALLOC_DEALLOCATE, |_, _| Ret::default());
+        e.register(LARGE_ARRAY_SET_AT_GROW, |_, a| (a[1] + 0x100).into_ret());
+        e.register(CALL_6F99E0, |_, a| (a[0] ^ 1).into_ret());
+        e
+    }
+
+    #[test]
+    fn array_constructors_store_sizes_and_vtables() {
+        for (address, vtable) in [
+            (0x0047_0040u32, CELL_PRIMITIVE_ARRAY_VTABLE),
+            (0x0047_00a0, ADDON_NODE_PRIMITIVE_ARRAY_VTABLE),
+            (0x0047_04e0, CELL_ARRAY_VTABLE),
+            (0x0047_0550, ADDON_NODE_ARRAY_VTABLE),
+        ] {
+            let mut e = engine();
+            let array: Ptr<NiTArray> = e.new_object();
+            e.set(array, NiTArray::m_usSize, 9);
+            e.set(array, NiTArray::m_usESize, 9);
+            e.call_log = Some(vec![]);
+            // Only the low half of each word is the size.
+            let back = e
+                .call(address, &args![array, 0xffff_0005u32, 0x0003_0002u32])
+                .u32();
+            let log = e.call_log.take().unwrap();
+            assert_eq!(back, array.addr());
+            assert_eq!(e.mem.u32(array.addr()), vtable);
+            assert_eq!(e.get(array, NiTArray::m_usMaxSize), 5);
+            assert_eq!(e.get(array, NiTArray::m_usGrowBy), 2);
+            assert_eq!(e.get(array, NiTArray::m_usSize), 0);
+            assert_eq!(e.get(array, NiTArray::m_usESize), 0);
+            assert_eq!(e.get(array, NiTArray::m_pBase), 0x0010_0005);
+            assert_eq!(calls(&log, MALLOC_ALLOCATE), vec![vec![5]]);
+        }
+        // A maximum of 0 allocates nothing.
+        let mut e = engine();
+        let array: Ptr<NiTArray> = e.new_object();
+        e.set(array, NiTArray::m_pBase, 7);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_04e0, &args![array, 0u32, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls(&log, MALLOC_ALLOCATE).is_empty());
+        assert_eq!(e.get(array, NiTArray::m_pBase), 0);
+    }
+
+    #[test]
+    fn array_destructors_release_the_block() {
+        let mut e = engine();
+        let array = e.mem.alloc(0x18);
+        e.mem.set_u32(array + 4, 0x4444);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_0070, &args![array]);
+        assert_eq!(e.mem.u32(array), ADDON_NODE_ARRAY_VTABLE);
+        e.call(0x0047_0110, &args![array]);
+        assert_eq!(e.mem.u32(array), FORM_LARGE_ARRAY_VTABLE);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, MALLOC_DEALLOCATE),
+            vec![vec![0x4444], vec![0x4444]]
+        );
+    }
+
+    #[test]
+    fn add_to_first_empty_slot() {
+        let mut e = engine();
+        let array = e.mem.alloc(0x18);
+        let block = e.mem.alloc(12);
+        e.mem.set_u32(block, 0x11);
+        e.mem.set_u32(array + 4, block);
+        e.mem.set_u32(array + 0xc, 3);
+        e.mem.set_u32(array + 0x10, 1);
+        let item = e.mem.alloc(4);
+        // A null item: -1.
+        assert_eq!(e.call(0x0047_0140, &args![array, item]).u32(), u32::MAX);
+        e.mem.set_u32(item, 0x22);
+        assert_eq!(e.call(0x0047_0140, &args![array, item]).u32(), 1);
+        assert_eq!(e.mem.u32(block + 4), 0x22);
+        assert_eq!(e.mem.u32(array + 0x10), 2);
+        e.mem.set_u32(block + 8, 0x33);
+        // No empty slot: added at the end.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_0140, &args![array, item]).u32(), 0x103);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, LARGE_ARRAY_SET_AT_GROW),
+            vec![vec![array, 3, item]]
+        );
+    }
+
+    #[test]
+    fn forwarder_passes_this_plus_8() {
+        let mut e = engine();
+        assert_eq!(e.call(0x0047_05c0, &args![0x1000u32]).u32(), 0x1009);
     }
 }

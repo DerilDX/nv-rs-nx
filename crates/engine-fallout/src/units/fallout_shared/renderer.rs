@@ -1752,6 +1752,440 @@ pub fn fn_004dc650(e: &mut Engine) {
     make_scene_graph(e, MENU_3D_SCENE_GRAPH, MENU_3D_NAME, 0, 0);
 }
 
+// ---- Display-mode and adapter helpers (batch b005) ------------------------
+
+/// The adapter list `004dce30` creates on first use (`00e69a60`) and keeps.
+const ADAPTER_LIST_POINTER: u32 = 0x011c_70dc;
+const ADAPTER_LIST_CREATE: u32 = 0x00e6_9a60;
+/// The adapter list's mode count (`00658930`) and element access
+/// (`00877a30`, the element's address) on its array at `+4`.
+const ARRAY_COUNT: u32 = 0x0065_8930;
+const ARRAY_ELEMENT: u32 = 0x0087_7a30;
+/// Eyefinity flags (`004de070` returns the first, `004de080` both).
+const EYEFINITY_FLAG: u32 = 0x011c_70ed;
+const EYEFINITY_SECOND_FLAG: u32 = 0x011c_70ee;
+/// `"bUse Shaders:Display"`; `004b9930` on `bFull Screen:Display` gives "not
+/// full screen".
+const B_USE_SHADERS: u32 = 0x011c_726c;
+const WINDOWED_FROM_SETTING: u32 = 0x004b_9930;
+/// `00446e10`: the `bFull Screen:Display` byte (through `00408d60`).
+const FULL_SCREEN_MODE: u32 = 0x0044_6e10;
+/// `00408840`: the absolute value of a `float` (cdecl, result in ST0).
+const FLOAT_ABS: u32 = 0x0040_8840;
+/// `_pow` (`00ec9ac0`, cdecl, two `double`s, result in ST0).
+const POW: u32 = 0x00ec_9ac0;
+/// `0.01` (the `float` widened to `double`), `1.25` and `1.3333334` (the
+/// `float` widened), all `double`.
+const ASPECT_TOLERANCE: u32 = 0x0101_6408;
+const ASPECT_FIVE_BY_FOUR: u32 = 0x0102_1798;
+const ASPECT_FOUR_BY_THREE: u32 = 0x0102_1790;
+/// Error texts of `004dc710`.
+const MESSAGE_NO_DEVICE: u32 = 0x0102_1610;
+const MESSAGE_BAD_ADAPTER: u32 = 0x0102_1634;
+const MESSAGE_NO_WINDOWED: u32 = 0x0102_17a0;
+const MESSAGE_RESOLUTION: u32 = 0x0102_16f8;
+const MESSAGE_SHADER_VERSIONS: u32 = 0x0102_1698;
+const MESSAGE_NO_HARDWARE_TL: u32 = 0x0102_1660;
+/// Device-capability words of the hardware device information (`+0x1C`
+/// flags, `+0xC4` and `+0xCC` the vertex and pixel shader versions).
+const CAPS_FLAGS_OFFSET: u32 = 0x1c;
+const CAPS_VERTEX_SHADER_OFFSET: u32 = 0xc4;
+const CAPS_PIXEL_SHADER_OFFSET: u32 = 0xcc;
+/// The renderer's Direct3D device-type word (`+0x5C8`).
+const RENDERER_DEVICE_TYPE_OFFSET: u32 = 0x5c8;
+/// The light colour `004dce50` keeps (three `float`s).
+const LIGHT_COLOR: u32 = 0x011c_74b8;
+
+// Translated from 004dc710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Prepares the display mode for `Renderer::Init` (cdecl; its argument is
+/// not read). Needs the adapter list and the adapter of `iAdapter`
+/// (otherwise an error text through `004dc330` and false); a windowed game
+/// needs a windowed-capable adapter (`004dcd30(1)`). Full screen, it walks
+/// the adapter's display modes from the last: a mode of at least 32 bits in
+/// the display format is taken at once when windowed, or when it matches
+/// the requested size with an aspect ratio within 0.01 of the screen's
+/// (or the screen is 5:4 and the mode 4:3); else the nearest larger mode is
+/// remembered, whose size then becomes the render size (`OFFSCREEN_ENABLED`
+/// set), or an error text when there is none. Then the hardware device
+/// information must offer hardware T&L and the shader versions the shader
+/// manager needs (`004dcd90`, `004dcd80`), whose versions it stores; with
+/// shaders off (`bUse Shaders:Display`) or no device information the
+/// versions are 0 and the shader manager is configured directly
+/// (`00b4f710`). Returns whether the mode can be used.
+pub fn fn_004dc710(e: &mut Engine, _unused_1: u32) -> u8 {
+    let mut found = 0u8;
+    let screen_width = e.call(IMPORT_GET_SYSTEM_METRICS, &args![SM_CXSCREEN]).u32();
+    let screen_height = e.call(IMPORT_GET_SYSTEM_METRICS, &args![SM_CYSCREEN]).u32();
+    let screen_aspect = x87_store32(x87_div(f64::from(screen_width), f64::from(screen_height)));
+    if fn_004dce30(e) == 0 {
+        fn_004dc330(e, MESSAGE_NO_DEVICE);
+        return found;
+    }
+    let adapter_index = fn_004dc210(e) as u32;
+    let adapter = fn_004dcdb0(e, adapter_index);
+    if adapter == 0 {
+        fn_004dc330(e, MESSAGE_BAD_ADAPTER);
+        return found;
+    }
+    let adapter = Ptr::new(adapter);
+    found = e.call(FULL_SCREEN_MODE, &[]).u8();
+    if found == 0 {
+        found = fn_004dcd30(e, adapter, 1);
+        if found == 0 {
+            fn_004dc330(e, MESSAGE_NO_WINDOWED);
+        }
+    }
+    if found != 0 {
+        found = 0;
+        let mut index = u32::from(fn_004dcce0(e, adapter));
+        let mut best = index.wrapping_add(1);
+        // A local the code compares mode heights with; never set but to 0.
+        let floor = 0u32;
+        let tolerance = e.global::<f64>(ASPECT_TOLERANCE);
+        let near = |e: &mut Engine, bits: u32| -> bool {
+            let distance = e.call(FLOAT_ABS, &args![x87_quiet_bits(bits)]).st0;
+            distance < tolerance
+        };
+        loop {
+            let previous = index;
+            index = index.wrapping_sub(1);
+            if previous == 0 || found != 0 {
+                break;
+            }
+            let mode = fn_004dcd00(e, adapter, index);
+            if e.mem.u32(mode.wrapping_add(8)) < 0x20 {
+                continue;
+            }
+            let format = fn_004dc270(e);
+            let format = fn_004dcbe0(e, format);
+            if e.mem.u32(mode.wrapping_add(0xc)) != format {
+                continue;
+            }
+            if e.call(FULL_SCREEN_MODE, &[]).u8() == 0 {
+                found = 1;
+                break;
+            }
+            let mode_width = e.mem.u32(mode);
+            let mode_height = e.mem.u32(mode.wrapping_add(4));
+            let aspect = x87_store32(x87_div(f64::from(mode_width), f64::from(mode_height)));
+            let five_by_four = e.global::<f64>(ASPECT_FIVE_BY_FOUR);
+            let four_by_three = e.global::<f64>(ASPECT_FOUR_BY_THREE);
+            let difference = x87_store32(x87_sub(x87_load32(aspect), x87_m32(screen_aspect)));
+            let matched = if near(e, difference) {
+                true
+            } else {
+                let difference = x87_store32(x87_sub(x87_load32(screen_aspect), five_by_four));
+                if near(e, difference) {
+                    let difference = x87_store32(x87_sub(x87_load32(aspect), four_by_three));
+                    near(e, difference)
+                } else {
+                    false
+                }
+            };
+            if matched {
+                if fn_004dc1f0(e) as u32 == e.mem.u32(mode)
+                    && fn_004dc200(e) as u32 == e.mem.u32(mode.wrapping_add(4))
+                {
+                    found = 1;
+                    break;
+                }
+                if e.call(FULL_SCREEN_MODE, &[]).u8() != 0
+                    && fn_004dc1f0(e) as u32 == e.mem.u32(mode)
+                {
+                    let difference = x87_store32(x87_sub(x87_load32(aspect), five_by_four));
+                    let other_ratio = if near(e, difference) {
+                        let difference = x87_store32(x87_sub(x87_load32(aspect), four_by_three));
+                        !near(e, difference)
+                    } else {
+                        true
+                    };
+                    if other_ratio
+                        && e.mem.u32(mode.wrapping_add(4)) > fn_004dc200(e) as u32
+                        && (best > u32::from(fn_004dcce0(e, adapter))
+                            || e.mem.u32(mode.wrapping_add(4)) > floor)
+                    {
+                        best = index;
+                    }
+                }
+            } else if fn_004dc1f0(e) as u32 == e.mem.u32(mode)
+                && fn_004dc200(e) <= e.mem.u32(mode.wrapping_add(4)) as i32
+                && best > u32::from(fn_004dcce0(e, adapter))
+            {
+                best = index;
+            }
+        }
+        if found == 0 && best > u32::from(fn_004dcce0(e, adapter)) {
+            fn_004dc330(e, MESSAGE_RESOLUTION);
+        } else if found == 0 && best <= u32::from(fn_004dcce0(e, adapter)) {
+            let mode = fn_004dcd00(e, adapter, best);
+            let width = e.mem.u32(mode);
+            e.set_global(RENDER_WIDTH, width);
+            let mode = fn_004dcd00(e, adapter, best);
+            let height = e.mem.u32(mode.wrapping_add(4));
+            e.set_global(RENDER_HEIGHT, height);
+            found = 1;
+            e.set_global(OFFSCREEN_ENABLED, 1u8);
+        }
+    }
+    if found != 0 {
+        found = 0;
+        let caps = fn_004dc120(e, adapter, 1).addr();
+        if caps != 0 && fn_004dcda0(e) as u8 != 0 {
+            let flags = e.mem.u32(caps.wrapping_add(CAPS_FLAGS_OFFSET));
+            found = u8::from(flags & 0x1_0000 != 0);
+            if found != 0 {
+                let vertex = e.mem.u32(caps.wrapping_add(CAPS_VERTEX_SHADER_OFFSET)) & 0xffff;
+                let ok = if vertex < fn_004dcd90(e) {
+                    false
+                } else {
+                    let pixel = e.mem.u32(caps.wrapping_add(CAPS_PIXEL_SHADER_OFFSET)) & 0xffff;
+                    pixel >= fn_004dcd80(e)
+                };
+                found = u8::from(ok);
+                if ok {
+                    let vertex = e.mem.u32(caps.wrapping_add(CAPS_VERTEX_SHADER_OFFSET)) & 0xffff;
+                    e.set_global(SHADER_MANAGER_WORD_B, vertex);
+                    let pixel = e.mem.u32(caps.wrapping_add(CAPS_PIXEL_SHADER_OFFSET)) & 0xffff;
+                    e.set_global(SHADER_MANAGER_WORD_A, pixel);
+                } else {
+                    fn_004dc330(e, MESSAGE_SHADER_VERSIONS);
+                }
+            } else {
+                fn_004dc330(e, MESSAGE_NO_HARDWARE_TL);
+            }
+            let flags = e.mem.u32(caps.wrapping_add(CAPS_FLAGS_OFFSET));
+            let patches = u32::from(flags & 0x100_0000 != 0);
+            let many = u32::from(fn_004dc2b0(e) > 1);
+            e.set_global(RENDER_TARGET_ADJUST_FLAG, (patches & many) as u8);
+        } else {
+            e.set_global(SHADER_MANAGER_WORD_B, 0u32);
+            e.set_global(SHADER_MANAGER_WORD_A, 0u32);
+            let force = e
+                .call(SETTING_BOOL_POINTER, &args![B_FORCE_1X_SHADERS])
+                .u32();
+            let force = u32::from(e.mem.u8(force));
+            let word_b: u32 = e.global(SHADER_MANAGER_WORD_B);
+            let word_a: u32 = e.global(SHADER_MANAGER_WORD_A);
+            e.call(
+                SHADER_MANAGER_CONFIGURE,
+                &args![word_a, word_b, force, 0u32, 0u32, 0u32],
+            );
+            if fn_004dcda0(e) as u8 == 0 {
+                found = 1;
+            }
+        }
+    }
+    found
+}
+
+// Translated from 004dcbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The Direct3D format of a display-format index (cdecl; the exe's jump
+/// table at 004dcc8c): 1..=11 give `0x14..=0x1E`, 12 `0x6F`, 13 `0x70`, 14
+/// `0x24`, 15..=18 `0x71..=0x74`; 0 and anything above 18 give 0.
+pub fn fn_004dcbe0(_e: &mut Engine, index: u32) -> u32 {
+    match index {
+        0 => 0,
+        1..=11 => 0x13 + index,
+        12 => 0x6f,
+        13 => 0x70,
+        14 => 0x24,
+        15..=18 => 0x62 + index,
+        _ => 0,
+    }
+}
+
+// Translated from 004dcd00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of display mode `index` of an adapter description (its
+/// array at `+0x450`, `00877a30`, read through the element).
+pub fn fn_004dcd00(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let element = e
+        .call(
+            ARRAY_ELEMENT,
+            &args![this.addr().wrapping_add(0x450), index],
+        )
+        .u32();
+    e.mem.u32(element)
+}
+
+// Translated from 004dcd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the device information `selector` of an adapter description
+/// (`004dc160`) exists and allows windowed rendering (`004dcd60`).
+pub fn fn_004dcd30(e: &mut Engine, this: Ptr, selector: u32) -> u8 {
+    let info = fn_004dc160(e, this, selector);
+    if info.is_null() {
+        return 0;
+    }
+    fn_004dcd60(e, info)
+}
+
+// Translated from 004dcd60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x140` of a device information object (read by
+/// `004dcd30` as "windowed rendering possible").
+pub fn fn_004dcd60(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr().wrapping_add(0x140))
+}
+
+// Translated from 004dcd80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `01189468` (the pixel shader version the shader manager
+/// needs / was given).
+pub fn fn_004dcd80(e: &mut Engine) -> u32 {
+    e.global(SHADER_MANAGER_WORD_A)
+}
+
+// Translated from 004dcd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `0118946c` (the vertex shader version the shader manager
+/// needs / was given).
+pub fn fn_004dcd90(e: &mut Engine) -> u32 {
+    e.global(SHADER_MANAGER_WORD_B)
+}
+
+// Translated from 004dcda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `bUse Shaders:Display` setting (`00454af0`; its result register
+/// passed on).
+pub fn fn_004dcda0(e: &mut Engine) -> u32 {
+    e.call(SETTING_BOOL_VALUE, &args![B_USE_SHADERS]).u32()
+}
+
+// Translated from 004dcdb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The adapter description with `index` (cdecl), or null when there is no
+/// adapter list or `index` is not below its count (the list's first word).
+pub fn fn_004dcdb0(e: &mut Engine, index: u32) -> u32 {
+    if fn_004dce30(e) == 0 {
+        return 0;
+    }
+    let list: u32 = e.global(ADAPTER_LIST_POINTER);
+    let count = e.call(SMART_POINTER_GET, &args![list]).u32();
+    if index >= count {
+        return 0;
+    }
+    let list: u32 = e.global(ADAPTER_LIST_POINTER);
+    fn_004dcdf0(e, Ptr::new(list), index)
+}
+
+// Translated from 004dcdf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Entry `index` of the adapter list's array at `+4` (`00658930` count,
+/// `00877a30` element), or null past the end.
+pub fn fn_004dcdf0(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let array = this.addr().wrapping_add(4);
+    if index >= e.call(ARRAY_COUNT, &args![array]).u32() {
+        return 0;
+    }
+    let element = e.call(ARRAY_ELEMENT, &args![array, index]).u32();
+    e.mem.u32(element)
+}
+
+// Translated from 004dce30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The adapter list, created on first use (`00e69a60`) and kept at
+/// `011c70dc`.
+pub fn fn_004dce30(e: &mut Engine) -> u32 {
+    if e.global::<u32>(ADAPTER_LIST_POINTER) == 0 {
+        let list = e.call(ADAPTER_LIST_CREATE, &[]).u32();
+        e.set_global(ADAPTER_LIST_POINTER, list);
+    }
+    e.global(ADAPTER_LIST_POINTER)
+}
+
+// Translated from 004dce50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a light colour (three words from `color`, cdecl) at `011c74b8`
+/// and, when there is a renderer object (`004bc3f0`), passes it with 0 as
+/// the fourth component to the object's vtable +0xAC (a four-`float`
+/// local built by `00414430`); returns whether it did.
+pub fn fn_004dce50(e: &mut Engine, color: Ptr) -> bool {
+    for i in 0..3 {
+        let word = e.mem.u32(color.addr().wrapping_add(4 * i));
+        e.set_global(LIGHT_COLOR + 4 * i, word);
+    }
+    if e.call(RENDERER_GETTER, &[]).u32() == 0 {
+        return false;
+    }
+    e.with_stack(0x10, |e, local| {
+        e.call(
+            FLOAT4_CONSTRUCT,
+            &args![
+                local,
+                FLOAT_ZERO_BITS,
+                FLOAT_ZERO_BITS,
+                FLOAT_ZERO_BITS,
+                FLOAT_ZERO_BITS
+            ],
+        );
+        for i in 0..3 {
+            let word = x87_quiet_bits(e.global(LIGHT_COLOR + 4 * i));
+            e.mem.set_u32(local.addr() + 4 * i, word);
+        }
+        e.mem.set_u32(local.addr() + 0xc, FLOAT_ZERO_BITS);
+        let renderer = e.call(RENDERER_GETTER, &[]).u32();
+        e.vcall(renderer, 0xac, &args![local]);
+    });
+    true
+}
+
+/// `FLDZ` pushed as a `float`.
+const FLOAT_ZERO_BITS: u32 = 0;
+
+// Translated from 004dd150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `powf` (Ghidra's name; no map name; cdecl): both `float`s widened to
+/// `double` for `_pow` (`00ec9ac0`), the result stored to a `float` and
+/// returned in ST0.
+pub fn fn_004dd150(e: &mut Engine, base: f32, exponent: f32) -> f32 {
+    let base = x87_load32(base.to_bits());
+    let exponent = x87_load32(exponent.to_bits());
+    let result = e.call(POW, &args![base, exponent]).st0;
+    f32::from_bits(x87_quiet_bits(x87_store32(result)))
+}
+
+// Translated from 004dd180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `multisample` is supported (cdecl `(multisample, format)`): false
+/// without a renderer; otherwise the Direct3D object's
+/// `CheckDeviceMultiSampleType` (vtable +0x2C, C style) for `iAdapter`, the
+/// renderer's device type, `format` (or, when 0, the display format of the
+/// index at `01189470`), windowed (`bFull Screen:Display` off) and no quality
+/// pointer must succeed.
+pub fn fn_004dd180(e: &mut Engine, multisample: u32, format: u32) -> bool {
+    if e.call(SMART_POINTER_GET, &args![RENDERER_POINTER]).u32() == 0 {
+        return false;
+    }
+    let format = if format != 0 {
+        format
+    } else {
+        let index = fn_004dc270(e);
+        fn_004dcbe0(e, index)
+    };
+    e.call(SMART_POINTER_GET, &args![RENDERER_POINTER]);
+    let direct3d = fn_004dc040(e);
+    let windowed = u32::from(e.call(WINDOWED_FROM_SETTING, &args![B_FULL_SCREEN]).u8());
+    let renderer = e.call(SMART_POINTER_GET, &args![RENDERER_POINTER]).u32();
+    let device_type = fn_004dd220(e, Ptr::new(renderer));
+    let adapter = fn_004dc210(e) as u32;
+    let result = e
+        .vcall(
+            direct3d,
+            0x2c,
+            &args![adapter, device_type, format, windowed, multisample, 0u32],
+        )
+        .i32();
+    result >= 0
+}
+
+// Translated from 004dd220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The renderer's Direct3D device-type word (`+0x5C8`).
+pub fn fn_004dd220(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem
+        .u32(this.addr().wrapping_add(RENDERER_DEVICE_TYPE_OFFSET))
+}
+
+// Translated from 004de070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The Eyefinity flag byte at `011c70ed`.
+pub fn fn_004de070(e: &mut Engine) -> u8 {
+    e.global(EYEFINITY_FLAG)
+}
+
+// Translated from 004de080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether both Eyefinity flag bytes (`011c70ed`, `011c70ee`) are set.
+pub fn fn_004de080(e: &mut Engine) -> u8 {
+    u8::from(e.global::<u8>(EYEFINITY_FLAG) != 0 && e.global::<u8>(EYEFINITY_SECOND_FLAG) != 0)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1802,6 +2236,23 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004dc590, fn_004dc590()),
         entry!(0x004dd130, fn_004dd130(f32, f32) -> f32),
         entry!(0x004d_cce0, fn_004dcce0(Ptr) -> u16),
+        entry!(0x004d_c710, fn_004dc710(u32) -> u8),
+        entry!(0x004d_cbe0, fn_004dcbe0(u32) -> u32),
+        entry!(0x004d_cd00, fn_004dcd00(Ptr, u32) -> u32),
+        entry!(0x004d_cd30, fn_004dcd30(Ptr, u32) -> u8),
+        entry!(0x004d_cd60, fn_004dcd60(Ptr) -> u8),
+        entry!(0x004d_cd80, fn_004dcd80() -> u32),
+        entry!(0x004d_cd90, fn_004dcd90() -> u32),
+        entry!(0x004d_cda0, fn_004dcda0() -> u32),
+        entry!(0x004d_cdb0, fn_004dcdb0(u32) -> u32),
+        entry!(0x004d_cdf0, fn_004dcdf0(Ptr, u32) -> u32),
+        entry!(0x004d_ce30, fn_004dce30() -> u32),
+        entry!(0x004d_ce50, fn_004dce50(Ptr) -> bool),
+        entry!(0x004d_d150, fn_004dd150(f32, f32) -> f32),
+        entry!(0x004d_d180, fn_004dd180(u32, u32) -> bool),
+        entry!(0x004d_d220, fn_004dd220(Ptr) -> u32),
+        entry!(0x004d_e070, fn_004de070() -> u8),
+        entry!(0x004d_e080, fn_004de080() -> u8),
     ]
 }
 
@@ -3505,6 +3956,374 @@ mod b000_tests {
         assert_eq!(
             calls(&e, SMART_POINTER_SET),
             vec![vec![MENU_SCENE_GRAPH, 0], vec![MENU_3D_SCENE_GRAPH, 0]]
+        );
+    }
+}
+
+#[cfg(test)]
+mod display_mode_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, target: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == target)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn mapped() -> Engine {
+        let mut e = Engine::new();
+        for page in [
+            0x0101_2000,
+            0x0101_6000,
+            0x0102_1000,
+            0x0118_9000,
+            0x011c_6000,
+            0x011c_7000,
+            0x0126_f000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e
+    }
+
+    #[test]
+    fn display_format_table() {
+        let mut e = Engine::new();
+        let formats: Vec<u32> = (0..20)
+            .map(|i| e.call(0x004d_cbe0, &args![i as u32]).u32())
+            .collect();
+        assert_eq!(
+            formats,
+            vec![
+                0, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x6f, 0x70,
+                0x24, 0x71, 0x72, 0x73, 0x74, 0
+            ]
+        );
+    }
+
+    #[test]
+    fn small_getters_read_their_globals_and_fields() {
+        let mut e = mapped();
+        e.set_global(SHADER_MANAGER_WORD_A, 0x300u32);
+        e.set_global(SHADER_MANAGER_WORD_B, 0x200u32);
+        e.set_global(EYEFINITY_FLAG, 1u8);
+        assert_eq!(e.call(0x004d_cd80, &[]).u32(), 0x300);
+        assert_eq!(e.call(0x004d_cd90, &[]).u32(), 0x200);
+        assert_eq!(e.call(0x004d_e070, &[]).u8(), 1);
+        assert_eq!(e.call(0x004d_e080, &[]).u8(), 0);
+        e.set_global(EYEFINITY_SECOND_FLAG, 2u8);
+        assert_eq!(e.call(0x004d_e080, &[]).u8(), 1);
+        let object = e.mem.alloc(0x600);
+        e.mem.set_u32(object + 0x5c8, 7);
+        e.mem.set_u8(object + 0x140, 9);
+        assert_eq!(e.call(0x004d_d220, &args![object]).u32(), 7);
+        assert_eq!(e.call(0x004d_cd60, &args![object]).u8(), 9);
+        e.register(SETTING_BOOL_VALUE, |_, a| (a[0] & 0xff).into_ret());
+        assert_eq!(e.call(0x004d_cda0, &[]).u32(), B_USE_SHADERS & 0xff);
+    }
+
+    #[test]
+    fn adapter_list_is_made_once_and_indexed() {
+        let mut e = mapped();
+        // A list: count, then an array whose element `i` holds `0x100 + i`.
+        let list = e.mem.alloc(0x10);
+        e.mem.set_u32(list, 2);
+        e.register_double(ADAPTER_LIST_CREATE, move |_, _| list.into_ret());
+        e.register(SMART_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(ARRAY_COUNT, |_, _| 2u32.into_ret());
+        e.register(ARRAY_ELEMENT, |e, a| {
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, 0x100 + a[1]);
+            slot.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_ce30, &[]).u32(), list);
+        assert_eq!(e.call(0x004d_ce30, &[]).u32(), list);
+        assert_eq!(calls_to(&e, ADAPTER_LIST_CREATE).len(), 1);
+        assert_eq!(e.call(0x004d_cdb0, &args![1u32]).u32(), 0x101);
+        assert_eq!(e.call(0x004d_cdb0, &args![2u32]).u32(), 0);
+        assert_eq!(e.call(0x004d_cdf0, &args![list, 5u32]).u32(), 0);
+        // No list at all.
+        let mut e = mapped();
+        e.register(ADAPTER_LIST_CREATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x004d_cdb0, &args![0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn display_modes_and_windowed_support() {
+        let mut e = mapped();
+        let adapter = e.mem.alloc(0x470);
+        let info = e.mem.alloc(0x150);
+        e.mem.set_u32(info + 4, 1);
+        e.mem.set_u8(info + 0x140, 1);
+        e.mem.set_u32(adapter + 0x460, info);
+        e.register(ARRAY_ELEMENT, |e, a| {
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, a[0] + a[1]);
+            slot.into_ret()
+        });
+        assert_eq!(
+            e.call(0x004d_cd00, &args![adapter, 3u32]).u32(),
+            adapter + 0x453
+        );
+        assert_eq!(e.call(0x004d_cd30, &args![adapter, 1u32]).u8(), 1);
+        // The reference device information has no handle.
+        let reference = e.mem.alloc(0x150);
+        e.mem.set_u32(adapter + 0x464, reference);
+        assert_eq!(e.call(0x004d_cd30, &args![adapter, 0u32]).u8(), 0);
+    }
+
+    #[test]
+    fn light_color_goes_to_the_renderer_object() {
+        let mut e = mapped();
+        let color = e.mem.alloc(12);
+        for (i, value) in [0.25f32, 0.5, 0.75].iter().enumerate() {
+            e.mem.set_f32(color + 4 * i as u32, *value);
+        }
+        e.register(RENDERER_GETTER, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x004d_ce50, &args![color]).bool());
+        assert_eq!(e.mem.f32(LIGHT_COLOR + 8), 0.75);
+        let object = e.mem.alloc(4);
+        e.put_vtable(0x0090_0000, &[0; 0x2c]);
+        e.mem.set_u32(0x0090_00ac, 0x0091_0000);
+        e.mem.set_u32(object, 0x0090_0000);
+        e.register_double(RENDERER_GETTER, move |_, _| object.into_ret());
+        e.register(FLOAT4_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(0x0091_0000, |e, a| {
+            let values = e.mem.bytes(a[1], 16);
+            e.mem.write(0x011c_7f00, &values);
+            Ret::default()
+        });
+        assert!(e.call(0x004d_ce50, &args![color]).bool());
+        assert_eq!(e.mem.f32(0x011c_7f00), 0.25);
+        assert_eq!(e.mem.f32(0x011c_7f08), 0.75);
+        assert_eq!(e.mem.u32(0x011c_7f0c), 0);
+    }
+
+    #[test]
+    fn powf_goes_through_doubles() {
+        let mut e = Engine::new();
+        e.register(POW, |_, a| {
+            let base = f64::take(a, &mut 0);
+            let exponent = f64::take(&a[2..], &mut 0);
+            base.powf(exponent).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_d150, &args![2.0f32, 10.0f32]).f32(), 1024.0);
+        assert_eq!(calls_to(&e, POW), vec![args![2.0f64, 10.0f64]]);
+    }
+
+    #[test]
+    fn multisample_check_asks_direct3d() {
+        let mut e = mapped();
+        let renderer = e.mem.alloc(0x600);
+        e.mem.set_u32(renderer + 0x5c8, 1);
+        e.set_global(RENDERER_POINTER, renderer);
+        e.register(SMART_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(WINDOWED_FROM_SETTING, |_, _| 1u32.into_ret());
+        e.register(SETTING_INT_VALUE, |_, _| 2u32.into_ret());
+        let direct3d = e.mem.alloc(4);
+        e.put_vtable(0x0090_0000, &[0; 0x0c]);
+        e.mem.set_u32(0x0090_002c, 0x0091_0000);
+        e.mem.set_u32(direct3d, 0x0090_0000);
+        e.set_global(DIRECT3D_OBJECT, direct3d);
+        e.register(0x0091_0000, |_, a| {
+            u32::from(a[5] == 8).wrapping_sub(1).into_ret()
+        });
+        e.set_global(RENDERER_ARG_01189470, 3u32);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x004d_d180, &args![4u32, 0u32]).bool());
+        assert_eq!(
+            calls_to(&e, 0x0091_0000),
+            vec![vec![direct3d, 2, 1, 0x16, 1, 4, 0]]
+        );
+        assert!(e.call(0x004d_d180, &args![8u32, 0x71u32]).bool());
+        e.set_global(RENDERER_POINTER, 0u32);
+        assert!(!e.call(0x004d_d180, &args![8u32, 0x71u32]).bool());
+    }
+
+    /// The display-format index whose format (`0x16`) the modes use.
+    const FORMAT_INDEX: u32 = 3;
+
+    /// A rig for `004dc710`: screen 1600x1200, one adapter whose display
+    /// modes are `modes` (width, height, bits, format), the requested size
+    /// `request`, a hardware device information with hardware T&L and
+    /// shader versions 0x200 / 0x300 (both needed).
+    fn mode_rig(
+        modes: &[(u32, u32, u32, u32)],
+        full_screen: u8,
+        request: (u32, u32),
+    ) -> (Engine, u32) {
+        let mut e = mapped();
+        e.mem.set_f64(ASPECT_TOLERANCE, f64::from(0.01f32));
+        e.mem.set_f64(ASPECT_FIVE_BY_FOUR, 1.25);
+        e.mem
+            .set_f64(ASPECT_FOUR_BY_THREE, f64::from(1.333_333_4f32));
+        e.register(IMPORT_GET_SYSTEM_METRICS, |_, a| {
+            if a[0] == SM_CXSCREEN { 1600u32 } else { 1200 }.into_ret()
+        });
+        let list = e.mem.alloc(8);
+        e.mem.set_u32(list, 1);
+        e.set_global(ADAPTER_LIST_POINTER, list);
+        let adapter = e.mem.alloc(0x470);
+        let info = e.mem.alloc(0x150);
+        e.mem.set_u32(info + 4, 1);
+        e.mem.set_u8(info + 0x140, 1);
+        e.mem.set_u32(adapter + 0x460, info);
+        let caps = e.mem.alloc(0x100);
+        e.mem.set_u32(caps + 0x1c, 0x0001_0000);
+        e.mem.set_u32(caps + 0xc4, 0xfffe_0200);
+        e.mem.set_u32(caps + 0xcc, 0x0000_0300);
+        let list_slot = e.mem.alloc(4);
+        e.mem.set_u32(list_slot, adapter);
+        let mode_slots = e.mem.alloc(4 * modes.len() as u32);
+        for (i, (width, height, bits, format)) in modes.iter().enumerate() {
+            let mode = e.mem.alloc(0x10);
+            e.mem.set_u32(mode, *width);
+            e.mem.set_u32(mode + 4, *height);
+            e.mem.set_u32(mode + 8, *bits);
+            e.mem.set_u32(mode + 0xc, *format);
+            e.mem.set_u32(mode_slots + 4 * i as u32, mode);
+        }
+        let count = modes.len() as u32;
+        e.register_double(ARRAY_COUNT, move |_, a| {
+            if a[0] == adapter + 0x450 { count } else { 1 }.into_ret()
+        });
+        e.register_double(ARRAY_ELEMENT, move |_, a| {
+            if a[0] == adapter + 0x450 {
+                mode_slots + 4 * a[1]
+            } else {
+                list_slot
+            }
+            .into_ret()
+        });
+        e.register(SMART_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(SETTING_INT_VALUE, |_, a| {
+            u32::from(a[0] == I_N_PATCHES).wrapping_mul(2).into_ret()
+        });
+        e.register_double(FULL_SCREEN_MODE, move |_, _| full_screen.into_ret());
+        e.register(FLOAT_ABS, |_, a| {
+            f64::from(f32::from_bits(a[0]).abs()).into_ret()
+        });
+        e.register_double(ADAPTER_SECOND_NAME, move |_, _| caps.into_ret());
+        e.register(SETTING_BOOL_VALUE, |_, _| 1u32.into_ret());
+        e.register(STRING_COPY, |_, _| Ret::default());
+        e.set_global(RENDERER_ARG_01189470, FORMAT_INDEX);
+        e.set_global(SHADER_MANAGER_WORD_B, 0x200u32);
+        e.set_global(SHADER_MANAGER_WORD_A, 0x300u32);
+        e.set_global(RENDER_WIDTH, request.0);
+        e.set_global(RENDER_HEIGHT, request.1);
+        (e, caps)
+    }
+
+    const MODES: [(u32, u32, u32, u32); 3] = [
+        (800, 600, 32, 0x16),
+        (1024, 768, 32, 0x16),
+        (1280, 1024, 32, 0x16),
+    ];
+
+    #[test]
+    fn display_mode_takes_the_requested_size() {
+        let (mut e, _) = mode_rig(&MODES, 1, (1024, 768));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_c710, &args![1u32]).u8(), 1);
+        assert!(calls_to(&e, STRING_COPY).is_empty());
+        assert_eq!(e.global::<u32>(SHADER_MANAGER_WORD_B), 0x200);
+        assert_eq!(e.global::<u32>(SHADER_MANAGER_WORD_A), 0x300);
+        assert_eq!(e.global::<u8>(OFFSCREEN_ENABLED), 0);
+        assert_eq!(e.global::<u8>(RENDER_TARGET_ADJUST_FLAG), 0);
+    }
+
+    #[test]
+    fn display_mode_falls_back_to_a_taller_mode() {
+        let (mut e, _) = mode_rig(&MODES, 1, (1024, 700));
+        assert_eq!(e.call(0x004d_c710, &args![1u32]).u8(), 1);
+        assert_eq!(e.global::<u32>(RENDER_WIDTH), 1024);
+        assert_eq!(e.global::<u32>(RENDER_HEIGHT), 768);
+        assert_eq!(e.global::<u8>(OFFSCREEN_ENABLED), 1);
+    }
+
+    #[test]
+    fn display_mode_without_a_usable_size_fails() {
+        let (mut e, _) = mode_rig(&MODES, 1, (1000, 700));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_c710, &args![1u32]).u8(), 0);
+        assert_eq!(
+            calls_to(&e, STRING_COPY),
+            vec![vec![ERROR_MESSAGE, MESSAGE_RESOLUTION]]
+        );
+    }
+
+    #[test]
+    fn windowed_takes_the_last_full_colour_mode() {
+        let modes = [
+            (800, 600, 32, 0x16),
+            (1024, 768, 16, 0x16),
+            (640, 480, 32, 0x15),
+        ];
+        let (mut e, caps) = mode_rig(&modes, 0, (1, 1));
+        // No hardware T&L: an error and false; the patch flag needs both.
+        e.mem.set_u32(caps + 0x1c, 0x0100_0000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_c710, &args![1u32]).u8(), 0);
+        assert_eq!(
+            calls_to(&e, STRING_COPY),
+            vec![vec![ERROR_MESSAGE, MESSAGE_NO_HARDWARE_TL]]
+        );
+        assert_eq!(e.global::<u8>(RENDER_TARGET_ADJUST_FLAG), 1);
+        // The list entry, then all three modes from the last.
+        assert_eq!(calls_to(&e, ARRAY_ELEMENT).len(), 1 + 3);
+    }
+
+    #[test]
+    fn old_shaders_are_refused_and_shaders_off_configures_the_manager() {
+        let (mut e, caps) = mode_rig(&MODES, 1, (1024, 768));
+        e.mem.set_u32(caps + 0xcc, 0x0000_0200);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_c710, &args![1u32]).u8(), 0);
+        assert_eq!(
+            calls_to(&e, STRING_COPY),
+            vec![vec![ERROR_MESSAGE, MESSAGE_SHADER_VERSIONS]]
+        );
+        let (mut e, _) = mode_rig(&MODES, 1, (1024, 768));
+        e.register(SETTING_BOOL_VALUE, |_, _| 0u32.into_ret());
+        let force = e.mem.alloc(1);
+        e.mem.set_u8(force, 1);
+        e.register_double(SETTING_BOOL_POINTER, move |_, _| force.into_ret());
+        e.register(SHADER_MANAGER_CONFIGURE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_c710, &args![1u32]).u8(), 1);
+        assert_eq!(
+            calls_to(&e, SHADER_MANAGER_CONFIGURE),
+            vec![vec![0, 0, 1, 0, 0, 0]]
+        );
+        assert_eq!(e.global::<u32>(SHADER_MANAGER_WORD_B), 0);
+    }
+
+    #[test]
+    fn display_mode_needs_an_adapter() {
+        let mut e = mapped();
+        e.register(IMPORT_GET_SYSTEM_METRICS, |_, _| 800u32.into_ret());
+        e.register(ADAPTER_LIST_CREATE, |_, _| 0u32.into_ret());
+        e.register(STRING_COPY, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_c710, &args![1u32]).u8(), 0);
+        assert_eq!(
+            calls_to(&e, STRING_COPY),
+            vec![vec![ERROR_MESSAGE, MESSAGE_NO_DEVICE]]
+        );
+        // A list without the adapter.
+        let (mut e, _) = mode_rig(&MODES, 1, (1024, 768));
+        e.register(SETTING_INT_VALUE, |_, _| 5u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004d_c710, &args![1u32]).u8(), 0);
+        assert_eq!(
+            calls_to(&e, STRING_COPY),
+            vec![vec![ERROR_MESSAGE, MESSAGE_BAD_ADAPTER]]
         );
     }
 }

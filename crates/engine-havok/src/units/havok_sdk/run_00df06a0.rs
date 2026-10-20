@@ -42,24 +42,25 @@ pub(crate) fn movss_bits(bits: u32) -> Xmm {
     [f32::from_bits(bits), 0.0, 0.0, 0.0]
 }
 
-/// `MULPS dest, src`.
+/// `MULPS dest, src` (the SSE NaN rules, [`crate::sse::mulps`]).
 pub(crate) fn mulps(a: Xmm, b: Xmm) -> Xmm {
-    std::array::from_fn(|lane| a[lane] * b[lane])
+    crate::sse::mulps(a, b)
 }
 
-/// `ADDPS dest, src`.
+/// `ADDPS dest, src` (the SSE NaN rules, [`crate::sse::addps`]).
 pub(crate) fn addps(a: Xmm, b: Xmm) -> Xmm {
-    std::array::from_fn(|lane| a[lane] + b[lane])
+    crate::sse::addps(a, b)
 }
 
-/// `SUBPS dest, src`.
+/// `SUBPS dest, src` (the SSE NaN rules, [`crate::sse::subps`]).
 pub(crate) fn subps(a: Xmm, b: Xmm) -> Xmm {
-    std::array::from_fn(|lane| a[lane] - b[lane])
+    crate::sse::subps(a, b)
 }
 
-/// `ADDSS dest, src`: lane 0 summed, the other lanes of `dest`.
+/// `ADDSS dest, src`: lane 0 summed, the other lanes of `dest` (the SSE NaN rules,
+/// [`crate::sse::addss`]).
 pub(crate) fn addss(dest: Xmm, src: Xmm) -> Xmm {
-    [dest[0] + src[0], dest[1], dest[2], dest[3]]
+    crate::sse::addss(dest, src)
 }
 
 /// `SHUFPS dest, src, imm`: two lanes of `dest` then two of `src`.
@@ -77,15 +78,10 @@ pub(crate) fn splat0(v: Xmm) -> Xmm {
     shufps(v, v, 0)
 }
 
-/// `MAXPS dest, src`: per lane `dest > src ? dest : src` (a NaN in either gives `src`).
+/// `MAXPS dest, src`: per lane `dest > src ? dest : src` (a NaN in either gives `src`;
+/// [`crate::sse::maxps`]).
 pub(crate) fn maxps(dest: Xmm, src: Xmm) -> Xmm {
-    std::array::from_fn(|lane| {
-        if dest[lane] > src[lane] {
-            dest[lane]
-        } else {
-            src[lane]
-        }
-    })
+    crate::sse::maxps(dest, src)
 }
 
 /// `RCPPS`: the per-lane reciprocal estimate of the host CPU (x86).

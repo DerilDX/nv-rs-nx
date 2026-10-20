@@ -76,9 +76,66 @@ pub fn ni_t_pointer_list_base_remove_all(e: &mut Engine, this: Ptr<NiTPointerLis
     e.set(this, NiTPointerList::m_pkTail, 0);
 }
 
+/// Imported `InterlockedIncrement` (import slot).
+const IMPORT_INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+/// The list-item allocation `0043a010` (`thiscall` on the list's +8, no stack words; it
+/// answers a cleared item from the free list at `011c5f58`).
+const LIST_NEW_ITEM_0043A010: u32 = 0x0043_a010;
+
+// Translated from 00c1b4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `NiParticle/niparticlesystem.cpp`): adds an `NiPointer`
+/// element at the head of an `NiTPointerList`. `thiscall`, `RET 4`, one word (the address of
+/// the `NiPointer` to add). Takes an item from `0043a010` (on the list's +8); when the item's
+/// element differs from the pointer's object, the old one is released (reference count at +4
+/// through `InterlockedDecrement`, deleted through vtable slot +4 at 0) when not null, and the
+/// new one stored and, when not null, held (`InterlockedIncrement` on its +4). Then the item's
+/// previous link is cleared and its next link takes the old head; with an old head, that head's
+/// previous link takes the item, otherwise the tail does; the count goes up by one and the item
+/// becomes the head.
+pub fn fn_00c1b4a0(e: &mut Engine, this: Ptr<NiTPointerList>, element: Ptr) {
+    let count = this.addr().wrapping_add(8);
+    let item = Ptr::<NiTListItem>::new(e.call(LIST_NEW_ITEM_0043A010, &args![count]).u32());
+    let held = e.get(item, NiTListItem::m_element);
+    if held != e.mem.u32(element.addr()) {
+        if held != 0 {
+            let left = e
+                .call(IMPORT_INTERLOCKED_DECREMENT, &args![held.wrapping_add(4)])
+                .u32();
+            if left == 0 {
+                e.vcall(held, 4, &args![]);
+            }
+        }
+        let object = e.mem.u32(element.addr());
+        e.set(item, NiTListItem::m_element, object);
+        if object != 0 {
+            e.call(IMPORT_INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+        }
+    }
+    e.set(item, NiTListItem::m_pkPrev, 0);
+    let head = e.get(this, NiTPointerList::m_pkHead);
+    e.set(item, NiTListItem::m_pkNext, head);
+    let head = e.get(this, NiTPointerList::m_pkHead);
+    if head != 0 {
+        e.set(
+            Ptr::<NiTListItem>::new(head),
+            NiTListItem::m_pkPrev,
+            item.addr(),
+        );
+        let n = e.get(this, NiTPointerList::m_uiCount).wrapping_add(1);
+        e.set(this, NiTPointerList::m_uiCount, n);
+        e.set(this, NiTPointerList::m_pkHead, item.addr());
+        return;
+    }
+    let n = e.get(this, NiTPointerList::m_uiCount).wrapping_add(1);
+    e.set(this, NiTPointerList::m_uiCount, n);
+    e.set(this, NiTPointerList::m_pkTail, item.addr());
+    e.set(this, NiTPointerList::m_pkHead, item.addr());
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c1_b4a0, fn_00c1b4a0(Ptr<NiTPointerList>, Ptr)),
         entry!(0x00c1b5b0, ni_particle_system_get_rtti() -> Ptr),
         entry!(0x00c1_ad80, ni_particle_system_set_model_data(Ptr, Ptr)),
         entry!(
@@ -190,5 +247,102 @@ mod tests {
         e.call(0x00e7_4d40, &args![list]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
         assert_eq!(e.mem.bytes(list, 12), vec![0; 12]);
+    }
+
+    /// An engine whose item allocation answers `item` (holding `stale` as its element) and
+    /// whose interlocked doubles change the counts in memory.
+    fn add_head_rig(item: &mut u32, stale: u32) -> Engine {
+        let mut e = Engine::new();
+        *item = e.mem.alloc(12);
+        e.mem.set_u32(*item + 8, stale);
+        let answer = *item;
+        e.register_double(LIST_NEW_ITEM_0043A010, move |_, _| answer.into_ret());
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.put_vtable(0x0f00_1000, &[0, 0x0f00_2000]);
+        e.register(0x0f00_2000, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn fn_00c1b4a0_adds_before_the_old_head_and_holds_the_element() {
+        let mut item = 0;
+        let mut e = add_head_rig(&mut item, 0);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object + 4, 1);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, object);
+        let old = e.mem.alloc(12);
+        let list = e.mem.alloc(12);
+        e.mem.set_u32(list, old);
+        e.mem.set_u32(list + 4, old);
+        e.mem.set_u32(list + 8, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_b4a0, &args![list, slot]);
+        let log = e.call_log.take().unwrap();
+        let new_item: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == LIST_NEW_ITEM_0043A010)
+            .collect();
+        assert_eq!(new_item[0].1, [list + 8]);
+        assert_eq!(e.mem.u32(item + 8), object);
+        assert_eq!(e.mem.u32(object + 4), 2);
+        assert_eq!(e.mem.u32(item), old);
+        assert_eq!(e.mem.u32(item + 4), 0);
+        assert_eq!(e.mem.u32(old + 4), item);
+        assert_eq!(e.mem.u32(list), item);
+        assert_eq!(e.mem.u32(list + 4), old);
+        assert_eq!(e.mem.u32(list + 8), 2);
+    }
+
+    #[test]
+    fn fn_00c1b4a0_releases_a_stale_element_and_starts_an_empty_list() {
+        let mut item = 0;
+        let stale_object = 0x0f00_5000u32;
+        let mut e = add_head_rig(&mut item, stale_object);
+        e.map(stale_object, 8);
+        e.mem.set_u32(stale_object, 0x0f00_1000);
+        e.mem.set_u32(stale_object + 4, 1);
+        // A null pointer to add: the stale element is released, nothing is held.
+        let slot = e.mem.alloc(4);
+        let list = e.mem.alloc(12);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_b4a0, &args![list, slot]);
+        let log = e.call_log.take().unwrap();
+        let deletes: Vec<_> = log.iter().filter(|c| c.0 == 0x0f00_2000).collect();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].1, [stale_object]);
+        assert!(!log.iter().any(|c| c.0 == IMPORT_INTERLOCKED_INCREMENT));
+        assert_eq!(e.mem.u32(item + 8), 0);
+        assert_eq!(e.mem.u32(list), item);
+        assert_eq!(e.mem.u32(list + 4), item);
+        assert_eq!(e.mem.u32(list + 8), 1);
+    }
+
+    #[test]
+    fn fn_00c1b4a0_leaves_the_same_element_alone() {
+        let mut item = 0;
+        let object = 0x0f00_6000u32;
+        let mut e = add_head_rig(&mut item, object);
+        e.map(object, 8);
+        e.mem.set_u32(object + 4, 5);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, object);
+        let list = e.mem.alloc(12);
+        e.call_log = Some(vec![]);
+        e.call(0x00c1_b4a0, &args![list, slot]);
+        let log = e.call_log.take().unwrap();
+        assert!(!log
+            .iter()
+            .any(|c| c.0 == IMPORT_INTERLOCKED_INCREMENT || c.0 == IMPORT_INTERLOCKED_DECREMENT));
+        assert_eq!(e.mem.u32(object + 4), 5);
     }
 }

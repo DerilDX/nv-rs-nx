@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::{NiTListItem, NiTPointerList};
 
 layout! {
     /// `ShadowSceneLight` (Xbox PDB), an `NiRefObject`. The PC constructor (`00b9fda0`)
@@ -274,9 +275,47 @@ pub fn shadow_scene_light_shadow_scene_light(
     this
 }
 
+/// The item free `00e6e830` (`thiscall` on the list, `RET 4`: the item; the engine map names
+/// the body `NiTPointerMap<char const*,NiPointer<NiShaderLibrary>>::DeleteItem`).
+const LIST_FREE_ITEM_00E6E830: u32 = 0x00e6_e830;
+
+// Translated from 00b9e7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `BSShader/shadowscenelight.cpp`): removes the head of an
+/// `NiTPointerList` of `NiPointer`s into an `NiPointer` the caller provides. `thiscall`,
+/// `RET 4`, one word (the out pointer, not yet holding anything). The head item is unlinked
+/// (the head takes its next link; with a new head that one's previous link is cleared,
+/// otherwise the tail is), its element is stored in the out pointer and held
+/// (`InterlockedIncrement` on its +4) when not null, the item is freed (`00e6e830`) and the
+/// count goes down by one. Answers the out pointer. An empty list is not checked (the head's
+/// next link is read from address 0, as in the exe).
+// Translation incomplete: 00b9e7c0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the out pointer) is not translated.
+pub fn fn_00b9e7c0(e: &mut Engine, this: Ptr<NiTPointerList>, out: Ptr) -> Ptr {
+    let item = Ptr::<NiTListItem>::new(e.get(this, NiTPointerList::m_pkHead));
+    let next = e.get(item, NiTListItem::m_pkNext);
+    e.set(this, NiTPointerList::m_pkHead, next);
+    if next == 0 {
+        e.set(this, NiTPointerList::m_pkTail, 0);
+    } else {
+        e.set(Ptr::<NiTListItem>::new(next), NiTListItem::m_pkPrev, 0);
+    }
+    let element = e.get(item, NiTListItem::m_element);
+    e.mem.set_u32(out.addr(), element);
+    if element != 0 {
+        e.call(
+            IMPORT_INTERLOCKED_INCREMENT,
+            &args![element.wrapping_add(4)],
+        );
+    }
+    e.call(LIST_FREE_ITEM_00E6E830, &args![this, item]);
+    let count = e.get(this, NiTPointerList::m_uiCount).wrapping_sub(1);
+    e.set(this, NiTPointerList::m_uiCount, count);
+    out
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b9_e7c0, fn_00b9e7c0(Ptr<NiTPointerList>, Ptr) -> Ptr),
         entry!(
             0x00b9_dda0,
             shadow_scene_light_set_light(Ptr<ShadowSceneLight>, Ptr)
@@ -507,5 +546,59 @@ mod tests {
         assert_eq!(e.mem.u32(this + 0x208), 0xdead_be00);
         // +0x8 (iEnabledPasses) is not the constructor's.
         assert_eq!(e.mem.u32(this + 8), 0xdead_beef);
+    }
+
+    /// A list of `n` items (1 or 2) whose first element is `element`.
+    fn pop_rig(n: u32, element: u32) -> (Engine, u32, Vec<u32>) {
+        let mut e = Engine::new();
+        counting(&mut e);
+        e.register(LIST_FREE_ITEM_00E6E830, |_, _| Ret::default());
+        let items: Vec<u32> = (0..n).map(|_| e.mem.alloc(12)).collect();
+        if n == 2 {
+            e.mem.set_u32(items[0], items[1]);
+            e.mem.set_u32(items[1] + 4, items[0]);
+        }
+        e.mem.set_u32(items[0] + 8, element);
+        let list = e.mem.alloc(12);
+        e.mem.set_u32(list, items[0]);
+        e.mem.set_u32(list + 4, items[n as usize - 1]);
+        e.mem.set_u32(list + 8, n);
+        (e, list, items)
+    }
+
+    #[test]
+    fn fn_00b9e7c0_takes_the_head_and_holds_its_element() {
+        let (mut e, list, items) = pop_rig(2, 0x0f00_7000);
+        e.map(0x0f00_7000, 8);
+        e.mem.set_u32(0x0f00_7004, 3);
+        let out = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b9_e7c0, &args![list, out]).u32(), out);
+        assert_eq!(e.mem.u32(out), 0x0f00_7000);
+        assert_eq!(e.mem.u32(0x0f00_7004), 4);
+        assert_eq!(
+            calls(&e, LIST_FREE_ITEM_00E6E830),
+            vec![vec![list, items[0]]]
+        );
+        assert_eq!(e.mem.u32(list), items[1]);
+        assert_eq!(e.mem.u32(items[1] + 4), 0);
+        assert_eq!(e.mem.u32(list + 4), items[1]);
+        assert_eq!(e.mem.u32(list + 8), 1);
+    }
+
+    #[test]
+    fn fn_00b9e7c0_empties_a_one_item_list_and_holds_nothing_for_a_null_element() {
+        let (mut e, list, items) = pop_rig(1, 0);
+        let out = e.mem.alloc(4);
+        e.mem.set_u32(out, 0x5555);
+        e.call_log = Some(vec![]);
+        e.call(0x00b9_e7c0, &args![list, out]);
+        assert_eq!(e.mem.u32(out), 0);
+        assert!(calls(&e, IMPORT_INTERLOCKED_INCREMENT).is_empty());
+        assert_eq!(
+            calls(&e, LIST_FREE_ITEM_00E6E830),
+            vec![vec![list, items[0]]]
+        );
+        assert_eq!(e.mem.bytes(list, 12), vec![0; 12]);
     }
 }

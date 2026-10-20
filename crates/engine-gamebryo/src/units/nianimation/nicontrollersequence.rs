@@ -4410,9 +4410,23 @@ pub fn ni_t_primitive_set_add_unique(e: &mut Engine, this: Ptr<NiTPrimitiveSet>,
     e.set(this, NiTPrimitiveSet::m_uiUsed, used.wrapping_add(1));
 }
 
+// Translated from 00a326c0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (a function Ghidra did not create; by its body the creation
+/// function of `NiControllerSequence`): allocates 0x74 bytes (`operator new`) and, when that
+/// succeeds, runs the empty-sequence constructor `00a316a0` on them and answers its result;
+/// null otherwise.
+pub fn fn_00a326c0(e: &mut Engine) -> Ptr<NiControllerSequence> {
+    let block = e.call(OPERATOR_NEW, &args![0x74u32]).u32();
+    if block == 0 {
+        return Ptr::new(0);
+    }
+    e.call(SEQUENCE_CONSTRUCT_EMPTY, &args![block]).ptr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00a3_26c0, fn_00a326c0() -> Ptr<NiControllerSequence>),
         entry!(
             0x00a307c0,
             ni_controller_sequence_get_object_name_at(Ptr<NiControllerSequence>, u32, u32)
@@ -8864,5 +8878,20 @@ NiAlphaProperty",
         assert_eq!(e.call(0x00a35820, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0x74]]);
         assert_eq!(calls_to(&e, 0x00a3_5640), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn create_object_00a326c0_constructs_a_new_sequence_or_answers_null() {
+        let mut e = setup();
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(SEQUENCE_CONSTRUCT_EMPTY, |_, a| a[0].into_ret());
+        let object = e.call(0x00a3_26c0, &args![]).u32();
+        assert_ne!(object, 0);
+        assert_eq!(calls_to(&e, OPERATOR_NEW), vec![vec![0x74]]);
+        assert_eq!(calls_to(&e, SEQUENCE_CONSTRUCT_EMPTY), vec![vec![object]]);
+        e.register(OPERATOR_NEW, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a3_26c0, &args![]).u32(), 0);
+        assert!(calls_to(&e, SEQUENCE_CONSTRUCT_EMPTY).is_empty());
     }
 }

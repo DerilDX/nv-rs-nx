@@ -164,9 +164,142 @@ pub fn ni_back_to_front_accumulator_scalar_deleting_destructor(
     this
 }
 
+/// The depth at `index` in `m_pfDepths`, as `FLD dword` leaves it.
+fn depth(e: &Engine, this: Ptr<NiBackToFrontAccumulator>, index: i32) -> f64 {
+    let depths = e.get(this, NiBackToFrontAccumulator::m_pfDepths);
+    let at = depths.wrapping_add((index as u32).wrapping_mul(4));
+    x87_load32(e.mem.u32(at))
+}
+
+/// `FCOMPP`/`FCOMP` with `TEST AH,0x41` and no jump: `a` (the value pushed last, `ST0`)
+/// compares strictly above `b`, both ordered.
+fn above(a: f64, b: f64) -> bool {
+    a > b
+}
+
+// Translated from 00aa0a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBackToFrontAccumulator::ChoosePivot` (Xbox PDB; `__thiscall`, two words: left, right
+/// index): the median of the depths at `left`, `(left + right) >> 1` (arithmetic shift) and
+/// `right`, by the exe's comparisons (each "above" is false for a NaN, which picks the branch
+/// the flags give). Answers the chosen depth in `ST0`.
+pub fn ni_back_to_front_accumulator_choose_pivot(
+    e: &mut Engine,
+    this: Ptr<NiBackToFrontAccumulator>,
+    left: i32,
+    right: i32,
+) -> f64 {
+    let middle = left.wrapping_add(right) >> 1;
+    let (l, m, r) = (
+        depth(e, this, left),
+        depth(e, this, middle),
+        depth(e, this, right),
+    );
+    if above(m, l) {
+        if above(r, m) {
+            m
+        } else if above(r, l) {
+            r
+        } else {
+            l
+        }
+    } else if above(r, l) {
+        l
+    } else if above(r, m) {
+        r
+    } else {
+        m
+    }
+}
+
+// Translated from 00aa0b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBackToFrontAccumulator::SortObjectsByDepth` (Xbox PDB; `__thiscall`, two words: left,
+/// right index): quicksorts `m_ppkItems` and `m_pfDepths` together by depth, ascending.
+/// While `right > left`: the pivot is [`ni_back_to_front_accumulator_choose_pivot`] rounded
+/// to a float; from the right a scan moves down past depths above the pivot and from the left
+/// a scan moves up past depths below it (neither scan is bounded, as in the exe); crossing
+/// scans end the pass, otherwise the two items and depths swap (the depths copied through the
+/// x87 stack). When the right scan stopped at `right` the range shrinks by one; otherwise the
+/// left part is sorted recursively and the right part is the next range.
+pub fn ni_back_to_front_accumulator_sort_objects_by_depth(
+    e: &mut Engine,
+    this: Ptr<NiBackToFrontAccumulator>,
+    left: i32,
+    right: i32,
+) {
+    let mut left = left;
+    let mut right = right;
+    if right <= left {
+        return;
+    }
+    loop {
+        let pivot = ni_back_to_front_accumulator_choose_pivot(e, this, left, right);
+        let pivot = x87_load32(x87_store32(pivot));
+        let mut low = left.wrapping_sub(1);
+        let mut high = right.wrapping_add(1);
+        loop {
+            loop {
+                high = high.wrapping_sub(1);
+                if !above(depth(e, this, high), pivot) {
+                    break;
+                }
+            }
+            loop {
+                low = low.wrapping_add(1);
+                // `TEST AH,0x5` / `JNP`: on while below the pivot, ordered.
+                let value = depth(e, this, low);
+                if value >= pivot || value.is_nan() {
+                    break;
+                }
+            }
+            if low >= high {
+                break;
+            }
+            let items = e.get(this, NiBackToFrontAccumulator::m_ppkItems);
+            let low_at = items.wrapping_add((low as u32).wrapping_mul(4));
+            let high_at = items.wrapping_add((high as u32).wrapping_mul(4));
+            let low_item = e.mem.u32(low_at);
+            let high_item = e.mem.u32(high_at);
+            e.mem.set_u32(low_at, high_item);
+            e.mem.set_u32(high_at, low_item);
+            let depths = e.get(this, NiBackToFrontAccumulator::m_pfDepths);
+            let low_at = depths.wrapping_add((low as u32).wrapping_mul(4));
+            let high_at = depths.wrapping_add((high as u32).wrapping_mul(4));
+            let saved = x87_quiet_bits(e.mem.u32(low_at));
+            let moved = x87_quiet_bits(e.mem.u32(high_at));
+            e.mem.set_u32(low_at, moved);
+            e.mem.set_u32(high_at, saved);
+        }
+        if high == right {
+            right = high.wrapping_sub(1);
+        } else {
+            ni_back_to_front_accumulator_sort_objects_by_depth(e, this, left, high);
+            left = high.wrapping_add(1);
+        }
+        if right <= left {
+            return;
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00aa0a20,
+            ni_back_to_front_accumulator_choose_pivot(
+                Ptr<NiBackToFrontAccumulator>,
+                i32,
+                i32,
+            ) -> f64
+        ),
+        entry!(
+            0x00aa0b40,
+            ni_back_to_front_accumulator_sort_objects_by_depth(
+                Ptr<NiBackToFrontAccumulator>,
+                i32,
+                i32,
+            )
+        ),
         entry!(0x00aa0e50, ni_back_to_front_accumulator_get_rtti() -> Ptr),
         entry!(0x00aa0f30, ni_back_to_front_accumulator_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x00aa0fc0, fn_00aa0fc0(Ptr) -> Ptr),
@@ -370,5 +503,67 @@ mod tests {
         assert_eq!(e.mem.u32(POOL_LOCK), 0x55);
         assert_eq!(e.mem.u32(POOL_FREE_LIST), node);
         assert_eq!(e.mem.u32(this + 0x10), 0);
+    }
+}
+
+#[cfg(test)]
+mod b007_tests {
+    use super::*;
+
+    /// An accumulator whose items are 0x100 + i and whose depths are `values`.
+    fn accumulator(e: &mut Engine, values: &[f32]) -> u32 {
+        let this = e.mem.alloc(0x30);
+        let items = e.mem.alloc(4 * values.len() as u32 + 8);
+        let depths = e.mem.alloc(4 * values.len() as u32 + 8);
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_u32(items + 4 * i as u32, 0x100 + i as u32);
+            e.mem.set_u32(depths + 4 * i as u32, v.to_bits());
+        }
+        e.mem.set_u32(this + 0x24, items);
+        e.mem.set_u32(this + 0x28, depths);
+        this
+    }
+
+    fn pivot(e: &mut Engine, values: &[f32]) -> f64 {
+        let this = accumulator(e, values);
+        let right = values.len() as i32 - 1;
+        e.call(0x00aa0a20, &args![this, 0i32, right]).f64()
+    }
+
+    #[test]
+    fn choose_pivot_takes_the_median_of_three() {
+        let mut e = Engine::new();
+        assert_eq!(pivot(&mut e, &[1.0, 2.0, 3.0]), 2.0);
+        assert_eq!(pivot(&mut e, &[1.0, 3.0, 2.0]), 2.0);
+        assert_eq!(pivot(&mut e, &[2.0, 3.0, 1.0]), 2.0);
+        assert_eq!(pivot(&mut e, &[3.0, 1.0, 2.0]), 2.0);
+        assert_eq!(pivot(&mut e, &[2.0, 1.0, 3.0]), 2.0);
+        assert_eq!(pivot(&mut e, &[3.0, 2.0, 1.0]), 2.0);
+        assert_eq!(pivot(&mut e, &[5.0, 5.0, 5.0, 5.0]), 5.0);
+        // A NaN in the middle: m above l is false, r above l: the left depth.
+        assert_eq!(pivot(&mut e, &[1.0, f32::NAN, 3.0]), 1.0);
+    }
+
+    #[test]
+    fn sort_objects_by_depth_sorts_items_with_their_depths() {
+        let mut e = Engine::new();
+        let values = [5.0f32, 1.0, 4.0, 2.0, 3.0, 0.5, 9.0, 2.0];
+        let this = accumulator(&mut e, &values);
+        e.call(0x00aa0b40, &args![this, 0i32, 7i32]);
+        let items = e.mem.u32(this + 0x24);
+        let depths = e.mem.u32(this + 0x28);
+        let sorted: Vec<f32> = (0..8)
+            .map(|i| f32::from_bits(e.mem.u32(depths + 4 * i)))
+            .collect();
+        assert_eq!(sorted, vec![0.5, 1.0, 2.0, 2.0, 3.0, 4.0, 5.0, 9.0]);
+        for i in 0..8 {
+            let item = e.mem.u32(items + 4 * i) - 0x100;
+            assert_eq!(values[item as usize], sorted[i as usize]);
+        }
+        // An empty or one-element range is left alone.
+        e.mem.set_u32(depths, 7.0f32.to_bits());
+        e.call(0x00aa0b40, &args![this, 3i32, 3i32]);
+        e.call(0x00aa0b40, &args![this, 3i32, 1i32]);
+        assert_eq!(e.mem.u32(depths), 7.0f32.to_bits());
     }
 }

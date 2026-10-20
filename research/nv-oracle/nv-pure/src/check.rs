@@ -31,6 +31,11 @@ pub struct Options {
     /// The engine side running one vector longer than this stops the whole
     /// check with an error naming the vector.
     pub rust_timeout: std::time::Duration,
+    /// The x87 control word both sides run with (`--fpcw`): nv-call loads it
+    /// before each call, and each engine gets it as its main thread's word
+    /// (`crt::set_x87_control_word`), so the x87 helpers round to its
+    /// precision. `None`: nv-call's default 0x027F and the engine's.
+    pub fpcw: Option<u16>,
 }
 
 /// How one vector came out.
@@ -319,14 +324,16 @@ fn compare(
 
 /// `Engine::with_exe` without rereading the file: the checked data sections
 /// and imports parsed once, mapped into a new engine per vector (the same
-/// steps as `engine::exe::map_data_sections` and `Engine::with_exe`).
+/// steps as `engine::exe::map_data_sections` and `Engine::with_exe`), with
+/// `--fpcw` set as each new engine's main-thread x87 control word.
 struct FreshEngine {
     sections: Vec<(u32, u32, Vec<u8>)>,
     imports: Vec<engine::exe::Import>,
+    fpcw: Option<u16>,
 }
 
 impl FreshEngine {
-    fn load(exe: &Path) -> Result<Self, String> {
+    fn load(exe: &Path, fpcw: Option<u16>) -> Result<Self, String> {
         let file = fs::read(exe).map_err(|e| format!("{}: {e}", exe.display()))?;
         let secs = engine::exe::checked_sections(exe, &file)?;
         let mut sections = Vec::new();
@@ -341,6 +348,7 @@ impl FreshEngine {
         Ok(FreshEngine {
             sections,
             imports: engine::exe::imports(&file)?,
+            fpcw,
         })
     }
 
@@ -351,6 +359,9 @@ impl FreshEngine {
             e.mem.write(*va, bytes);
         }
         e.register_imports(&self.imports);
+        if let Some(word) = self.fpcw {
+            engine::units::crt::set_x87_control_word(&mut e, word);
+        }
         e
     }
 }
@@ -439,7 +450,7 @@ pub fn run(list: &[Pure], o: &Options) -> Result<Report, String> {
 
     // The engine side on a worker thread, under a watchdog: a vector the exe
     // finished in time but the engine doesn't finish at all stops the check.
-    let template = FreshEngine::load(&o.exe)?;
+    let template = FreshEngine::load(&o.exe, o.fpcw)?;
     let progress = AtomicU64::new(0);
     let current = Mutex::new(String::new());
     let quiet = panic::take_hook();
@@ -597,9 +608,12 @@ fn run_nv_call(o: &Options, items: &[(String, String)], buffers: bool) -> Result
             .map(|(_, l)| format!("{l}\n"))
             .collect();
         fs::write(&part, text).map_err(|e| format!("{}: {e}", part.display()))?;
-        let mut child = Command::new(&o.nv_call)
-            .arg(&o.exe)
-            .arg(&part)
+        let mut command = Command::new(&o.nv_call);
+        command.arg(&o.exe).arg(&part);
+        if let Some(word) = o.fpcw {
+            command.arg("--fpcw").arg(format!("0x{word:04x}"));
+        }
+        let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
