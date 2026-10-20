@@ -47,7 +47,69 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00626560, function_copy_constructor(Ptr, u32) -> Ptr),
         entry!(0x006265c0, fn_006265c0(Ptr, u32, u32)),
         entry!(0x00626660, fn_00626660(Ptr, u32) -> u32),
+        entry!(0x0062_6600, fn_00626600(Ptr, u32)),
+        entry!(0x0062_6630, fn_00626630(Ptr) -> Ptr),
     ]
+}
+
+/// `hkMapBase<unsigned long,unsigned long,hkMapOperations<unsigned long>>::reserve` (engine
+/// map name of `00cb1fe0`): `thiscall`, `RET 8`, the allocator and the count.
+const MAP_RESERVE: u32 = 0x00cb_1fe0;
+
+// Translated from 00626600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. `thiscall`, `RET 4`. Asks `004a4840` (on a zeroed stack byte,
+/// with `this`) for the allocator and reserves `count` entries in the map `this` (`00cb1fe0`;
+/// `count` is the word the exe pushed before `004a4840`, left on the stack for it).
+pub fn fn_00626600(e: &mut Engine, this: Ptr, count: u32) {
+    let allocator = e.with_stack(1, |e, byte| {
+        e.mem.set_u8(byte.addr(), 0);
+        e.call(CHECK_HOLDER, &args![byte, this]).u32()
+    });
+    e.call(MAP_RESERVE, &args![this, allocator, count]);
+}
+
+// Translated from 00626630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. `fastcall`: an empty map, 0 at `+0` and `+4` and `0xffffffff`
+/// at `+8`. Answers `this`.
+pub fn fn_00626630(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0);
+    e.mem.set_u32(this.addr().wrapping_add(4), 0);
+    e.mem.set_u32(this.addr().wrapping_add(8), 0xffff_ffff);
+    this
+}
+
+#[cfg(test)]
+mod map_tests {
+    use super::*;
+
+    #[test]
+    fn at_00626600_reserves_through_the_allocator() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.register(CHECK_HOLDER, |e, a| {
+            assert_eq!(e.mem.u8(a[0]), 0);
+            0x7700u32.into_ret()
+        });
+        e.register(MAP_RESERVE, |_, _| Ret::default());
+        e.call(0x0062_6600, &args![0x4000u32, 9u32]);
+        let log = e.call_log.clone().unwrap();
+        assert!(log.contains(&(MAP_RESERVE, vec![0x4000, 0x7700, 9])));
+        assert!(log
+            .iter()
+            .any(|(a, w)| *a == CHECK_HOLDER && w[1] == 0x4000));
+    }
+
+    #[test]
+    fn at_00626630_makes_an_empty_map() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc);
+        e.mem.set_u32(this, 5);
+        e.mem.set_u32(this + 4, 5);
+        assert_eq!(e.call(0x0062_6630, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(e.mem.u32(this + 8), 0xffff_ffff);
+    }
 }
 
 #[cfg(test)]

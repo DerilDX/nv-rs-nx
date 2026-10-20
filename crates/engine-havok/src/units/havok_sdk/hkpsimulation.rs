@@ -924,10 +924,486 @@ pub fn hkp_simulation_collide(e: &mut Engine, this: Ptr) -> u32 {
     })
 }
 
+// Translated from 00cfa6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConstraintQueryIn::set` (Xbox PDB name per the engine map), thiscall on the query,
+/// `(info, step_info, word)`, `RET 0xc`: fills the query from the solver info `info` (the
+/// world's `+0x1e0`) and the step info. In the exe's order: `+0` = `info[+0x10c]`, `+4` =
+/// `info[+0x11c] * info[+0x10c]`, `+8` = `info[+0x110]`, `+0x14` = `info[+0x120]`, `+0x18` =
+/// `info[+0x120] * info[+0x11c]`, `+0x40` = `info[+4]`, `+0x68` = `word`, `+0x44` =
+/// `info[+8]`, `+0x20` = `info[+0x54] * info[+0x110]`, `+0x24` = `info[+8]`, `+0x28` =
+/// `info[+0x5c] * info[+0x110]` (the floats through `FLD`/`FMUL`/`FSTP`), `+0xc` and `+0x10`
+/// the step info's words `+8` and `+0xc` (moved as integers), and `+0x50` .. `+0x5c` the
+/// vector `(info[+0x128], 0, 0, 0)` (a `MOVSS` load, bit for bit).
+pub fn hkp_constraint_query_in_set(
+    e: &mut Engine,
+    this: Ptr,
+    info: Ptr,
+    step_info: Ptr,
+    word: u32,
+) {
+    let (query, info, step) = (this.addr(), info.addr(), step_info.addr());
+    let copy = |e: &mut Engine, from: u32, to: u32| {
+        let bits = x87_quiet_bits(e.mem.u32(from));
+        e.mem.set_u32(to, bits);
+    };
+    let product = |e: &mut Engine, a: u32, b: u32, to: u32| {
+        let value = x87_mul(x87_load32(e.mem.u32(a)), x87_m32(e.mem.u32(b)));
+        e.mem.set_u32(to, x87_store32(value));
+    };
+    copy(e, info + 0x10c, query);
+    product(e, info + 0x11c, info + 0x10c, query + 4);
+    copy(e, info + 0x110, query + 8);
+    copy(e, info + 0x120, query + 0x14);
+    product(e, info + 0x120, info + 0x11c, query + 0x18);
+    copy(e, info + 4, query + 0x40);
+    let time = x87_quiet_bits(e.mem.u32(info + 8));
+    e.mem.set_u32(query + 0x68, word);
+    e.mem.set_u32(query + 0x44, time);
+    product(e, info + 0x54, info + 0x110, query + 0x20);
+    copy(e, info + 8, query + 0x24);
+    product(e, info + 0x5c, info + 0x110, query + 0x28);
+    let low = e.mem.u32(step + 8);
+    e.mem.set_u32(query + 0xc, low);
+    let high = e.mem.u32(step + 0xc);
+    e.mem.set_u32(query + 0x10, high);
+    let lanes = [e.mem.u32(info + 0x128), 0, 0, 0];
+    for (lane, bits) in lanes.into_iter().enumerate() {
+        e.mem.set_u32(query + 0x50 + 4 * lane as u32, bits);
+    }
+}
+
+// Translated from 00cf87a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The callback `resetCollisionInformationForEntities` hands to `00cf9480` (Ghidra made no
+/// function of it; no name in the engine map), `(entry, info, output)`, `RET 0xc`: invalidates
+/// the entry's time of impact (`hkAgentNnMachine_InvalidateTimInAgent`, `00cfdbe0`, cdecl
+/// `(entry, info)`). The output block is not read; `EAX` is whatever the callee leaves.
+pub fn fn_00cf87a0(e: &mut Engine, entry: u32, info: u32, _unused_output: u32) {
+    e.call(INVALIDATE_TIM_IN_AGENT, &args![entry, info]);
+}
+
+/// `hkAgentNnMachine_ProcessAgent` (Xbox PDB name per the engine map, `00cfedd0`, cdecl
+/// `(entry, info, output, agent)`).
+const PROCESS_AGENT: u32 = 0x00cf_edd0;
+
+// Translated from 00cf92c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The callback `00cfa400` hands to `00cf9480` (Ghidra made no function of it; no name in the
+/// engine map), `(entry, info, output)`, `RET 0xc`: prepares the output block (`+0x3030` the
+/// float at `0104da48` through `FLD`/`FSTP`, `+0x3080` zero, `+0` the address of its contact
+/// points at `+0x10`), points the info's `+0x60` at `info[0] + 0x1c60` and sets its `+0x14` to
+/// the word at `info[0] + 0x1c30 + 64 * entry[+0xc]` (the byte sign-extended), runs
+/// `hkAgentNnMachine_ProcessAgent(entry, info, output, entry[+8])` (`00cfedd0`) and, unless the
+/// abort flag (`01269200`) is 1 or the output holds no contact point (`output[0]` still `output
+/// + 0x10`), calls slot `0x18` of the agent `entry[+8]` with `(entry[+0x10], entry[+0x14], info,
+/// output)`.
+pub fn fn_00cf92c0(e: &mut Engine, entry: u32, info: u32, output: u32) {
+    let fill = x87_quiet_bits(e.mem.u32(OUTPUT_INITIAL_FLOAT));
+    e.mem.set_u32(output + 0x3030, fill);
+    e.mem.set_u32(output + 0x3080, 0);
+    let points = output + 0x10;
+    e.mem.set_u32(output, points);
+    let tables = e.mem.u32(info);
+    e.mem.set_u32(info + 0x60, tables.wrapping_add(0x1c60));
+    let row = (i32::from(e.mem.i8(entry + 0xc)) as u32).wrapping_shl(6);
+    let value = e.mem.u32(row.wrapping_add(tables).wrapping_add(0x1c30));
+    e.mem.set_u32(info + 0x14, value);
+    let agent = e.mem.u32(entry + 8);
+    e.call(PROCESS_AGENT, &args![entry, info, output, agent]);
+    if e.global::<u32>(ABORT_FLAG) == 1 || e.mem.u32(output) == points {
+        return;
+    }
+    let first = e.mem.u32(entry + 0x10);
+    let second = e.mem.u32(entry + 0x14);
+    let agent = e.mem.u32(entry + 8);
+    e.vcall(agent, 0x18, &args![first, second, info, output]);
+}
+
+/// Callees of `collideEntitiesBroadPhaseDiscrete`: `hkpTypedBroadPhaseDispatcher::addPairs`,
+/// `removePairs` and `removeDuplicates` (Xbox PDB names per the engine map; the first two
+/// thiscall on the dispatcher at `world + 0x64`, `(pairs, count[, filter])`, the last cdecl
+/// `(new pairs, removed pairs)`) and `hkSetOutOfMemoryState` (`00d88040`, cdecl, one word).
+const DISPATCHER_ADD_PAIRS: u32 = 0x00cf_7080;
+const DISPATCHER_REMOVE_PAIRS: u32 = 0x00cf_70f0;
+const DISPATCHER_REMOVE_DUPLICATES: u32 = 0x00cf_7130;
+const SET_OUT_OF_MEMORY_STATE: u32 = 0x00d8_8040;
+/// The profiling labels of `collideEntitiesBroadPhaseDiscrete`: `"LtBroadPhase"` with
+/// `"StInitMem"`, `"StCalcAabbs"`, `"St3AxisSweep"`, `"StRemoveDup"`, `"StRemoveAgt"`,
+/// `"StAddAgt"` and the end label `01076f38` that the integration's records end with too.
+const PROFILE_BROAD_PHASE: u32 = 0x010c_c624;
+const PROFILE_INIT_MEMORY: u32 = 0x010c_c618;
+const PROFILE_CALC_AABBS: u32 = 0x010c_c60c;
+const PROFILE_SWEEP: u32 = 0x010c_c5fc;
+const PROFILE_REMOVE_DUPLICATES: u32 = 0x010c_c5f0;
+const PROFILE_REMOVE_AGENTS: u32 = 0x010c_c5e4;
+const PROFILE_ADD_AGENTS: u32 = 0x010c_c5d8;
+const PROFILE_STAGE_END: u32 = 0x0107_6f38;
+
+/// Takes `bytes` rounded up to 128 from the memory router's stack (its word `+0`) and answers
+/// the old top.
+fn router_stack_take(e: &mut Engine, bytes: u32) -> u32 {
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let top = e.mem.u32(router);
+    e.mem.set_u32(
+        router,
+        (bytes.wrapping_add(0x7f) & 0xffff_ff80).wrapping_add(top),
+    );
+    top
+}
+
+/// Sets the memory router's stack top (its word `+0`) back to `top`.
+fn router_stack_restore(e: &mut Engine, top: u32) {
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    e.mem.set_u32(router, top);
+}
+
+/// Releases an `hkLocalArray` of 8-byte pairs at `array` (data, size, capacity and flags, the
+/// saved stack top): the size is cleared when the data is still the stack block, the stack top
+/// goes back to the saved one, and storage the array owns (bit 31 of the capacity clear) goes
+/// back to the allocator (slot `0x10`, `(data, capacity * 8)`).
+fn release_local_pair_array(e: &mut Engine, array: u32) {
+    let saved = e.mem.u32(array + 0xc);
+    if saved == e.mem.u32(array) {
+        e.mem.set_u32(array + 4, 0);
+    }
+    router_stack_restore(e, saved);
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let capacity = e.mem.u32(array + 8);
+    e.mem.set_u32(array + 4, 0);
+    if (capacity as i32) >= 0 {
+        let data = e.mem.u32(array);
+        e.vcall(
+            allocator,
+            0x10,
+            &args![data, (capacity & 0x3fff_ffff).wrapping_mul(8)],
+        );
+    }
+}
+
+// Translated from 00cf9c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSimulation::collideEntitiesBroadPhaseDiscrete` (Xbox PDB), cdecl `(entities, count,
+/// world)`. Between the profile records, two `hkLocalArray`s of broad-phase pairs (new and
+/// removed, each `world[+0x33c]` pairs of 8 bytes, flagged "not owned") and the blocks for the
+/// entities' AABBs (`count * 0x20`) and broad-phase handles (`count * 4`) are taken from the
+/// memory router's stack. For every entity the handle (`entity + 0x24`) is stored, the AABB
+/// recomputed (`entityBatchRecalcAabb(world[+0x78], &entity, 1)`) when its first word (`+0x30`)
+/// is above its fifth (`+0x40`, unsigned), and the AABB's eight words copied. The broad phase
+/// (`world[+0x58]`, slot `0x2c`) gets `(handles, aabbs, count, new pairs, removed pairs)`; the
+/// handle and AABB blocks are given back. With pairs in either array, duplicates are removed
+/// (`00cf7130`), the removed pairs taken from the dispatcher (`00cf70f0`) and, when the
+/// allocator at `router + 0x10` answers through slot `0x24` that `new pairs * 0x280` bytes
+/// are available, the new pairs added with the collision filter's `+8` interface (or null)
+/// (`00cf7080`); otherwise `hkSetOutOfMemoryState(1)` runs. The end record follows in every
+/// case and the two arrays are released, the removed pairs first.
+pub fn hkp_simulation_collide_entities_broad_phase_discrete(
+    e: &mut Engine,
+    entities: u32,
+    count: i32,
+    world: u32,
+) {
+    super::hkpbvagent::profile_start_record(e, PROFILE_BROAD_PHASE, PROFILE_INIT_MEMORY);
+    e.with_stack(0x24, |e, frame| {
+        let removed = frame.addr();
+        let added = removed + 0x10;
+        let entity_slot = removed + 0x20;
+        for array in [added, removed] {
+            let capacity = e.mem.u32(world + 0x33c);
+            e.mem.set_u32(array, 0);
+            e.mem.set_u32(array + 4, 0);
+            e.mem.set_u32(array + 8, 0x8000_0000);
+            let top = router_stack_take(e, capacity.wrapping_mul(8));
+            e.mem.set_u32(array + 8, capacity | 0x8000_0000);
+            e.mem.set_u32(array, top);
+            e.mem.set_u32(array + 0xc, top);
+        }
+        let aabbs = router_stack_take(e, (count as u32).wrapping_shl(5));
+        let handles = router_stack_take(e, (count as u32).wrapping_mul(4));
+        profile_record(e, PROFILE_CALC_AABBS);
+        let mut remaining = count.wrapping_sub(1);
+        let mut index = 0u32;
+        while remaining >= 0 {
+            let entity = e.mem.u32(entities.wrapping_add(index.wrapping_mul(4)));
+            e.mem.set_u32(entity_slot, entity);
+            e.mem.set_u32(
+                handles.wrapping_add(index.wrapping_mul(4)),
+                entity.wrapping_add(0x24),
+            );
+            let aabb = entity.wrapping_add(0x30);
+            if e.mem.u32(aabb) > e.mem.u32(aabb.wrapping_add(0x10)) {
+                let collision_input = e.mem.u32(world + 0x78);
+                e.call(
+                    ENTITY_BATCH_RECALC_AABB,
+                    &args![collision_input, entity_slot, 1u32],
+                );
+            }
+            let cursor = aabbs.wrapping_add(index.wrapping_mul(0x20));
+            for word in 0..8u32 {
+                let value = e.mem.u32(aabb.wrapping_add(4 * word));
+                e.mem.set_u32(cursor.wrapping_add(4 * word), value);
+            }
+            index = index.wrapping_add(1);
+            remaining = remaining.wrapping_sub(1);
+        }
+        profile_record(e, PROFILE_SWEEP);
+        let broad_phase = e.mem.u32(world + 0x58);
+        e.vcall(
+            broad_phase,
+            0x2c,
+            &args![handles, aabbs, count, added, removed],
+        );
+        router_stack_restore(e, handles);
+        router_stack_restore(e, aabbs);
+        let total = e.mem.i32(added + 4).wrapping_add(e.mem.i32(removed + 4));
+        if total > 0 {
+            profile_record(e, PROFILE_REMOVE_DUPLICATES);
+            e.call(DISPATCHER_REMOVE_DUPLICATES, &args![added, removed]);
+            profile_record(e, PROFILE_REMOVE_AGENTS);
+            let dispatcher = e.mem.u32(world + 0x64);
+            let (pairs, size) = (e.mem.u32(removed), e.mem.u32(removed + 4));
+            e.call(DISPATCHER_REMOVE_PAIRS, &args![dispatcher, pairs, size]);
+            let new_pairs = e.mem.u32(added + 4);
+            let router = e.call(MEMORY_ROUTER, &args![]).u32();
+            let guard = e.mem.u32(router + 0x10);
+            let available = e
+                .vcall(guard, 0x24, &args![new_pairs.wrapping_mul(0x280)])
+                .u32() as u8
+                != 0;
+            if available {
+                profile_record(e, PROFILE_ADD_AGENTS);
+                let filter = e.mem.u32(world + 0x7c);
+                let filter = if filter == 0 { 0 } else { filter + 8 };
+                let dispatcher = e.mem.u32(world + 0x64);
+                let (pairs, size) = (e.mem.u32(added), e.mem.u32(added + 4));
+                e.call(
+                    DISPATCHER_ADD_PAIRS,
+                    &args![dispatcher, pairs, size, filter],
+                );
+            } else {
+                e.call(SET_OUT_OF_MEMORY_STATE, &args![1u32]);
+            }
+        }
+        profile_record(e, PROFILE_STAGE_END);
+        release_local_pair_array(e, removed);
+        e.mem.set_u32(removed + 8, 0x8000_0000);
+        e.mem.set_u32(removed, 0);
+        release_local_pair_array(e, added);
+    });
+}
+
+/// Callees of `integrateInternal`: `hkSolveUpload` (`00d892d0`, no arguments),
+/// `hkpWorldOperationUtil::cleanupDirtyIslands` (`00cb55d0`, cdecl `(world)`),
+/// `hkpWorld::getMemUsageForIntegration` (`00c92b50`, thiscall on the world, `(out)`),
+/// `hkpWorldMemoryUtil::checkMemoryForIntegration` (`00d01bc0`, cdecl `(world)`),
+/// `hkRigidMotionUtilApplyForcesAndStep` (`00d28a30`, cdecl), `hkpConstraintSolverSetup::solve`
+/// (`00d88b50`, cdecl), `hkpWorldOperationUtil::markIslandInactive` (`00cb5420`, cdecl `(world,
+/// island)`) and the island and world post-integrate callbacks (`00d015a0`, `(world, island,
+/// step info)`, and `00d01440`, `(world, step info)`, cdecl; unnamed in the engine map).
+const SOLVE_UPLOAD: u32 = 0x00d8_92d0;
+const CLEANUP_DIRTY_ISLANDS: u32 = 0x00cb_55d0;
+const GET_MEM_USAGE_FOR_INTEGRATION: u32 = 0x00c9_2b50;
+const CHECK_MEMORY_FOR_INTEGRATION: u32 = 0x00d0_1bc0;
+const APPLY_FORCES_AND_STEP: u32 = 0x00d2_8a30;
+const SOLVER_SETUP_SOLVE: u32 = 0x00d8_8b50;
+const MARK_ISLAND_INACTIVE: u32 = 0x00cb_5420;
+const FIRE_ISLAND_POST_INTEGRATE: u32 = 0x00d0_15a0;
+const FIRE_WORLD_POST_INTEGRATE: u32 = 0x00d0_1440;
+/// The profiling labels of `integrateInternal`: `"LtIntegrate"` with `"StInit"`,
+/// `"StActions"`, `"StIntegrate"`, `"TtSingleObj"`, `"StIslandPostIntegrateCb"` and
+/// `"TtWorldPostIntegrateCb"`.
+const PROFILE_INTEGRATE_INTERNAL: u32 = 0x010c_c5c4;
+const PROFILE_INTEGRATE_INIT: u32 = 0x010c_c5bc;
+const PROFILE_ACTIONS: u32 = 0x010c_c5b0;
+const PROFILE_INTEGRATE_ISLANDS: u32 = 0x010c_c5a4;
+const PROFILE_SINGLE_OBJECT: u32 = 0x010c_c55c;
+const PROFILE_ISLAND_POST_INTEGRATE: u32 = 0x010c_c58c;
+const PROFILE_WORLD_POST_INTEGRATE: u32 = 0x010c_c574;
+
+fn add_to_word(e: &mut Engine, address: u32, delta: i32) {
+    let value = e.mem.u32(address).wrapping_add(delta as u32);
+    e.mem.set_u32(address, value);
+}
+
+// Translated from 00cf8da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSimulation::integrateInternal` (Xbox PDB), thiscall on the simulation, `(step_info)`,
+/// `RET 4`. Starts the profile record pair `"LtIntegrate"`/`"StInit"`, copies the step info to
+/// the world's `+0x1d0`, sets `+0x2ec = [+0x300] * delta` and `+0x2f0 = (int)[+0x2f4] *
+/// inverse delta` through the x87 unit and the vectors `+0x1f0` and `+0x200` to the gravity
+/// (`+0x10`) times `+0x2ec` and times the delta (`MULPS`), runs `hkSolveUpload` and
+/// `cleanupDirtyIslands`, and asks the object at `router + 0x18` (slot `0x20`) whether the
+/// memory `getMemUsageForIntegration` reports is available. When not: without a memory
+/// watchdog the stage word `+0x28` becomes 1 and 1 is answered at once; with one the world
+/// lock is released, `checkMemoryForIntegration` runs and the lock taken again. Then the
+/// lock is taken, the world's `+0x98` counted down around the actions (`00cf8b00`, record
+/// `"StActions"`), the lock released and taken again, and the bytes `+0x305` to `+0x307`
+/// stepped (the counter `+0x307` toggles bit 0 of `+0x305` when it is 4 more than a multiple of
+/// 8 and bit 1 at multiples of 8; at multiples of 16 it is cleared and `+0x306` becomes `1 -
+/// +0x306`). The constraint query on the stack is set (`00cfa6e0`) from the world's `+0x1e0`,
+/// the step info and `[+0x1b8]`. Each active island, last first (record `"StIntegrate"`), is
+/// stepped: an island without constraints (`+0xc` zero) through
+/// `hkRigidMotionUtilApplyForcesAndStep(world + 0x1e0, world + 0x1d0, world + 0x200,
+/// entities, count, 0xe0)` and `entityBatchRecalcAabb` (between `"TtSingleObj"` and the end
+/// label), any other through `hkpConstraintSolverSetup::solve(world + 0x1d0, world + 0x1e0,
+/// query, island, 0, 0, entities, count)`. When that answers more than 5, the island's byte
+/// `+0x26` has a bit of `0xc` and its world's byte `+0xd5` is set, the island is marked
+/// inactive; with the world's `+0x18c` set the island post-integrate callback fires. Last the
+/// lock is released, the world post-integrate callback fires when `+0x174` is set, the end
+/// record `01076f38` is written and 0 answered.
+pub fn hkp_simulation_integrate_internal(e: &mut Engine, this: Ptr, step_info: Ptr) -> u32 {
+    let base = this.addr();
+    let step = step_info.addr();
+    let world_of = |e: &Engine| e.mem.u32(base + 0xc);
+    super::hkpbvagent::profile_start_record(e, PROFILE_INTEGRATE_INTERNAL, PROFILE_INTEGRATE_INIT);
+    let world = world_of(e);
+    for word in 0..4u32 {
+        let value = e.mem.u32(step + 4 * word);
+        e.mem.set_u32(world + 0x1d0 + 4 * word, value);
+    }
+    let world = world_of(e);
+    let solver_info = world + 0x1e0;
+    let scaled = x87_mul(
+        x87_load32(e.mem.u32(world + 0x300)),
+        x87_m32(e.mem.u32(step + 8)),
+    );
+    e.mem.set_u32(solver_info + 0x10c, x87_store32(scaled));
+    let ticks = x87_mul(
+        f64::from(e.mem.i32(solver_info + 0x114)),
+        x87_m32(e.mem.u32(step + 0xc)),
+    );
+    e.mem.set_u32(solver_info + 0x110, x87_store32(ticks));
+    let factor = f32::from_bits(e.mem.u32(solver_info + 0x10c));
+    let gravity = load_vec(e, world_of(e) + 0x10);
+    store_vec(e, solver_info + 0x10, mul(splat(factor), gravity));
+    let delta = f32::from_bits(x87_quiet_bits(e.mem.u32(step + 8)));
+    let gravity = load_vec(e, world_of(e) + 0x10);
+    store_vec(e, solver_info + 0x20, mul(splat(delta), gravity));
+    e.call(SOLVE_UPLOAD, &args![]);
+    e.call(CLEANUP_DIRTY_ISLANDS, &args![world_of(e)]);
+    e.with_stack(0xa0, |e, frame| {
+        let usage = frame.addr() + 0x18;
+        let query = frame.addr() + 0x30;
+        e.call(GET_MEM_USAGE_FOR_INTEGRATION, &args![world_of(e), usage]);
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let guard = e.mem.u32(router + 0x18);
+        let needed = e.mem.u32(usage);
+        let enough = e.vcall(guard, 0x20, &args![needed]).u32() as u8 != 0;
+        if !enough {
+            let watchdog = e
+                .call(WORLD_GET_MEMORY_WATCH_DOG, &args![world_of(e)])
+                .u32();
+            if watchdog == 0 {
+                e.mem.set_u32(base + 0x28, 1);
+                return 1;
+            }
+            release_world_lock(e, world_of(e));
+            e.call(CHECK_MEMORY_FOR_INTEGRATION, &args![world_of(e)]);
+            add_to_word(e, world_of(e) + 0x94, 1);
+        }
+        add_to_word(e, world_of(e) + 0x94, 1);
+        add_to_word(e, world_of(e) + 0x98, -1);
+        profile_record(e, PROFILE_ACTIONS);
+        fn_00cf8b00(e, this);
+        add_to_word(e, world_of(e) + 0x98, 1);
+        release_world_lock(e, world_of(e));
+        add_to_word(e, world_of(e) + 0x94, 1);
+        let world = world_of(e);
+        let counter = e.mem.u8(world + 0x307).wrapping_add(1);
+        e.mem.set_u8(world + 0x307, counter);
+        if counter.wrapping_sub(4) & 7 == 0 {
+            let toggled = e.mem.u8(world + 0x305) ^ 1;
+            e.mem.set_u8(world + 0x305, toggled);
+        }
+        if counter & 7 == 0 {
+            let toggled = e.mem.u8(world + 0x305) ^ 2;
+            e.mem.set_u8(world + 0x305, toggled);
+        }
+        if counter & 0xf == 0 {
+            let flipped = 1u8.wrapping_sub(e.mem.u8(world + 0x306));
+            e.mem.set_u8(world + 0x307, 0);
+            e.mem.set_u8(world + 0x306, flipped);
+        }
+        let world = world_of(e);
+        let word = e.mem.u32(world + 0x1b8);
+        hkp_constraint_query_in_set(e, Ptr::new(query), Ptr::new(world + 0x1e0), step_info, word);
+        profile_record(e, PROFILE_INTEGRATE_ISLANDS);
+        let islands = world_of(e) + 0x28;
+        let mut index = e.mem.i32(islands + 4).wrapping_sub(1);
+        while index >= 0 {
+            let data = e.mem.u32(islands);
+            let info = world_of(e) + 0x1d0;
+            let island = e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)));
+            let entities = e.mem.u32(island + 0x48);
+            let count = e.mem.u32(island + 0x4c);
+            let result = if e.mem.u32(island + 0xc) == 0 {
+                profile_record(e, PROFILE_SINGLE_OBJECT);
+                let result = e
+                    .call(
+                        APPLY_FORCES_AND_STEP,
+                        &args![info + 0x10, info, info + 0x30, entities, count, 0xe0u32],
+                    )
+                    .i32();
+                let island_world = e.mem.u32(island + 0x18);
+                let collision_input = e.mem.u32(island_world + 0x78);
+                let entities = e.mem.u32(island + 0x48);
+                let count = e.mem.u32(island + 0x4c);
+                e.call(
+                    ENTITY_BATCH_RECALC_AABB,
+                    &args![collision_input, entities, count],
+                );
+                profile_record(e, PROFILE_END);
+                result
+            } else {
+                e.call(
+                    SOLVER_SETUP_SOLVE,
+                    &args![
+                        info,
+                        info + 0x10,
+                        query,
+                        island,
+                        0u32,
+                        0u32,
+                        entities,
+                        count
+                    ],
+                )
+                .i32()
+            };
+            if result > 5 && e.mem.u8(island + 0x26) & 0xc != 0 {
+                let island_world = e.mem.u32(island + 0x18);
+                if e.mem.u8(island_world + 0xd5) != 0 {
+                    e.call(MARK_ISLAND_INACTIVE, &args![island_world, island]);
+                }
+            }
+            if e.mem.u32(world_of(e) + 0x18c) != 0 {
+                profile_record(e, PROFILE_ISLAND_POST_INTEGRATE);
+                e.call(
+                    FIRE_ISLAND_POST_INTEGRATE,
+                    &args![world_of(e), island, step],
+                );
+            }
+            index = index.wrapping_sub(1);
+        }
+        release_world_lock(e, world_of(e));
+        if e.mem.u32(world_of(e) + 0x174) != 0 {
+            profile_record(e, PROFILE_WORLD_POST_INTEGRATE);
+            e.call(FIRE_WORLD_POST_INTEGRATE, &args![world_of(e), step]);
+            profile_record(e, PROFILE_END);
+        }
+        profile_record(e, PROFILE_STAGE_END);
+        0
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00cf_8bc0, hkp_simulation_collide(Ptr) -> u32),
+        entry!(0x00cf_a6e0, hkp_constraint_query_in_set(Ptr, Ptr, Ptr, u32)),
+        entry!(0x00cf_87a0, fn_00cf87a0(u32, u32, u32)),
+        entry!(0x00cf_92c0, fn_00cf92c0(u32, u32, u32)),
+        entry!(
+            0x00cf_9c60,
+            hkp_simulation_collide_entities_broad_phase_discrete(u32, i32, u32)
+        ),
+        entry!(0x00cf_8da0, hkp_simulation_integrate_internal(Ptr, Ptr) -> u32),
         entry!(0x00cf_8730, hkp_simulation_step_delta_time(Ptr, f32) -> u32),
         entry!(0x00cf_87c0, hkp_simulation_construct(Ptr, u32) -> Ptr),
         entry!(0x00cf_8820, hkp_simulation_re_collide_after_step_failure(Ptr) -> u32),
@@ -2268,5 +2744,645 @@ mod collide_tests {
         assert_eq!(r.e.mem.u32(r.this + 0x28), 0);
         assert_eq!(r.e.mem.f32(r.this + 0x18), 2.0);
         assert_eq!(records(&r.e, r.stream)[0], PROFILE_INTEGRATE);
+    }
+}
+
+#[cfg(test)]
+mod last_functions_tests {
+    use super::*;
+    use crate::units::havok_sdk::hkpsphereshape::{PROFILE_SLOT, TLS_GET_VALUE};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    type CallLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// The double addresses standing for the virtual slots of the test objects.
+    const BROAD_PHASE_SLOTS: u32 = 0x0900_1000;
+    const ALLOCATOR_SLOTS: u32 = 0x0900_2000;
+    const GUARD_SLOTS: u32 = 0x0900_3000;
+    const AGENT_SLOTS: u32 = 0x0900_4000;
+
+    /// An engine with the exe's data pages and a profile stream with room for `room` records of
+    /// 12 bytes after a 16-byte one.
+    fn engine(room: u32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.map(0x00fd_f000, 0x1000);
+        e.call_log = Some(Vec::new());
+        let stream = e.mem.alloc(0x200);
+        e.mem.set_u32(stream + 4, stream + 0x20);
+        e.mem
+            .set_u32(stream + 0xc, stream + 0x20 + 0x10 + room * 12);
+        e.set_global(PROFILE_SLOT, 3u32);
+        e.register_double(TLS_GET_VALUE, move |_, _| stream.into_ret());
+        (e, stream)
+    }
+
+    /// The labels of the records: the 16-byte first one (both labels) and the 12-byte others.
+    fn records(e: &Engine, stream: u32) -> Vec<u32> {
+        let end = e.mem.u32(stream + 4);
+        let first = stream + 0x20;
+        let mut labels = vec![e.mem.u32(first), e.mem.u32(first + 0xc)];
+        labels.extend(
+            (first + 0x10..end)
+                .step_by(12)
+                .map(|record| e.mem.u32(record)),
+        );
+        labels
+    }
+
+    /// A double at `address` that logs `[address, arguments...]` and answers `answer`.
+    fn log_double(e: &mut Engine, address: u32, log: &CallLog, answer: u32) {
+        let log = Rc::clone(log);
+        e.register_double(address, move |_, a| {
+            let mut entry = vec![address];
+            entry.extend_from_slice(a);
+            log.borrow_mut().push(entry);
+            answer.into_ret()
+        });
+    }
+
+    fn logged(log: &CallLog, address: u32) -> Vec<Vec<u32>> {
+        log.borrow()
+            .iter()
+            .filter(|entry| entry[0] == address)
+            .map(|entry| entry[1..].to_vec())
+            .collect()
+    }
+
+    fn order(log: &CallLog) -> Vec<u32> {
+        log.borrow().iter().map(|entry| entry[0]).collect()
+    }
+
+    /// An object whose vtable's slots are the double addresses from `slots`.
+    fn object(e: &mut Engine, slots: u32, size: u32) -> u32 {
+        let table = e.mem.alloc(0x40);
+        let entries: Vec<u32> = (0..16).map(|slot| slots + 4 * slot).collect();
+        e.put_vtable(table, &entries);
+        let object = e.mem.alloc(size);
+        e.mem.set_u32(object, table);
+        object
+    }
+
+    #[test]
+    fn hkp_constraint_query_in_set_copies_and_multiplies_the_solver_info() {
+        let (mut e, _) = engine(0);
+        let info = e.mem.alloc(0x130);
+        for (offset, value) in [
+            (0x10c, 2.0f32),
+            (0x11c, 3.0),
+            (0x110, 4.0),
+            (0x120, 5.0),
+            (8, 8.0),
+            (0x54, 0.5),
+            (0x5c, 0.25),
+        ] {
+            e.mem.set_f32(info + offset, value);
+        }
+        // A signalling NaN comes out quiet through `FLD`/`FSTP`, bit for bit through `MOVSS`.
+        e.mem.set_u32(info + 4, 0x7f80_0001);
+        e.mem.set_u32(info + 0x128, 0x7f80_0002);
+        let step = e.mem.alloc(0x10);
+        e.mem.set_u32(step + 8, 0x7f80_0003);
+        e.mem.set_u32(step + 0xc, 0x1234_5678);
+        let query = e.mem.alloc(0x70);
+        for word in 0..0x1c {
+            e.mem.set_u32(query + 4 * word, 0xdddd_dddd);
+        }
+        e.call(0x00cf_a6e0, &args![query, info, step, 0x55u32]);
+        let float = |e: &Engine, offset: u32| e.mem.f32(query + offset);
+        assert_eq!(float(&e, 0), 2.0);
+        assert_eq!(float(&e, 4), 6.0);
+        assert_eq!(float(&e, 8), 4.0);
+        assert_eq!(float(&e, 0x14), 5.0);
+        assert_eq!(float(&e, 0x18), 15.0);
+        assert_eq!(e.mem.u32(query + 0x40), 0x7fc0_0001);
+        assert_eq!(float(&e, 0x44), 8.0);
+        assert_eq!(float(&e, 0x20), 2.0);
+        assert_eq!(float(&e, 0x24), 8.0);
+        assert_eq!(float(&e, 0x28), 1.0);
+        assert_eq!(e.mem.u32(query + 0x68), 0x55);
+        // The step info's words are moved as integers.
+        assert_eq!(e.mem.u32(query + 0xc), 0x7f80_0003);
+        assert_eq!(e.mem.u32(query + 0x10), 0x1234_5678);
+        let vector: Vec<u32> = (0..4)
+            .map(|lane| e.mem.u32(query + 0x50 + 4 * lane))
+            .collect();
+        assert_eq!(vector, vec![0x7f80_0002, 0, 0, 0]);
+        // The words in between are left alone.
+        for offset in [0x1c, 0x2c, 0x30, 0x3c, 0x48, 0x4c, 0x60, 0x64, 0x6c] {
+            assert_eq!(e.mem.u32(query + offset), 0xdddd_dddd);
+        }
+    }
+
+    #[test]
+    fn fn_00cf87a0_invalidates_the_time_of_impact_of_the_entry() {
+        let (mut e, _) = engine(0);
+        let log: CallLog = Rc::new(RefCell::new(Vec::new()));
+        log_double(&mut e, INVALIDATE_TIM_IN_AGENT, &log, 0);
+        e.call(0x00cf_87a0, &args![0x1000u32, 0x2000u32, 0x3000u32]);
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![INVALIDATE_TIM_IN_AGENT, 0x1000, 0x2000]]
+        );
+    }
+
+    /// Runs `00cf92c0` on a fresh entry; `contact` makes the agent double leave a contact point.
+    fn process_entry(contact: bool, abort: u32) -> (Engine, CallLog, [u32; 4]) {
+        let (mut e, _) = engine(0);
+        e.set_global(ABORT_FLAG, abort);
+        e.set_global(OUTPUT_INITIAL_FLOAT, 0x7f80_0004u32);
+        let log: CallLog = Rc::new(RefCell::new(Vec::new()));
+        e.register_double(PROCESS_AGENT, {
+            let log = Rc::clone(&log);
+            move |e, a| {
+                log.borrow_mut()
+                    .push(vec![PROCESS_AGENT, a[0], a[1], a[2], a[3]]);
+                if contact {
+                    e.mem.set_u32(a[2], a[2] + 0x40);
+                }
+                Ret::default()
+            }
+        });
+        log_double(&mut e, AGENT_SLOTS + 0x18, &log, 0);
+        let tables = e.mem.alloc(0x1d00);
+        e.mem.set_u32(tables + 0x1bf0, 0x0bad_f00d);
+        let info = e.mem.alloc(0x80);
+        e.mem.set_u32(info, tables);
+        let agent = object(&mut e, AGENT_SLOTS, 0x10);
+        let entry = e.mem.alloc(0x20);
+        e.mem.set_u8(entry + 0xc, 0xff);
+        e.mem.set_u32(entry + 8, agent);
+        e.mem.set_u32(entry + 0x10, 0x1111);
+        e.mem.set_u32(entry + 0x14, 0x2222);
+        let output = e.mem.alloc(0x3090);
+        e.call(0x00cf_92c0, &args![entry, info, output]);
+        (e, log, [entry, info, output, agent])
+    }
+
+    #[test]
+    fn fn_00cf92c0_processes_the_agent_and_hands_contact_points_on() {
+        let (e, log, [entry, info, output, agent]) = process_entry(true, 0);
+        assert_eq!(e.mem.u32(output + 0x3030), 0x7fc0_0004);
+        assert_eq!(e.mem.u32(output + 0x3080), 0);
+        let tables = e.mem.u32(info);
+        assert_eq!(e.mem.u32(info + 0x60), tables + 0x1c60);
+        // The entry's byte -1 picks the row 64 bytes before `+0x1c30`.
+        assert_eq!(e.mem.u32(info + 0x14), 0x0bad_f00d);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                vec![PROCESS_AGENT, entry, info, output, agent],
+                vec![AGENT_SLOTS + 0x18, agent, 0x1111, 0x2222, info, output],
+            ]
+        );
+        // Without a contact point, or with the abort flag, the agent is not called.
+        let (e, log, [_, _, output, _]) = process_entry(false, 0);
+        assert_eq!(e.mem.u32(output), output + 0x10);
+        assert_eq!(order(&log), vec![PROCESS_AGENT]);
+        let (_, log, _) = process_entry(true, 1);
+        assert_eq!(order(&log), vec![PROCESS_AGENT]);
+    }
+
+    struct BroadPhaseRig {
+        e: Engine,
+        stream: u32,
+        log: CallLog,
+        world: u32,
+        router: u32,
+        top: u32,
+        owned: u32,
+    }
+
+    /// A world with pair capacity 4, a dispatcher, a collision input and a filter, a memory
+    /// router whose stack starts at `top`, and doubles for every callee. The broad phase double
+    /// reports `new_pairs` new and `removed_pairs` removed pairs and moves the removed pairs to
+    /// an owned block (capacity 8); the allocator answers `available` to slot `0x24`.
+    fn broad_phase_rig(new_pairs: u32, removed_pairs: u32, available: u32) -> BroadPhaseRig {
+        let (mut e, stream) = engine(8);
+        let log: CallLog = Rc::new(RefCell::new(Vec::new()));
+        let allocator = object(&mut e, ALLOCATOR_SLOTS, 0x10);
+        log_double(&mut e, ALLOCATOR_SLOTS + 0x24, &log, available);
+        log_double(&mut e, ALLOCATOR_SLOTS + 0x10, &log, 0);
+        let router = e.mem.alloc(0x20);
+        let top = e.mem.alloc(0x1000);
+        e.mem.set_u32(router, top);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| router.into_ret());
+        let owned = e.mem.alloc(0x40);
+        let broad_phase = object(&mut e, BROAD_PHASE_SLOTS, 0x10);
+        e.register_double(BROAD_PHASE_SLOTS + 0x2c, {
+            let log = Rc::clone(&log);
+            move |e, a| {
+                let mut entry = vec![BROAD_PHASE_SLOTS + 0x2c];
+                entry.extend_from_slice(a);
+                // The handles and the AABBs as the broad phase sees them.
+                entry.extend((0..2).map(|i| e.mem.u32(a[1] + 4 * i)));
+                entry.extend((0..16).map(|i| e.mem.u32(a[2] + 4 * i)));
+                log.borrow_mut().push(entry);
+                e.mem.set_u32(a[4] + 4, new_pairs);
+                e.mem.set_u32(a[5] + 4, removed_pairs);
+                e.mem.set_u32(a[5], owned);
+                e.mem.set_u32(a[5] + 8, 8);
+                Ret::default()
+            }
+        });
+        let world = e.mem.alloc(0x400);
+        e.mem.set_u32(world + 0x33c, 4);
+        e.mem.set_u32(world + 0x58, broad_phase);
+        e.mem.set_u32(world + 0x64, 0x6464);
+        e.mem.set_u32(world + 0x78, 0x7878);
+        e.mem.set_u32(world + 0x7c, 0x7c00);
+        for address in [
+            ENTITY_BATCH_RECALC_AABB,
+            DISPATCHER_REMOVE_DUPLICATES,
+            DISPATCHER_REMOVE_PAIRS,
+            DISPATCHER_ADD_PAIRS,
+            SET_OUT_OF_MEMORY_STATE,
+        ] {
+            log_double(&mut e, address, &log, 0);
+        }
+        BroadPhaseRig {
+            e,
+            stream,
+            log,
+            world,
+            router,
+            top,
+            owned,
+        }
+    }
+
+    /// Two entities: the first with an AABB to recompute (`+0x30` above `+0x40`); the words of
+    /// their AABBs are `0x100 + i` and `0x200 + i`.
+    fn entities(e: &mut Engine) -> (u32, [u32; 2]) {
+        let list = e.mem.alloc(8);
+        let mut bodies = [0; 2];
+        for (index, body) in bodies.iter_mut().enumerate() {
+            *body = e.mem.alloc(0x60);
+            for word in 0..8u32 {
+                let value = 0x100 * (index as u32 + 1) + word;
+                e.mem.set_u32(*body + 0x30 + 4 * word, value);
+            }
+            e.mem.set_u32(list + 4 * index as u32, *body);
+        }
+        e.mem.set_u32(bodies[0] + 0x30, 0x500);
+        (list, bodies)
+    }
+
+    fn collide_broad_phase(r: &mut BroadPhaseRig, list: u32, count: u32) {
+        let world = r.world;
+        r.e.call(0x00cf_9c60, &args![list, count, world]);
+    }
+
+    #[test]
+    fn hkp_simulation_collide_entities_broad_phase_discrete_updates_the_pairs() {
+        let mut r = broad_phase_rig(2, 1, 1);
+        let (list, bodies) = entities(&mut r.e);
+        let recalc_slot = Rc::new(Cell::new(0u32));
+        r.e.register_double(ENTITY_BATCH_RECALC_AABB, {
+            let log = Rc::clone(&r.log);
+            let recalc_slot = Rc::clone(&recalc_slot);
+            move |e, a| {
+                let body = e.mem.u32(a[1]);
+                log.borrow_mut()
+                    .push(vec![ENTITY_BATCH_RECALC_AABB, a[0], body, a[2]]);
+                recalc_slot.set(a[1]);
+                // The recomputed AABB is what gets copied.
+                e.mem.set_u32(body + 0x30, 0x77);
+                Ret::default()
+            }
+        });
+        collide_broad_phase(&mut r, list, 2);
+        assert_eq!(
+            order(&r.log),
+            vec![
+                ENTITY_BATCH_RECALC_AABB,
+                BROAD_PHASE_SLOTS + 0x2c,
+                DISPATCHER_REMOVE_DUPLICATES,
+                DISPATCHER_REMOVE_PAIRS,
+                ALLOCATOR_SLOTS + 0x24,
+                DISPATCHER_ADD_PAIRS,
+                ALLOCATOR_SLOTS + 0x10,
+            ]
+        );
+        assert_eq!(
+            logged(&r.log, ENTITY_BATCH_RECALC_AABB),
+            vec![vec![0x7878, bodies[0], 1]]
+        );
+        let sweep = &logged(&r.log, BROAD_PHASE_SLOTS + 0x2c)[0];
+        let (handles, aabbs, added, removed) = (sweep[1], sweep[2], sweep[4], sweep[5]);
+        // Both pair arrays (32 bytes each, rounded to 128), then the AABBs and the handles.
+        assert_eq!(aabbs, r.top + 0x100);
+        assert_eq!(handles, r.top + 0x180);
+        assert_eq!(sweep[3], 2);
+        assert_eq!(&sweep[6..8], &[bodies[0] + 0x24, bodies[1] + 0x24]);
+        let mut expected: Vec<u32> = vec![0x77, 0x101, 0x102, 0x103, 0x104, 0x105, 0x106, 0x107];
+        expected.extend(0x200..0x208);
+        assert_eq!(&sweep[8..24], expected.as_slice());
+        // The removed pairs are the first local array, the new pairs the second.
+        assert_eq!(removed + 0x10, added);
+        assert_eq!(recalc_slot.get(), removed + 0x20);
+        assert_eq!(
+            logged(&r.log, DISPATCHER_REMOVE_DUPLICATES),
+            vec![vec![added, removed]]
+        );
+        assert_eq!(
+            logged(&r.log, DISPATCHER_REMOVE_PAIRS),
+            vec![vec![0x6464, r.owned, 1]]
+        );
+        assert_eq!(logged(&r.log, ALLOCATOR_SLOTS + 0x24)[0][1], 0x500);
+        assert_eq!(
+            logged(&r.log, DISPATCHER_ADD_PAIRS),
+            vec![vec![0x6464, r.top, 2, 0x7c08]]
+        );
+        // Only the owned block is freed; the stack top is back where it was.
+        assert_eq!(
+            logged(&r.log, ALLOCATOR_SLOTS + 0x10)[0][1..],
+            [r.owned, 0x40]
+        );
+        assert_eq!(r.e.mem.u32(r.router), r.top);
+        assert_eq!(
+            records(&r.e, r.stream),
+            vec![
+                PROFILE_BROAD_PHASE,
+                PROFILE_INIT_MEMORY,
+                PROFILE_CALC_AABBS,
+                PROFILE_SWEEP,
+                PROFILE_REMOVE_DUPLICATES,
+                PROFILE_REMOVE_AGENTS,
+                PROFILE_ADD_AGENTS,
+                PROFILE_STAGE_END,
+            ]
+        );
+    }
+
+    #[test]
+    fn hkp_simulation_collide_entities_broad_phase_discrete_without_pairs_or_memory() {
+        // No pairs: no dispatcher work, the removed array's owned block is still freed.
+        let mut r = broad_phase_rig(0, 0, 1);
+        let (list, _) = entities(&mut r.e);
+        r.e.mem.set_u32(r.world + 0x7c, 0);
+        collide_broad_phase(&mut r, list, 0);
+        assert_eq!(
+            order(&r.log),
+            vec![BROAD_PHASE_SLOTS + 0x2c, ALLOCATOR_SLOTS + 0x10]
+        );
+        assert_eq!(
+            records(&r.e, r.stream)[2..],
+            [PROFILE_CALC_AABBS, PROFILE_SWEEP, PROFILE_STAGE_END]
+        );
+        // No memory for the new pairs: out-of-memory state instead of adding them.
+        let mut r = broad_phase_rig(1, 0, 0);
+        let (list, _) = entities(&mut r.e);
+        r.e.mem.set_u32(r.world + 0x7c, 0);
+        collide_broad_phase(&mut r, list, 1);
+        assert!(!order(&r.log).contains(&DISPATCHER_ADD_PAIRS));
+        assert_eq!(logged(&r.log, SET_OUT_OF_MEMORY_STATE), vec![vec![1]]);
+        assert_eq!(
+            records(&r.e, r.stream)[4..],
+            [
+                PROFILE_REMOVE_DUPLICATES,
+                PROFILE_REMOVE_AGENTS,
+                PROFILE_STAGE_END
+            ]
+        );
+        assert_eq!(r.e.mem.u32(r.router), r.top);
+    }
+
+    struct IntegrateRig {
+        e: Engine,
+        stream: u32,
+        log: CallLog,
+        this: u32,
+        world: u32,
+        step: u32,
+        islands: [u32; 2],
+    }
+
+    /// A simulation on a world with two active islands (the first without constraints, the
+    /// second with them, which the solver double answers 6 for and whose world allows
+    /// deactivation), both callbacks pending and the world lock held once. `enough` is the
+    /// guard's answer, `watchdog` what `getMemoryWatchDog` answers.
+    fn integrate_rig(enough: u32, watchdog: u32) -> IntegrateRig {
+        let (mut e, stream) = engine(12);
+        let log: CallLog = Rc::new(RefCell::new(Vec::new()));
+        let guard = object(&mut e, GUARD_SLOTS, 0x10);
+        log_double(&mut e, GUARD_SLOTS + 0x20, &log, enough);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x18, guard);
+        e.register_double(MEMORY_ROUTER, move |_, _| router.into_ret());
+        e.register_double(GET_MEM_USAGE_FOR_INTEGRATION, {
+            let log = Rc::clone(&log);
+            move |e, a| {
+                log.borrow_mut()
+                    .push(vec![GET_MEM_USAGE_FOR_INTEGRATION, a[0]]);
+                e.mem.set_u32(a[1], 0x999);
+                Ret::default()
+            }
+        });
+        log_double(&mut e, WORLD_GET_MEMORY_WATCH_DOG, &log, watchdog);
+        log_double(&mut e, APPLY_FORCES_AND_STEP, &log, 2);
+        log_double(&mut e, SOLVER_SETUP_SOLVE, &log, 6);
+        for address in [
+            SOLVE_UPLOAD,
+            CLEANUP_DIRTY_ISLANDS,
+            CHECK_MEMORY_FOR_INTEGRATION,
+            ENTITY_BATCH_RECALC_AABB,
+            MARK_ISLAND_INACTIVE,
+            FIRE_ISLAND_POST_INTEGRATE,
+            FIRE_WORLD_POST_INTEGRATE,
+            WORLD_UNLOCK_FIRST,
+            WORLD_UNLOCK_SECOND,
+        ] {
+            log_double(&mut e, address, &log, 0);
+        }
+        let world = e.mem.alloc(0x400);
+        for (lane, value) in [1.0f32, -2.0, 4.0, 0.0].into_iter().enumerate() {
+            e.mem.set_f32(world + 0x10 + 4 * lane as u32, value);
+        }
+        e.mem.set_f32(world + 0x300, 3.0);
+        e.mem.set_i32(world + 0x2f4, 5);
+        e.mem.set_u32(world + 0x1b8, 0x1b8);
+        e.mem.set_u32(world + 0x78, 0x7878);
+        e.mem.set_u32(world + 0x94, 1);
+        e.mem.set_u32(world + 0x98, 7);
+        e.mem.set_u32(world + 0x18c, 1);
+        e.mem.set_u32(world + 0x174, 1);
+        e.mem.set_u8(world + 0xd5, 1);
+        e.mem.set_u8(world + 0x305, 0);
+        e.mem.set_u8(world + 0x306, 1);
+        e.mem.set_u8(world + 0x307, 3);
+        let list = e.mem.alloc(8);
+        let mut islands = [0; 2];
+        for (index, island) in islands.iter_mut().enumerate() {
+            *island = e.mem.alloc(0x6c);
+            e.mem.set_u32(*island + 0xc, index as u32);
+            e.mem.set_u32(*island + 0x18, world);
+            e.mem.set_u32(*island + 0x48, 0x4800 + index as u32);
+            e.mem.set_u32(*island + 0x4c, 3 + index as u32);
+            e.mem.set_u8(*island + 0x26, 4);
+            e.mem.set_u32(list + 4 * index as u32, *island);
+        }
+        e.mem.set_u32(world + 0x28, list);
+        e.mem.set_u32(world + 0x2c, 2);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0xc, world);
+        let step = e.mem.alloc(0x10);
+        for (word, value) in [1.0f32, 1.5, 0.5, 2.0].into_iter().enumerate() {
+            e.mem.set_f32(step + 4 * word as u32, value);
+        }
+        IntegrateRig {
+            e,
+            stream,
+            log,
+            this,
+            world,
+            step,
+            islands,
+        }
+    }
+
+    fn integrate(r: &mut IntegrateRig) -> u32 {
+        let (this, step) = (r.this, r.step);
+        r.e.call(0x00cf_8da0, &args![this, step]).u32()
+    }
+
+    #[test]
+    fn hkp_simulation_integrate_internal_steps_every_island() {
+        let mut r = integrate_rig(1, 0);
+        assert_eq!(integrate(&mut r), 0);
+        let (world, step) = (r.world, r.step);
+        let words: Vec<u32> = (0..4).map(|w| r.e.mem.u32(world + 0x1d0 + 4 * w)).collect();
+        let step_words: Vec<u32> = (0..4).map(|w| r.e.mem.u32(step + 4 * w)).collect();
+        assert_eq!(words, step_words);
+        assert_eq!(r.e.mem.f32(world + 0x2ec), 1.5);
+        assert_eq!(r.e.mem.f32(world + 0x2f0), 10.0);
+        assert_eq!(load_vec(&r.e, world + 0x1f0), [1.5, -3.0, 6.0, 0.0]);
+        assert_eq!(load_vec(&r.e, world + 0x200), [0.5, -1.0, 2.0, 0.0]);
+        // The lock is back where it was, the actions' counter too; no pending work ran.
+        assert_eq!(r.e.mem.u32(world + 0x94), 1);
+        assert_eq!(r.e.mem.u32(world + 0x98), 7);
+        // Counter 3 -> 4: bit 0 of +0x305 toggles.
+        assert_eq!(r.e.mem.u8(world + 0x307), 4);
+        assert_eq!(r.e.mem.u8(world + 0x305), 1);
+        assert_eq!(r.e.mem.u8(world + 0x306), 1);
+        let [single, solved] = r.islands;
+        let info = world + 0x1d0;
+        assert_eq!(
+            order(&r.log),
+            vec![
+                SOLVE_UPLOAD,
+                CLEANUP_DIRTY_ISLANDS,
+                GET_MEM_USAGE_FOR_INTEGRATION,
+                GUARD_SLOTS + 0x20,
+                SOLVER_SETUP_SOLVE,
+                MARK_ISLAND_INACTIVE,
+                FIRE_ISLAND_POST_INTEGRATE,
+                APPLY_FORCES_AND_STEP,
+                ENTITY_BATCH_RECALC_AABB,
+                FIRE_ISLAND_POST_INTEGRATE,
+                FIRE_WORLD_POST_INTEGRATE,
+            ]
+        );
+        assert_eq!(logged(&r.log, GUARD_SLOTS + 0x20)[0][1], 0x999);
+        let solve = &logged(&r.log, SOLVER_SETUP_SOLVE)[0];
+        let query = solve[2];
+        assert_eq!(
+            solve,
+            &vec![info, info + 0x10, query, solved, 0, 0, 0x4801, 4]
+        );
+        // The query was set from the world's solver info and the step info.
+        assert_eq!(r.e.mem.u32(query + 0x68), 0x1b8);
+        assert_eq!(r.e.mem.f32(query + 0xc), 0.5);
+        assert_eq!(r.e.mem.f32(query), 1.5);
+        assert_eq!(
+            logged(&r.log, MARK_ISLAND_INACTIVE),
+            vec![vec![world, solved]]
+        );
+        assert_eq!(
+            logged(&r.log, APPLY_FORCES_AND_STEP),
+            vec![vec![info + 0x10, info, info + 0x30, 0x4800, 3, 0xe0]]
+        );
+        assert_eq!(
+            logged(&r.log, ENTITY_BATCH_RECALC_AABB),
+            vec![vec![0x7878, 0x4800, 3]]
+        );
+        assert_eq!(
+            logged(&r.log, FIRE_ISLAND_POST_INTEGRATE),
+            vec![vec![world, solved, step], vec![world, single, step]]
+        );
+        assert_eq!(
+            logged(&r.log, FIRE_WORLD_POST_INTEGRATE),
+            vec![vec![world, step]]
+        );
+        assert_eq!(
+            records(&r.e, r.stream),
+            vec![
+                PROFILE_INTEGRATE_INTERNAL,
+                PROFILE_INTEGRATE_INIT,
+                PROFILE_ACTIONS,
+                PROFILE_INTEGRATE_ISLANDS,
+                PROFILE_ISLAND_POST_INTEGRATE,
+                PROFILE_SINGLE_OBJECT,
+                PROFILE_END,
+                PROFILE_ISLAND_POST_INTEGRATE,
+                PROFILE_WORLD_POST_INTEGRATE,
+                PROFILE_END,
+                PROFILE_STAGE_END,
+            ]
+        );
+    }
+
+    #[test]
+    fn hkp_simulation_integrate_internal_steps_the_tags_and_skips_what_is_not_due() {
+        let mut r = integrate_rig(1, 0);
+        let world = r.world;
+        r.e.mem.set_u8(world + 0x307, 15);
+        r.e.mem.set_u32(world + 0x18c, 0);
+        r.e.mem.set_u32(world + 0x174, 0);
+        r.e.mem.set_u8(world + 0xd5, 0);
+        assert_eq!(integrate(&mut r), 0);
+        // Counter 15 -> 16: bit 1 toggles, the counter is cleared and +0x306 flips.
+        assert_eq!(r.e.mem.u8(world + 0x307), 0);
+        assert_eq!(r.e.mem.u8(world + 0x305), 2);
+        assert_eq!(r.e.mem.u8(world + 0x306), 0);
+        let calls = order(&r.log);
+        assert!(!calls.contains(&MARK_ISLAND_INACTIVE));
+        assert!(!calls.contains(&FIRE_ISLAND_POST_INTEGRATE));
+        assert!(!calls.contains(&FIRE_WORLD_POST_INTEGRATE));
+        assert_eq!(*records(&r.e, r.stream).last().unwrap(), PROFILE_STAGE_END);
+        // A solver answer of 5 does not deactivate.
+        let mut r = integrate_rig(1, 0);
+        let log = Rc::clone(&r.log);
+        log_double(&mut r.e, SOLVER_SETUP_SOLVE, &log, 5);
+        integrate(&mut r);
+        assert!(!order(&r.log).contains(&MARK_ISLAND_INACTIVE));
+    }
+
+    #[test]
+    fn hkp_simulation_integrate_internal_without_memory() {
+        // No watchdog: the stage word becomes 1 and nothing else runs.
+        let mut r = integrate_rig(0, 0);
+        assert_eq!(integrate(&mut r), 1);
+        assert_eq!(r.e.mem.u32(r.this + 0x28), 1);
+        assert_eq!(*order(&r.log).last().unwrap(), WORLD_GET_MEMORY_WATCH_DOG);
+        assert_eq!(r.e.mem.u32(r.world + 0x94), 1);
+        assert_eq!(records(&r.e, r.stream).len(), 2);
+        // With a watchdog the lock is released around the memory check; with the lock at 1 the
+        // release reaches zero and runs the pending work.
+        let mut r = integrate_rig(0, 0x5000);
+        let world = r.world;
+        r.e.mem.set_u32(world + 0x8c, 1);
+        assert_eq!(integrate(&mut r), 0);
+        let calls = order(&r.log);
+        let check = calls
+            .iter()
+            .position(|&c| c == CHECK_MEMORY_FOR_INTEGRATION)
+            .unwrap();
+        assert_eq!(calls[check - 1], WORLD_UNLOCK_FIRST);
+        assert_eq!(calls[check - 2], WORLD_GET_MEMORY_WATCH_DOG);
+        assert_eq!(r.e.mem.u32(world + 0x94), 1);
+        assert_eq!(r.e.mem.u32(r.this + 0x28), 0);
     }
 }

@@ -190,7 +190,10 @@ address	cc	params	ret	unit	callees	consts
 006041c0	cdecl		u32	crates/engine-fallout/src/units/fallout_shared/tesnpc.rs		
 00605d40	cdecl	u32	u32	crates/engine-fallout/src/units/fallout_shared/tesnpc.rs		
 00607340	cdecl		u32	crates/engine-fallout/src/units/fallout_shared/tesnpc.rs		
+00622ba0	cdecl		f64	crates/engine-fallout/src/units/fallout_shared_havok/run_006227e0.rs		f42000000
+00622bb0	cdecl		f64	crates/engine-fallout/src/units/fallout_shared_havok/run_006227e0.rs		f43800000
 006259f0	cdecl		u32	crates/engine-fallout/src/units/fallout_shared_havok/havokstream.rs		
+0062aad0	cdecl		u32	crates/engine-fallout/src/units/fallout_shared_havok/tesarrowtargetlistener.rs		
 00631070	cdecl	f32	f32	crates/engine-fallout/src/units/fallout_shared_havok/teswaterlistener.rs		i65,i5,d0000000000000000,fbf800000
 006310c0	thiscall	u32	u32	crates/engine-fallout/src/units/fallout_shared_havok/teswaterlistener.rs	006310e0,0087eaa0,009d9f40	i16,i64,i224
 006310e0	thiscall	u32	u32	crates/engine-fallout/src/units/fallout_shared_havok/teswaterlistener.rs	0087eaa0	i16,i64

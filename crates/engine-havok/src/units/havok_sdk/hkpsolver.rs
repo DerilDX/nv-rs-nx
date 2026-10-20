@@ -7567,6 +7567,6652 @@ pub fn hk_solve_constraints_by_the_steps(
     })
 }
 
+// Translated from 00d8d030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkSolveConstraints` (engine map; cdecl, four words, answers `EAX`): the solver's main loop
+/// over one island. `solver_info` is the parameter block, `schema` the record list,
+/// `bodies` the solver element array (`0x80` bytes each; the layout `hkSolveStepJacobians`
+/// documents) and `accumulators` the float array the rows add their impulses to.
+///
+/// It first makes sure the Havok license flag (`01269204`) is set, running the check
+/// `00df22f0` once when it is not, and answers `0` without touching anything when it is still
+/// clear. Then it walks the elements by their type byte: type 0 clears the two pseudo velocity
+/// vectors (`+0x40`, `+0x50`) and adds the element's float at `+8` times the vector at
+/// `solver_info + 0x10` to the linear velocity at `+0x10`, types 1 and 2 only clear the pseudo
+/// velocities, type 3 ends the walk and anything above 3 is a breakpoint (a panic here). The
+/// end test compares the element pointer with `0xffffffff` (`CMP EAX,-0x1`), so in practice
+/// only type 3 ends it.
+///
+/// It answers `1` after `solver_info[0x114]` iterations (none when that count is not above 0),
+/// each made of `solver_info[0x118]` sub-steps over the schema (the 32 record types of
+/// `hkSolveStepJacobians`, here applying the rows' solver step with the frame block of the
+/// iteration number and a float that is `1.0` in the first sub-step and `0.0` after; record
+/// types `29` to `31` go to the chain solvers `00d893a0`, `00d89690` and `00d8a3a0`) and one
+/// more pass over the elements (types 0 to 2 clip and integrate the velocities with the
+/// iteration's damping entry, the last iteration differently; type 3 ends the pass). The
+/// function keeps four values on the x87 stack across blocks and reuses registers across
+/// record types, so it is translated instruction by instruction on [`SolverMachine`] (its
+/// exe instruction above each statement; the x87 arithmetic through the prelude's `x87_*`
+/// helpers, every SSE lane through the `run_00d6bf60` lane helpers).
+pub fn hk_solve_constraints(
+    e: &mut Engine,
+    solver_info: u32,
+    schema: u32,
+    bodies: u32,
+    accumulators: u32,
+) -> u32 {
+    e.with_stack(SOLVER_STACK_SIZE, |e, stack| {
+        SolverMachine::new(
+            e,
+            stack.addr(),
+            &[solver_info, schema, bodies, accumulators],
+        )
+        .run_solve_constraints()
+    })
+}
+
+/// The machine code of `hkSolveConstraints` (`00d8d030`) and the instructions it needs beyond
+/// those of the two other schema walks, with the x87 arithmetic through the prelude's helpers.
+mod solve_constraints {
+    use super::*;
+    use crate::units::havok_sdk::run_00d6bf60::{
+        addps, addss, andps, cmpeqps, cmpleps, cmpltps, load_vec, maxps, minps, movmskps, mulps,
+        mulss, shufps, store_vec, subps, subss,
+    };
+
+    /// The x87 arithmetic forms the function uses: `FADD`, `FMUL`, `FSUB` and `FDIVR`.
+    #[derive(Clone, Copy)]
+    enum X87Op {
+        Add,
+        Mul,
+        Sub,
+        DivR,
+    }
+
+    impl X87Op {
+        /// `destination op source` (`DivR`: `source op destination`).
+        fn apply(self, destination: f64, source: f64) -> f64 {
+            match self {
+                X87Op::Add => x87_add(destination, source),
+                X87Op::Mul => x87_mul(destination, source),
+                X87Op::Sub => x87_sub(destination, source),
+                X87Op::DivR => x87_div(source, destination),
+            }
+        }
+    }
+
+    impl SolverMachine<'_> {
+        /// A register form: `ST(destination) = ST(destination) op ST(source)`, then a pop for
+        /// the `P` forms.
+        fn x87_registers(&mut self, op: X87Op, destination: usize, source: usize, pop: bool) {
+            let value = op.apply(self.x87.st(destination), self.x87.st(source));
+            self.x87.set(destination, value);
+            if pop {
+                self.x87.pop();
+            }
+        }
+
+        /// A `float ptr` memory form: `ST0 = ST0 op operand`.
+        fn x87_float_operand(&mut self, op: X87Op, address: u32) {
+            let operand = x87_m32(self.e.mem.u32(address));
+            let value = op.apply(self.x87.st(0), operand);
+            self.x87.set(0, value);
+        }
+
+        /// `FIMUL dword ptr`: `ST0 = ST0 * operand` (a 32-bit integer).
+        fn x87_fimul(&mut self, address: u32) {
+            let operand = f64::from(self.e.mem.i32(address));
+            let value = x87_mul(self.x87.st(0), operand);
+            self.x87.set(0, value);
+        }
+
+        /// `TEST` of two words.
+        fn test32(&mut self, a: u32, b: u32) {
+            self.cf = false;
+            self.result_flags(a & b, 32);
+        }
+
+        /// `INC` and `DEC`: the carry flag stays.
+        fn inc32(&mut self, a: u32) -> u32 {
+            let result = a.wrapping_add(1);
+            self.result_flags(result, 32);
+            result
+        }
+
+        fn dec32(&mut self, a: u32) -> u32 {
+            let result = a.wrapping_sub(1);
+            self.result_flags(result, 32);
+            result
+        }
+
+        /// The blocks of the function that starts at `0x00d8_d030`, one arm per block.
+        pub(super) fn run_solve_constraints(&mut self) -> u32 {
+            let mut block: u32 = 0x00d8_d030;
+            loop {
+                match block {
+                    0x00d8_d030 => {
+                        // 00d8d030: PUSH EBP
+                        self.push(self.ebp);
+                        // 00d8d031: MOV EBP,ESP
+                        self.ebp = self.esp;
+                        // 00d8d033: AND ESP,0xfffffff0
+                        self.esp = self.and32(self.esp, 0xffff_fff0);
+                        // 00d8d036: SUB ESP,0x314
+                        self.esp = self.sub32(self.esp, 0x314);
+                        // 00d8d03c: CMP byte ptr [0x01269204],0x0
+                        self.cmp8(self.e.mem.u8(0x0126_9204), 0x0_u8);
+                        // 00d8d043: PUSH EBX
+                        self.push(self.ebx);
+                        // 00d8d044: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8d045: PUSH EDI
+                        self.push(self.edi);
+                        // 00d8d046: JNZ 0x00d8d067
+                        if !self.zf {
+                            block = 0x00d8_d067;
+                            continue;
+                        }
+                        // 00d8d048: PUSH 0x1269204
+                        self.push(0x0126_9204);
+                        // 00d8d04d: CALL 0x00df22f0
+                        self.call_cdecl(LICENSE_CHECK, 1);
+                        // 00d8d052: ADD ESP,0x4
+                        self.esp = self.add32(self.esp, 0x4);
+                        // 00d8d055: CMP byte ptr [0x01269204],0x0
+                        self.cmp8(self.e.mem.u8(0x0126_9204), 0x0_u8);
+                        // 00d8d05c: JNZ 0x00d8d067
+                        if !self.zf {
+                            block = 0x00d8_d067;
+                            continue;
+                        }
+                        // 00d8d05e: XOR EAX,EAX
+                        self.eax = self.xor32(self.eax, self.eax);
+                        // 00d8d060: POP EDI
+                        self.edi = self.pop();
+                        // 00d8d061: POP ESI
+                        self.esi = self.pop();
+                        // 00d8d062: POP EBX
+                        self.ebx = self.pop();
+                        // 00d8d063: MOV ESP,EBP
+                        self.esp = self.ebp;
+                        // 00d8d065: POP EBP
+                        self.ebp = self.pop();
+                        // 00d8d066: RET
+                        return self.eax;
+                    }
+                    0x00d8_d067 => {
+                        // 00d8d067: MOV EDX,dword ptr [EBP + 0x8]
+                        self.edx = self.e.mem.u32(self.ebp.wrapping_add(0x8));
+                        // 00d8d06a: MOV EAX,dword ptr [EDX + 0x10]
+                        self.eax = self.e.mem.u32(self.edx.wrapping_add(0x10));
+                        // 00d8d06d: MOV dword ptr [ESP + 0xf0],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0xf0), self.eax);
+                        // 00d8d074: MOV ECX,dword ptr [EDX + 0x14]
+                        self.ecx = self.e.mem.u32(self.edx.wrapping_add(0x14));
+                        // 00d8d077: MOV dword ptr [ESP + 0xf4],ECX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0xf4), self.ecx);
+                        // 00d8d07e: MOV EAX,dword ptr [EDX + 0x18]
+                        self.eax = self.e.mem.u32(self.edx.wrapping_add(0x18));
+                        // 00d8d081: MOV dword ptr [ESP + 0xf8],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0xf8), self.eax);
+                        // 00d8d088: MOV ECX,dword ptr [EDX + 0x1c]
+                        self.ecx = self.e.mem.u32(self.edx.wrapping_add(0x1c));
+                        // 00d8d08b: MOV EAX,dword ptr [EBP + 0x10]
+                        self.eax = self.e.mem.u32(self.ebp.wrapping_add(0x10));
+                        // 00d8d08e: MOV dword ptr [ESP + 0xfc],ECX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0xfc), self.ecx);
+                        // 00d8d095: MOVAPS XMM7,xmmword ptr [ESP + 0xf0]
+                        self.xmm[7] = load_vec(self.e, self.esp.wrapping_add(0xf0));
+                        // 00d8d09d: CMP EAX,-0x1
+                        self.cmp32(self.eax, 0xffff_ffff);
+                        // 00d8d0a0: JNC 0x00d8d104
+                        if !self.cf {
+                            block = 0x00d8_d104;
+                            continue;
+                        }
+                        block = 0x00d8_d0a2;
+                    }
+                    0x00d8_d0a2 => {
+                        // 00d8d0a2: MOVZX ECX,byte ptr [EAX]
+                        self.ecx = u32::from(self.e.mem.u8(self.eax));
+                        // 00d8d0a5: CMP ECX,0x3
+                        self.cmp32(self.ecx, 0x3);
+                        // 00d8d0a8: JA 0x00d8d0fe
+                        if !self.cf && !self.zf {
+                            block = 0x00d8_d0fe;
+                            continue;
+                        }
+                        // 00d8d0aa: JMP dword ptr [ECX*0x4 + 0xd8facc]
+                        block = match self.ecx {
+                            0 => 0x00d8_d0c1,
+                            1 => 0x00d8_d0b1,
+                            2 => 0x00d8_d0b1,
+                            3 => 0x00d8_d104,
+                            _ => unreachable!("the bound check above leaves 0 to 3"),
+                        };
+                        continue;
+                    }
+                    0x00d8_d0b1 => {
+                        // 00d8d0b1: XORPS XMM0,XMM0
+                        self.xmm[0] = [0.0; 4];
+                        // 00d8d0b4: MOVAPS xmmword ptr [EAX + 0x40],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x40), self.xmm[0]);
+                        // 00d8d0b8: MOVAPS xmmword ptr [EAX + 0x50],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x50), self.xmm[0]);
+                        // 00d8d0bc: SUB EAX,-0x80
+                        self.eax = self.sub32(self.eax, 0xffff_ff80);
+                        // 00d8d0bf: JMP 0x00d8d0ff
+                        block = 0x00d8_d0ff;
+                        continue;
+                    }
+                    0x00d8_d0c1 => {
+                        // 00d8d0c1: XORPS XMM1,XMM1
+                        self.xmm[1] = [0.0; 4];
+                        // 00d8d0c4: JMP 0x00d8d0d0
+                        block = 0x00d8_d0d0;
+                        continue;
+                    }
+                    0x00d8_d0d0 => {
+                        // 00d8d0d0: MOVSS XMM0,dword ptr [EAX + 0x8]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.eax.wrapping_add(0x8)));
+                        // 00d8d0d5: MOVAPS xmmword ptr [EAX + 0x40],XMM1
+                        store_vec(self.e, self.eax.wrapping_add(0x40), self.xmm[1]);
+                        // 00d8d0d9: MOVAPS xmmword ptr [EAX + 0x50],XMM1
+                        store_vec(self.e, self.eax.wrapping_add(0x50), self.xmm[1]);
+                        // 00d8d0dd: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8d0e1: SUB EAX,-0x80
+                        self.eax = self.sub32(self.eax, 0xffff_ff80);
+                        // 00d8d0e4: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8d0e8: MULPS XMM0,XMM7
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[7]);
+                        // 00d8d0eb: ADDPS XMM2,XMM0
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[0]);
+                        // 00d8d0ee: MOVAPS xmmword ptr [EAX + -0x70],XMM2
+                        store_vec(self.e, self.eax.wrapping_sub(0x70), self.xmm[2]);
+                        // 00d8d0f2: CMP byte ptr [EAX],0x0
+                        self.cmp8(self.e.mem.u8(self.eax), 0x0_u8);
+                        // 00d8d0f5: JNZ 0x00d8d0ff
+                        if !self.zf {
+                            block = 0x00d8_d0ff;
+                            continue;
+                        }
+                        // 00d8d0f7: CMP EAX,-0x1
+                        self.cmp32(self.eax, 0xffff_ffff);
+                        // 00d8d0fa: JC 0x00d8d0d0
+                        if self.cf {
+                            block = 0x00d8_d0d0;
+                            continue;
+                        }
+                        // 00d8d0fc: JMP 0x00d8d104
+                        block = 0x00d8_d104;
+                        continue;
+                    }
+                    0x00d8_d0fe => {
+                        // 00d8d0fe: INT3
+                        panic!("INT3 at 00d8d0fe");
+                    }
+                    0x00d8_d0ff => {
+                        // 00d8d0ff: CMP EAX,-0x1
+                        self.cmp32(self.eax, 0xffff_ffff);
+                        // 00d8d102: JC 0x00d8d0a2
+                        if self.cf {
+                            block = 0x00d8_d0a2;
+                            continue;
+                        }
+                        block = 0x00d8_d104;
+                    }
+                    0x00d8_d104 => {
+                        // 00d8d104: CMP dword ptr [EDX + 0x114],0x0
+                        self.cmp32(self.e.mem.u32(self.edx.wrapping_add(0x114)), 0x0);
+                        // 00d8d10b: FLD float ptr [EDX + 0x120]
+                        self.fld32(self.edx.wrapping_add(0x120));
+                        // 00d8d111: FMUL float ptr [EDX + 0x40]
+                        self.x87_float_operand(X87Op::Mul, self.edx.wrapping_add(0x40));
+                        // 00d8d114: MOV dword ptr [ESP + 0x6c],0x0
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x6c), 0x0);
+                        // 00d8d11c: FSTP float ptr [ESP + 0x70]
+                        self.fstp32(self.esp.wrapping_add(0x70));
+                        // 00d8d120: MOVSS XMM0,dword ptr [ESP + 0x70]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x70)));
+                        // 00d8d126: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8d12a: MOVAPS xmmword ptr [ESP + 0x200],XMM0
+                        store_vec(self.e, self.esp.wrapping_add(0x200), self.xmm[0]);
+                        // 00d8d132: JLE 0x00d8f90d
+                        if (self.e.mem.u32(self.edx.wrapping_add(0x114)) as i32) <= 0 {
+                            // the flags of CMP dword ptr [EDX + 0x114],0x0 at 00d8d104
+                            block = 0x00d8_f90d;
+                            continue;
+                        }
+                        // 00d8d138: JMP 0x00d8d140
+                        block = 0x00d8_d140;
+                        continue;
+                    }
+                    0x00d8_d140 => {
+                        // 00d8d140: FLD1
+                        self.x87.push(1.0);
+                        // 00d8d142: MOV EDX,dword ptr [ESP + 0x6c]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x6c));
+                        // 00d8d146: MOV EAX,dword ptr [EBP + 0x8]
+                        self.eax = self.e.mem.u32(self.ebp.wrapping_add(0x8));
+                        // 00d8d149: FSTP float ptr [ESP + 0x78]
+                        self.fstp32(self.esp.wrapping_add(0x78));
+                        // 00d8d14d: MOV dword ptr [ESP + 0x74],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x74), self.edx);
+                        // 00d8d151: MOV ECX,dword ptr [EAX + 0x118]
+                        self.ecx = self.e.mem.u32(self.eax.wrapping_add(0x118));
+                        // 00d8d157: MOV dword ptr [ESP + 0x70],ECX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x70), self.ecx);
+                        // 00d8d15b: JMP 0x00d8d160
+                        block = 0x00d8_d160;
+                        continue;
+                    }
+                    0x00d8_d160 => {
+                        // 00d8d160: MOV ESI,dword ptr [EBP + 0xc]
+                        self.esi = self.e.mem.u32(self.ebp.wrapping_add(0xc));
+                        // 00d8d163: CMP byte ptr [ESI],0x0
+                        self.cmp8(self.e.mem.u8(self.esi), 0x0_u8);
+                        // 00d8d166: MOV EDI,dword ptr [EBP + 0x14]
+                        self.edi = self.e.mem.u32(self.ebp.wrapping_add(0x14));
+                        // 00d8d169: JZ 0x00d8f6f4
+                        if self.zf {
+                            block = 0x00d8_f6f4;
+                            continue;
+                        }
+                        // 00d8d16f: NOP
+                        // NOP
+                        block = 0x00d8_d170;
+                    }
+                    0x00d8_d170 => {
+                        // 00d8d170: MOVZX EBX,word ptr [ESI + 0x4]
+                        self.ebx = u32::from(self.e.mem.u16(self.esi.wrapping_add(0x4)));
+                        // 00d8d174: MOVZX EAX,word ptr [ESI + 0x6]
+                        self.eax = u32::from(self.e.mem.u16(self.esi.wrapping_add(0x6)));
+                        // 00d8d178: MOV ECX,dword ptr [EBP + 0x10]
+                        self.ecx = self.e.mem.u32(self.ebp.wrapping_add(0x10));
+                        // 00d8d17b: SHL EBX,0x7
+                        self.ebx = self.shl32(self.ebx, 7);
+                        // 00d8d17e: SHL EAX,0x7
+                        self.eax = self.shl32(self.eax, 7);
+                        // 00d8d181: ADD EBX,ECX
+                        self.ebx = self.add32(self.ebx, self.ecx);
+                        // 00d8d183: ADD EAX,ECX
+                        self.eax = self.add32(self.eax, self.ecx);
+                        // 00d8d185: MOV dword ptr [ESP + 0x4c],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x4c), self.eax);
+                        block = 0x00d8_d189;
+                    }
+                    0x00d8_d189 => {
+                        // 00d8d189: ADD ESI,0x10
+                        self.esi = self.add32(self.esi, 0x10);
+                        block = 0x00d8_d18c;
+                    }
+                    0x00d8_d18c => {
+                        // 00d8d18c: MOVSX EAX,byte ptr [ESI]
+                        self.eax = i32::from(self.e.mem.i8(self.esi)) as u32;
+                        // 00d8d18f: CMP EAX,0x1f
+                        self.cmp32(self.eax, 0x1f);
+                        // 00d8d192: JA 0x00d8f6eb
+                        if !self.cf && !self.zf {
+                            block = 0x00d8_f6eb;
+                            continue;
+                        }
+                        // 00d8d198: JMP dword ptr [EAX*0x4 + 0xd8fadc]
+                        block = match self.eax {
+                            0 => 0x00d8_f6ec,
+                            1 => 0x00d8_d170,
+                            2 => 0x00d8_f6b7,
+                            3 => 0x00d8_d189,
+                            4 => 0x00d8_f6eb,
+                            5 => 0x00d8_e890,
+                            6 => 0x00d8_e9a2,
+                            7 => 0x00d8_ead3,
+                            8 => 0x00d8_ee84,
+                            9 => 0x00d8_ed33,
+                            10 => 0x00d8_f05d,
+                            11 => 0x00d8_f39c,
+                            12 => 0x00d8_e7e5,
+                            13 => 0x00d8_e3a0,
+                            14 => 0x00d8_e29d,
+                            15 => 0x00d8_e5cc,
+                            16 => 0x00d8_d75e,
+                            17 => 0x00d8_d75e,
+                            18 => 0x00d8_d87d,
+                            19 => 0x00d8_d87d,
+                            20 => 0x00d8_d19f,
+                            21 => 0x00d8_d19f,
+                            22 => 0x00d8_e029,
+                            23 => 0x00d8_dcd7,
+                            24 => 0x00d8_db0e,
+                            25 => 0x00d8_f52b,
+                            26 => 0x00d8_f546,
+                            27 => 0x00d8_f5c0,
+                            28 => 0x00d8_f6eb,
+                            29 => 0x00d8_f66a,
+                            30 => 0x00d8_f693,
+                            31 => 0x00d8_f6bf,
+                            _ => unreachable!("the bound check above leaves 0 to 31"),
+                        };
+                        continue;
+                    }
+                    0x00d8_d19f => {
+                        // 00d8d19f: MOV EDX,dword ptr [ESP + 0x4c]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8d1a3: MOVAPS XMM0,xmmword ptr [EDX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.edx.wrapping_add(0x10));
+                        // 00d8d1a7: MOVAPS XMM1,xmmword ptr [EBX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d1ab: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d1af: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8d1b3: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8d1b6: MOVAPS XMM0,xmmword ptr [ESI + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8d1ba: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8d1bd: MOVAPS XMM0,xmmword ptr [EDX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.edx.wrapping_add(0x20));
+                        // 00d8d1c1: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d1c4: MOVAPS XMM2,xmmword ptr [ESI]
+                        self.xmm[2] = load_vec(self.e, self.esi);
+                        // 00d8d1c7: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d1ca: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8d1cd: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8d1d0: LEA ECX,[EDX + 0x10]
+                        self.ecx = self.edx.wrapping_add(0x10);
+                        // 00d8d1d3: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8d1d6: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8d1da: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8d1de: ADD EDX,0x20
+                        self.edx = self.add32(self.edx, 0x20);
+                        // 00d8d1e1: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8d1e5: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8d1e9: SHUFPS XMM2,XMM2,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[2], 255);
+                        // 00d8d1ed: SUBSS XMM2,XMM0
+                        self.xmm[2] = subss(self.xmm[2], self.xmm[0]);
+                        // 00d8d1f1: MOVSS dword ptr [ESP + 0x88],XMM2
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0x88), self.xmm[2][0].to_bits());
+                        // 00d8d1fa: FLD float ptr [ESP + 0x88]
+                        self.fld32(self.esp.wrapping_add(0x88));
+                        // 00d8d201: FST float ptr [ESP + 0x1e0]
+                        self.fst32(self.esp.wrapping_add(0x1e0));
+                        // 00d8d208: MOVAPS XMM0,xmmword ptr [ECX]
+                        self.xmm[0] = load_vec(self.e, self.ecx);
+                        // 00d8d20b: MOVAPS XMM1,xmmword ptr [EBX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d20f: MOVAPS XMM3,xmmword ptr [ESI + 0x40]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x40));
+                        // 00d8d213: MOVAPS XMM2,xmmword ptr [EDX]
+                        self.xmm[2] = load_vec(self.e, self.edx);
+                        // 00d8d216: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8d219: MOVAPS XMM0,xmmword ptr [EBX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d21d: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8d220: MOVAPS XMM0,xmmword ptr [ESI + 0x50]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x50));
+                        // 00d8d224: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d227: MOVAPS XMM2,xmmword ptr [ESI + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x30));
+                        // 00d8d22b: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d22e: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8d231: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8d234: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8d237: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8d23b: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8d23f: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8d243: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8d247: SHUFPS XMM2,XMM2,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[2], 255);
+                        // 00d8d24b: SUBSS XMM2,XMM0
+                        self.xmm[2] = subss(self.xmm[2], self.xmm[0]);
+                        // 00d8d24f: MOVSS dword ptr [ESP + 0x90],XMM2
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0x90), self.xmm[2][0].to_bits());
+                        // 00d8d258: FLD float ptr [ESP + 0x90]
+                        self.fld32(self.esp.wrapping_add(0x90));
+                        // 00d8d25f: FST float ptr [ESP + 0x1e4]
+                        self.fst32(self.esp.wrapping_add(0x1e4));
+                        // 00d8d266: FLD float ptr [ESI + 0x2c]
+                        self.fld32(self.esi.wrapping_add(0x2c));
+                        // 00d8d269: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8d26d: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8d26f: FMUL float ptr [ESI + 0x60]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x60));
+                        // 00d8d272: FLD ST2
+                        self.x87.fld_st(2);
+                        // 00d8d274: FMUL float ptr [ESP + 0x10]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x10));
+                        // 00d8d278: FADDP
+                        self.x87_registers(X87Op::Add, 1, 0, true); // DE C1
+                                                                    // 00d8d27a: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8d27e: FLD float ptr [ESI + 0x5c]
+                        self.fld32(self.esi.wrapping_add(0x5c));
+                        // 00d8d281: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8d285: FLD float ptr [ESI + 0x60]
+                        self.fld32(self.esi.wrapping_add(0x60));
+                        // 00d8d288: FMULP ST2
+                        self.x87_registers(X87Op::Mul, 2, 0, true); // DE CA
+                                                                    // 00d8d28a: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8d28c: FMUL float ptr [ESP + 0x10]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x10));
+                        // 00d8d290: FADDP ST2,ST0
+                        self.x87_registers(X87Op::Add, 2, 0, true); // DE C2
+                                                                    // 00d8d292: FXCH
+                        self.x87.fxch(1);
+                        // 00d8d294: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8d298: FLD float ptr [ESP + 0x30]
+                        self.fld32(self.esp.wrapping_add(0x30));
+                        // 00d8d29c: FLD float ptr [EDI]
+                        self.fld32(self.edi);
+                        // 00d8d29e: FCHS
+                        self.x87.fchs();
+                        // 00d8d2a0: FCOMPP
+                        self.fcompp();
+                        // 00d8d2a2: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8d2a4: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8d2a7: JP 0x00d8d3d1
+                        if self.pf {
+                            block = 0x00d8_d3d1;
+                            continue;
+                        }
+                        // 00d8d2ad: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8d2af: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8d2b3: FLD float ptr [EDI + 0x4]
+                        self.fld32(self.edi.wrapping_add(0x4));
+                        // 00d8d2b6: FCHS
+                        self.x87.fchs();
+                        // 00d8d2b8: FCOMPP
+                        self.fcompp();
+                        // 00d8d2ba: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8d2bc: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8d2bf: JP 0x00d8d3ee
+                        if self.pf {
+                            block = 0x00d8_d3ee;
+                            continue;
+                        }
+                        // 00d8d2c5: MOVSS XMM5,dword ptr [ESP + 0x30]
+                        self.xmm[5] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x30)));
+                        // 00d8d2cb: MOVSS XMM0,dword ptr [ESP + 0x10]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8d2d1: MOVAPS XMM2,xmmword ptr [EBX + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8d2d5: MOVAPS XMM6,xmmword ptr [ESI]
+                        self.xmm[6] = load_vec(self.e, self.esi);
+                        // 00d8d2d8: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8d2dc: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8d2df: ADD EAX,0x30
+                        self.eax = self.add32(self.eax, 0x30);
+                        // 00d8d2e2: MOVAPS XMM1,XMM5
+                        self.xmm[1] = self.xmm[5];
+                        // 00d8d2e5: SHUFPS XMM1,XMM5,0x0
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[5], 0);
+                        // 00d8d2e9: MOVAPS XMM0,XMM1
+                        self.xmm[0] = self.xmm[1];
+                        // 00d8d2ec: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d2ef: MOVAPS XMM2,xmmword ptr [EAX]
+                        self.xmm[2] = load_vec(self.e, self.eax);
+                        // 00d8d2f2: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d2f5: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8d2f8: SHUFPS XMM2,XMM0,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 255);
+                        // 00d8d2fc: MULPS XMM2,XMM6
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[6]);
+                        // 00d8d2ff: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8d302: SHUFPS XMM3,XMM1,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 255);
+                        // 00d8d306: MULPS XMM3,XMM6
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[6]);
+                        // 00d8d309: MOVAPS XMM6,xmmword ptr [EBX + 0x10]
+                        self.xmm[6] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d30d: ADDPS XMM2,XMM6
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[6]);
+                        // 00d8d310: MOVAPS xmmword ptr [EBX + 0x10],XMM2
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8d314: MOVAPS XMM2,xmmword ptr [ECX]
+                        self.xmm[2] = load_vec(self.e, self.ecx);
+                        // 00d8d317: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8d31a: MOVAPS xmmword ptr [ECX],XMM2
+                        store_vec(self.e, self.ecx, self.xmm[2]);
+                        // 00d8d31d: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8d321: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d325: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d328: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8d32c: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d32f: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8d333: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8d336: MOVAPS xmmword ptr [EBX + 0x20],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8d33a: MOVAPS XMM0,xmmword ptr [EDX]
+                        self.xmm[0] = load_vec(self.e, self.edx);
+                        // 00d8d33d: MOV dword ptr [ESP + 0x50],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x50), self.eax);
+                        // 00d8d341: ADDPS XMM1,XMM0
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[0]);
+                        // 00d8d344: MOVAPS xmmword ptr [EDX],XMM1
+                        store_vec(self.e, self.edx, self.xmm[1]);
+                        // 00d8d347: ADDSS XMM2,XMM5
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[5]);
+                        // 00d8d34b: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        // 00d8d34f: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8d353: LEA EAX,[EDI + 0x4]
+                        self.eax = self.edi.wrapping_add(0x4);
+                        // 00d8d356: MOV dword ptr [ESP + 0x30],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x30), self.eax);
+                        // 00d8d35a: LEA EAX,[ESI + 0x30]
+                        self.eax = self.esi.wrapping_add(0x30);
+                        // 00d8d35d: MOV dword ptr [ESP + 0x10],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x10), self.eax);
+                        // 00d8d361: MOV EAX,dword ptr [ESP + 0x50]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x50));
+                        // 00d8d365: MOVAPS XMM1,xmmword ptr [EAX]
+                        self.xmm[1] = load_vec(self.e, self.eax);
+                        // 00d8d368: MOV EAX,dword ptr [ESP + 0x10]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x10));
+                        // 00d8d36c: MOVAPS XMM2,XMM4
+                        self.xmm[2] = self.xmm[4];
+                        // 00d8d36f: SHUFPS XMM2,XMM4,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[4], 0);
+                        // 00d8d373: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d376: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d379: MOVAPS XMM2,xmmword ptr [EAX]
+                        self.xmm[2] = load_vec(self.e, self.eax);
+                        // 00d8d37c: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8d37f: SHUFPS XMM3,XMM0,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[0], 255);
+                        // 00d8d383: MOVAPS XMM6,XMM2
+                        self.xmm[6] = self.xmm[2];
+                        // 00d8d386: MULPS XMM6,XMM3
+                        self.xmm[6] = mulps(self.xmm[6], self.xmm[3]);
+                        // 00d8d389: MOVAPS XMM3,xmmword ptr [EBX + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d38d: ADDPS XMM3,XMM6
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[6]);
+                        // 00d8d390: MOVAPS xmmword ptr [EBX + 0x10],XMM3
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[3]);
+                        // 00d8d394: MOVAPS XMM3,xmmword ptr [ECX]
+                        self.xmm[3] = load_vec(self.e, self.ecx);
+                        // 00d8d397: MOVAPS XMM5,XMM1
+                        self.xmm[5] = self.xmm[1];
+                        // 00d8d39a: SHUFPS XMM5,XMM1,0xff
+                        self.xmm[5] = shufps(self.xmm[5], self.xmm[1], 255);
+                        // 00d8d39e: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8d3a1: SUBPS XMM3,XMM2
+                        self.xmm[3] = subps(self.xmm[3], self.xmm[2]);
+                        // 00d8d3a4: MOVAPS xmmword ptr [ECX],XMM3
+                        store_vec(self.e, self.ecx, self.xmm[3]);
+                        // 00d8d3a7: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8d3ab: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d3af: MULPS XMM2,XMM0
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[0]);
+                        // 00d8d3b2: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8d3b6: MOV EAX,dword ptr [ESP + 0x30]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x30));
+                        // 00d8d3ba: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8d3bd: MOVSS XMM1,dword ptr [EAX]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.eax));
+                        // 00d8d3c1: ADDPS XMM3,XMM2
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[2]);
+                        // 00d8d3c4: MOVAPS xmmword ptr [EBX + 0x20],XMM3
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[3]);
+                        // 00d8d3c8: ADDSS XMM1,XMM4
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[4]);
+                        // 00d8d3cc: JMP 0x00d8d523
+                        block = 0x00d8_d523;
+                        continue;
+                    }
+                    0x00d8_d3d1 => {
+                        // 00d8d3d1: FMUL float ptr [ESI + 0x4c]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x4c));
+                        // 00d8d3d4: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8d3d8: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8d3dc: FLD float ptr [EDI + 0x4]
+                        self.fld32(self.edi.wrapping_add(0x4));
+                        // 00d8d3df: FCHS
+                        self.x87.fchs();
+                        // 00d8d3e1: FCOMPP
+                        self.fcompp();
+                        // 00d8d3e3: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8d3e5: TEST AH,0x1
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x1_u8);
+                        // 00d8d3e8: JNZ 0x00d8d498
+                        if !self.zf {
+                            block = 0x00d8_d498;
+                            continue;
+                        }
+                        block = 0x00d8_d3ee;
+                    }
+                    0x00d8_d3ee => {
+                        // 00d8d3ee: MOVSS XMM1,dword ptr [ESP + 0x1e0]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x1e0)));
+                        // 00d8d3f7: MOVAPS XMM0,xmmword ptr [ESI + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8d3fb: MOVAPS XMM4,xmmword ptr [ESI]
+                        self.xmm[4] = load_vec(self.e, self.esi);
+                        // 00d8d3fe: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8d402: SHUFPS XMM0,XMM0,0xff
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 255);
+                        // 00d8d406: MOVAPS XMM2,XMM1
+                        self.xmm[2] = self.xmm[1];
+                        // 00d8d409: MOVAPS XMM1,xmmword ptr [0x010c7160]
+                        self.xmm[1] = load_vec(self.e, 0x010c_7160);
+                        // 00d8d410: MULSS XMM2,XMM0
+                        self.xmm[2] = mulss(self.xmm[2], self.xmm[0]);
+                        // 00d8d414: MOVSS XMM0,dword ptr [EDI]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8d418: ADD EAX,0x30
+                        self.eax = self.add32(self.eax, 0x30);
+                        // 00d8d41b: MOV dword ptr [ESP + 0x50],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x50), self.eax);
+                        // 00d8d41f: SUBSS XMM1,XMM0
+                        self.xmm[1] = subss(self.xmm[1], self.xmm[0]);
+                        // 00d8d423: MOVAPS XMM0,xmmword ptr [EAX]
+                        self.xmm[0] = load_vec(self.e, self.eax);
+                        // 00d8d426: MAXPS XMM1,XMM2
+                        self.xmm[1] = maxps(self.xmm[1], self.xmm[2]);
+                        // 00d8d429: MOVAPS XMM2,xmmword ptr [EBX + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8d42d: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8d430: SHUFPS XMM3,XMM1,0x0
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 0);
+                        // 00d8d434: MULPS XMM2,XMM3
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[3]);
+                        // 00d8d437: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8d43a: MOVAPS XMM5,XMM2
+                        self.xmm[5] = self.xmm[2];
+                        // 00d8d43d: SHUFPS XMM5,XMM2,0xff
+                        self.xmm[5] = shufps(self.xmm[5], self.xmm[2], 255);
+                        // 00d8d441: MOVAPS XMM3,XMM4
+                        self.xmm[3] = self.xmm[4];
+                        // 00d8d444: MULPS XMM3,XMM5
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[5]);
+                        // 00d8d447: MOVAPS XMM5,xmmword ptr [EBX + 0x10]
+                        self.xmm[5] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d44b: ADDPS XMM3,XMM5
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[5]);
+                        // 00d8d44e: MOVAPS xmmword ptr [EBX + 0x10],XMM3
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[3]);
+                        // 00d8d452: MOVAPS XMM3,xmmword ptr [ECX]
+                        self.xmm[3] = load_vec(self.e, self.ecx);
+                        // 00d8d455: MOVAPS XMM6,XMM0
+                        self.xmm[6] = self.xmm[0];
+                        // 00d8d458: SHUFPS XMM6,XMM0,0xff
+                        self.xmm[6] = shufps(self.xmm[6], self.xmm[0], 255);
+                        // 00d8d45c: MULPS XMM4,XMM6
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[6]);
+                        // 00d8d45f: SUBPS XMM3,XMM4
+                        self.xmm[3] = subps(self.xmm[3], self.xmm[4]);
+                        // 00d8d462: MOVAPS xmmword ptr [ECX],XMM3
+                        store_vec(self.e, self.ecx, self.xmm[3]);
+                        // 00d8d465: MOVAPS XMM3,xmmword ptr [ESI + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8d469: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d46d: MULPS XMM3,XMM2
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[2]);
+                        // 00d8d470: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8d474: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d477: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8d47b: ADDPS XMM4,XMM3
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[3]);
+                        // 00d8d47e: MOVAPS xmmword ptr [EBX + 0x20],XMM4
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[4]);
+                        // 00d8d482: MOVAPS XMM3,xmmword ptr [EDX]
+                        self.xmm[3] = load_vec(self.e, self.edx);
+                        // 00d8d485: ADDPS XMM3,XMM0
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[0]);
+                        // 00d8d488: MOVAPS xmmword ptr [EDX],XMM3
+                        store_vec(self.e, self.edx, self.xmm[3]);
+                        // 00d8d48b: ADDSS XMM2,XMM1
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[1]);
+                        // 00d8d48f: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        // 00d8d493: JMP 0x00d8d530
+                        block = 0x00d8_d530;
+                        continue;
+                    }
+                    0x00d8_d498 => {
+                        // 00d8d498: MOVSS XMM3,dword ptr [ESP + 0x10]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8d49e: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8d4a2: LEA EAX,[EDI + 0x4]
+                        self.eax = self.edi.wrapping_add(0x4);
+                        // 00d8d4a5: MOV dword ptr [ESP + 0x30],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x30), self.eax);
+                        // 00d8d4a9: LEA EAX,[ESI + 0x30]
+                        self.eax = self.esi.wrapping_add(0x30);
+                        // 00d8d4ac: MOV dword ptr [ESP + 0x10],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x10), self.eax);
+                        // 00d8d4b0: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8d4b4: MOVAPS XMM1,xmmword ptr [EAX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x30));
+                        // 00d8d4b8: ADD EAX,0x30
+                        self.eax = self.add32(self.eax, 0x30);
+                        // 00d8d4bb: MOV dword ptr [ESP + 0x50],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x50), self.eax);
+                        // 00d8d4bf: MOV EAX,dword ptr [ESP + 0x10]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x10));
+                        // 00d8d4c3: MOVAPS XMM2,XMM3
+                        self.xmm[2] = self.xmm[3];
+                        // 00d8d4c6: SHUFPS XMM2,XMM3,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[3], 0);
+                        // 00d8d4ca: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d4cd: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d4d0: MOVAPS XMM2,xmmword ptr [EAX]
+                        self.xmm[2] = load_vec(self.e, self.eax);
+                        // 00d8d4d3: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8d4d6: SHUFPS XMM4,XMM0,0xff
+                        self.xmm[4] = shufps(self.xmm[4], self.xmm[0], 255);
+                        // 00d8d4da: MOVAPS XMM6,XMM2
+                        self.xmm[6] = self.xmm[2];
+                        // 00d8d4dd: MULPS XMM6,XMM4
+                        self.xmm[6] = mulps(self.xmm[6], self.xmm[4]);
+                        // 00d8d4e0: MOVAPS XMM4,xmmword ptr [EBX + 0x10]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d4e4: ADDPS XMM4,XMM6
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[6]);
+                        // 00d8d4e7: MOVAPS xmmword ptr [EBX + 0x10],XMM4
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[4]);
+                        // 00d8d4eb: MOVAPS XMM4,xmmword ptr [ECX]
+                        self.xmm[4] = load_vec(self.e, self.ecx);
+                        // 00d8d4ee: MOVAPS XMM5,XMM1
+                        self.xmm[5] = self.xmm[1];
+                        // 00d8d4f1: SHUFPS XMM5,XMM1,0xff
+                        self.xmm[5] = shufps(self.xmm[5], self.xmm[1], 255);
+                        // 00d8d4f5: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8d4f8: SUBPS XMM4,XMM2
+                        self.xmm[4] = subps(self.xmm[4], self.xmm[2]);
+                        // 00d8d4fb: MOVAPS xmmword ptr [ECX],XMM4
+                        store_vec(self.e, self.ecx, self.xmm[4]);
+                        // 00d8d4fe: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8d502: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d506: MULPS XMM2,XMM0
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[0]);
+                        // 00d8d509: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8d50d: MOV EAX,dword ptr [ESP + 0x30]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x30));
+                        // 00d8d511: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8d514: MOVSS XMM1,dword ptr [EAX]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.eax));
+                        // 00d8d518: ADDPS XMM4,XMM2
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[2]);
+                        // 00d8d51b: MOVAPS xmmword ptr [EBX + 0x20],XMM4
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[4]);
+                        // 00d8d51f: ADDSS XMM1,XMM3
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[3]);
+                        block = 0x00d8_d523;
+                    }
+                    0x00d8_d523 => {
+                        // 00d8d523: MOVAPS XMM2,xmmword ptr [EDX]
+                        self.xmm[2] = load_vec(self.e, self.edx);
+                        // 00d8d526: ADDPS XMM2,XMM0
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[0]);
+                        // 00d8d529: MOVAPS xmmword ptr [EDX],XMM2
+                        store_vec(self.e, self.edx, self.xmm[2]);
+                        // 00d8d52c: MOVSS dword ptr [EAX],XMM1
+                        self.e.mem.set_u32(self.eax, self.xmm[1][0].to_bits());
+                        block = 0x00d8_d530;
+                    }
+                    0x00d8_d530 => {
+                        // 00d8d530: ADD ESI,0x70
+                        self.esi = self.add32(self.esi, 0x70);
+                        // 00d8d533: ADD EDI,0x8
+                        self.edi = self.add32(self.edi, 0x8);
+                        // 00d8d536: CMP byte ptr [ESI],0x14
+                        self.cmp8(self.e.mem.u8(self.esi), 0x14_u8);
+                        // 00d8d539: JNZ 0x00d8d18c
+                        if !self.zf {
+                            block = 0x00d8_d18c;
+                            continue;
+                        }
+                        // 00d8d53f: MOVAPS XMM0,xmmword ptr [ECX]
+                        self.xmm[0] = load_vec(self.e, self.ecx);
+                        // 00d8d542: MOVAPS XMM1,xmmword ptr [EBX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d546: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d54a: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8d54e: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8d551: MOVAPS XMM0,xmmword ptr [ESI + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8d555: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8d558: MOVAPS XMM0,xmmword ptr [EDX]
+                        self.xmm[0] = load_vec(self.e, self.edx);
+                        // 00d8d55b: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d55e: MOVAPS XMM2,xmmword ptr [ESI]
+                        self.xmm[2] = load_vec(self.e, self.esi);
+                        // 00d8d561: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d564: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8d567: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8d56a: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8d56d: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8d571: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8d575: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8d579: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8d57d: SHUFPS XMM2,XMM2,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[2], 255);
+                        // 00d8d581: SUBSS XMM2,XMM0
+                        self.xmm[2] = subss(self.xmm[2], self.xmm[0]);
+                        // 00d8d585: MOVSS dword ptr [ESP + 0xcc],XMM2
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xcc), self.xmm[2][0].to_bits());
+                        // 00d8d58e: FLD float ptr [ESP + 0xcc]
+                        self.fld32(self.esp.wrapping_add(0xcc));
+                        // 00d8d595: FST float ptr [ESP + 0x1f0]
+                        self.fst32(self.esp.wrapping_add(0x1f0));
+                        // 00d8d59c: MOVAPS XMM0,xmmword ptr [ECX]
+                        self.xmm[0] = load_vec(self.e, self.ecx);
+                        // 00d8d59f: MOVAPS XMM2,xmmword ptr [EBX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d5a3: MOVAPS XMM3,xmmword ptr [ESI + 0x40]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x40));
+                        // 00d8d5a7: MOVAPS XMM1,xmmword ptr [EDX]
+                        self.xmm[1] = load_vec(self.e, self.edx);
+                        // 00d8d5aa: SUBPS XMM2,XMM0
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[0]);
+                        // 00d8d5ad: MOVAPS XMM0,xmmword ptr [EBX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d5b1: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8d5b4: MOVAPS XMM0,xmmword ptr [ESI + 0x50]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x50));
+                        // 00d8d5b8: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8d5bb: MOVAPS XMM1,xmmword ptr [ESI + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.esi.wrapping_add(0x30));
+                        // 00d8d5bf: MOVAPS XMM4,XMM1
+                        self.xmm[4] = self.xmm[1];
+                        // 00d8d5c2: MULPS XMM4,XMM2
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[2]);
+                        // 00d8d5c5: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8d5c8: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8d5cb: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8d5ce: SHUFPS XMM2,XMM0,0x55
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 85);
+                        // 00d8d5d2: ADDSS XMM2,XMM0
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[0]);
+                        // 00d8d5d6: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8d5da: ADDSS XMM0,XMM2
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[2]);
+                        // 00d8d5de: SHUFPS XMM1,XMM1,0xff
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 255);
+                        // 00d8d5e2: SUBSS XMM1,XMM0
+                        self.xmm[1] = subss(self.xmm[1], self.xmm[0]);
+                        // 00d8d5e6: MOVSS dword ptr [ESP + 0xa8],XMM1
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xa8), self.xmm[1][0].to_bits());
+                        // 00d8d5ef: FLD float ptr [ESP + 0xa8]
+                        self.fld32(self.esp.wrapping_add(0xa8));
+                        // 00d8d5f6: FST float ptr [ESP + 0x1f4]
+                        self.fst32(self.esp.wrapping_add(0x1f4));
+                        // 00d8d5fd: FLD float ptr [ESI + 0x2c]
+                        self.fld32(self.esi.wrapping_add(0x2c));
+                        // 00d8d600: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8d604: FLD ST1
+                        self.x87.fld_st(1);
+                        // 00d8d606: FMUL float ptr [ESP + 0x10]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x10));
+                        // 00d8d60a: FLD ST1
+                        self.x87.fld_st(1);
+                        // 00d8d60c: FMUL float ptr [ESI + 0x60]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x60));
+                        // 00d8d60f: FADDP
+                        self.x87_registers(X87Op::Add, 1, 0, true); // DE C1
+                                                                    // 00d8d611: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8d615: FLD float ptr [ESI + 0x5c]
+                        self.fld32(self.esi.wrapping_add(0x5c));
+                        // 00d8d618: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8d61c: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8d61e: FMUL float ptr [ESP + 0x10]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x10));
+                        // 00d8d622: FLD float ptr [ESI + 0x60]
+                        self.fld32(self.esi.wrapping_add(0x60));
+                        // 00d8d625: FMULP ST3
+                        self.x87_registers(X87Op::Mul, 3, 0, true); // DE CB
+                                                                    // 00d8d627: FADDP ST2,ST0
+                        self.x87_registers(X87Op::Add, 2, 0, true); // DE C2
+                                                                    // 00d8d629: FXCH
+                        self.x87.fxch(1);
+                        // 00d8d62b: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8d62f: FLD float ptr [ESP + 0x30]
+                        self.fld32(self.esp.wrapping_add(0x30));
+                        // 00d8d633: FLD float ptr [EDI]
+                        self.fld32(self.edi);
+                        // 00d8d635: FCHS
+                        self.x87.fchs();
+                        // 00d8d637: FCOMPP
+                        self.fcompp();
+                        // 00d8d639: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8d63b: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8d63e: JP 0x00d8d9b0
+                        if self.pf {
+                            block = 0x00d8_d9b0;
+                            continue;
+                        }
+                        // 00d8d644: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8d646: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8d64a: FLD float ptr [EDI + 0x4]
+                        self.fld32(self.edi.wrapping_add(0x4));
+                        // 00d8d64d: FCHS
+                        self.x87.fchs();
+                        // 00d8d64f: FCOMPP
+                        self.fcompp();
+                        // 00d8d651: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8d653: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8d656: JP 0x00d8d9cd
+                        if self.pf {
+                            block = 0x00d8_d9cd;
+                            continue;
+                        }
+                        // 00d8d65c: MOVSS XMM5,dword ptr [ESP + 0x30]
+                        self.xmm[5] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x30)));
+                        // 00d8d662: MOVSS XMM0,dword ptr [ESP + 0x10]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8d668: MOVAPS XMM6,xmmword ptr [ESI]
+                        self.xmm[6] = load_vec(self.e, self.esi);
+                        // 00d8d66b: MOV EAX,dword ptr [ESP + 0x50]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x50));
+                        // 00d8d66f: MOVAPS XMM1,xmmword ptr [EAX]
+                        self.xmm[1] = load_vec(self.e, self.eax);
+                        // 00d8d672: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8d675: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8d679: MOVAPS XMM2,XMM5
+                        self.xmm[2] = self.xmm[5];
+                        // 00d8d67c: SHUFPS XMM2,XMM5,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[5], 0);
+                        // 00d8d680: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d683: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d686: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8d689: SHUFPS XMM2,XMM0,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 255);
+                        // 00d8d68d: MULPS XMM2,XMM6
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[6]);
+                        // 00d8d690: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8d693: SHUFPS XMM3,XMM1,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 255);
+                        // 00d8d697: MULPS XMM3,XMM6
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[6]);
+                        // 00d8d69a: MOVAPS XMM6,xmmword ptr [EBX + 0x10]
+                        self.xmm[6] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d69e: ADDPS XMM2,XMM6
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[6]);
+                        // 00d8d6a1: MOVAPS xmmword ptr [EBX + 0x10],XMM2
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8d6a5: MOVAPS XMM2,xmmword ptr [ECX]
+                        self.xmm[2] = load_vec(self.e, self.ecx);
+                        // 00d8d6a8: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8d6ab: MOVAPS xmmword ptr [ECX],XMM2
+                        store_vec(self.e, self.ecx, self.xmm[2]);
+                        // 00d8d6ae: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8d6b2: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d6b6: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d6b9: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8d6bd: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d6c0: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8d6c4: ADDPS XMM3,XMM0
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[0]);
+                        // 00d8d6c7: MOVAPS xmmword ptr [EBX + 0x20],XMM3
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[3]);
+                        // 00d8d6cb: MOVAPS XMM0,xmmword ptr [EDX]
+                        self.xmm[0] = load_vec(self.e, self.edx);
+                        // 00d8d6ce: ADDPS XMM1,XMM0
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[0]);
+                        // 00d8d6d1: MOVAPS xmmword ptr [EDX],XMM1
+                        store_vec(self.e, self.edx, self.xmm[1]);
+                        // 00d8d6d4: ADDSS XMM2,XMM5
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[5]);
+                        // 00d8d6d8: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        // 00d8d6dc: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8d6e0: LEA EAX,[EDI + 0x4]
+                        self.eax = self.edi.wrapping_add(0x4);
+                        // 00d8d6e3: MOV dword ptr [ESP + 0x30],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x30), self.eax);
+                        // 00d8d6e7: LEA EAX,[ESI + 0x30]
+                        self.eax = self.esi.wrapping_add(0x30);
+                        // 00d8d6ea: MOV dword ptr [ESP + 0x10],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x10), self.eax);
+                        // 00d8d6ee: MOV EAX,dword ptr [ESP + 0x50]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x50));
+                        // 00d8d6f2: MOVAPS XMM1,xmmword ptr [EAX]
+                        self.xmm[1] = load_vec(self.e, self.eax);
+                        // 00d8d6f5: MOV EAX,dword ptr [ESP + 0x10]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x10));
+                        // 00d8d6f9: MOVAPS XMM2,XMM4
+                        self.xmm[2] = self.xmm[4];
+                        // 00d8d6fc: SHUFPS XMM2,XMM4,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[4], 0);
+                        // 00d8d700: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d703: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d706: MOVAPS XMM2,xmmword ptr [EAX]
+                        self.xmm[2] = load_vec(self.e, self.eax);
+                        // 00d8d709: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8d70c: SHUFPS XMM3,XMM0,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[0], 255);
+                        // 00d8d710: MOVAPS XMM6,XMM2
+                        self.xmm[6] = self.xmm[2];
+                        // 00d8d713: MULPS XMM6,XMM3
+                        self.xmm[6] = mulps(self.xmm[6], self.xmm[3]);
+                        // 00d8d716: MOVAPS XMM3,xmmword ptr [EBX + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d71a: ADDPS XMM3,XMM6
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[6]);
+                        // 00d8d71d: MOVAPS xmmword ptr [EBX + 0x10],XMM3
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[3]);
+                        // 00d8d721: MOVAPS XMM3,xmmword ptr [ECX]
+                        self.xmm[3] = load_vec(self.e, self.ecx);
+                        // 00d8d724: MOVAPS XMM5,XMM1
+                        self.xmm[5] = self.xmm[1];
+                        // 00d8d727: SHUFPS XMM5,XMM1,0xff
+                        self.xmm[5] = shufps(self.xmm[5], self.xmm[1], 255);
+                        // 00d8d72b: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8d72e: SUBPS XMM3,XMM2
+                        self.xmm[3] = subps(self.xmm[3], self.xmm[2]);
+                        // 00d8d731: MOVAPS xmmword ptr [ECX],XMM3
+                        store_vec(self.e, self.ecx, self.xmm[3]);
+                        // 00d8d734: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8d738: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d73c: MULPS XMM2,XMM0
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[0]);
+                        // 00d8d73f: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8d743: MOV EAX,dword ptr [ESP + 0x30]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x30));
+                        // 00d8d747: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8d74a: MOVSS XMM1,dword ptr [EAX]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.eax));
+                        // 00d8d74e: ADDPS XMM3,XMM2
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[2]);
+                        // 00d8d751: MOVAPS xmmword ptr [EBX + 0x20],XMM3
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[3]);
+                        // 00d8d755: ADDSS XMM1,XMM4
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[4]);
+                        // 00d8d759: JMP 0x00d8daed
+                        block = 0x00d8_daed;
+                        continue;
+                    }
+                    0x00d8_d75e => {
+                        // 00d8d75e: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8d762: LEA EDX,[ECX + 0x30]
+                        self.edx = self.ecx.wrapping_add(0x30);
+                        // 00d8d765: MOV dword ptr [ESP + 0x50],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x50), self.edx);
+                        // 00d8d769: MOV EDX,dword ptr [ESP + 0x4c]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8d76d: ADD ECX,0x10
+                        self.ecx = self.add32(self.ecx, 0x10);
+                        // 00d8d770: ADD EDX,0x20
+                        self.edx = self.add32(self.edx, 0x20);
+                        // 00d8d773: LEA EAX,[EBX + 0x10]
+                        self.eax = self.ebx.wrapping_add(0x10);
+                        // 00d8d776: MOV dword ptr [ESP + 0x10],ECX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x10), self.ecx);
+                        // 00d8d77a: MOV dword ptr [ESP + 0x30],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x30), self.edx);
+                        // 00d8d77e: MOV EDI,EDI
+                        // no operation (alignment padding)
+                        block = 0x00d8_d780;
+                    }
+                    0x00d8_d780 => {
+                        // 00d8d780: MOVAPS XMM1,xmmword ptr [EBX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d784: MOVAPS XMM3,xmmword ptr [ESI + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8d788: MOV EDX,dword ptr [ESP + 0x10]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x10));
+                        // 00d8d78c: MOVAPS XMM0,xmmword ptr [EDX]
+                        self.xmm[0] = load_vec(self.e, self.edx);
+                        // 00d8d78f: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8d793: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d797: MOV EDX,dword ptr [ESP + 0x30]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x30));
+                        // 00d8d79b: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8d79e: MOVAPS XMM0,xmmword ptr [EDX]
+                        self.xmm[0] = load_vec(self.e, self.edx);
+                        // 00d8d7a1: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8d7a4: MOVAPS XMM3,xmmword ptr [ESI]
+                        self.xmm[3] = load_vec(self.e, self.esi);
+                        // 00d8d7a7: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8d7aa: MOVAPS XMM5,xmmword ptr [ESI]
+                        self.xmm[5] = load_vec(self.e, self.esi);
+                        // 00d8d7ad: MOV EDX,dword ptr [ESP + 0x50]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x50));
+                        // 00d8d7b1: MULPS XMM4,XMM2
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[2]);
+                        // 00d8d7b4: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8d7b7: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8d7ba: SHUFPS XMM3,XMM3,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[3], 255);
+                        // 00d8d7be: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8d7c1: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8d7c5: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8d7c9: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8d7cd: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8d7d1: MOVAPS XMM1,xmmword ptr [EDX]
+                        self.xmm[1] = load_vec(self.e, self.edx);
+                        // 00d8d7d4: SUBSS XMM3,XMM0
+                        self.xmm[3] = subss(self.xmm[3], self.xmm[0]);
+                        // 00d8d7d8: MOVSS XMM0,dword ptr [EDI]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8d7dc: SHUFPS XMM2,XMM2,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[2], 255);
+                        // 00d8d7e0: MULSS XMM3,XMM2
+                        self.xmm[3] = mulss(self.xmm[3], self.xmm[2]);
+                        // 00d8d7e4: MOVAPS XMM2,xmmword ptr [0x010c7160]
+                        self.xmm[2] = load_vec(self.e, 0x010c_7160);
+                        // 00d8d7eb: LEA EDX,[EBX + 0x20]
+                        self.edx = self.ebx.wrapping_add(0x20);
+                        // 00d8d7ee: ADD ESI,0x30
+                        self.esi = self.add32(self.esi, 0x30);
+                        // 00d8d7f1: SUBSS XMM2,XMM0
+                        self.xmm[2] = subss(self.xmm[2], self.xmm[0]);
+                        // 00d8d7f5: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8d7f9: MAXPS XMM2,XMM3
+                        self.xmm[2] = maxps(self.xmm[2], self.xmm[3]);
+                        // 00d8d7fc: MOVAPS XMM3,XMM2
+                        self.xmm[3] = self.xmm[2];
+                        // 00d8d7ff: SHUFPS XMM3,XMM2,0x0
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[2], 0);
+                        // 00d8d803: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8d806: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8d809: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8d80c: SHUFPS XMM3,XMM0,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[0], 255);
+                        // 00d8d810: MULPS XMM3,XMM5
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[5]);
+                        // 00d8d813: MOVAPS XMM4,XMM1
+                        self.xmm[4] = self.xmm[1];
+                        // 00d8d816: SHUFPS XMM4,XMM1,0xff
+                        self.xmm[4] = shufps(self.xmm[4], self.xmm[1], 255);
+                        // 00d8d81a: MULPS XMM4,XMM5
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[5]);
+                        // 00d8d81d: MOVAPS XMM5,xmmword ptr [EAX]
+                        self.xmm[5] = load_vec(self.e, self.eax);
+                        // 00d8d820: ADDPS XMM5,XMM3
+                        self.xmm[5] = addps(self.xmm[5], self.xmm[3]);
+                        // 00d8d823: MOVAPS xmmword ptr [EAX],XMM5
+                        store_vec(self.e, self.eax, self.xmm[5]);
+                        // 00d8d826: MOVAPS XMM3,xmmword ptr [ECX]
+                        self.xmm[3] = load_vec(self.e, self.ecx);
+                        // 00d8d829: SUBPS XMM3,XMM4
+                        self.xmm[3] = subps(self.xmm[3], self.xmm[4]);
+                        // 00d8d82c: MOVAPS xmmword ptr [ECX],XMM3
+                        store_vec(self.e, self.ecx, self.xmm[3]);
+                        // 00d8d82f: MOVAPS XMM3,xmmword ptr [ESI + -0x20]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_sub(0x20));
+                        // 00d8d833: MOVAPS XMM4,xmmword ptr [EDX]
+                        self.xmm[4] = load_vec(self.e, self.edx);
+                        // 00d8d836: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8d839: MOVAPS XMM3,xmmword ptr [ESI + -0x10]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_sub(0x10));
+                        // 00d8d83d: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8d840: MOVSS XMM3,dword ptr [EDI]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8d844: ADDPS XMM4,XMM0
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[0]);
+                        // 00d8d847: MOVAPS xmmword ptr [EDX],XMM4
+                        store_vec(self.e, self.edx, self.xmm[4]);
+                        // 00d8d84a: MOV EDX,dword ptr [ESP + 0x30]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x30));
+                        // 00d8d84e: MOVAPS XMM0,xmmword ptr [EDX]
+                        self.xmm[0] = load_vec(self.e, self.edx);
+                        // 00d8d851: ADDPS XMM1,XMM0
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[0]);
+                        // 00d8d854: MOVAPS xmmword ptr [EDX],XMM1
+                        store_vec(self.e, self.edx, self.xmm[1]);
+                        // 00d8d857: ADDSS XMM3,XMM2
+                        self.xmm[3] = addss(self.xmm[3], self.xmm[2]);
+                        // 00d8d85b: MOVSS dword ptr [EDI],XMM3
+                        self.e.mem.set_u32(self.edi, self.xmm[3][0].to_bits());
+                        // 00d8d85f: MOVSX EDX,byte ptr [ESI + -0x30]
+                        self.edx = i32::from(self.e.mem.i8(self.esi.wrapping_sub(0x30))) as u32;
+                        // 00d8d863: MOVZX EDX,byte ptr [EDX + 0x11b9434]
+                        self.edx = u32::from(self.e.mem.u8(self.edx.wrapping_add(0x011b_9434)));
+                        // 00d8d86a: LEA EDI,[EDI + EDX*0x4]
+                        self.edi = self.edi.wrapping_add(self.edx.wrapping_mul(4));
+                        // 00d8d86d: MOV DL,byte ptr [ESI]
+                        self.edx =
+                            (self.edx & 0xffff_ff00) | (u32::from(self.e.mem.u8(self.esi)) & 0xff);
+                        // 00d8d86f: CMP DL,0x10
+                        self.cmp8((self.edx & 0xff) as u8, 0x10_u8);
+                        // 00d8d872: JZ 0x00d8d780
+                        if self.zf {
+                            block = 0x00d8_d780;
+                            continue;
+                        }
+                        // 00d8d878: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_d87d => {
+                        // 00d8d87d: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8d881: MOV EDX,dword ptr [ESP + 0x4c]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8d885: LEA EAX,[ECX + 0x30]
+                        self.eax = self.ecx.wrapping_add(0x30);
+                        // 00d8d888: ADD ECX,0x10
+                        self.ecx = self.add32(self.ecx, 0x10);
+                        // 00d8d88b: ADD EDX,0x20
+                        self.edx = self.add32(self.edx, 0x20);
+                        // 00d8d88e: MOV dword ptr [ESP + 0x50],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x50), self.eax);
+                        // 00d8d892: LEA EAX,[EBX + 0x10]
+                        self.eax = self.ebx.wrapping_add(0x10);
+                        // 00d8d895: MOV dword ptr [ESP + 0x10],ECX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x10), self.ecx);
+                        // 00d8d899: MOV dword ptr [ESP + 0x30],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x30), self.edx);
+                        // 00d8d89d: LEA ECX,[ECX]
+                        // no operation (alignment padding)
+                        block = 0x00d8_d8a0;
+                    }
+                    0x00d8_d8a0 => {
+                        // 00d8d8a0: MOVAPS XMM1,xmmword ptr [EBX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8d8a4: MOVAPS XMM3,xmmword ptr [ESI + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8d8a8: MOV EDX,dword ptr [ESP + 0x10]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x10));
+                        // 00d8d8ac: MOVAPS XMM0,xmmword ptr [EDX]
+                        self.xmm[0] = load_vec(self.e, self.edx);
+                        // 00d8d8af: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8d8b3: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d8b7: MOV EDX,dword ptr [ESP + 0x30]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x30));
+                        // 00d8d8bb: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8d8be: MOVAPS XMM0,xmmword ptr [EDX]
+                        self.xmm[0] = load_vec(self.e, self.edx);
+                        // 00d8d8c1: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8d8c4: MOVAPS XMM3,xmmword ptr [ESI]
+                        self.xmm[3] = load_vec(self.e, self.esi);
+                        // 00d8d8c7: MULPS XMM4,XMM2
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[2]);
+                        // 00d8d8ca: MOVAPS XMM5,xmmword ptr [ESI]
+                        self.xmm[5] = load_vec(self.e, self.esi);
+                        // 00d8d8cd: MOV EDX,dword ptr [ESP + 0x50]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x50));
+                        // 00d8d8d1: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8d8d4: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8d8d7: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8d8da: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8d8dd: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8d8e1: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8d8e5: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8d8e9: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8d8ed: MOVSS XMM1,dword ptr [EDI]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8d8f1: SHUFPS XMM2,XMM2,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[2], 255);
+                        // 00d8d8f5: SHUFPS XMM3,XMM3,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[3], 255);
+                        // 00d8d8f9: SUBSS XMM3,XMM0
+                        self.xmm[3] = subss(self.xmm[3], self.xmm[0]);
+                        // 00d8d8fd: MOVAPS XMM0,xmmword ptr [ESI + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8d901: MULSS XMM3,XMM2
+                        self.xmm[3] = mulss(self.xmm[3], self.xmm[2]);
+                        // 00d8d905: MOVAPS XMM2,xmmword ptr [0x010c7160]
+                        self.xmm[2] = load_vec(self.e, 0x010c_7160);
+                        // 00d8d90c: SUBSS XMM2,XMM1
+                        self.xmm[2] = subss(self.xmm[2], self.xmm[1]);
+                        // 00d8d910: MAXPS XMM2,XMM3
+                        self.xmm[2] = maxps(self.xmm[2], self.xmm[3]);
+                        // 00d8d913: SHUFPS XMM0,XMM0,0xff
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 255);
+                        // 00d8d917: SUBSS XMM0,XMM1
+                        self.xmm[0] = subss(self.xmm[0], self.xmm[1]);
+                        // 00d8d91b: MOVAPS XMM1,xmmword ptr [EDX]
+                        self.xmm[1] = load_vec(self.e, self.edx);
+                        // 00d8d91e: MINPS XMM0,XMM2
+                        self.xmm[0] = minps(self.xmm[0], self.xmm[2]);
+                        // 00d8d921: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8d924: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8d928: MOVAPS XMM2,XMM4
+                        self.xmm[2] = self.xmm[4];
+                        // 00d8d92b: SHUFPS XMM2,XMM4,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[4], 0);
+                        // 00d8d92f: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d932: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d935: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8d938: SHUFPS XMM2,XMM0,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 255);
+                        // 00d8d93c: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8d93f: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8d942: SHUFPS XMM3,XMM1,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 255);
+                        // 00d8d946: MULPS XMM3,XMM5
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[5]);
+                        // 00d8d949: MOVAPS XMM5,xmmword ptr [EAX]
+                        self.xmm[5] = load_vec(self.e, self.eax);
+                        // 00d8d94c: ADDPS XMM2,XMM5
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[5]);
+                        // 00d8d94f: MOVAPS xmmword ptr [EAX],XMM2
+                        store_vec(self.e, self.eax, self.xmm[2]);
+                        // 00d8d952: MOVAPS XMM2,xmmword ptr [ECX]
+                        self.xmm[2] = load_vec(self.e, self.ecx);
+                        // 00d8d955: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8d958: MOVAPS xmmword ptr [ECX],XMM2
+                        store_vec(self.e, self.ecx, self.xmm[2]);
+                        // 00d8d95b: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8d95f: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8d963: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8d966: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8d96a: LEA EDX,[EBX + 0x20]
+                        self.edx = self.ebx.wrapping_add(0x20);
+                        // 00d8d96d: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8d970: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8d974: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8d977: MOVAPS xmmword ptr [EDX],XMM0
+                        store_vec(self.e, self.edx, self.xmm[0]);
+                        // 00d8d97a: MOV EDX,dword ptr [ESP + 0x30]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x30));
+                        // 00d8d97e: MOVAPS XMM0,xmmword ptr [EDX]
+                        self.xmm[0] = load_vec(self.e, self.edx);
+                        // 00d8d981: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8d984: MOVAPS xmmword ptr [EDX],XMM0
+                        store_vec(self.e, self.edx, self.xmm[0]);
+                        // 00d8d987: ADDSS XMM2,XMM4
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[4]);
+                        // 00d8d98b: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        // 00d8d98f: MOVSX EDX,byte ptr [ESI]
+                        self.edx = i32::from(self.e.mem.i8(self.esi)) as u32;
+                        // 00d8d992: MOVZX EDX,byte ptr [EDX + 0x11b9434]
+                        self.edx = u32::from(self.e.mem.u8(self.edx.wrapping_add(0x011b_9434)));
+                        // 00d8d999: LEA EDI,[EDI + EDX*0x4]
+                        self.edi = self.edi.wrapping_add(self.edx.wrapping_mul(4));
+                        // 00d8d99c: MOV DL,byte ptr [ESI + 0x30]
+                        self.edx = (self.edx & 0xffff_ff00)
+                            | (u32::from(self.e.mem.u8(self.esi.wrapping_add(0x30))) & 0xff);
+                        // 00d8d99f: ADD ESI,0x30
+                        self.esi = self.add32(self.esi, 0x30);
+                        // 00d8d9a2: CMP DL,0x12
+                        self.cmp8((self.edx & 0xff) as u8, 0x12_u8);
+                        // 00d8d9a5: JZ 0x00d8d8a0
+                        if self.zf {
+                            block = 0x00d8_d8a0;
+                            continue;
+                        }
+                        // 00d8d9ab: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_d9b0 => {
+                        // 00d8d9b0: FMUL float ptr [ESI + 0x4c]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x4c));
+                        // 00d8d9b3: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8d9b7: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8d9bb: FLD float ptr [EDI + 0x4]
+                        self.fld32(self.edi.wrapping_add(0x4));
+                        // 00d8d9be: FCHS
+                        self.x87.fchs();
+                        // 00d8d9c0: FCOMPP
+                        self.fcompp();
+                        // 00d8d9c2: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8d9c4: TEST AH,0x1
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x1_u8);
+                        // 00d8d9c7: JNZ 0x00d8da6a
+                        if !self.zf {
+                            block = 0x00d8_da6a;
+                            continue;
+                        }
+                        block = 0x00d8_d9cd;
+                    }
+                    0x00d8_d9cd => {
+                        // 00d8d9cd: MOVAPS XMM0,xmmword ptr [ESI + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8d9d1: MOVSS XMM1,dword ptr [ESP + 0x1f0]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x1f0)));
+                        // 00d8d9da: MOVAPS XMM2,xmmword ptr [0x010c7160]
+                        self.xmm[2] = load_vec(self.e, 0x010c_7160);
+                        // 00d8d9e1: MOVAPS XMM5,xmmword ptr [ESI]
+                        self.xmm[5] = load_vec(self.e, self.esi);
+                        // 00d8d9e4: MOV EAX,dword ptr [ESP + 0x50]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x50));
+                        // 00d8d9e8: SHUFPS XMM0,XMM0,0xff
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 255);
+                        // 00d8d9ec: MULSS XMM1,XMM0
+                        self.xmm[1] = mulss(self.xmm[1], self.xmm[0]);
+                        // 00d8d9f0: MOVSS XMM0,dword ptr [EDI]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8d9f4: SUBSS XMM2,XMM0
+                        self.xmm[2] = subss(self.xmm[2], self.xmm[0]);
+                        // 00d8d9f8: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8d9fc: MAXPS XMM2,XMM1
+                        self.xmm[2] = maxps(self.xmm[2], self.xmm[1]);
+                        // 00d8d9ff: MOVAPS XMM1,xmmword ptr [EAX]
+                        self.xmm[1] = load_vec(self.e, self.eax);
+                        // 00d8da02: MOVAPS XMM3,XMM2
+                        self.xmm[3] = self.xmm[2];
+                        // 00d8da05: SHUFPS XMM3,XMM2,0x0
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[2], 0);
+                        // 00d8da09: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8da0c: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8da0f: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8da12: SHUFPS XMM3,XMM0,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[0], 255);
+                        // 00d8da16: MULPS XMM3,XMM5
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[5]);
+                        // 00d8da19: MOVAPS XMM4,XMM1
+                        self.xmm[4] = self.xmm[1];
+                        // 00d8da1c: SHUFPS XMM4,XMM1,0xff
+                        self.xmm[4] = shufps(self.xmm[4], self.xmm[1], 255);
+                        // 00d8da20: MULPS XMM4,XMM5
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[5]);
+                        // 00d8da23: MOVAPS XMM5,xmmword ptr [EBX + 0x10]
+                        self.xmm[5] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8da27: ADDPS XMM5,XMM3
+                        self.xmm[5] = addps(self.xmm[5], self.xmm[3]);
+                        // 00d8da2a: MOVAPS xmmword ptr [EBX + 0x10],XMM5
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[5]);
+                        // 00d8da2e: MOVAPS XMM3,xmmword ptr [ECX]
+                        self.xmm[3] = load_vec(self.e, self.ecx);
+                        // 00d8da31: SUBPS XMM3,XMM4
+                        self.xmm[3] = subps(self.xmm[3], self.xmm[4]);
+                        // 00d8da34: MOVAPS xmmword ptr [ECX],XMM3
+                        store_vec(self.e, self.ecx, self.xmm[3]);
+                        // 00d8da37: MOVAPS XMM3,xmmword ptr [ESI + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8da3b: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8da3f: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8da42: MOVAPS XMM3,xmmword ptr [ESI + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8da46: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8da49: MOVSS XMM3,dword ptr [EDI]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8da4d: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8da50: MOVAPS xmmword ptr [EBX + 0x20],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8da54: MOVAPS XMM0,xmmword ptr [EDX]
+                        self.xmm[0] = load_vec(self.e, self.edx);
+                        // 00d8da57: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8da5a: MOVAPS xmmword ptr [EDX],XMM0
+                        store_vec(self.e, self.edx, self.xmm[0]);
+                        // 00d8da5d: ADDSS XMM3,XMM2
+                        self.xmm[3] = addss(self.xmm[3], self.xmm[2]);
+                        // 00d8da61: MOVSS dword ptr [EDI],XMM3
+                        self.e.mem.set_u32(self.edi, self.xmm[3][0].to_bits());
+                        // 00d8da65: JMP 0x00d8dafa
+                        block = 0x00d8_dafa;
+                        continue;
+                    }
+                    0x00d8_da6a => {
+                        // 00d8da6a: MOVSS XMM3,dword ptr [ESP + 0x10]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8da70: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8da74: LEA EAX,[EDI + 0x4]
+                        self.eax = self.edi.wrapping_add(0x4);
+                        // 00d8da77: MOV dword ptr [ESP + 0x30],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x30), self.eax);
+                        // 00d8da7b: LEA EAX,[ESI + 0x30]
+                        self.eax = self.esi.wrapping_add(0x30);
+                        // 00d8da7e: MOV dword ptr [ESP + 0x10],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x10), self.eax);
+                        // 00d8da82: MOV EAX,dword ptr [ESP + 0x50]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x50));
+                        // 00d8da86: MOVAPS XMM1,xmmword ptr [EAX]
+                        self.xmm[1] = load_vec(self.e, self.eax);
+                        // 00d8da89: MOV EAX,dword ptr [ESP + 0x10]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x10));
+                        // 00d8da8d: MOVAPS XMM2,XMM3
+                        self.xmm[2] = self.xmm[3];
+                        // 00d8da90: SHUFPS XMM2,XMM3,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[3], 0);
+                        // 00d8da94: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8da97: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8da9a: MOVAPS XMM2,xmmword ptr [EAX]
+                        self.xmm[2] = load_vec(self.e, self.eax);
+                        // 00d8da9d: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8daa0: SHUFPS XMM4,XMM0,0xff
+                        self.xmm[4] = shufps(self.xmm[4], self.xmm[0], 255);
+                        // 00d8daa4: MOVAPS XMM6,XMM2
+                        self.xmm[6] = self.xmm[2];
+                        // 00d8daa7: MULPS XMM6,XMM4
+                        self.xmm[6] = mulps(self.xmm[6], self.xmm[4]);
+                        // 00d8daaa: MOVAPS XMM4,xmmword ptr [EBX + 0x10]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8daae: ADDPS XMM4,XMM6
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[6]);
+                        // 00d8dab1: MOVAPS xmmword ptr [EBX + 0x10],XMM4
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[4]);
+                        // 00d8dab5: MOVAPS XMM4,xmmword ptr [ECX]
+                        self.xmm[4] = load_vec(self.e, self.ecx);
+                        // 00d8dab8: MOVAPS XMM5,XMM1
+                        self.xmm[5] = self.xmm[1];
+                        // 00d8dabb: SHUFPS XMM5,XMM1,0xff
+                        self.xmm[5] = shufps(self.xmm[5], self.xmm[1], 255);
+                        // 00d8dabf: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8dac2: SUBPS XMM4,XMM2
+                        self.xmm[4] = subps(self.xmm[4], self.xmm[2]);
+                        // 00d8dac5: MOVAPS xmmword ptr [ECX],XMM4
+                        store_vec(self.e, self.ecx, self.xmm[4]);
+                        // 00d8dac8: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8dacc: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8dad0: MULPS XMM2,XMM0
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[0]);
+                        // 00d8dad3: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8dad7: MOV EAX,dword ptr [ESP + 0x30]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x30));
+                        // 00d8dadb: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8dade: MOVSS XMM1,dword ptr [EAX]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.eax));
+                        // 00d8dae2: ADDPS XMM4,XMM2
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[2]);
+                        // 00d8dae5: MOVAPS xmmword ptr [EBX + 0x20],XMM4
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[4]);
+                        // 00d8dae9: ADDSS XMM1,XMM3
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[3]);
+                        block = 0x00d8_daed;
+                    }
+                    0x00d8_daed => {
+                        // 00d8daed: MOVAPS XMM2,xmmword ptr [EDX]
+                        self.xmm[2] = load_vec(self.e, self.edx);
+                        // 00d8daf0: ADDPS XMM0,XMM2
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[2]);
+                        // 00d8daf3: MOVAPS xmmword ptr [EDX],XMM0
+                        store_vec(self.e, self.edx, self.xmm[0]);
+                        // 00d8daf6: MOVSS dword ptr [EAX],XMM1
+                        self.e.mem.set_u32(self.eax, self.xmm[1][0].to_bits());
+                        block = 0x00d8_dafa;
+                    }
+                    0x00d8_dafa => {
+                        // 00d8dafa: ADD ESI,0x70
+                        self.esi = self.add32(self.esi, 0x70);
+                        // 00d8dafd: ADD EDI,0x8
+                        self.edi = self.add32(self.edi, 0x8);
+                        // 00d8db00: CMP byte ptr [ESI],0x17
+                        self.cmp8(self.e.mem.u8(self.esi), 0x17_u8);
+                        // 00d8db03: JNZ 0x00d8d18c
+                        if !self.zf {
+                            block = 0x00d8_d18c;
+                            continue;
+                        }
+                        // 00d8db09: JMP 0x00d8dcd7
+                        block = 0x00d8_dcd7;
+                        continue;
+                    }
+                    0x00d8_db0e => {
+                        // 00d8db0e: MOVAPS XMM1,xmmword ptr [EBX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8db12: FLD float ptr [ESI + 0x40]
+                        self.fld32(self.esi.wrapping_add(0x40));
+                        // 00d8db15: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8db19: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8db1d: MOVAPS XMM0,xmmword ptr [ESI]
+                        self.xmm[0] = load_vec(self.e, self.esi);
+                        // 00d8db20: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8db24: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8db28: FMUL ST0
+                        self.x87_registers(X87Op::Mul, 0, 0, false); // DC C8
+                                                                     // 00d8db2a: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8db2d: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8db31: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8db34: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8db38: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8db3b: FLD float ptr [ESI + 0xc]
+                        self.fld32(self.esi.wrapping_add(0xc));
+                        // 00d8db3e: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8db41: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8db45: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8db49: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8db4d: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8db51: MOVAPS XMM1,xmmword ptr [ESI + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8db55: SHUFPS XMM1,XMM1,0xff
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 255);
+                        // 00d8db59: SUBSS XMM1,XMM0
+                        self.xmm[1] = subss(self.xmm[1], self.xmm[0]);
+                        // 00d8db5d: MOVSS dword ptr [ESP + 0x7c],XMM1
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0x7c), self.xmm[1][0].to_bits());
+                        // 00d8db63: FMUL float ptr [ESP + 0x7c]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x7c));
+                        // 00d8db67: MOVAPS XMM0,xmmword ptr [ESI + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8db6b: MOVAPS XMM1,xmmword ptr [EBX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8db6f: MOVAPS XMM2,xmmword ptr [ESI + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x30));
+                        // 00d8db73: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8db77: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8db7a: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8db7e: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8db81: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8db84: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8db87: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8db8b: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8db8f: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8db93: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8db97: MOVAPS XMM1,xmmword ptr [ESI + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.esi.wrapping_add(0x30));
+                        // 00d8db9b: SHUFPS XMM1,XMM1,0xff
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 255);
+                        // 00d8db9f: SUBSS XMM1,XMM0
+                        self.xmm[1] = subss(self.xmm[1], self.xmm[0]);
+                        // 00d8dba3: MOVSS dword ptr [ESP + 0xc8],XMM1
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xc8), self.xmm[1][0].to_bits());
+                        // 00d8dbac: FLD float ptr [ESI + 0x2c]
+                        self.fld32(self.esi.wrapping_add(0x2c));
+                        // 00d8dbaf: FMUL float ptr [ESP + 0xc8]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0xc8));
+                        // 00d8dbb6: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8dbba: FLD float ptr [ESP + 0x30]
+                        self.fld32(self.esp.wrapping_add(0x30));
+                        // 00d8dbbe: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8dbc2: FMUL ST0
+                        self.x87_registers(X87Op::Mul, 0, 0, false); // DC C8
+                                                                     // 00d8dbc4: FLD ST1
+                        self.x87.fld_st(1);
+                        // 00d8dbc6: FMULP ST2
+                        self.x87_registers(X87Op::Mul, 2, 0, true); // DE CA
+                                                                    // 00d8dbc8: FADDP
+                        self.x87_registers(X87Op::Add, 1, 0, true); // DE C1
+                                                                    // 00d8dbca: FSTP float ptr [ESP + 0x50]
+                        self.fstp32(self.esp.wrapping_add(0x50));
+                        // 00d8dbce: FLD float ptr [ESP + 0x50]
+                        self.fld32(self.esp.wrapping_add(0x50));
+                        // 00d8dbd2: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8dbd6: FCOM
+                        self.fcom_st(1, false);
+                        // 00d8dbd8: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8dbda: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8dbdd: JP 0x00d8dc14
+                        if self.pf {
+                            block = 0x00d8_dc14;
+                            continue;
+                        }
+                        // 00d8dbdf: FDIVRP
+                        self.x87_registers(X87Op::DivR, 1, 0, true); // DE F1
+                                                                     // 00d8dbe1: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8dbe5: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8dbe9: CALL 0x00ec6040
+                        self.call_square_root();
+                        // 00d8dbee: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8dbf2: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8dbf6: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8dbfa: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8dbfe: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8dc00: FMUL float ptr [ESP + 0x10]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x10));
+                        // 00d8dc04: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8dc08: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8dc0a: FMUL float ptr [ESP + 0x30]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x30));
+                        // 00d8dc0e: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8dc12: JMP 0x00d8dc1a
+                        block = 0x00d8_dc1a;
+                        continue;
+                    }
+                    0x00d8_dc14 => {
+                        // 00d8dc14: FSTP ST1
+                        self.x87.fstp_st(1);
+                        // 00d8dc16: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8dc18: FLD1
+                        self.x87.push(1.0);
+                        block = 0x00d8_dc1a;
+                    }
+                    0x00d8_dc1a => {
+                        // 00d8dc1a: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8dc1e: FSTP float ptr [EDI + 0x8]
+                        self.fstp32(self.edi.wrapping_add(0x8));
+                        // 00d8dc21: MOVSS XMM0,dword ptr [ESP + 0x10]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8dc27: MOVAPS XMM3,xmmword ptr [EBX + 0x30]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8dc2b: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8dc2f: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8dc32: MOVAPS XMM0,xmmword ptr [EAX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x30));
+                        // 00d8dc36: MOVAPS XMM1,XMM2
+                        self.xmm[1] = self.xmm[2];
+                        // 00d8dc39: SHUFPS XMM1,XMM2,0x0
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[2], 0);
+                        // 00d8dc3d: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8dc40: MULPS XMM3,XMM1
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[1]);
+                        // 00d8dc43: MOVAPS XMM1,xmmword ptr [ESI]
+                        self.xmm[1] = load_vec(self.e, self.esi);
+                        // 00d8dc46: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8dc49: MOVAPS XMM3,xmmword ptr [ESI + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8dc4d: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8dc50: MOVSS XMM3,dword ptr [EDI]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8dc54: ADDPS XMM4,XMM1
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[1]);
+                        // 00d8dc57: MOVAPS xmmword ptr [EBX + 0x20],XMM4
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[4]);
+                        // 00d8dc5b: MOVAPS XMM1,xmmword ptr [EAX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8dc5f: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8dc62: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8dc66: ADDSS XMM3,XMM2
+                        self.xmm[3] = addss(self.xmm[3], self.xmm[2]);
+                        // 00d8dc6a: MOVSS dword ptr [EDI],XMM3
+                        self.e.mem.set_u32(self.edi, self.xmm[3][0].to_bits());
+                        // 00d8dc6e: MOVSS XMM3,dword ptr [ESP + 0x30]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x30)));
+                        // 00d8dc74: MOVAPS XMM1,xmmword ptr [EAX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x30));
+                        // 00d8dc78: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8dc7c: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8dc80: MOVAPS XMM2,XMM3
+                        self.xmm[2] = self.xmm[3];
+                        // 00d8dc83: SHUFPS XMM2,XMM3,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[3], 0);
+                        // 00d8dc87: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8dc8a: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8dc8d: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8dc91: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8dc94: MOVAPS XMM2,xmmword ptr [ESI + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x30));
+                        // 00d8dc98: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8dc9b: MOVSS XMM2,dword ptr [EDI + 0x4]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi.wrapping_add(0x4)));
+                        // 00d8dca0: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8dca3: MOVAPS xmmword ptr [EBX + 0x20],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8dca7: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8dcab: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8dcae: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8dcb2: ADDSS XMM2,XMM3
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[3]);
+                        // 00d8dcb6: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8dcb7: MOVSS dword ptr [EDI + 0x4],XMM2
+                        self.e
+                            .mem
+                            .set_u32(self.edi.wrapping_add(0x4), self.xmm[2][0].to_bits());
+                        // 00d8dcbc: CALL 0x00d921d0
+                        self.call_table_byte();
+                        // 00d8dcc1: LEA EDI,[EDI + EAX*0x4]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(4));
+                        // 00d8dcc4: MOVSX EAX,byte ptr [ESI + 0x50]
+                        self.eax = i32::from(self.e.mem.i8(self.esi.wrapping_add(0x50))) as u32;
+                        // 00d8dcc8: ADD ESP,0x4
+                        self.esp = self.add32(self.esp, 0x4);
+                        // 00d8dccb: ADD ESI,0x50
+                        self.esi = self.add32(self.esi, 0x50);
+                        // 00d8dcce: CMP EAX,0x17
+                        self.cmp32(self.eax, 0x17);
+                        // 00d8dcd1: JNZ 0x00d8e020
+                        if !self.zf {
+                            block = 0x00d8_e020;
+                            continue;
+                        }
+                        block = 0x00d8_dcd7;
+                    }
+                    0x00d8_dcd7 => {
+                        // 00d8dcd7: MOVAPS XMM1,xmmword ptr [EBX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8dcdb: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8dcdf: MOVAPS XMM0,xmmword ptr [ECX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8dce3: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8dce7: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8dcea: MOVAPS XMM0,xmmword ptr [ESI + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8dcee: MOVAPS XMM4,xmmword ptr [ESI + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8dcf2: MOVAPS XMM2,xmmword ptr [ESI]
+                        self.xmm[2] = load_vec(self.e, self.esi);
+                        // 00d8dcf5: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8dcf8: MOVAPS XMM0,xmmword ptr [ECX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8dcfc: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8dcff: MULPS XMM0,XMM4
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[4]);
+                        // 00d8dd02: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8dd05: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8dd08: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8dd0b: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8dd0f: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8dd13: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8dd17: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8dd1b: SHUFPS XMM2,XMM2,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[2], 255);
+                        // 00d8dd1f: SUBSS XMM2,XMM0
+                        self.xmm[2] = subss(self.xmm[2], self.xmm[0]);
+                        // 00d8dd23: MOVSS dword ptr [ESP + 0xb0],XMM2
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xb0), self.xmm[2][0].to_bits());
+                        // 00d8dd2c: FLD float ptr [ESP + 0xb0]
+                        self.fld32(self.esp.wrapping_add(0xb0));
+                        // 00d8dd33: FST float ptr [ESP + 0x1d0]
+                        self.fst32(self.esp.wrapping_add(0x1d0));
+                        // 00d8dd3a: MOVAPS XMM0,xmmword ptr [ECX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8dd3e: MOVAPS XMM2,xmmword ptr [EBX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8dd42: MOVAPS XMM3,xmmword ptr [ESI + 0x40]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x40));
+                        // 00d8dd46: MOVAPS XMM1,xmmword ptr [ECX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8dd4a: SUBPS XMM2,XMM0
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[0]);
+                        // 00d8dd4d: MOVAPS XMM0,xmmword ptr [EBX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8dd51: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8dd54: MOVAPS XMM0,xmmword ptr [ESI + 0x50]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x50));
+                        // 00d8dd58: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8dd5b: MOVAPS XMM1,xmmword ptr [ESI + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.esi.wrapping_add(0x30));
+                        // 00d8dd5f: MOVAPS XMM4,XMM1
+                        self.xmm[4] = self.xmm[1];
+                        // 00d8dd62: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8dd65: MULPS XMM4,XMM2
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[2]);
+                        // 00d8dd68: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8dd6b: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8dd6e: SHUFPS XMM2,XMM0,0x55
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 85);
+                        // 00d8dd72: ADDSS XMM2,XMM0
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[0]);
+                        // 00d8dd76: SHUFPS XMM1,XMM1,0xff
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 255);
+                        // 00d8dd7a: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8dd7e: ADDSS XMM0,XMM2
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[2]);
+                        // 00d8dd82: SUBSS XMM1,XMM0
+                        self.xmm[1] = subss(self.xmm[1], self.xmm[0]);
+                        // 00d8dd86: MOVSS dword ptr [ESP + 0x98],XMM1
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0x98), self.xmm[1][0].to_bits());
+                        // 00d8dd8f: FLD float ptr [ESP + 0x98]
+                        self.fld32(self.esp.wrapping_add(0x98));
+                        // 00d8dd96: FST float ptr [ESP + 0x1d4]
+                        self.fst32(self.esp.wrapping_add(0x1d4));
+                        // 00d8dd9d: MOVAPS XMM0,xmmword ptr [ESI + 0x60]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x60));
+                        // 00d8dda1: MOVAPS XMM1,xmmword ptr [EBX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8dda5: MOVAPS XMM2,xmmword ptr [ECX + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8dda9: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8ddac: MOVAPS XMM0,xmmword ptr [ESI + 0x70]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x70));
+                        // 00d8ddb0: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8ddb3: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8ddb6: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8ddb9: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8ddbd: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8ddc1: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8ddc5: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8ddc9: MOVAPS XMM1,xmmword ptr [ESI + 0x70]
+                        self.xmm[1] = load_vec(self.e, self.esi.wrapping_add(0x70));
+                        // 00d8ddcd: SHUFPS XMM1,XMM1,0xff
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 255);
+                        // 00d8ddd1: SUBSS XMM1,XMM0
+                        self.xmm[1] = subss(self.xmm[1], self.xmm[0]);
+                        // 00d8ddd5: MOVSS dword ptr [ESP + 0xc0],XMM1
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xc0), self.xmm[1][0].to_bits());
+                        // 00d8ddde: FLD float ptr [ESP + 0xc0]
+                        self.fld32(self.esp.wrapping_add(0xc0));
+                        // 00d8dde5: FST float ptr [ESP + 0x1d8]
+                        self.fst32(self.esp.wrapping_add(0x1d8));
+                        // 00d8ddec: FMUL float ptr [ESI + 0x6c]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x6c));
+                        // 00d8ddef: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8ddf3: FLD float ptr [ESI + 0x2c]
+                        self.fld32(self.esi.wrapping_add(0x2c));
+                        // 00d8ddf6: FMUL ST2
+                        self.x87_registers(X87Op::Mul, 0, 2, false); // D8 CA
+                                                                     // 00d8ddf8: FLD ST1
+                        self.x87.fld_st(1);
+                        // 00d8ddfa: FMUL float ptr [ESI + 0x80]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x80));
+                        // 00d8de00: FADDP
+                        self.x87_registers(X87Op::Add, 1, 0, true); // DE C1
+                                                                    // 00d8de02: FSTP float ptr [ESP + 0x50]
+                        self.fstp32(self.esp.wrapping_add(0x50));
+                        // 00d8de06: FMUL float ptr [ESI + 0x5c]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x5c));
+                        // 00d8de09: FLD float ptr [ESI + 0x80]
+                        self.fld32(self.esi.wrapping_add(0x80));
+                        // 00d8de0f: FMULP ST2
+                        self.x87_registers(X87Op::Mul, 2, 0, true); // DE CA
+                                                                    // 00d8de11: FADDP
+                        self.x87_registers(X87Op::Add, 1, 0, true); // DE C1
+                                                                    // 00d8de13: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8de17: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8de1b: FLD float ptr [ESP + 0x50]
+                        self.fld32(self.esp.wrapping_add(0x50));
+                        // 00d8de1f: FLD float ptr [ESP + 0x30]
+                        self.fld32(self.esp.wrapping_add(0x30));
+                        // 00d8de23: FLD ST1
+                        self.x87.fld_st(1);
+                        // 00d8de25: FMULP ST2
+                        self.x87_registers(X87Op::Mul, 2, 0, true); // DE CA
+                                                                    // 00d8de27: FLD ST2
+                        self.x87.fld_st(2);
+                        // 00d8de29: FMULP ST3
+                        self.x87_registers(X87Op::Mul, 3, 0, true); // DE CB
+                                                                    // 00d8de2b: FXCH
+                        self.x87.fxch(1);
+                        // 00d8de2d: FADDP ST2,ST0
+                        self.x87_registers(X87Op::Add, 2, 0, true); // DE C2
+                                                                    // 00d8de2f: FMUL ST0
+                        self.x87_registers(X87Op::Mul, 0, 0, false); // DC C8
+                                                                     // 00d8de31: FADDP
+                        self.x87_registers(X87Op::Add, 1, 0, true); // DE C1
+                                                                    // 00d8de33: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8de37: FLD float ptr [ESI + 0x84]
+                        self.fld32(self.esi.wrapping_add(0x84));
+                        // 00d8de3d: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8de41: FLD ST1
+                        self.x87.fld_st(1);
+                        // 00d8de43: FMULP ST2
+                        self.x87_registers(X87Op::Mul, 2, 0, true); // DE CA
+                                                                    // 00d8de45: FXCH
+                        self.x87.fxch(1);
+                        // 00d8de47: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8de4b: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8de4f: FCOMP
+                        self.fcom_st(1, true);
+                        // 00d8de51: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8de53: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8de56: JP 0x00d8dea3
+                        if self.pf {
+                            block = 0x00d8_dea3;
+                            continue;
+                        }
+                        // 00d8de58: CALL 0x00ec6040
+                        self.call_square_root();
+                        // 00d8de5d: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8de61: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8de65: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8de69: FLD1
+                        self.x87.push(1.0);
+                        // 00d8de6b: FDIVRP
+                        self.x87_registers(X87Op::DivR, 1, 0, true); // DE F1
+                                                                     // 00d8de6d: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8de71: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8de75: FMUL float ptr [ESI + 0x84]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x84));
+                        // 00d8de7b: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8de7f: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8de83: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8de85: FMUL float ptr [ESP + 0x50]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x50));
+                        // 00d8de89: FSTP float ptr [ESP + 0x50]
+                        self.fstp32(self.esp.wrapping_add(0x50));
+                        // 00d8de8d: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8de8f: FMUL float ptr [ESP + 0x10]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x10));
+                        // 00d8de93: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8de97: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8de99: FMUL float ptr [ESP + 0x30]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x30));
+                        // 00d8de9d: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8dea1: JMP 0x00d8dea7
+                        block = 0x00d8_dea7;
+                        continue;
+                    }
+                    0x00d8_dea3 => {
+                        // 00d8dea3: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8dea5: FLD1
+                        self.x87.push(1.0);
+                        block = 0x00d8_dea7;
+                    }
+                    0x00d8_dea7 => {
+                        // 00d8dea7: FSTP float ptr [EDI + 0xc]
+                        self.fstp32(self.edi.wrapping_add(0xc));
+                        // 00d8deaa: MOVSS XMM5,dword ptr [ESP + 0x50]
+                        self.xmm[5] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x50)));
+                        // 00d8deb0: MOVSS XMM0,dword ptr [ESP + 0x10]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8deb6: FLD float ptr [ESI + 0x88]
+                        self.fld32(self.esi.wrapping_add(0x88));
+                        // 00d8debc: MOVAPS XMM2,xmmword ptr [EBX + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8dec0: FMUL float ptr [ESP + 0x30]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x30));
+                        // 00d8dec4: MOVAPS XMM6,xmmword ptr [ESI]
+                        self.xmm[6] = load_vec(self.e, self.esi);
+                        // 00d8dec7: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8deca: MOVAPS XMM1,XMM5
+                        self.xmm[1] = self.xmm[5];
+                        // 00d8decd: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8ded1: SHUFPS XMM1,XMM5,0x0
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[5], 0);
+                        // 00d8ded5: MOVAPS XMM0,XMM1
+                        self.xmm[0] = self.xmm[1];
+                        // 00d8ded8: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8dedb: MOVAPS XMM2,xmmword ptr [ECX + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x30));
+                        // 00d8dedf: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8dee2: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8dee5: SHUFPS XMM2,XMM0,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 255);
+                        // 00d8dee9: MULPS XMM2,XMM6
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[6]);
+                        // 00d8deec: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8deef: SHUFPS XMM3,XMM1,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 255);
+                        // 00d8def3: MULPS XMM3,XMM6
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[6]);
+                        // 00d8def6: MOVAPS XMM6,xmmword ptr [EBX + 0x10]
+                        self.xmm[6] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8defa: ADDPS XMM2,XMM6
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[6]);
+                        // 00d8defd: MOVAPS xmmword ptr [EBX + 0x10],XMM2
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8df01: MOVAPS XMM2,xmmword ptr [ECX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8df05: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8df08: MOVAPS xmmword ptr [ECX + 0x10],XMM2
+                        store_vec(self.e, self.ecx.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8df0c: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8df10: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8df14: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8df17: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8df1b: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8df1e: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8df22: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8df25: MOVAPS xmmword ptr [EBX + 0x20],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8df29: MOVAPS XMM0,xmmword ptr [ECX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8df2d: ADDPS XMM1,XMM0
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[0]);
+                        // 00d8df30: MOVAPS xmmword ptr [ECX + 0x20],XMM1
+                        store_vec(self.e, self.ecx.wrapping_add(0x20), self.xmm[1]);
+                        // 00d8df34: ADDSS XMM2,XMM5
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[5]);
+                        // 00d8df38: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        // 00d8df3c: MOVAPS XMM2,xmmword ptr [EBX + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8df40: MOVAPS XMM5,xmmword ptr [ESI + 0x30]
+                        self.xmm[5] = load_vec(self.e, self.esi.wrapping_add(0x30));
+                        // 00d8df44: MOVAPS XMM0,XMM4
+                        self.xmm[0] = self.xmm[4];
+                        // 00d8df47: SHUFPS XMM0,XMM4,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[4], 0);
+                        // 00d8df4b: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8df4e: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8df51: MOVAPS XMM2,xmmword ptr [ECX + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x30));
+                        // 00d8df55: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8df58: MOVAPS XMM2,XMM1
+                        self.xmm[2] = self.xmm[1];
+                        // 00d8df5b: SHUFPS XMM2,XMM1,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[1], 255);
+                        // 00d8df5f: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8df62: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8df65: SHUFPS XMM3,XMM0,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[0], 255);
+                        // 00d8df69: LEA EAX,[ESI + 0x30]
+                        self.eax = self.esi.wrapping_add(0x30);
+                        // 00d8df6c: MULPS XMM3,XMM5
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[5]);
+                        // 00d8df6f: MOVAPS XMM5,xmmword ptr [EBX + 0x10]
+                        self.xmm[5] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8df73: ADDPS XMM2,XMM5
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[5]);
+                        // 00d8df76: MOVAPS xmmword ptr [EBX + 0x10],XMM2
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8df7a: MOVAPS XMM2,xmmword ptr [ECX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8df7e: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8df81: MOVAPS xmmword ptr [ECX + 0x10],XMM2
+                        store_vec(self.e, self.ecx.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8df85: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8df89: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8df8d: MULPS XMM2,XMM1
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[1]);
+                        // 00d8df90: MOVAPS XMM1,xmmword ptr [EAX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8df94: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8df97: MOVSS XMM0,dword ptr [EDI + 0x4]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.edi.wrapping_add(0x4)));
+                        // 00d8df9c: ADDPS XMM2,XMM3
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[3]);
+                        // 00d8df9f: MOVAPS xmmword ptr [EBX + 0x20],XMM2
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[2]);
+                        // 00d8dfa3: MOVAPS XMM2,xmmword ptr [ECX + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8dfa7: ADDPS XMM1,XMM2
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[2]);
+                        // 00d8dfaa: MOVAPS xmmword ptr [ECX + 0x20],XMM1
+                        store_vec(self.e, self.ecx.wrapping_add(0x20), self.xmm[1]);
+                        // 00d8dfae: ADDSS XMM0,XMM4
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[4]);
+                        // 00d8dfb2: MOVSS dword ptr [EDI + 0x4],XMM0
+                        self.e
+                            .mem
+                            .set_u32(self.edi.wrapping_add(0x4), self.xmm[0][0].to_bits());
+                        // 00d8dfb7: MOVSS XMM1,dword ptr [ESP + 0x30]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x30)));
+                        // 00d8dfbd: MOVAPS XMM2,xmmword ptr [EBX + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8dfc1: MOVAPS XMM3,xmmword ptr [ECX + 0x30]
+                        self.xmm[3] = load_vec(self.e, self.ecx.wrapping_add(0x30));
+                        // 00d8dfc5: MOVAPS XMM0,XMM1
+                        self.xmm[0] = self.xmm[1];
+                        // 00d8dfc8: SHUFPS XMM0,XMM1,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[1], 0);
+                        // 00d8dfcc: MULPS XMM2,XMM0
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[0]);
+                        // 00d8dfcf: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8dfd2: MOVAPS XMM0,xmmword ptr [ESI + 0x60]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x60));
+                        // 00d8dfd6: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8dfda: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8dfdd: MOVAPS XMM2,xmmword ptr [ESI + 0x70]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x70));
+                        // 00d8dfe1: MULPS XMM2,XMM3
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[3]);
+                        // 00d8dfe4: MOVSS XMM3,dword ptr [EDI + 0x8]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.edi.wrapping_add(0x8)));
+                        // 00d8dfe9: ADDPS XMM4,XMM0
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[0]);
+                        // 00d8dfec: MOVAPS xmmword ptr [EBX + 0x20],XMM4
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[4]);
+                        // 00d8dff0: MOVAPS XMM0,xmmword ptr [ECX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8dff4: ADDPS XMM0,XMM2
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[2]);
+                        // 00d8dff7: MOVAPS xmmword ptr [ECX + 0x20],XMM0
+                        store_vec(self.e, self.ecx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8dffb: ADDSS XMM3,XMM1
+                        self.xmm[3] = addss(self.xmm[3], self.xmm[1]);
+                        // 00d8dfff: MOVSS dword ptr [EDI + 0x8],XMM3
+                        self.e
+                            .mem
+                            .set_u32(self.edi.wrapping_add(0x8), self.xmm[3][0].to_bits());
+                        // 00d8e004: MOV AL,byte ptr [ESI + 0x90]
+                        self.eax = (self.eax & 0xffff_ff00)
+                            | (u32::from(self.e.mem.u8(self.esi.wrapping_add(0x90))) & 0xff);
+                        // 00d8e00a: ADD EDI,0x10
+                        self.edi = self.add32(self.edi, 0x10);
+                        // 00d8e00d: ADD ESI,0x90
+                        self.esi = self.add32(self.esi, 0x90);
+                        // 00d8e013: CMP AL,0x1
+                        self.cmp8((self.eax & 0xff) as u8, 0x1_u8);
+                        // 00d8e015: JNZ 0x00d8d18c
+                        if !self.zf {
+                            block = 0x00d8_d18c;
+                            continue;
+                        }
+                        // 00d8e01b: JMP 0x00d8d170
+                        block = 0x00d8_d170;
+                        continue;
+                    }
+                    0x00d8_e020 => {
+                        // 00d8e020: CMP EAX,0x16
+                        self.cmp32(self.eax, 0x16);
+                        // 00d8e023: JNZ 0x00d8d18c
+                        if !self.zf {
+                            block = 0x00d8_d18c;
+                            continue;
+                        }
+                        block = 0x00d8_e029;
+                    }
+                    0x00d8_e029 => {
+                        // 00d8e029: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e02d: MOVAPS XMM0,xmmword ptr [ECX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8e031: MOVAPS XMM2,xmmword ptr [EBX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8e035: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e039: MOVAPS XMM4,xmmword ptr [ESI + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8e03d: MOVAPS XMM1,xmmword ptr [ESI]
+                        self.xmm[1] = load_vec(self.e, self.esi);
+                        // 00d8e040: SUBPS XMM2,XMM0
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[0]);
+                        // 00d8e043: MOVAPS XMM0,xmmword ptr [ESI + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e047: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8e04a: MOVAPS XMM0,xmmword ptr [ECX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8e04e: MULPS XMM0,XMM4
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[4]);
+                        // 00d8e051: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8e054: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8e057: MULPS XMM3,XMM2
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[2]);
+                        // 00d8e05a: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8e05d: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8e060: SHUFPS XMM2,XMM0,0x55
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 85);
+                        // 00d8e064: ADDSS XMM2,XMM0
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[0]);
+                        // 00d8e068: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8e06c: ADDSS XMM0,XMM2
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[2]);
+                        // 00d8e070: SHUFPS XMM1,XMM1,0xff
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 255);
+                        // 00d8e074: SUBSS XMM1,XMM0
+                        self.xmm[1] = subss(self.xmm[1], self.xmm[0]);
+                        // 00d8e078: MOVSS dword ptr [ESP + 0xa0],XMM1
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xa0), self.xmm[1][0].to_bits());
+                        // 00d8e081: FLD float ptr [ESP + 0xa0]
+                        self.fld32(self.esp.wrapping_add(0xa0));
+                        // 00d8e088: FST float ptr [ESP + 0x280]
+                        self.fst32(self.esp.wrapping_add(0x280));
+                        // 00d8e08f: MOVAPS XMM0,xmmword ptr [ECX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8e093: MOVAPS XMM2,xmmword ptr [EBX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8e097: MOVAPS XMM3,xmmword ptr [ESI + 0x40]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x40));
+                        // 00d8e09b: MOVAPS XMM1,xmmword ptr [ECX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8e09f: SUBPS XMM2,XMM0
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[0]);
+                        // 00d8e0a2: MOVAPS XMM0,xmmword ptr [EBX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e0a6: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8e0a9: MOVAPS XMM0,xmmword ptr [ESI + 0x50]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x50));
+                        // 00d8e0ad: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8e0b0: MOVAPS XMM1,xmmword ptr [ESI + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.esi.wrapping_add(0x30));
+                        // 00d8e0b4: MOVAPS XMM4,XMM1
+                        self.xmm[4] = self.xmm[1];
+                        // 00d8e0b7: MULPS XMM4,XMM2
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[2]);
+                        // 00d8e0ba: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8e0bd: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8e0c0: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8e0c3: SHUFPS XMM2,XMM0,0x55
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 85);
+                        // 00d8e0c7: ADDSS XMM2,XMM0
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[0]);
+                        // 00d8e0cb: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8e0cf: ADDSS XMM0,XMM2
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[2]);
+                        // 00d8e0d3: SHUFPS XMM1,XMM1,0xff
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 255);
+                        // 00d8e0d7: SUBSS XMM1,XMM0
+                        self.xmm[1] = subss(self.xmm[1], self.xmm[0]);
+                        // 00d8e0db: MOVSS dword ptr [ESP + 0xb8],XMM1
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xb8), self.xmm[1][0].to_bits());
+                        // 00d8e0e4: FLD float ptr [ESP + 0xb8]
+                        self.fld32(self.esp.wrapping_add(0xb8));
+                        // 00d8e0eb: FST float ptr [ESP + 0x284]
+                        self.fst32(self.esp.wrapping_add(0x284));
+                        // 00d8e0f2: FLD float ptr [ESI + 0x64]
+                        self.fld32(self.esi.wrapping_add(0x64));
+                        // 00d8e0f5: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e0f9: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e0fd: FMUL ST0
+                        self.x87_registers(X87Op::Mul, 0, 0, false); // DC C8
+                                                                     // 00d8e0ff: FSTP float ptr [ESP + 0x50]
+                        self.fstp32(self.esp.wrapping_add(0x50));
+                        // 00d8e103: FLD float ptr [ESI + 0x2c]
+                        self.fld32(self.esi.wrapping_add(0x2c));
+                        // 00d8e106: FMUL ST2
+                        self.x87_registers(X87Op::Mul, 0, 2, false); // D8 CA
+                                                                     // 00d8e108: FLD ST1
+                        self.x87.fld_st(1);
+                        // 00d8e10a: FMUL float ptr [ESI + 0x60]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x60));
+                        // 00d8e10d: FADDP
+                        self.x87_registers(X87Op::Add, 1, 0, true); // DE C1
+                                                                    // 00d8e10f: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8e113: FMUL float ptr [ESI + 0x5c]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x5c));
+                        // 00d8e116: FLD float ptr [ESI + 0x60]
+                        self.fld32(self.esi.wrapping_add(0x60));
+                        // 00d8e119: FMULP ST2
+                        self.x87_registers(X87Op::Mul, 2, 0, true); // DE CA
+                                                                    // 00d8e11b: FADDP
+                        self.x87_registers(X87Op::Add, 1, 0, true); // DE C1
+                                                                    // 00d8e11d: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e121: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8e125: FLD float ptr [ESP + 0x30]
+                        self.fld32(self.esp.wrapping_add(0x30));
+                        // 00d8e129: FMUL ST0
+                        self.x87_registers(X87Op::Mul, 0, 0, false); // DC C8
+                                                                     // 00d8e12b: FLD ST1
+                        self.x87.fld_st(1);
+                        // 00d8e12d: FMULP ST2
+                        self.x87_registers(X87Op::Mul, 2, 0, true); // DE CA
+                                                                    // 00d8e12f: FADDP
+                        self.x87_registers(X87Op::Add, 1, 0, true); // DE C1
+                                                                    // 00d8e131: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e135: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e139: FLD float ptr [ESP + 0x50]
+                        self.fld32(self.esp.wrapping_add(0x50));
+                        // 00d8e13d: FCOM
+                        self.fcom_st(1, false);
+                        // 00d8e13f: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8e141: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8e144: JP 0x00d8e183
+                        if self.pf {
+                            block = 0x00d8_e183;
+                            continue;
+                        }
+                        // 00d8e146: FDIVRP
+                        self.x87_registers(X87Op::DivR, 1, 0, true); // DE F1
+                                                                     // 00d8e148: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e14c: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e150: CALL 0x00ec6040
+                        self.call_square_root();
+                        // 00d8e155: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e159: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e15d: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e161: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e165: FLD float ptr [ESP + 0x30]
+                        self.fld32(self.esp.wrapping_add(0x30));
+                        // 00d8e169: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e16d: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8e16f: FMULP ST2
+                        self.x87_registers(X87Op::Mul, 2, 0, true); // DE CA
+                                                                    // 00d8e171: FXCH
+                        self.x87.fxch(1);
+                        // 00d8e173: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8e177: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8e17b: FMUL ST1
+                        self.x87_registers(X87Op::Mul, 0, 1, false); // D8 C9
+                                                                     // 00d8e17d: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e181: JMP 0x00d8e189
+                        block = 0x00d8_e189;
+                        continue;
+                    }
+                    0x00d8_e183 => {
+                        // 00d8e183: FSTP ST1
+                        self.x87.fstp_st(1);
+                        // 00d8e185: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8e187: FLD1
+                        self.x87.push(1.0);
+                        block = 0x00d8_e189;
+                    }
+                    0x00d8_e189 => {
+                        // 00d8e189: FSTP float ptr [EDI + 0x8]
+                        self.fstp32(self.edi.wrapping_add(0x8));
+                        // 00d8e18c: MOVSS XMM5,dword ptr [ESP + 0x30]
+                        self.xmm[5] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x30)));
+                        // 00d8e192: MOVSS XMM0,dword ptr [ESP + 0x10]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8e198: MOVAPS XMM1,xmmword ptr [EBX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8e19c: MOVAPS XMM6,xmmword ptr [ESI]
+                        self.xmm[6] = load_vec(self.e, self.esi);
+                        // 00d8e19f: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8e1a2: MOVAPS XMM0,xmmword ptr [ECX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x30));
+                        // 00d8e1a6: MOVAPS XMM2,XMM5
+                        self.xmm[2] = self.xmm[5];
+                        // 00d8e1a9: SHUFPS XMM2,XMM5,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[5], 0);
+                        // 00d8e1ad: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8e1b0: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8e1b3: MOVAPS XMM2,XMM1
+                        self.xmm[2] = self.xmm[1];
+                        // 00d8e1b6: SHUFPS XMM2,XMM1,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[1], 255);
+                        // 00d8e1ba: MULPS XMM2,XMM6
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[6]);
+                        // 00d8e1bd: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8e1c0: SHUFPS XMM3,XMM0,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[0], 255);
+                        // 00d8e1c4: MULPS XMM3,XMM6
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[6]);
+                        // 00d8e1c7: MOVAPS XMM6,xmmword ptr [EBX + 0x10]
+                        self.xmm[6] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8e1cb: ADDPS XMM6,XMM2
+                        self.xmm[6] = addps(self.xmm[6], self.xmm[2]);
+                        // 00d8e1ce: MOVAPS xmmword ptr [EBX + 0x10],XMM6
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[6]);
+                        // 00d8e1d2: MOVAPS XMM2,xmmword ptr [ECX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8e1d6: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8e1d9: MOVAPS xmmword ptr [ECX + 0x10],XMM2
+                        store_vec(self.e, self.ecx.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8e1dd: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e1e1: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e1e5: MULPS XMM2,XMM1
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[1]);
+                        // 00d8e1e8: MOVAPS XMM1,xmmword ptr [ESI + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8e1ec: ADDPS XMM3,XMM2
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[2]);
+                        // 00d8e1ef: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8e1f2: MOVSS XMM1,dword ptr [EDI]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8e1f6: MOVAPS xmmword ptr [EBX + 0x20],XMM3
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[3]);
+                        // 00d8e1fa: MOVAPS XMM2,xmmword ptr [ECX + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8e1fe: ADDPS XMM2,XMM0
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[0]);
+                        // 00d8e201: MOVAPS xmmword ptr [ECX + 0x20],XMM2
+                        store_vec(self.e, self.ecx.wrapping_add(0x20), self.xmm[2]);
+                        // 00d8e205: LEA EAX,[ESI + 0x30]
+                        self.eax = self.esi.wrapping_add(0x30);
+                        // 00d8e208: ADDSS XMM1,XMM5
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[5]);
+                        // 00d8e20c: MOVSS dword ptr [EDI],XMM1
+                        self.e.mem.set_u32(self.edi, self.xmm[1][0].to_bits());
+                        // 00d8e210: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8e214: MOVAPS XMM1,xmmword ptr [ECX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.ecx.wrapping_add(0x30));
+                        // 00d8e218: MOVAPS XMM2,XMM4
+                        self.xmm[2] = self.xmm[4];
+                        // 00d8e21b: SHUFPS XMM2,XMM4,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[4], 0);
+                        // 00d8e21f: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8e222: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8e225: MOVAPS XMM2,xmmword ptr [EAX]
+                        self.xmm[2] = load_vec(self.e, self.eax);
+                        // 00d8e228: MOVAPS XMM6,XMM2
+                        self.xmm[6] = self.xmm[2];
+                        // 00d8e22b: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8e22e: SHUFPS XMM3,XMM0,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[0], 255);
+                        // 00d8e232: MULPS XMM6,XMM3
+                        self.xmm[6] = mulps(self.xmm[6], self.xmm[3]);
+                        // 00d8e235: MOVAPS XMM3,xmmword ptr [EBX + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8e239: ADDPS XMM3,XMM6
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[6]);
+                        // 00d8e23c: MOVAPS xmmword ptr [EBX + 0x10],XMM3
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[3]);
+                        // 00d8e240: MOVAPS XMM3,xmmword ptr [ECX + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8e244: MOVAPS XMM5,XMM1
+                        self.xmm[5] = self.xmm[1];
+                        // 00d8e247: SHUFPS XMM5,XMM1,0xff
+                        self.xmm[5] = shufps(self.xmm[5], self.xmm[1], 255);
+                        // 00d8e24b: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8e24e: SUBPS XMM3,XMM2
+                        self.xmm[3] = subps(self.xmm[3], self.xmm[2]);
+                        // 00d8e251: MOVAPS xmmword ptr [ECX + 0x10],XMM3
+                        store_vec(self.e, self.ecx.wrapping_add(0x10), self.xmm[3]);
+                        // 00d8e255: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8e259: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e25d: MULPS XMM2,XMM0
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[0]);
+                        // 00d8e260: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8e264: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8e267: MOVSS XMM1,dword ptr [EDI + 0x4]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.edi.wrapping_add(0x4)));
+                        // 00d8e26c: ADDPS XMM3,XMM2
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[2]);
+                        // 00d8e26f: MOVAPS xmmword ptr [EBX + 0x20],XMM3
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[3]);
+                        // 00d8e273: MOVAPS XMM2,xmmword ptr [ECX + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8e277: ADDPS XMM2,XMM0
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[0]);
+                        // 00d8e27a: MOVAPS xmmword ptr [ECX + 0x20],XMM2
+                        store_vec(self.e, self.ecx.wrapping_add(0x20), self.xmm[2]);
+                        // 00d8e27e: ADDSS XMM1,XMM4
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[4]);
+                        // 00d8e282: MOVSS dword ptr [EDI + 0x4],XMM1
+                        self.e
+                            .mem
+                            .set_u32(self.edi.wrapping_add(0x4), self.xmm[1][0].to_bits());
+                        // 00d8e287: MOV AL,byte ptr [ESI + 0x70]
+                        self.eax = (self.eax & 0xffff_ff00)
+                            | (u32::from(self.e.mem.u8(self.esi.wrapping_add(0x70))) & 0xff);
+                        // 00d8e28a: ADD EDI,0xc
+                        self.edi = self.add32(self.edi, 0xc);
+                        // 00d8e28d: ADD ESI,0x70
+                        self.esi = self.add32(self.esi, 0x70);
+                        // 00d8e290: CMP AL,0x1
+                        self.cmp8((self.eax & 0xff) as u8, 0x1_u8);
+                        // 00d8e292: JNZ 0x00d8d18c
+                        if !self.zf {
+                            block = 0x00d8_d18c;
+                            continue;
+                        }
+                        // 00d8e298: JMP 0x00d8d170
+                        block = 0x00d8_d170;
+                        continue;
+                    }
+                    0x00d8_e29d => {
+                        // 00d8e29d: MOVAPS XMM0,xmmword ptr [ESI]
+                        self.xmm[0] = load_vec(self.e, self.esi);
+                        // 00d8e2a0: MOVAPS XMM2,xmmword ptr [EBX + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e2a4: MOVAPS XMM1,xmmword ptr [ESI + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e2a8: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e2ac: MULPS XMM2,XMM0
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[0]);
+                        // 00d8e2af: MOVAPS XMM0,xmmword ptr [ECX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8e2b3: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8e2b6: ADDPS XMM0,XMM2
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[2]);
+                        // 00d8e2b9: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8e2bc: SHUFPS XMM2,XMM0,0x55
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 85);
+                        // 00d8e2c0: ADDSS XMM2,XMM0
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[0]);
+                        // 00d8e2c4: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8e2c8: ADDSS XMM0,XMM2
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[2]);
+                        // 00d8e2cc: SHUFPS XMM1,XMM1,0xff
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 255);
+                        // 00d8e2d0: SUBSS XMM1,XMM0
+                        self.xmm[1] = subss(self.xmm[1], self.xmm[0]);
+                        // 00d8e2d4: MOVSS dword ptr [ESP + 0x80],XMM1
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0x80), self.xmm[1][0].to_bits());
+                        // 00d8e2dd: FLD float ptr [ESI + 0xc]
+                        self.fld32(self.esi.wrapping_add(0xc));
+                        // 00d8e2e0: FMUL float ptr [ESP + 0x80]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x80));
+                        // 00d8e2e7: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e2eb: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8e2ef: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8e2f1: FABS
+                        self.x87.fabs();
+                        // 00d8e2f3: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e2f7: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e2fb: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e2ff: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e303: FLD float ptr [ESI + 0x20]
+                        self.fld32(self.esi.wrapping_add(0x20));
+                        // 00d8e306: FCOMP
+                        self.fcom_st(1, true);
+                        // 00d8e308: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8e30a: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8e30d: JP 0x00d8e326
+                        if self.pf {
+                            block = 0x00d8_e326;
+                            continue;
+                        }
+                        // 00d8e30f: FDIVR float ptr [ESI + 0x20]
+                        self.x87_float_operand(X87Op::DivR, self.esi.wrapping_add(0x20));
+                        // 00d8e312: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e316: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e31a: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8e31c: FMULP ST2
+                        self.x87_registers(X87Op::Mul, 2, 0, true); // DE CA
+                                                                    // 00d8e31e: FXCH
+                        self.x87.fxch(1);
+                        // 00d8e320: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e324: JMP 0x00d8e32c
+                        block = 0x00d8_e32c;
+                        continue;
+                    }
+                    0x00d8_e326 => {
+                        // 00d8e326: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8e328: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8e32a: FLD1
+                        self.x87.push(1.0);
+                        block = 0x00d8_e32c;
+                    }
+                    0x00d8_e32c => {
+                        // 00d8e32c: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e330: FSTP float ptr [EDI + 0x4]
+                        self.fstp32(self.edi.wrapping_add(0x4));
+                        // 00d8e333: MOVSS XMM0,dword ptr [ESP + 0x10]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8e339: MOVAPS XMM3,xmmword ptr [EBX + 0x30]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8e33d: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e341: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8e344: MOVAPS XMM0,xmmword ptr [EAX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x30));
+                        // 00d8e348: MOVAPS XMM1,XMM2
+                        self.xmm[1] = self.xmm[2];
+                        // 00d8e34b: SHUFPS XMM1,XMM2,0x0
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[2], 0);
+                        // 00d8e34f: MULPS XMM3,XMM1
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[1]);
+                        // 00d8e352: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8e355: MOVAPS XMM1,xmmword ptr [ESI]
+                        self.xmm[1] = load_vec(self.e, self.esi);
+                        // 00d8e358: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8e35b: MOVAPS XMM3,xmmword ptr [ESI + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e35f: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8e362: MOVSS XMM3,dword ptr [EDI]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8e366: ADDPS XMM4,XMM1
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[1]);
+                        // 00d8e369: MOVAPS xmmword ptr [EBX + 0x20],XMM4
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[4]);
+                        // 00d8e36d: MOVAPS XMM1,xmmword ptr [EAX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8e371: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8e374: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8e378: ADDSS XMM3,XMM2
+                        self.xmm[3] = addss(self.xmm[3], self.xmm[2]);
+                        // 00d8e37c: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8e37d: MOVSS dword ptr [EDI],XMM3
+                        self.e.mem.set_u32(self.edi, self.xmm[3][0].to_bits());
+                        // 00d8e381: CALL 0x00d921d0
+                        self.call_table_byte();
+                        // 00d8e386: LEA EDI,[EDI + EAX*0x4]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(4));
+                        // 00d8e389: MOV AL,byte ptr [ESI + 0x30]
+                        self.eax = (self.eax & 0xffff_ff00)
+                            | (u32::from(self.e.mem.u8(self.esi.wrapping_add(0x30))) & 0xff);
+                        // 00d8e38c: ADD ESP,0x4
+                        self.esp = self.add32(self.esp, 0x4);
+                        // 00d8e38f: ADD ESI,0x30
+                        self.esi = self.add32(self.esi, 0x30);
+                        // 00d8e392: CMP AL,0xe
+                        self.cmp8((self.eax & 0xff) as u8, 0xe_u8);
+                        // 00d8e394: JZ 0x00d8e29d
+                        if self.zf {
+                            block = 0x00d8_e29d;
+                            continue;
+                        }
+                        // 00d8e39a: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_e3a0 => {
+                        // 00d8e3a0: MOVAPS XMM0,xmmword ptr [EBX + 0x50]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x50));
+                        // 00d8e3a4: FLD float ptr [ESI + 0x28]
+                        self.fld32(self.esi.wrapping_add(0x28));
+                        // 00d8e3a7: MOVAPS XMM1,xmmword ptr [EBX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e3ab: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e3af: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e3b3: FLD float ptr [ESI + 0x1c]
+                        self.fld32(self.esi.wrapping_add(0x1c));
+                        // 00d8e3b6: MOVAPS XMM2,xmmword ptr [ECX + 0x50]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x50));
+                        // 00d8e3ba: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e3be: MOV EDX,dword ptr [EBX + 0x50]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x50));
+                        // 00d8e3c1: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e3c5: MOV EAX,dword ptr [EBP + 0x8]
+                        self.eax = self.e.mem.u32(self.ebp.wrapping_add(0x8));
+                        // 00d8e3c8: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8e3ca: MOVSS XMM3,dword ptr [EAX + 0x8]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.eax.wrapping_add(0x8)));
+                        // 00d8e3cf: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8e3d2: MOVAPS XMM0,xmmword ptr [ECX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8e3d6: SUBPS XMM0,XMM2
+                        self.xmm[0] = subps(self.xmm[0], self.xmm[2]);
+                        // 00d8e3d9: MOVAPS XMM2,xmmword ptr [ESI]
+                        self.xmm[2] = load_vec(self.e, self.esi);
+                        // 00d8e3dc: MULPS XMM2,XMM1
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[1]);
+                        // 00d8e3df: MOVAPS XMM1,xmmword ptr [ESI + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e3e3: MOV dword ptr [ESP + 0x180],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x180), self.edx);
+                        // 00d8e3ea: MOV EDX,dword ptr [EBX + 0x54]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x54));
+                        // 00d8e3ed: MOV dword ptr [ESP + 0x184],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x184), self.edx);
+                        // 00d8e3f4: MOV EDX,dword ptr [EBX + 0x58]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x58));
+                        // 00d8e3f7: MOV dword ptr [ESP + 0x188],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x188), self.edx);
+                        // 00d8e3fe: MOV EDX,dword ptr [EBX + 0x5c]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x5c));
+                        // 00d8e401: MOV dword ptr [ESP + 0x18c],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x18c), self.edx);
+                        // 00d8e408: MOV EDX,dword ptr [ECX + 0x50]
+                        self.edx = self.e.mem.u32(self.ecx.wrapping_add(0x50));
+                        // 00d8e40b: MOV dword ptr [ESP + 0x120],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x120), self.edx);
+                        // 00d8e412: MOV EDX,dword ptr [ECX + 0x54]
+                        self.edx = self.e.mem.u32(self.ecx.wrapping_add(0x54));
+                        // 00d8e415: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8e418: MOV dword ptr [ESP + 0x124],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x124), self.edx);
+                        // 00d8e41f: MOV EDX,dword ptr [ECX + 0x58]
+                        self.edx = self.e.mem.u32(self.ecx.wrapping_add(0x58));
+                        // 00d8e422: ADDPS XMM0,XMM2
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[2]);
+                        // 00d8e425: MOV dword ptr [ESP + 0x128],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x128), self.edx);
+                        // 00d8e42c: MOV EDX,dword ptr [ECX + 0x5c]
+                        self.edx = self.e.mem.u32(self.ecx.wrapping_add(0x5c));
+                        // 00d8e42f: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8e432: MOVAPS XMM0,xmmword ptr [ESP + 0x180]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x180));
+                        // 00d8e43a: MOV dword ptr [ESP + 0x12c],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x12c), self.edx);
+                        // 00d8e441: FMUL float ptr [EAX + 0x40]
+                        self.x87_float_operand(X87Op::Mul, self.eax.wrapping_add(0x40));
+                        // 00d8e444: MOVAPS XMM1,xmmword ptr [ESI]
+                        self.xmm[1] = load_vec(self.e, self.esi);
+                        // 00d8e447: MOVAPS XMM4,xmmword ptr [ESI + 0x10]
+                        self.xmm[4] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e44b: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e44f: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8e452: MOVAPS XMM0,xmmword ptr [ESP + 0x120]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x120));
+                        // 00d8e45a: FMUL float ptr [ESP + 0x10]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x10));
+                        // 00d8e45e: MULPS XMM0,XMM4
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[4]);
+                        // 00d8e461: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8e464: MOVSS XMM1,dword ptr [ESP + 0x2c]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x2c)));
+                        // 00d8e46a: SHUFPS XMM1,XMM1,0x0
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 0);
+                        // 00d8e46e: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8e471: MOVAPS XMM0,XMM3
+                        self.xmm[0] = self.xmm[3];
+                        // 00d8e474: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8e478: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8e47b: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8e47e: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8e481: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8e485: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8e488: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8e48c: SHUFPS XMM2,XMM0,0xaa
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 170);
+                        // 00d8e490: ADDSS XMM2,XMM1
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[1]);
+                        // 00d8e494: MOVSS dword ptr [ESP + 0x84],XMM2
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0x84), self.xmm[2][0].to_bits());
+                        // 00d8e49d: FSUB float ptr [ESP + 0x84]
+                        self.x87_float_operand(X87Op::Sub, self.esp.wrapping_add(0x84));
+                        // 00d8e4a4: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e4a8: MOVSS XMM0,dword ptr [ESP + 0x2c]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x2c)));
+                        // 00d8e4ae: MOVSS dword ptr [ESP + 0x8c],XMM0
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0x8c), self.xmm[0][0].to_bits());
+                        // 00d8e4b7: FLD float ptr [EDI]
+                        self.fld32(self.edi);
+                        // 00d8e4b9: FCHS
+                        self.x87.fchs();
+                        // 00d8e4bb: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e4bf: FLD float ptr [ESP + 0x8c]
+                        self.fld32(self.esp.wrapping_add(0x8c));
+                        // 00d8e4c6: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8e4c8: FSUB float ptr [ESI + 0x20]
+                        self.x87_float_operand(X87Op::Sub, self.esi.wrapping_add(0x20));
+                        // 00d8e4cb: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e4cf: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8e4d3: FMUL float ptr [ESI + 0xc]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0xc));
+                        // 00d8e4d6: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e4da: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8e4de: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e4e2: FCOM
+                        self.fcom_st(1, false);
+                        // 00d8e4e4: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8e4e6: FSTP ST1
+                        self.x87.fstp_st(1);
+                        // 00d8e4e8: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8e4eb: JP 0x00d8e540
+                        if self.pf {
+                            block = 0x00d8_e540;
+                            continue;
+                        }
+                        // 00d8e4ed: MOVSS XMM0,dword ptr [ESP + 0x10]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8e4f3: FSTP ST1
+                        self.x87.fstp_st(1);
+                        // 00d8e4f5: MOVAPS XMM3,xmmword ptr [EBX + 0x30]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8e4f9: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8e4fb: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e4ff: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8e502: MOVAPS XMM0,xmmword ptr [ECX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x30));
+                        // 00d8e506: MOVAPS XMM1,XMM2
+                        self.xmm[1] = self.xmm[2];
+                        // 00d8e509: SHUFPS XMM1,XMM2,0x0
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[2], 0);
+                        // 00d8e50d: MULPS XMM3,XMM1
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[1]);
+                        // 00d8e510: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8e513: MOVAPS XMM1,xmmword ptr [ESI]
+                        self.xmm[1] = load_vec(self.e, self.esi);
+                        // 00d8e516: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8e519: MOVAPS XMM3,xmmword ptr [ESI + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e51d: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8e520: MOVSS XMM3,dword ptr [EDI]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8e524: ADDPS XMM4,XMM1
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[1]);
+                        // 00d8e527: MOVAPS xmmword ptr [EBX + 0x20],XMM4
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[4]);
+                        // 00d8e52b: MOVAPS XMM1,xmmword ptr [ECX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8e52f: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8e532: MOVAPS xmmword ptr [ECX + 0x20],XMM0
+                        store_vec(self.e, self.ecx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8e536: ADDSS XMM3,XMM2
+                        self.xmm[3] = addss(self.xmm[3], self.xmm[2]);
+                        // 00d8e53a: MOVSS dword ptr [EDI],XMM3
+                        self.e.mem.set_u32(self.edi, self.xmm[3][0].to_bits());
+                        // 00d8e53e: JMP 0x00d8e5ad
+                        block = 0x00d8_e5ad;
+                        continue;
+                    }
+                    0x00d8_e540 => {
+                        // 00d8e540: FLD float ptr [ESI + 0x24]
+                        self.fld32(self.esi.wrapping_add(0x24));
+                        // 00d8e543: FSUBP ST2,ST0
+                        self.x87_registers(X87Op::Sub, 2, 0, true); // DE EA
+                                                                    // 00d8e545: FXCH
+                        self.x87.fxch(1);
+                        // 00d8e547: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e54b: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8e54f: FMUL float ptr [ESI + 0xc]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0xc));
+                        // 00d8e552: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e556: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8e55a: FCOMPP
+                        self.fcompp();
+                        // 00d8e55c: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8e55e: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8e561: JP 0x00d8e5ad
+                        if self.pf {
+                            block = 0x00d8_e5ad;
+                            continue;
+                        }
+                        // 00d8e563: MOVSS XMM3,dword ptr [ESP + 0x10]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8e569: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8e56d: MOVAPS XMM1,xmmword ptr [ECX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.ecx.wrapping_add(0x30));
+                        // 00d8e571: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e575: MOVAPS XMM2,XMM3
+                        self.xmm[2] = self.xmm[3];
+                        // 00d8e578: SHUFPS XMM2,XMM3,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[3], 0);
+                        // 00d8e57c: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8e57f: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8e582: MOVAPS XMM2,xmmword ptr [ESI]
+                        self.xmm[2] = load_vec(self.e, self.esi);
+                        // 00d8e585: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8e588: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e58c: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8e58f: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8e593: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8e596: MOVAPS xmmword ptr [EBX + 0x20],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8e59a: MOVAPS XMM0,xmmword ptr [ECX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8e59e: ADDPS XMM1,XMM0
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[0]);
+                        // 00d8e5a1: MOVAPS xmmword ptr [ECX + 0x20],XMM1
+                        store_vec(self.e, self.ecx.wrapping_add(0x20), self.xmm[1]);
+                        // 00d8e5a5: ADDSS XMM2,XMM3
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[3]);
+                        // 00d8e5a9: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        block = 0x00d8_e5ad;
+                    }
+                    0x00d8_e5ad => {
+                        // 00d8e5ad: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8e5ae: CALL 0x00d921d0
+                        self.call_table_byte();
+                        // 00d8e5b3: LEA EDI,[EDI + EAX*0x4]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(4));
+                        // 00d8e5b6: MOV AL,byte ptr [ESI + 0x30]
+                        self.eax = (self.eax & 0xffff_ff00)
+                            | (u32::from(self.e.mem.u8(self.esi.wrapping_add(0x30))) & 0xff);
+                        // 00d8e5b9: ADD ESP,0x4
+                        self.esp = self.add32(self.esp, 0x4);
+                        // 00d8e5bc: ADD ESI,0x30
+                        self.esi = self.add32(self.esi, 0x30);
+                        // 00d8e5bf: CMP AL,0xd
+                        self.cmp8((self.eax & 0xff) as u8, 0xd_u8);
+                        // 00d8e5c1: JZ 0x00d8e3a0
+                        if self.zf {
+                            block = 0x00d8_e3a0;
+                            continue;
+                        }
+                        // 00d8e5c7: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_e5cc => {
+                        // 00d8e5cc: LEA EAX,[ESI + 0x24]
+                        self.eax = self.esi.wrapping_add(0x24);
+                        // 00d8e5cf: MOV dword ptr [ESP + 0x30],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x30), self.eax);
+                        block = 0x00d8_e5d3;
+                    }
+                    0x00d8_e5d3 => {
+                        // 00d8e5d3: MOV ECX,dword ptr [ESP + 0x30]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x30));
+                        // 00d8e5d7: FLD float ptr [ECX + 0x4]
+                        self.fld32(self.ecx.wrapping_add(0x4));
+                        // 00d8e5da: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e5de: FMUL float ptr [ESP + 0x78]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x78));
+                        // 00d8e5e2: FADD float ptr [EDI + 0x8]
+                        self.x87_float_operand(X87Op::Add, self.edi.wrapping_add(0x8));
+                        // 00d8e5e5: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e5e9: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e5ed: FST float ptr [ESP + 0x10]
+                        self.fst32(self.esp.wrapping_add(0x10));
+                        // 00d8e5f1: FSTP float ptr [EDI + 0x8]
+                        self.fstp32(self.edi.wrapping_add(0x8));
+                        // 00d8e5f4: MOVAPS XMM0,xmmword ptr [EBX + 0x50]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x50));
+                        // 00d8e5f8: FLD float ptr [ECX + -0x8]
+                        self.fld32(self.ecx.wrapping_sub(0x8));
+                        // 00d8e5fb: MOVAPS XMM3,xmmword ptr [EAX + 0x50]
+                        self.xmm[3] = load_vec(self.e, self.eax.wrapping_add(0x50));
+                        // 00d8e5ff: MOVAPS XMM1,xmmword ptr [EBX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e603: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e607: MOVSS XMM2,dword ptr [ECX + 0xc]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.ecx.wrapping_add(0xc)));
+                        // 00d8e60c: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e610: FADD float ptr [ESP + 0x10]
+                        self.x87_float_operand(X87Op::Add, self.esp.wrapping_add(0x10));
+                        // 00d8e614: MOV EDX,dword ptr [EBX + 0x50]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x50));
+                        // 00d8e617: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8e61a: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8e61e: SUBPS XMM0,XMM3
+                        self.xmm[0] = subps(self.xmm[0], self.xmm[3]);
+                        // 00d8e621: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e625: MOVAPS XMM3,xmmword ptr [ESI]
+                        self.xmm[3] = load_vec(self.e, self.esi);
+                        // 00d8e628: FLD float ptr [ECX + 0x8]
+                        self.fld32(self.ecx.wrapping_add(0x8));
+                        // 00d8e62b: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8e62e: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e632: MOVAPS XMM3,xmmword ptr [ECX + -0x14]
+                        self.xmm[3] = load_vec(self.e, self.ecx.wrapping_sub(0x14));
+                        // 00d8e636: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8e63a: MOV dword ptr [ESP + 0x1a0],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x1a0), self.edx);
+                        // 00d8e641: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8e643: MOV EDX,dword ptr [EBX + 0x54]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x54));
+                        // 00d8e646: MOV dword ptr [ESP + 0x1a4],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x1a4), self.edx);
+                        // 00d8e64d: MOV EDX,dword ptr [EBX + 0x58]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x58));
+                        // 00d8e650: MOV dword ptr [ESP + 0x1a8],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x1a8), self.edx);
+                        // 00d8e657: MOV EDX,dword ptr [EBX + 0x5c]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x5c));
+                        // 00d8e65a: MOV dword ptr [ESP + 0x1ac],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x1ac), self.edx);
+                        // 00d8e661: MOV EDX,dword ptr [EAX + 0x50]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x50));
+                        // 00d8e664: MOV dword ptr [ESP + 0x140],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x140), self.edx);
+                        // 00d8e66b: MOV EDX,dword ptr [EAX + 0x54]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x54));
+                        // 00d8e66e: MOV dword ptr [ESP + 0x144],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x144), self.edx);
+                        // 00d8e675: MOV EDX,dword ptr [EAX + 0x58]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x58));
+                        // 00d8e678: MOV dword ptr [ESP + 0x148],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x148), self.edx);
+                        // 00d8e67f: MOV EAX,dword ptr [EAX + 0x5c]
+                        self.eax = self.e.mem.u32(self.eax.wrapping_add(0x5c));
+                        // 00d8e682: MOV EDX,dword ptr [EBP + 0x8]
+                        self.edx = self.e.mem.u32(self.ebp.wrapping_add(0x8));
+                        // 00d8e685: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8e688: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8e68b: MOVAPS XMM1,xmmword ptr [ESP + 0x1a0]
+                        self.xmm[1] = load_vec(self.e, self.esp.wrapping_add(0x1a0));
+                        // 00d8e693: MOV dword ptr [ESP + 0x14c],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x14c), self.eax);
+                        // 00d8e69a: FMUL float ptr [EDX + 0x40]
+                        self.x87_float_operand(X87Op::Mul, self.edx.wrapping_add(0x40));
+                        // 00d8e69d: MOVAPS XMM4,xmmword ptr [ECX + -0x14]
+                        self.xmm[4] = load_vec(self.e, self.ecx.wrapping_sub(0x14));
+                        // 00d8e6a1: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8e6a4: MOVAPS XMM0,xmmword ptr [ESI]
+                        self.xmm[0] = load_vec(self.e, self.esi);
+                        // 00d8e6a7: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e6ab: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8e6ae: MOVAPS XMM0,xmmword ptr [ESP + 0x140]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x140));
+                        // 00d8e6b6: FMUL float ptr [ESP + 0x10]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x10));
+                        // 00d8e6ba: MULPS XMM0,XMM4
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[4]);
+                        // 00d8e6bd: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8e6c0: MOVSS XMM1,dword ptr [ESP + 0x2c]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x2c)));
+                        // 00d8e6c6: LEA EAX,[ECX + -0x14]
+                        self.eax = self.ecx.wrapping_sub(0x14);
+                        // 00d8e6c9: SHUFPS XMM1,XMM1,0x0
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 0);
+                        // 00d8e6cd: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8e6d0: MOVSS XMM0,XMM2
+                        self.xmm[0][0] = self.xmm[2][0];
+                        // 00d8e6d4: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8e6d8: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8e6db: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8e6de: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8e6e1: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8e6e5: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8e6e8: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8e6ec: SHUFPS XMM2,XMM0,0xaa
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 170);
+                        // 00d8e6f0: ADDSS XMM2,XMM1
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[1]);
+                        // 00d8e6f4: MOVSS dword ptr [ESP + 0x94],XMM2
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0x94), self.xmm[2][0].to_bits());
+                        // 00d8e6fd: FSUB float ptr [ESP + 0x94]
+                        self.x87_float_operand(X87Op::Sub, self.esp.wrapping_add(0x94));
+                        // 00d8e704: MOV dword ptr [ESP + 0x50],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x50), self.eax);
+                        // 00d8e708: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8e70c: MOVSS XMM0,dword ptr [ESP + 0x2c]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x2c)));
+                        // 00d8e712: MOVSS dword ptr [ESP + 0x9c],XMM0
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0x9c), self.xmm[0][0].to_bits());
+                        // 00d8e71b: FLD float ptr [ECX + -0x18]
+                        self.fld32(self.ecx.wrapping_sub(0x18));
+                        // 00d8e71e: FMUL float ptr [ESP + 0x9c]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x9c));
+                        // 00d8e725: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e729: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8e72d: LEA EDX,[ECX + -0x4]
+                        self.edx = self.ecx.wrapping_sub(0x4);
+                        // 00d8e730: FLD float ptr [EDX]
+                        self.fld32(self.edx);
+                        // 00d8e732: FCOMP
+                        self.fcom_st(1, true);
+                        // 00d8e734: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8e736: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8e739: JP 0x00d8e748
+                        if self.pf {
+                            block = 0x00d8_e748;
+                            continue;
+                        }
+                        // 00d8e73b: FDIVR float ptr [EDX]
+                        self.x87_float_operand(X87Op::DivR, self.edx);
+                        // 00d8e73d: FSTP float ptr [EDI + 0x4]
+                        self.fstp32(self.edi.wrapping_add(0x4));
+                        // 00d8e740: FLD float ptr [EDX]
+                        self.fld32(self.edx);
+                        // 00d8e742: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e746: JMP 0x00d8e767
+                        block = 0x00d8_e767;
+                        continue;
+                    }
+                    0x00d8_e748 => {
+                        // 00d8e748: FLD float ptr [ECX]
+                        self.fld32(self.ecx);
+                        // 00d8e74a: FCOMP
+                        self.fcom_st(1, true);
+                        // 00d8e74c: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8e74e: TEST AH,0x41
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x41_u8);
+                        // 00d8e751: JNZ 0x00d8e760
+                        if !self.zf {
+                            block = 0x00d8_e760;
+                            continue;
+                        }
+                        // 00d8e753: FDIVR float ptr [ECX]
+                        self.x87_float_operand(X87Op::DivR, self.ecx);
+                        // 00d8e755: FSTP float ptr [EDI + 0x4]
+                        self.fstp32(self.edi.wrapping_add(0x4));
+                        // 00d8e758: FLD float ptr [ECX]
+                        self.fld32(self.ecx);
+                        // 00d8e75a: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8e75e: JMP 0x00d8e767
+                        block = 0x00d8_e767;
+                        continue;
+                    }
+                    0x00d8_e760 => {
+                        // 00d8e760: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8e762: FLD1
+                        self.x87.push(1.0);
+                        // 00d8e764: FSTP float ptr [EDI + 0x4]
+                        self.fstp32(self.edi.wrapping_add(0x4));
+                        block = 0x00d8_e767;
+                    }
+                    0x00d8_e767 => {
+                        // 00d8e767: MOVSS XMM0,dword ptr [ESP + 0x10]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8e76d: MOVAPS XMM3,xmmword ptr [EBX + 0x30]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8e771: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e775: MOV ECX,dword ptr [ESP + 0x50]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x50));
+                        // 00d8e779: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e77d: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8e780: SHUFPS XMM0,XMM2,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[2], 0);
+                        // 00d8e784: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8e787: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8e78a: MOVAPS XMM3,xmmword ptr [EAX + 0x30]
+                        self.xmm[3] = load_vec(self.e, self.eax.wrapping_add(0x30));
+                        // 00d8e78e: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8e791: MOVAPS XMM3,xmmword ptr [ESI]
+                        self.xmm[3] = load_vec(self.e, self.esi);
+                        // 00d8e794: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8e797: MOVAPS XMM3,xmmword ptr [ECX]
+                        self.xmm[3] = load_vec(self.e, self.ecx);
+                        // 00d8e79a: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8e79d: MOVSS XMM3,dword ptr [EDI]
+                        self.xmm[3] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8e7a1: ADDPS XMM1,XMM4
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[4]);
+                        // 00d8e7a4: MOVAPS xmmword ptr [EBX + 0x20],XMM1
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[1]);
+                        // 00d8e7a8: MOVAPS XMM1,xmmword ptr [EAX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8e7ac: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8e7af: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8e7b3: ADDSS XMM3,XMM2
+                        self.xmm[3] = addss(self.xmm[3], self.xmm[2]);
+                        // 00d8e7b7: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8e7b8: MOVSS dword ptr [EDI],XMM3
+                        self.e.mem.set_u32(self.edi, self.xmm[3][0].to_bits());
+                        // 00d8e7bc: CALL 0x00d921d0
+                        self.call_table_byte();
+                        // 00d8e7c1: MOV ECX,dword ptr [ESP + 0x34]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x34));
+                        // 00d8e7c5: LEA EDI,[EDI + EAX*0x4]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(4));
+                        // 00d8e7c8: MOV AL,byte ptr [ECX + 0x1c]
+                        self.eax = (self.eax & 0xffff_ff00)
+                            | (u32::from(self.e.mem.u8(self.ecx.wrapping_add(0x1c))) & 0xff);
+                        // 00d8e7cb: ADD ECX,0x40
+                        self.ecx = self.add32(self.ecx, 0x40);
+                        // 00d8e7ce: ADD ESP,0x4
+                        self.esp = self.add32(self.esp, 0x4);
+                        // 00d8e7d1: ADD ESI,0x40
+                        self.esi = self.add32(self.esi, 0x40);
+                        // 00d8e7d4: MOV dword ptr [ESP + 0x30],ECX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x30), self.ecx);
+                        // 00d8e7d8: CMP AL,0xf
+                        self.cmp8((self.eax & 0xff) as u8, 0xf_u8);
+                        // 00d8e7da: JZ 0x00d8e5d3
+                        if self.zf {
+                            block = 0x00d8_e5d3;
+                            continue;
+                        }
+                        // 00d8e7e0: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_e7e5 => {
+                        // 00d8e7e5: MOVAPS XMM1,xmmword ptr [ESI]
+                        self.xmm[1] = load_vec(self.e, self.esi);
+                        // 00d8e7e8: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e7ec: MOV EDX,dword ptr [ESP + 0x4c]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e7f0: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e7f4: MOVAPS XMM0,xmmword ptr [EDX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.edx.wrapping_add(0x20));
+                        // 00d8e7f8: MOVAPS XMM5,xmmword ptr [EBX + 0x30]
+                        self.xmm[5] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8e7fc: MULPS XMM3,XMM1
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[1]);
+                        // 00d8e7ff: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8e802: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8e805: LEA EAX,[EBX + 0x20]
+                        self.eax = self.ebx.wrapping_add(0x20);
+                        // 00d8e808: LEA ECX,[EDX + 0x20]
+                        self.ecx = self.edx.wrapping_add(0x20);
+                        // 00d8e80b: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8e80e: SHUFPS XMM4,XMM0,0x55
+                        self.xmm[4] = shufps(self.xmm[4], self.xmm[0], 85);
+                        // 00d8e812: ADDSS XMM4,XMM0
+                        self.xmm[4] = addss(self.xmm[4], self.xmm[0]);
+                        // 00d8e816: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8e819: SHUFPS XMM3,XMM0,0xaa
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[0], 170);
+                        // 00d8e81d: ADDSS XMM3,XMM4
+                        self.xmm[3] = addss(self.xmm[3], self.xmm[4]);
+                        // 00d8e821: MOVAPS XMM0,XMM2
+                        self.xmm[0] = self.xmm[2];
+                        // 00d8e824: SHUFPS XMM0,XMM2,0xff
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[2], 255);
+                        // 00d8e828: SUBSS XMM0,XMM3
+                        self.xmm[0] = subss(self.xmm[0], self.xmm[3]);
+                        // 00d8e82c: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8e82f: SHUFPS XMM3,XMM1,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 255);
+                        // 00d8e833: MULSS XMM0,XMM3
+                        self.xmm[0] = mulss(self.xmm[0], self.xmm[3]);
+                        // 00d8e837: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8e83a: SHUFPS XMM0,XMM3,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[3], 0);
+                        // 00d8e83e: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8e841: MULPS XMM4,XMM5
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[5]);
+                        // 00d8e844: MOVAPS XMM5,xmmword ptr [EDX + 0x30]
+                        self.xmm[5] = load_vec(self.e, self.edx.wrapping_add(0x30));
+                        // 00d8e848: MULPS XMM5,XMM0
+                        self.xmm[5] = mulps(self.xmm[5], self.xmm[0]);
+                        // 00d8e84b: MOVSS XMM0,dword ptr [EDI]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8e84f: MULPS XMM1,XMM4
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[4]);
+                        // 00d8e852: MOVAPS XMM4,xmmword ptr [EAX]
+                        self.xmm[4] = load_vec(self.e, self.eax);
+                        // 00d8e855: ADDPS XMM4,XMM1
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[1]);
+                        // 00d8e858: MOVAPS xmmword ptr [EAX],XMM4
+                        store_vec(self.e, self.eax, self.xmm[4]);
+                        // 00d8e85b: MOVAPS XMM1,xmmword ptr [ECX]
+                        self.xmm[1] = load_vec(self.e, self.ecx);
+                        // 00d8e85e: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8e861: ADDPS XMM1,XMM2
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[2]);
+                        // 00d8e864: MOVAPS xmmword ptr [ECX],XMM1
+                        store_vec(self.e, self.ecx, self.xmm[1]);
+                        // 00d8e867: ADDSS XMM0,XMM3
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[3]);
+                        // 00d8e86b: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8e86c: MOVSS dword ptr [EDI],XMM0
+                        self.e.mem.set_u32(self.edi, self.xmm[0][0].to_bits());
+                        // 00d8e870: CALL 0x00d921d0
+                        self.call_table_byte();
+                        // 00d8e875: LEA EDI,[EDI + EAX*0x4]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(4));
+                        // 00d8e878: MOV AL,byte ptr [ESI + 0x20]
+                        self.eax = (self.eax & 0xffff_ff00)
+                            | (u32::from(self.e.mem.u8(self.esi.wrapping_add(0x20))) & 0xff);
+                        // 00d8e87b: ADD ESP,0x4
+                        self.esp = self.add32(self.esp, 0x4);
+                        // 00d8e87e: ADD ESI,0x20
+                        self.esi = self.add32(self.esi, 0x20);
+                        // 00d8e881: CMP AL,0xc
+                        self.cmp8((self.eax & 0xff) as u8, 0xc_u8);
+                        // 00d8e883: JZ 0x00d8e7e5
+                        if self.zf {
+                            block = 0x00d8_e7e5;
+                            continue;
+                        }
+                        // 00d8e889: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_e890 => {
+                        // 00d8e890: MOVAPS XMM3,xmmword ptr [EBX + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8e894: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e898: MOVAPS XMM0,xmmword ptr [ECX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8e89c: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e8a0: MOV EDX,dword ptr [ESP + 0x4c]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e8a4: MOVAPS XMM1,xmmword ptr [EDX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.edx.wrapping_add(0x20));
+                        // 00d8e8a8: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e8ac: SUBPS XMM3,XMM0
+                        self.xmm[3] = subps(self.xmm[3], self.xmm[0]);
+                        // 00d8e8af: MOVAPS XMM0,xmmword ptr [ESI + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8e8b3: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8e8b6: MOVAPS XMM0,xmmword ptr [ESI]
+                        self.xmm[0] = load_vec(self.e, self.esi);
+                        // 00d8e8b9: MULPS XMM4,XMM2
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[2]);
+                        // 00d8e8bc: ADDPS XMM1,XMM4
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[4]);
+                        // 00d8e8bf: LEA EAX,[EBX + 0x10]
+                        self.eax = self.ebx.wrapping_add(0x10);
+                        // 00d8e8c2: ADD ECX,0x10
+                        self.ecx = self.add32(self.ecx, 0x10);
+                        // 00d8e8c5: ADD EDX,0x20
+                        self.edx = self.add32(self.edx, 0x20);
+                        // 00d8e8c8: MOVAPS XMM5,XMM0
+                        self.xmm[5] = self.xmm[0];
+                        // 00d8e8cb: MULPS XMM5,XMM3
+                        self.xmm[5] = mulps(self.xmm[5], self.xmm[3]);
+                        // 00d8e8ce: ADDPS XMM1,XMM5
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[5]);
+                        // 00d8e8d1: MOVAPS XMM4,XMM1
+                        self.xmm[4] = self.xmm[1];
+                        // 00d8e8d4: SHUFPS XMM4,XMM1,0x55
+                        self.xmm[4] = shufps(self.xmm[4], self.xmm[1], 85);
+                        // 00d8e8d8: ADDSS XMM4,XMM1
+                        self.xmm[4] = addss(self.xmm[4], self.xmm[1]);
+                        // 00d8e8dc: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8e8df: SHUFPS XMM3,XMM1,0xaa
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 170);
+                        // 00d8e8e3: ADDSS XMM3,XMM4
+                        self.xmm[3] = addss(self.xmm[3], self.xmm[4]);
+                        // 00d8e8e7: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8e8ea: SHUFPS XMM1,XMM0,0xff
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 255);
+                        // 00d8e8ee: SUBSS XMM1,XMM3
+                        self.xmm[1] = subss(self.xmm[1], self.xmm[3]);
+                        // 00d8e8f2: SHUFPS XMM2,XMM2,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[2], 255);
+                        // 00d8e8f6: MULSS XMM1,XMM2
+                        self.xmm[1] = mulss(self.xmm[1], self.xmm[2]);
+                        // 00d8e8fa: MOVAPS XMM2,xmmword ptr [EBX + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8e8fe: MOVAPS XMM4,XMM1
+                        self.xmm[4] = self.xmm[1];
+                        // 00d8e901: MOV dword ptr [ESP + 0x30],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x30), self.edx);
+                        // 00d8e905: MOV EDX,dword ptr [ESP + 0x4c]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e909: MOVAPS XMM1,xmmword ptr [EDX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.edx.wrapping_add(0x30));
+                        // 00d8e90d: MOVAPS XMM6,XMM0
+                        self.xmm[6] = self.xmm[0];
+                        // 00d8e910: MOVAPS XMM3,XMM4
+                        self.xmm[3] = self.xmm[4];
+                        // 00d8e913: SHUFPS XMM3,XMM4,0x0
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[4], 0);
+                        // 00d8e917: MULPS XMM2,XMM3
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[3]);
+                        // 00d8e91a: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8e91d: MOVAPS XMM3,XMM2
+                        self.xmm[3] = self.xmm[2];
+                        // 00d8e920: SHUFPS XMM3,XMM2,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[2], 255);
+                        // 00d8e924: MULPS XMM6,XMM3
+                        self.xmm[6] = mulps(self.xmm[6], self.xmm[3]);
+                        // 00d8e927: MOVAPS XMM3,xmmword ptr [EAX]
+                        self.xmm[3] = load_vec(self.e, self.eax);
+                        // 00d8e92a: ADDPS XMM3,XMM6
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[6]);
+                        // 00d8e92d: MOVAPS xmmword ptr [EAX],XMM3
+                        store_vec(self.e, self.eax, self.xmm[3]);
+                        // 00d8e930: MOVAPS XMM3,xmmword ptr [ECX]
+                        self.xmm[3] = load_vec(self.e, self.ecx);
+                        // 00d8e933: MOVAPS XMM5,XMM1
+                        self.xmm[5] = self.xmm[1];
+                        // 00d8e936: SHUFPS XMM5,XMM1,0xff
+                        self.xmm[5] = shufps(self.xmm[5], self.xmm[1], 255);
+                        // 00d8e93a: MULPS XMM0,XMM5
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[5]);
+                        // 00d8e93d: SUBPS XMM3,XMM0
+                        self.xmm[3] = subps(self.xmm[3], self.xmm[0]);
+                        // 00d8e940: MOVAPS xmmword ptr [ECX],XMM3
+                        store_vec(self.e, self.ecx, self.xmm[3]);
+                        // 00d8e943: MOVAPS XMM0,xmmword ptr [ESI + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e947: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e94b: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8e94e: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8e952: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8e955: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8e959: LEA EAX,[EBX + 0x20]
+                        self.eax = self.ebx.wrapping_add(0x20);
+                        // 00d8e95c: ADDPS XMM3,XMM0
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[0]);
+                        // 00d8e95f: MOVAPS xmmword ptr [EAX],XMM3
+                        store_vec(self.e, self.eax, self.xmm[3]);
+                        // 00d8e962: MOV EAX,dword ptr [ESP + 0x30]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x30));
+                        // 00d8e966: MOVAPS XMM0,xmmword ptr [EAX]
+                        self.xmm[0] = load_vec(self.e, self.eax);
+                        // 00d8e969: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8e96c: MOVAPS xmmword ptr [EAX],XMM0
+                        store_vec(self.e, self.eax, self.xmm[0]);
+                        // 00d8e96f: ADDSS XMM2,XMM4
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[4]);
+                        // 00d8e973: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8e974: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        // 00d8e978: CALL 0x00d921d0
+                        self.call_table_byte();
+                        // 00d8e97d: LEA EDI,[EDI + EAX*0x4]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(4));
+                        // 00d8e980: ADD ESI,0x30
+                        self.esi = self.add32(self.esi, 0x30);
+                        // 00d8e983: LEA EAX,[ESP + 0x6a]
+                        self.eax = self.esp.wrapping_add(0x6a);
+                        // 00d8e987: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8e988: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8e989: CALL 0x00d921c0
+                        self.call_copy_byte();
+                        // 00d8e98e: MOVSX EAX,byte ptr [EAX]
+                        self.eax = i32::from(self.e.mem.i8(self.eax)) as u32;
+                        // 00d8e991: ADD ESP,0xc
+                        self.esp = self.add32(self.esp, 0xc);
+                        // 00d8e994: CMP EAX,0x5
+                        self.cmp32(self.eax, 0x5);
+                        // 00d8e997: JZ 0x00d8e890
+                        if self.zf {
+                            block = 0x00d8_e890;
+                            continue;
+                        }
+                        // 00d8e99d: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_e9a2 => {
+                        // 00d8e9a2: MOVAPS XMM1,xmmword ptr [EBX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8e9a6: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e9aa: MOVAPS XMM0,xmmword ptr [ECX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8e9ae: MOVAPS XMM3,xmmword ptr [ESI + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8e9b2: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8e9b6: MOVAPS XMM4,xmmword ptr [EBX + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8e9ba: MOV EDX,dword ptr [ESP + 0x4c]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8e9be: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8e9c1: MOVAPS XMM0,xmmword ptr [EDX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.edx.wrapping_add(0x20));
+                        // 00d8e9c5: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8e9c8: MOVAPS XMM3,xmmword ptr [ESI]
+                        self.xmm[3] = load_vec(self.e, self.esi);
+                        // 00d8e9cb: MULPS XMM4,XMM2
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[2]);
+                        // 00d8e9ce: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8e9d1: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8e9d4: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8e9d7: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8e9da: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8e9de: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8e9e2: MOVAPS XMM5,xmmword ptr [ESI]
+                        self.xmm[5] = load_vec(self.e, self.esi);
+                        // 00d8e9e5: LEA EAX,[EBX + 0x10]
+                        self.eax = self.ebx.wrapping_add(0x10);
+                        // 00d8e9e8: ADD ECX,0x10
+                        self.ecx = self.add32(self.ecx, 0x10);
+                        // 00d8e9eb: ADD EDX,0x20
+                        self.edx = self.add32(self.edx, 0x20);
+                        // 00d8e9ee: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8e9f2: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8e9f6: SHUFPS XMM2,XMM2,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[2], 255);
+                        // 00d8e9fa: SHUFPS XMM3,XMM3,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[3], 255);
+                        // 00d8e9fe: SUBSS XMM3,XMM0
+                        self.xmm[3] = subss(self.xmm[3], self.xmm[0]);
+                        // 00d8ea02: MOVSS XMM0,dword ptr [EDI]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8ea06: MULSS XMM3,XMM2
+                        self.xmm[3] = mulss(self.xmm[3], self.xmm[2]);
+                        // 00d8ea0a: MOVAPS XMM2,xmmword ptr [0x010c7160]
+                        self.xmm[2] = load_vec(self.e, 0x010c_7160);
+                        // 00d8ea11: MOV dword ptr [ESP + 0x30],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x30), self.edx);
+                        // 00d8ea15: MOV EDX,dword ptr [ESP + 0x4c]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8ea19: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8ea1a: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8ea1d: MOVAPS XMM0,xmmword ptr [ESI + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8ea21: SHUFPS XMM0,XMM0,0xff
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 255);
+                        // 00d8ea25: SUBSS XMM2,XMM0
+                        self.xmm[2] = subss(self.xmm[2], self.xmm[0]);
+                        // 00d8ea29: SUBSS XMM2,XMM1
+                        self.xmm[2] = subss(self.xmm[2], self.xmm[1]);
+                        // 00d8ea2d: MAXPS XMM2,XMM3
+                        self.xmm[2] = maxps(self.xmm[2], self.xmm[3]);
+                        // 00d8ea30: SUBSS XMM0,XMM1
+                        self.xmm[0] = subss(self.xmm[0], self.xmm[1]);
+                        // 00d8ea34: MOVAPS XMM1,xmmword ptr [EDX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.edx.wrapping_add(0x30));
+                        // 00d8ea38: MINPS XMM0,XMM2
+                        self.xmm[0] = minps(self.xmm[0], self.xmm[2]);
+                        // 00d8ea3b: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8ea3e: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8ea42: MOVAPS XMM2,XMM4
+                        self.xmm[2] = self.xmm[4];
+                        // 00d8ea45: SHUFPS XMM2,XMM4,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[4], 0);
+                        // 00d8ea49: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8ea4c: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8ea4f: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8ea52: SHUFPS XMM2,XMM0,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 255);
+                        // 00d8ea56: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8ea59: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8ea5c: SHUFPS XMM3,XMM1,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 255);
+                        // 00d8ea60: MULPS XMM3,XMM5
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[5]);
+                        // 00d8ea63: MOVAPS XMM5,xmmword ptr [EAX]
+                        self.xmm[5] = load_vec(self.e, self.eax);
+                        // 00d8ea66: ADDPS XMM5,XMM2
+                        self.xmm[5] = addps(self.xmm[5], self.xmm[2]);
+                        // 00d8ea69: MOVAPS xmmword ptr [EAX],XMM5
+                        store_vec(self.e, self.eax, self.xmm[5]);
+                        // 00d8ea6c: MOVAPS XMM2,xmmword ptr [ECX]
+                        self.xmm[2] = load_vec(self.e, self.ecx);
+                        // 00d8ea6f: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8ea72: MOVAPS xmmword ptr [ECX],XMM2
+                        store_vec(self.e, self.ecx, self.xmm[2]);
+                        // 00d8ea75: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8ea79: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8ea7d: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8ea80: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8ea84: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8ea87: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8ea8b: LEA EAX,[EBX + 0x20]
+                        self.eax = self.ebx.wrapping_add(0x20);
+                        // 00d8ea8e: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8ea91: MOVAPS xmmword ptr [EAX],XMM0
+                        store_vec(self.e, self.eax, self.xmm[0]);
+                        // 00d8ea94: MOV EAX,dword ptr [ESP + 0x34]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x34));
+                        // 00d8ea98: MOVAPS XMM0,xmmword ptr [EAX]
+                        self.xmm[0] = load_vec(self.e, self.eax);
+                        // 00d8ea9b: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8ea9e: MOVAPS xmmword ptr [EAX],XMM0
+                        store_vec(self.e, self.eax, self.xmm[0]);
+                        // 00d8eaa1: ADDSS XMM2,XMM4
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[4]);
+                        // 00d8eaa5: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        // 00d8eaa9: CALL 0x00d921d0
+                        self.call_table_byte();
+                        // 00d8eaae: ADD ESI,0x30
+                        self.esi = self.add32(self.esi, 0x30);
+                        // 00d8eab1: LEA EDI,[EDI + EAX*0x4]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(4));
+                        // 00d8eab4: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8eab5: LEA EAX,[ESP + 0x6f]
+                        self.eax = self.esp.wrapping_add(0x6f);
+                        // 00d8eab9: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8eaba: CALL 0x00d921c0
+                        self.call_copy_byte();
+                        // 00d8eabf: MOVSX EAX,byte ptr [EAX]
+                        self.eax = i32::from(self.e.mem.i8(self.eax)) as u32;
+                        // 00d8eac2: ADD ESP,0xc
+                        self.esp = self.add32(self.esp, 0xc);
+                        // 00d8eac5: CMP EAX,0x6
+                        self.cmp32(self.eax, 0x6);
+                        // 00d8eac8: JZ 0x00d8e9a2
+                        if self.zf {
+                            block = 0x00d8_e9a2;
+                            continue;
+                        }
+                        // 00d8eace: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_ead3 => {
+                        // 00d8ead3: MOVAPS XMM1,xmmword ptr [EBX + 0x40]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x40));
+                        // 00d8ead7: FLD float ptr [ESI + 0x30]
+                        self.fld32(self.esi.wrapping_add(0x30));
+                        // 00d8eada: MOVAPS XMM0,xmmword ptr [EBX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8eade: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8eae2: MOVAPS XMM2,xmmword ptr [EBX + 0x50]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x50));
+                        // 00d8eae6: FLD float ptr [ESI + 0xc]
+                        self.fld32(self.esi.wrapping_add(0xc));
+                        // 00d8eae9: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8eaed: FSTP float ptr [ESP + 0x50]
+                        self.fstp32(self.esp.wrapping_add(0x50));
+                        // 00d8eaf1: MOVAPS XMM3,xmmword ptr [EAX + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8eaf5: MOVAPS XMM4,xmmword ptr [EAX + 0x50]
+                        self.xmm[4] = load_vec(self.e, self.eax.wrapping_add(0x50));
+                        // 00d8eaf9: MOVSS XMM5,dword ptr [ESI + 0x34]
+                        self.xmm[5] = movss_load(self.e.mem.u32(self.esi.wrapping_add(0x34)));
+                        // 00d8eafe: SUBPS XMM0,XMM1
+                        self.xmm[0] = subps(self.xmm[0], self.xmm[1]);
+                        // 00d8eb01: MOVAPS XMM1,xmmword ptr [EBX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8eb05: SUBPS XMM1,XMM2
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[2]);
+                        // 00d8eb08: MOVAPS XMM2,xmmword ptr [EAX + 0x40]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8eb0c: SUBPS XMM3,XMM2
+                        self.xmm[3] = subps(self.xmm[3], self.xmm[2]);
+                        // 00d8eb0f: MOVAPS XMM2,xmmword ptr [EAX + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8eb13: SUBPS XMM0,XMM3
+                        self.xmm[0] = subps(self.xmm[0], self.xmm[3]);
+                        // 00d8eb16: MOVAPS XMM3,xmmword ptr [ESI + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8eb1a: LEA ECX,[EBX + 0x10]
+                        self.ecx = self.ebx.wrapping_add(0x10);
+                        // 00d8eb1d: LEA EDX,[EAX + 0x10]
+                        self.edx = self.eax.wrapping_add(0x10);
+                        // 00d8eb20: MOV dword ptr [ESP + 0x10],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x10), self.edx);
+                        // 00d8eb24: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8eb27: MOVAPS XMM3,xmmword ptr [ESI + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8eb2b: LEA EDX,[EAX + 0x20]
+                        self.edx = self.eax.wrapping_add(0x20);
+                        // 00d8eb2e: MOV dword ptr [ESP + 0x30],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x30), self.edx);
+                        // 00d8eb32: MOV EDX,dword ptr [EBX + 0x40]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x40));
+                        // 00d8eb35: SUBPS XMM2,XMM4
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[4]);
+                        // 00d8eb38: MULPS XMM2,XMM3
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[3]);
+                        // 00d8eb3b: MOVAPS XMM3,xmmword ptr [ESI]
+                        self.xmm[3] = load_vec(self.e, self.esi);
+                        // 00d8eb3e: MOV dword ptr [ESP + 0x100],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x100), self.edx);
+                        // 00d8eb45: MOV EDX,dword ptr [EBX + 0x44]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x44));
+                        // 00d8eb48: MOV dword ptr [ESP + 0x104],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x104), self.edx);
+                        // 00d8eb4f: MOV EDX,dword ptr [EBX + 0x48]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x48));
+                        // 00d8eb52: MOV dword ptr [ESP + 0x108],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x108), self.edx);
+                        // 00d8eb59: MOV EDX,dword ptr [EBX + 0x4c]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x4c));
+                        // 00d8eb5c: MOV dword ptr [ESP + 0x10c],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x10c), self.edx);
+                        // 00d8eb63: MOV EDX,dword ptr [EBX + 0x50]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x50));
+                        // 00d8eb66: MOV dword ptr [ESP + 0x110],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x110), self.edx);
+                        // 00d8eb6d: MOV EDX,dword ptr [EBX + 0x54]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x54));
+                        // 00d8eb70: MOV dword ptr [ESP + 0x114],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x114), self.edx);
+                        // 00d8eb77: MOV EDX,dword ptr [EBX + 0x58]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x58));
+                        // 00d8eb7a: MOV dword ptr [ESP + 0x118],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x118), self.edx);
+                        // 00d8eb81: MOV EDX,dword ptr [EBX + 0x5c]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x5c));
+                        // 00d8eb84: MOV dword ptr [ESP + 0x11c],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x11c), self.edx);
+                        // 00d8eb8b: MOV EDX,dword ptr [EAX + 0x40]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x40));
+                        // 00d8eb8e: MOV dword ptr [ESP + 0x160],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x160), self.edx);
+                        // 00d8eb95: MOV EDX,dword ptr [EAX + 0x44]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x44));
+                        // 00d8eb98: MOV dword ptr [ESP + 0x164],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x164), self.edx);
+                        // 00d8eb9f: MOV EDX,dword ptr [EAX + 0x48]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x48));
+                        // 00d8eba2: MOV dword ptr [ESP + 0x168],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x168), self.edx);
+                        // 00d8eba9: MOV EDX,dword ptr [EAX + 0x4c]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x4c));
+                        // 00d8ebac: MOV dword ptr [ESP + 0x16c],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x16c), self.edx);
+                        // 00d8ebb3: MOV EDX,dword ptr [EAX + 0x50]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x50));
+                        // 00d8ebb6: MOV dword ptr [ESP + 0x130],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x130), self.edx);
+                        // 00d8ebbd: MOV EDX,dword ptr [EAX + 0x54]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x54));
+                        // 00d8ebc0: MOV dword ptr [ESP + 0x134],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x134), self.edx);
+                        // 00d8ebc7: MOV EDX,dword ptr [EAX + 0x58]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x58));
+                        // 00d8ebca: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8ebcd: MOVAPS XMM0,xmmword ptr [ESP + 0x160]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x160));
+                        // 00d8ebd5: MOV dword ptr [ESP + 0x138],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x138), self.edx);
+                        // 00d8ebdc: MOV EDX,dword ptr [EAX + 0x5c]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x5c));
+                        // 00d8ebdf: MOV dword ptr [ESP + 0x13c],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x13c), self.edx);
+                        // 00d8ebe6: MOVAPS XMM4,xmmword ptr [ESI + 0x20]
+                        self.xmm[4] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8ebea: MOV EDX,dword ptr [EBP + 0x8]
+                        self.edx = self.e.mem.u32(self.ebp.wrapping_add(0x8));
+                        // 00d8ebed: FLD float ptr [EDX + 0x40]
+                        self.fld32(self.edx.wrapping_add(0x40));
+                        // 00d8ebf0: ADDPS XMM2,XMM1
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[1]);
+                        // 00d8ebf3: MOVAPS XMM1,xmmword ptr [ESP + 0x100]
+                        self.xmm[1] = load_vec(self.e, self.esp.wrapping_add(0x100));
+                        // 00d8ebfb: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8ebff: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8ec02: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8ec04: MOVAPS XMM0,xmmword ptr [ESI + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8ec08: ADDPS XMM2,XMM3
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[3]);
+                        // 00d8ec0b: MOVAPS XMM3,xmmword ptr [ESP + 0x110]
+                        self.xmm[3] = load_vec(self.e, self.esp.wrapping_add(0x110));
+                        // 00d8ec13: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8ec16: MOVAPS XMM0,xmmword ptr [ESP + 0x130]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x130));
+                        // 00d8ec1e: MULPS XMM0,XMM4
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[4]);
+                        // 00d8ec21: MOVAPS XMM4,xmmword ptr [ESI]
+                        self.xmm[4] = load_vec(self.e, self.esi);
+                        // 00d8ec24: MULPS XMM4,XMM1
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[1]);
+                        // 00d8ec27: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8ec2a: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8ec2d: FMULP ST2
+                        self.x87_registers(X87Op::Mul, 2, 0, true); // DE CA
+                                                                    // 00d8ec2f: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8ec30: FXCH
+                        self.x87.fxch(1);
+                        // 00d8ec32: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8ec36: MOVSS XMM1,dword ptr [ESP + 0x30]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x30)));
+                        // 00d8ec3c: FMUL float ptr [ESP + 0x54]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x54));
+                        // 00d8ec40: SHUFPS XMM1,XMM1,0x0
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 0);
+                        // 00d8ec44: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8ec47: MOVAPS XMM0,XMM5
+                        self.xmm[0] = self.xmm[5];
+                        // 00d8ec4a: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8ec4e: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8ec51: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8ec54: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8ec57: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8ec5b: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8ec5f: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8ec62: SHUFPS XMM2,XMM0,0xaa
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 170);
+                        // 00d8ec66: ADDSS XMM2,XMM1
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[1]);
+                        // 00d8ec6a: MOVSS dword ptr [ESP + 0xa8],XMM2
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xa8), self.xmm[2][0].to_bits());
+                        // 00d8ec73: FSUB float ptr [ESP + 0xa8]
+                        self.x87_float_operand(X87Op::Sub, self.esp.wrapping_add(0xa8));
+                        // 00d8ec7a: MOVAPS XMM0,xmmword ptr [ESI + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8ec7e: MOVAPS XMM5,xmmword ptr [ESI]
+                        self.xmm[5] = load_vec(self.e, self.esi);
+                        // 00d8ec81: SHUFPS XMM0,XMM0,0xff
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 255);
+                        // 00d8ec85: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8ec89: MOVSS XMM1,dword ptr [ESP + 0x30]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x30)));
+                        // 00d8ec8f: MULSS XMM1,XMM0
+                        self.xmm[1] = mulss(self.xmm[1], self.xmm[0]);
+                        // 00d8ec93: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8ec97: MOVAPS XMM4,XMM1
+                        self.xmm[4] = self.xmm[1];
+                        // 00d8ec9a: MOVAPS XMM1,xmmword ptr [EAX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x30));
+                        // 00d8ec9e: MOV EAX,dword ptr [ESP + 0x14]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x14));
+                        // 00d8eca2: MOVAPS XMM2,XMM4
+                        self.xmm[2] = self.xmm[4];
+                        // 00d8eca5: SHUFPS XMM2,XMM4,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[4], 0);
+                        // 00d8eca9: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8ecac: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8ecaf: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8ecb2: SHUFPS XMM2,XMM0,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 255);
+                        // 00d8ecb6: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8ecb9: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8ecbc: SHUFPS XMM3,XMM1,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 255);
+                        // 00d8ecc0: MULPS XMM3,XMM5
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[5]);
+                        // 00d8ecc3: MOVAPS XMM5,xmmword ptr [ECX]
+                        self.xmm[5] = load_vec(self.e, self.ecx);
+                        // 00d8ecc6: ADDPS XMM5,XMM2
+                        self.xmm[5] = addps(self.xmm[5], self.xmm[2]);
+                        // 00d8ecc9: MOVAPS xmmword ptr [ECX],XMM5
+                        store_vec(self.e, self.ecx, self.xmm[5]);
+                        // 00d8eccc: MOVAPS XMM2,xmmword ptr [EAX]
+                        self.xmm[2] = load_vec(self.e, self.eax);
+                        // 00d8eccf: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8ecd2: MOVAPS xmmword ptr [EAX],XMM2
+                        store_vec(self.e, self.eax, self.xmm[2]);
+                        // 00d8ecd5: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8ecd9: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8ecdd: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8ece0: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8ece4: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8ece7: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8eceb: LEA EAX,[EBX + 0x20]
+                        self.eax = self.ebx.wrapping_add(0x20);
+                        // 00d8ecee: ADDPS XMM3,XMM0
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[0]);
+                        // 00d8ecf1: MOVAPS xmmword ptr [EAX],XMM3
+                        store_vec(self.e, self.eax, self.xmm[3]);
+                        // 00d8ecf4: MOV EAX,dword ptr [ESP + 0x34]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x34));
+                        // 00d8ecf8: MOVAPS XMM0,xmmword ptr [EAX]
+                        self.xmm[0] = load_vec(self.e, self.eax);
+                        // 00d8ecfb: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8ecfe: MOVAPS xmmword ptr [EAX],XMM0
+                        store_vec(self.e, self.eax, self.xmm[0]);
+                        // 00d8ed01: ADDSS XMM2,XMM4
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[4]);
+                        // 00d8ed05: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        // 00d8ed09: CALL 0x00d921d0
+                        self.call_table_byte();
+                        // 00d8ed0e: LEA EDI,[EDI + EAX*0x4]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(4));
+                        // 00d8ed11: ADD ESI,0x40
+                        self.esi = self.add32(self.esi, 0x40);
+                        // 00d8ed14: LEA EAX,[ESP + 0x6e]
+                        self.eax = self.esp.wrapping_add(0x6e);
+                        // 00d8ed18: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8ed19: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8ed1a: CALL 0x00d921c0
+                        self.call_copy_byte();
+                        // 00d8ed1f: MOVSX EAX,byte ptr [EAX]
+                        self.eax = i32::from(self.e.mem.i8(self.eax)) as u32;
+                        // 00d8ed22: ADD ESP,0xc
+                        self.esp = self.add32(self.esp, 0xc);
+                        // 00d8ed25: CMP EAX,0x7
+                        self.cmp32(self.eax, 0x7);
+                        // 00d8ed28: JZ 0x00d8ead3
+                        if self.zf {
+                            block = 0x00d8_ead3;
+                            continue;
+                        }
+                        // 00d8ed2e: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_ed33 => {
+                        // 00d8ed33: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8ed37: MOVAPS XMM0,xmmword ptr [EAX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8ed3b: MOVAPS XMM1,xmmword ptr [EBX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8ed3f: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8ed43: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8ed47: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8ed4a: MOVAPS XMM0,xmmword ptr [ESI + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8ed4e: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8ed51: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8ed55: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8ed58: MOVAPS XMM2,xmmword ptr [ESI]
+                        self.xmm[2] = load_vec(self.e, self.esi);
+                        // 00d8ed5b: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8ed5e: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8ed61: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8ed64: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8ed67: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8ed6b: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8ed6f: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8ed73: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8ed77: SHUFPS XMM2,XMM2,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[2], 255);
+                        // 00d8ed7b: SUBSS XMM2,XMM0
+                        self.xmm[2] = subss(self.xmm[2], self.xmm[0]);
+                        // 00d8ed7f: MOVSS dword ptr [ESP + 0xac],XMM2
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xac), self.xmm[2][0].to_bits());
+                        // 00d8ed88: FLD float ptr [ESI + 0x1c]
+                        self.fld32(self.esi.wrapping_add(0x1c));
+                        // 00d8ed8b: FMUL float ptr [ESP + 0xac]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0xac));
+                        // 00d8ed92: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8ed96: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8ed9a: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8ed9c: FABS
+                        self.x87.fabs();
+                        // 00d8ed9e: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8eda2: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8eda6: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8edaa: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8edae: FLD float ptr [ESI + 0x30]
+                        self.fld32(self.esi.wrapping_add(0x30));
+                        // 00d8edb1: FCOMP
+                        self.fcom_st(1, true);
+                        // 00d8edb3: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8edb5: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8edb8: JP 0x00d8edd1
+                        if self.pf {
+                            block = 0x00d8_edd1;
+                            continue;
+                        }
+                        // 00d8edba: FDIVR float ptr [ESI + 0x30]
+                        self.x87_float_operand(X87Op::DivR, self.esi.wrapping_add(0x30));
+                        // 00d8edbd: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8edc1: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8edc5: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8edc7: FMULP ST2
+                        self.x87_registers(X87Op::Mul, 2, 0, true); // DE CA
+                                                                    // 00d8edc9: FXCH
+                        self.x87.fxch(1);
+                        // 00d8edcb: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8edcf: JMP 0x00d8edd7
+                        block = 0x00d8_edd7;
+                        continue;
+                    }
+                    0x00d8_edd1 => {
+                        // 00d8edd1: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8edd3: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8edd5: FLD1
+                        self.x87.push(1.0);
+                        block = 0x00d8_edd7;
+                    }
+                    0x00d8_edd7 => {
+                        // 00d8edd7: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8eddb: FSTP float ptr [EDI + 0x4]
+                        self.fstp32(self.edi.wrapping_add(0x4));
+                        // 00d8edde: MOVSS XMM0,dword ptr [ESP + 0x10]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8ede4: MOVAPS XMM1,xmmword ptr [EAX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x30));
+                        // 00d8ede8: MOVAPS XMM5,xmmword ptr [ESI]
+                        self.xmm[5] = load_vec(self.e, self.esi);
+                        // 00d8edeb: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8edee: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8edf2: MOVAPS XMM2,XMM4
+                        self.xmm[2] = self.xmm[4];
+                        // 00d8edf5: SHUFPS XMM2,XMM4,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[4], 0);
+                        // 00d8edf9: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8edfc: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8edff: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8ee02: SHUFPS XMM2,XMM0,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 255);
+                        // 00d8ee06: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8ee09: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8ee0c: SHUFPS XMM3,XMM1,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 255);
+                        // 00d8ee10: MULPS XMM3,XMM5
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[5]);
+                        // 00d8ee13: MOVAPS XMM5,xmmword ptr [EBX + 0x10]
+                        self.xmm[5] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8ee17: ADDPS XMM5,XMM2
+                        self.xmm[5] = addps(self.xmm[5], self.xmm[2]);
+                        // 00d8ee1a: MOVAPS xmmword ptr [EBX + 0x10],XMM5
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[5]);
+                        // 00d8ee1e: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8ee22: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8ee25: MOVAPS xmmword ptr [EAX + 0x10],XMM2
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8ee29: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8ee2d: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8ee31: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8ee34: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8ee38: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8ee3b: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8ee3f: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8ee42: MOVAPS xmmword ptr [EBX + 0x20],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8ee46: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8ee4a: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8ee4d: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8ee51: ADDSS XMM2,XMM4
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[4]);
+                        // 00d8ee55: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8ee56: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        // 00d8ee5a: CALL 0x00d921d0
+                        self.call_table_byte();
+                        // 00d8ee5f: ADD ESI,0x40
+                        self.esi = self.add32(self.esi, 0x40);
+                        // 00d8ee62: LEA ECX,[ESP + 0x6c]
+                        self.ecx = self.esp.wrapping_add(0x6c);
+                        // 00d8ee66: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8ee67: PUSH ECX
+                        self.push(self.ecx);
+                        // 00d8ee68: LEA EDI,[EDI + EAX*0x4]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(4));
+                        // 00d8ee6b: CALL 0x00d921c0
+                        self.call_copy_byte();
+                        // 00d8ee70: MOVSX EAX,byte ptr [EAX]
+                        self.eax = i32::from(self.e.mem.i8(self.eax)) as u32;
+                        // 00d8ee73: ADD ESP,0xc
+                        self.esp = self.add32(self.esp, 0xc);
+                        // 00d8ee76: CMP EAX,0x9
+                        self.cmp32(self.eax, 0x9);
+                        // 00d8ee79: JZ 0x00d8ed33
+                        if self.zf {
+                            block = 0x00d8_ed33;
+                            continue;
+                        }
+                        // 00d8ee7f: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_ee84 => {
+                        // 00d8ee84: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8ee88: MOVAPS XMM1,xmmword ptr [ECX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8ee8c: MOVAPS XMM0,xmmword ptr [EBX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8ee90: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8ee94: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8ee98: SUBPS XMM0,XMM1
+                        self.xmm[0] = subps(self.xmm[0], self.xmm[1]);
+                        // 00d8ee9b: MOVAPS XMM1,xmmword ptr [ESI + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8ee9f: MULPS XMM3,XMM1
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[1]);
+                        // 00d8eea2: MOVAPS XMM1,xmmword ptr [ECX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8eea6: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8eea9: MOVAPS XMM2,xmmword ptr [ESI]
+                        self.xmm[2] = load_vec(self.e, self.esi);
+                        // 00d8eeac: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8eeaf: ADDPS XMM1,XMM3
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[3]);
+                        // 00d8eeb2: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8eeb5: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8eeb8: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8eebc: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8eec0: SHUFPS XMM0,XMM0,0xaa
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 170);
+                        // 00d8eec4: ADDSS XMM0,XMM1
+                        self.xmm[0] = addss(self.xmm[0], self.xmm[1]);
+                        // 00d8eec8: SHUFPS XMM2,XMM2,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[2], 255);
+                        // 00d8eecc: SUBSS XMM2,XMM0
+                        self.xmm[2] = subss(self.xmm[2], self.xmm[0]);
+                        // 00d8eed0: MOVSS dword ptr [ESP + 0xb4],XMM2
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xb4), self.xmm[2][0].to_bits());
+                        // 00d8eed9: FLD float ptr [ESP + 0xb4]
+                        self.fld32(self.esp.wrapping_add(0xb4));
+                        // 00d8eee0: FST float ptr [ESP + 0x30]
+                        self.fst32(self.esp.wrapping_add(0x30));
+                        // 00d8eee4: FLD float ptr [EDI]
+                        self.fld32(self.edi);
+                        // 00d8eee6: FCHS
+                        self.x87.fchs();
+                        // 00d8eee8: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8eeec: FSUB float ptr [ESI + 0x30]
+                        self.x87_float_operand(X87Op::Sub, self.esi.wrapping_add(0x30));
+                        // 00d8eeef: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8eef3: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8eef7: FMUL float ptr [ESI + 0x1c]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x1c));
+                        // 00d8eefa: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8eefe: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8ef02: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8ef06: FCOM
+                        self.fcom_st(1, false);
+                        // 00d8ef08: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8ef0a: FSTP ST1
+                        self.x87.fstp_st(1);
+                        // 00d8ef0c: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8ef0f: JP 0x00d8ef90
+                        if self.pf {
+                            block = 0x00d8_ef90;
+                            continue;
+                        }
+                        // 00d8ef15: MOVSS XMM0,dword ptr [ESP + 0x10]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8ef1b: MOVAPS XMM1,xmmword ptr [ECX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.ecx.wrapping_add(0x30));
+                        // 00d8ef1f: MOVAPS XMM5,xmmword ptr [ESI]
+                        self.xmm[5] = load_vec(self.e, self.esi);
+                        // 00d8ef22: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8ef25: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8ef29: MOVAPS XMM2,XMM4
+                        self.xmm[2] = self.xmm[4];
+                        // 00d8ef2c: SHUFPS XMM2,XMM4,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[4], 0);
+                        // 00d8ef30: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8ef33: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8ef36: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8ef39: SHUFPS XMM2,XMM0,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 255);
+                        // 00d8ef3d: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8ef40: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8ef43: SHUFPS XMM3,XMM1,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 255);
+                        // 00d8ef47: MULPS XMM3,XMM5
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[5]);
+                        // 00d8ef4a: MOVAPS XMM5,xmmword ptr [EBX + 0x10]
+                        self.xmm[5] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8ef4e: ADDPS XMM2,XMM5
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[5]);
+                        // 00d8ef51: MOVAPS xmmword ptr [EBX + 0x10],XMM2
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8ef55: MOVAPS XMM2,xmmword ptr [ECX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8ef59: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8ef5c: MOVAPS xmmword ptr [ECX + 0x10],XMM2
+                        store_vec(self.e, self.ecx.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8ef60: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8ef64: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8ef68: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8ef6b: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8ef6f: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8ef72: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8ef76: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8ef79: MOVAPS xmmword ptr [EBX + 0x20],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8ef7d: MOVAPS XMM0,xmmword ptr [ECX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8ef81: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8ef84: MOVAPS xmmword ptr [ECX + 0x20],XMM0
+                        store_vec(self.e, self.ecx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8ef88: ADDSS XMM2,XMM4
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[4]);
+                        // 00d8ef8c: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        block = 0x00d8_ef90;
+                    }
+                    0x00d8_ef90 => {
+                        // 00d8ef90: FLD float ptr [ESP + 0x30]
+                        self.fld32(self.esp.wrapping_add(0x30));
+                        // 00d8ef94: FSUB float ptr [ESI + 0x34]
+                        self.x87_float_operand(X87Op::Sub, self.esi.wrapping_add(0x34));
+                        // 00d8ef97: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8ef9b: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8ef9f: FMUL float ptr [ESI + 0x1c]
+                        self.x87_float_operand(X87Op::Mul, self.esi.wrapping_add(0x1c));
+                        // 00d8efa2: FSTP float ptr [ESP + 0x10]
+                        self.fstp32(self.esp.wrapping_add(0x10));
+                        // 00d8efa6: FLD float ptr [ESP + 0x10]
+                        self.fld32(self.esp.wrapping_add(0x10));
+                        // 00d8efaa: FCOMPP
+                        self.fcompp();
+                        // 00d8efac: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8efae: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8efb1: JP 0x00d8f032
+                        if self.pf {
+                            block = 0x00d8_f032;
+                            continue;
+                        }
+                        // 00d8efb7: MOVSS XMM0,dword ptr [ESP + 0x10]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x10)));
+                        // 00d8efbd: MOVAPS XMM1,xmmword ptr [ECX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.ecx.wrapping_add(0x30));
+                        // 00d8efc1: MOVAPS XMM5,xmmword ptr [ESI]
+                        self.xmm[5] = load_vec(self.e, self.esi);
+                        // 00d8efc4: MOVAPS XMM4,XMM0
+                        self.xmm[4] = self.xmm[0];
+                        // 00d8efc7: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8efcb: MOVAPS XMM2,XMM4
+                        self.xmm[2] = self.xmm[4];
+                        // 00d8efce: SHUFPS XMM2,XMM4,0x0
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[4], 0);
+                        // 00d8efd2: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8efd5: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8efd8: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8efdb: SHUFPS XMM2,XMM0,0xff
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 255);
+                        // 00d8efdf: MULPS XMM2,XMM5
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[5]);
+                        // 00d8efe2: MOVAPS XMM3,XMM1
+                        self.xmm[3] = self.xmm[1];
+                        // 00d8efe5: SHUFPS XMM3,XMM1,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[1], 255);
+                        // 00d8efe9: MULPS XMM3,XMM5
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[5]);
+                        // 00d8efec: MOVAPS XMM5,xmmword ptr [EBX + 0x10]
+                        self.xmm[5] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8eff0: ADDPS XMM5,XMM2
+                        self.xmm[5] = addps(self.xmm[5], self.xmm[2]);
+                        // 00d8eff3: MOVAPS xmmword ptr [EBX + 0x10],XMM5
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[5]);
+                        // 00d8eff7: MOVAPS XMM2,xmmword ptr [ECX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.ecx.wrapping_add(0x10));
+                        // 00d8effb: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8effe: MOVAPS xmmword ptr [ECX + 0x10],XMM2
+                        store_vec(self.e, self.ecx.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8f002: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8f006: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8f00a: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8f00d: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8f011: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8f014: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8f018: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8f01b: MOVAPS xmmword ptr [EBX + 0x20],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8f01f: MOVAPS XMM0,xmmword ptr [ECX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.ecx.wrapping_add(0x20));
+                        // 00d8f023: ADDPS XMM1,XMM0
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[0]);
+                        // 00d8f026: MOVAPS xmmword ptr [ECX + 0x20],XMM1
+                        store_vec(self.e, self.ecx.wrapping_add(0x20), self.xmm[1]);
+                        // 00d8f02a: ADDSS XMM2,XMM4
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[4]);
+                        // 00d8f02e: MOVSS dword ptr [EDI],XMM2
+                        self.e.mem.set_u32(self.edi, self.xmm[2][0].to_bits());
+                        block = 0x00d8_f032;
+                    }
+                    0x00d8_f032 => {
+                        // 00d8f032: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8f033: CALL 0x00d921d0
+                        self.call_table_byte();
+                        // 00d8f038: ADD ESI,0x40
+                        self.esi = self.add32(self.esi, 0x40);
+                        // 00d8f03b: LEA EDX,[ESP + 0x6d]
+                        self.edx = self.esp.wrapping_add(0x6d);
+                        // 00d8f03f: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8f040: PUSH EDX
+                        self.push(self.edx);
+                        // 00d8f041: LEA EDI,[EDI + EAX*0x4]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(4));
+                        // 00d8f044: CALL 0x00d921c0
+                        self.call_copy_byte();
+                        // 00d8f049: MOVSX EAX,byte ptr [EAX]
+                        self.eax = i32::from(self.e.mem.i8(self.eax)) as u32;
+                        // 00d8f04c: ADD ESP,0xc
+                        self.esp = self.add32(self.esp, 0xc);
+                        // 00d8f04f: CMP EAX,0x8
+                        self.cmp32(self.eax, 0x8);
+                        // 00d8f052: JZ 0x00d8ee84
+                        if self.zf {
+                            block = 0x00d8_ee84;
+                            continue;
+                        }
+                        // 00d8f058: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_f05d => {
+                        // 00d8f05d: LEA EAX,[ESI + 0x34]
+                        self.eax = self.esi.wrapping_add(0x34);
+                        // 00d8f060: MOV dword ptr [ESP + 0x10],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x10), self.eax);
+                        block = 0x00d8_f064;
+                    }
+                    0x00d8_f064 => {
+                        // 00d8f064: MOV EDX,dword ptr [ESP + 0x10]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x10));
+                        // 00d8f068: FLD float ptr [EDX + 0x4]
+                        self.fld32(self.edx.wrapping_add(0x4));
+                        // 00d8f06b: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8f06f: FMUL float ptr [ESP + 0x78]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x78));
+                        // 00d8f073: LEA ECX,[EDX + -0x24]
+                        self.ecx = self.edx.wrapping_sub(0x24);
+                        // 00d8f076: ADD EDX,-0x14
+                        self.edx = self.add32(self.edx, 0xffff_ffec);
+                        // 00d8f079: FADD float ptr [EDI + 0x8]
+                        self.x87_float_operand(X87Op::Add, self.edi.wrapping_add(0x8));
+                        // 00d8f07c: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8f080: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8f084: FST float ptr [ESP + 0x2c]
+                        self.fst32(self.esp.wrapping_add(0x2c));
+                        // 00d8f088: FSTP float ptr [EDI + 0x8]
+                        self.fstp32(self.edi.wrapping_add(0x8));
+                        // 00d8f08b: MOVSS XMM4,dword ptr [EDX + 0x20]
+                        self.xmm[4] = movss_load(self.e.mem.u32(self.edx.wrapping_add(0x20)));
+                        // 00d8f090: FLD float ptr [EDX + -0x14]
+                        self.fld32(self.edx.wrapping_sub(0x14));
+                        // 00d8f093: MOVAPS XMM1,xmmword ptr [EBX + 0x40]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x40));
+                        // 00d8f097: MOVAPS XMM0,xmmword ptr [EBX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8f09b: FADD float ptr [ESP + 0x2c]
+                        self.x87_float_operand(X87Op::Add, self.esp.wrapping_add(0x2c));
+                        // 00d8f09f: MOVAPS XMM2,xmmword ptr [EBX + 0x50]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x50));
+                        // 00d8f0a3: MOVAPS XMM3,xmmword ptr [EAX + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8f0a7: MOVAPS XMM5,xmmword ptr [EAX + 0x50]
+                        self.xmm[5] = load_vec(self.e, self.eax.wrapping_add(0x50));
+                        // 00d8f0ab: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8f0af: FLD float ptr [EDX + 0x1c]
+                        self.fld32(self.edx.wrapping_add(0x1c));
+                        // 00d8f0b2: SUBPS XMM0,XMM1
+                        self.xmm[0] = subps(self.xmm[0], self.xmm[1]);
+                        // 00d8f0b5: MOVAPS XMM1,xmmword ptr [EBX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8f0b9: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8f0bd: SUBPS XMM1,XMM2
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[2]);
+                        // 00d8f0c0: MOVAPS XMM2,xmmword ptr [EAX + 0x40]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8f0c4: SUBPS XMM3,XMM2
+                        self.xmm[3] = subps(self.xmm[3], self.xmm[2]);
+                        // 00d8f0c7: MOVAPS XMM2,xmmword ptr [EAX + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8f0cb: SUBPS XMM0,XMM3
+                        self.xmm[0] = subps(self.xmm[0], self.xmm[3]);
+                        // 00d8f0ce: MOVAPS XMM3,xmmword ptr [ECX]
+                        self.xmm[3] = load_vec(self.e, self.ecx);
+                        // 00d8f0d1: MULPS XMM1,XMM3
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[3]);
+                        // 00d8f0d4: MOVAPS XMM3,xmmword ptr [EDX]
+                        self.xmm[3] = load_vec(self.e, self.edx);
+                        // 00d8f0d7: MOV EDX,dword ptr [EBX + 0x40]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x40));
+                        // 00d8f0da: SUBPS XMM2,XMM5
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[5]);
+                        // 00d8f0dd: MULPS XMM2,XMM3
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[3]);
+                        // 00d8f0e0: MOVAPS XMM3,xmmword ptr [ESI]
+                        self.xmm[3] = load_vec(self.e, self.esi);
+                        // 00d8f0e3: MOV dword ptr [ESP + 0x150],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x150), self.edx);
+                        // 00d8f0ea: MOV EDX,dword ptr [EBX + 0x44]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x44));
+                        // 00d8f0ed: MOV dword ptr [ESP + 0x154],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x154), self.edx);
+                        // 00d8f0f4: MOV EDX,dword ptr [EBX + 0x48]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x48));
+                        // 00d8f0f7: MOV dword ptr [ESP + 0x158],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x158), self.edx);
+                        // 00d8f0fe: MOV EDX,dword ptr [EBX + 0x4c]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x4c));
+                        // 00d8f101: MOV dword ptr [ESP + 0x15c],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x15c), self.edx);
+                        // 00d8f108: MOV EDX,dword ptr [EBX + 0x50]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x50));
+                        // 00d8f10b: MOV dword ptr [ESP + 0x190],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x190), self.edx);
+                        // 00d8f112: MOV EDX,dword ptr [EBX + 0x54]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x54));
+                        // 00d8f115: MOV dword ptr [ESP + 0x194],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x194), self.edx);
+                        // 00d8f11c: MOV EDX,dword ptr [EBX + 0x58]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x58));
+                        // 00d8f11f: MOV dword ptr [ESP + 0x198],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x198), self.edx);
+                        // 00d8f126: MOV EDX,dword ptr [EBX + 0x5c]
+                        self.edx = self.e.mem.u32(self.ebx.wrapping_add(0x5c));
+                        // 00d8f129: MOV dword ptr [ESP + 0x19c],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x19c), self.edx);
+                        // 00d8f130: MOV EDX,dword ptr [EAX + 0x40]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x40));
+                        // 00d8f133: MOV dword ptr [ESP + 0x170],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x170), self.edx);
+                        // 00d8f13a: MOV EDX,dword ptr [EAX + 0x44]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x44));
+                        // 00d8f13d: MOV dword ptr [ESP + 0x174],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x174), self.edx);
+                        // 00d8f144: MOV EDX,dword ptr [EAX + 0x48]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x48));
+                        // 00d8f147: MOV dword ptr [ESP + 0x178],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x178), self.edx);
+                        // 00d8f14e: MOV EDX,dword ptr [EAX + 0x4c]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x4c));
+                        // 00d8f151: MOV dword ptr [ESP + 0x17c],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x17c), self.edx);
+                        // 00d8f158: MOV EDX,dword ptr [EAX + 0x50]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x50));
+                        // 00d8f15b: MOV dword ptr [ESP + 0x1b0],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x1b0), self.edx);
+                        // 00d8f162: MOV EDX,dword ptr [EAX + 0x54]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x54));
+                        // 00d8f165: MOV dword ptr [ESP + 0x1b4],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x1b4), self.edx);
+                        // 00d8f16c: MOV EDX,dword ptr [EAX + 0x58]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x58));
+                        // 00d8f16f: MULPS XMM0,XMM3
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[3]);
+                        // 00d8f172: MOVAPS XMM3,xmmword ptr [ESP + 0x190]
+                        self.xmm[3] = load_vec(self.e, self.esp.wrapping_add(0x190));
+                        // 00d8f17a: MOV dword ptr [ESP + 0x1b8],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x1b8), self.edx);
+                        // 00d8f181: MOV EAX,dword ptr [EAX + 0x5c]
+                        self.eax = self.e.mem.u32(self.eax.wrapping_add(0x5c));
+                        // 00d8f184: MOV EDX,dword ptr [ESP + 0x10]
+                        self.edx = self.e.mem.u32(self.esp.wrapping_add(0x10));
+                        // 00d8f188: ADDPS XMM2,XMM1
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[1]);
+                        // 00d8f18b: MOVAPS XMM1,xmmword ptr [ESP + 0x150]
+                        self.xmm[1] = load_vec(self.e, self.esp.wrapping_add(0x150));
+                        // 00d8f193: ADDPS XMM2,XMM0
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[0]);
+                        // 00d8f196: MOVAPS XMM0,xmmword ptr [ESP + 0x170]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x170));
+                        // 00d8f19e: MOV dword ptr [ESP + 0x1bc],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x1bc), self.eax);
+                        // 00d8f1a5: MOVAPS XMM5,xmmword ptr [EDX + -0x14]
+                        self.xmm[5] = load_vec(self.e, self.edx.wrapping_sub(0x14));
+                        // 00d8f1a9: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8f1ac: MOVAPS XMM0,xmmword ptr [ECX]
+                        self.xmm[0] = load_vec(self.e, self.ecx);
+                        // 00d8f1af: LEA EAX,[EDX + -0x14]
+                        self.eax = self.edx.wrapping_sub(0x14);
+                        // 00d8f1b2: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8f1b5: MOVAPS XMM0,xmmword ptr [ESP + 0x1b0]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x1b0));
+                        // 00d8f1bd: MOV dword ptr [ESP + 0x50],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x50), self.eax);
+                        // 00d8f1c1: FLD float ptr [ESP + 0x2c]
+                        self.fld32(self.esp.wrapping_add(0x2c));
+                        // 00d8f1c5: MOV EAX,dword ptr [EBP + 0x8]
+                        self.eax = self.e.mem.u32(self.ebp.wrapping_add(0x8));
+                        // 00d8f1c8: FLD ST0
+                        self.x87.fld_st(0);
+                        // 00d8f1ca: MULPS XMM0,XMM5
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[5]);
+                        // 00d8f1cd: FMUL float ptr [EAX + 0x40]
+                        self.x87_float_operand(X87Op::Mul, self.eax.wrapping_add(0x40));
+                        // 00d8f1d0: MOVAPS XMM5,xmmword ptr [ESI]
+                        self.xmm[5] = load_vec(self.e, self.esi);
+                        // 00d8f1d3: MULPS XMM1,XMM5
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[5]);
+                        // 00d8f1d6: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8f1d9: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8f1dd: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8f1e0: MOVSS XMM1,dword ptr [ESP + 0x2c]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x2c)));
+                        // 00d8f1e6: FMUL float ptr [ESP + 0x30]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0x30));
+                        // 00d8f1ea: SHUFPS XMM1,XMM1,0x0
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[1], 0);
+                        // 00d8f1ee: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8f1f1: MOVSS XMM0,XMM4
+                        self.xmm[0][0] = self.xmm[4][0];
+                        // 00d8f1f5: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8f1f9: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8f1fc: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8f1ff: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8f202: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8f206: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8f209: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8f20d: SHUFPS XMM2,XMM0,0xaa
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 170);
+                        // 00d8f211: ADDSS XMM2,XMM1
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[1]);
+                        // 00d8f215: MOVSS dword ptr [ESP + 0xbc],XMM2
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xbc), self.xmm[2][0].to_bits());
+                        // 00d8f21e: FSUB float ptr [ESP + 0xbc]
+                        self.x87_float_operand(X87Op::Sub, self.esp.wrapping_add(0xbc));
+                        // 00d8f225: LEA EAX,[EDX + -0x4]
+                        self.eax = self.edx.wrapping_sub(0x4);
+                        // 00d8f228: FSTP float ptr [ESP + 0x2c]
+                        self.fstp32(self.esp.wrapping_add(0x2c));
+                        // 00d8f22c: MOVSS XMM0,dword ptr [ESP + 0x2c]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x2c)));
+                        // 00d8f232: MOVSS dword ptr [ESP + 0xc4],XMM0
+                        self.e
+                            .mem
+                            .set_u32(self.esp.wrapping_add(0xc4), self.xmm[0][0].to_bits());
+                        // 00d8f23b: FLD float ptr [EDX + -0x18]
+                        self.fld32(self.edx.wrapping_sub(0x18));
+                        // 00d8f23e: FMUL float ptr [ESP + 0xc4]
+                        self.x87_float_operand(X87Op::Mul, self.esp.wrapping_add(0xc4));
+                        // 00d8f245: MOV dword ptr [ESP + 0x2c],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x2c), self.eax);
+                        // 00d8f249: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8f24d: FLD float ptr [ESP + 0x30]
+                        self.fld32(self.esp.wrapping_add(0x30));
+                        // 00d8f251: FLD float ptr [EAX]
+                        self.fld32(self.eax);
+                        // 00d8f253: FCOMP
+                        self.fcom_st(1, true);
+                        // 00d8f255: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8f257: TEST AH,0x5
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x5_u8);
+                        // 00d8f25a: JP 0x00d8f26d
+                        if self.pf {
+                            block = 0x00d8_f26d;
+                            continue;
+                        }
+                        // 00d8f25c: MOV EAX,dword ptr [ESP + 0x2c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x2c));
+                        // 00d8f260: FDIVR float ptr [EAX]
+                        self.x87_float_operand(X87Op::DivR, self.eax);
+                        // 00d8f262: FSTP float ptr [EDI + 0x4]
+                        self.fstp32(self.edi.wrapping_add(0x4));
+                        // 00d8f265: FLD float ptr [EAX]
+                        self.fld32(self.eax);
+                        // 00d8f267: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8f26b: JMP 0x00d8f28c
+                        block = 0x00d8_f28c;
+                        continue;
+                    }
+                    0x00d8_f26d => {
+                        // 00d8f26d: FLD float ptr [EDX]
+                        self.fld32(self.edx);
+                        // 00d8f26f: FCOMP
+                        self.fcom_st(1, true);
+                        // 00d8f271: FNSTSW AX
+                        self.fnstsw_ax();
+                        // 00d8f273: TEST AH,0x41
+                        self.test8(((self.eax >> 8) & 0xff) as u8, 0x41_u8);
+                        // 00d8f276: JNZ 0x00d8f285
+                        if !self.zf {
+                            block = 0x00d8_f285;
+                            continue;
+                        }
+                        // 00d8f278: FDIVR float ptr [EDX]
+                        self.x87_float_operand(X87Op::DivR, self.edx);
+                        // 00d8f27a: FSTP float ptr [EDI + 0x4]
+                        self.fstp32(self.edi.wrapping_add(0x4));
+                        // 00d8f27d: FLD float ptr [EDX]
+                        self.fld32(self.edx);
+                        // 00d8f27f: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8f283: JMP 0x00d8f28c
+                        block = 0x00d8_f28c;
+                        continue;
+                    }
+                    0x00d8_f285 => {
+                        // 00d8f285: FSTP ST0
+                        self.x87.fstp_st(0);
+                        // 00d8f287: FLD1
+                        self.x87.push(1.0);
+                        // 00d8f289: FSTP float ptr [EDI + 0x4]
+                        self.fstp32(self.edi.wrapping_add(0x4));
+                        block = 0x00d8_f28c;
+                    }
+                    0x00d8_f28c => {
+                        // 00d8f28c: MOVSS XMM0,dword ptr [ESP + 0x30]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esp.wrapping_add(0x30)));
+                        // 00d8f292: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8f296: MOVAPS xmmword ptr [ESP + 0x270],XMM0
+                        store_vec(self.e, self.esp.wrapping_add(0x270), self.xmm[0]);
+                        // 00d8f29e: MOVAPS XMM1,xmmword ptr [EAX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x30));
+                        // 00d8f2a2: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8f2a6: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8f2a9: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8f2ad: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8f2b0: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8f2b3: MOVAPS XMM2,xmmword ptr [ESI]
+                        self.xmm[2] = load_vec(self.e, self.esi);
+                        // 00d8f2b6: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8f2b9: SHUFPS XMM3,XMM0,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[0], 255);
+                        // 00d8f2bd: MOVAPS XMM5,XMM2
+                        self.xmm[5] = self.xmm[2];
+                        // 00d8f2c0: MULPS XMM5,XMM3
+                        self.xmm[5] = mulps(self.xmm[5], self.xmm[3]);
+                        // 00d8f2c3: MOVAPS XMM3,xmmword ptr [EBX + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8f2c7: ADDPS XMM3,XMM5
+                        self.xmm[3] = addps(self.xmm[3], self.xmm[5]);
+                        // 00d8f2ca: MOVAPS xmmword ptr [EBX + 0x10],XMM3
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[3]);
+                        // 00d8f2ce: MOVAPS XMM3,xmmword ptr [EAX + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8f2d2: MOVAPS XMM4,XMM1
+                        self.xmm[4] = self.xmm[1];
+                        // 00d8f2d5: SHUFPS XMM4,XMM1,0xff
+                        self.xmm[4] = shufps(self.xmm[4], self.xmm[1], 255);
+                        // 00d8f2d9: MULPS XMM2,XMM4
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[4]);
+                        // 00d8f2dc: SUBPS XMM3,XMM2
+                        self.xmm[3] = subps(self.xmm[3], self.xmm[2]);
+                        // 00d8f2df: MOVAPS xmmword ptr [EAX + 0x10],XMM3
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[3]);
+                        // 00d8f2e3: MOVAPS XMM2,xmmword ptr [ECX]
+                        self.xmm[2] = load_vec(self.e, self.ecx);
+                        // 00d8f2e6: MOV ECX,dword ptr [ESP + 0x50]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x50));
+                        // 00d8f2ea: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8f2ed: MOVAPS XMM2,xmmword ptr [ECX]
+                        self.xmm[2] = load_vec(self.e, self.ecx);
+                        // 00d8f2f0: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8f2f3: MOVSS XMM2,dword ptr [EDI]
+                        self.xmm[2] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8f2f7: LEA EDX,[ESP + 0x270]
+                        self.edx = self.esp.wrapping_add(0x270);
+                        // 00d8f2fe: PUSH EDX
+                        self.push(self.edx);
+                        // 00d8f2ff: LEA ECX,[ESP + 0x2c4]
+                        self.ecx = self.esp.wrapping_add(0x2c4);
+                        // 00d8f306: MOVAPS xmmword ptr [ESP + 0xd4],XMM2
+                        store_vec(self.e, self.esp.wrapping_add(0xd4), self.xmm[2]);
+                        // 00d8f30e: MOVAPS XMM2,xmmword ptr [EBX + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8f312: ADDPS XMM0,XMM2
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[2]);
+                        // 00d8f315: MOVAPS xmmword ptr [EBX + 0x20],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8f319: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8f31d: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8f320: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8f324: LEA EAX,[ESP + 0xd4]
+                        self.eax = self.esp.wrapping_add(0xd4);
+                        // 00d8f32b: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8f32c: PUSH ECX
+                        self.push(self.ecx);
+                        // 00d8f32d: CALL 0x00c6cce0
+                        self.call_cdecl_returning_first(VECTOR_ADD_FIRST_LANE, 3);
+                        // 00d8f332: MOV EDX,dword ptr [EAX]
+                        self.edx = self.e.mem.u32(self.eax);
+                        // 00d8f334: MOV ECX,dword ptr [EAX + 0x4]
+                        self.ecx = self.e.mem.u32(self.eax.wrapping_add(0x4));
+                        // 00d8f337: MOV dword ptr [ESP + 0xdc],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0xdc), self.edx);
+                        // 00d8f33e: MOV EDX,dword ptr [EAX + 0x8]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x8));
+                        // 00d8f341: MOV EAX,dword ptr [EAX + 0xc]
+                        self.eax = self.e.mem.u32(self.eax.wrapping_add(0xc));
+                        // 00d8f344: MOV dword ptr [ESP + 0xe0],ECX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0xe0), self.ecx);
+                        // 00d8f34b: MOV dword ptr [ESP + 0xe4],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0xe4), self.edx);
+                        // 00d8f352: MOV dword ptr [ESP + 0xe8],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0xe8), self.eax);
+                        // 00d8f359: MOVAPS XMM0,xmmword ptr [ESP + 0xdc]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0xdc));
+                        // 00d8f361: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8f362: MOVSS dword ptr [EDI],XMM0
+                        self.e.mem.set_u32(self.edi, self.xmm[0][0].to_bits());
+                        // 00d8f366: CALL 0x00d921d0
+                        self.call_table_byte();
+                        // 00d8f36b: MOV ECX,dword ptr [ESP + 0x20]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x20));
+                        // 00d8f36f: ADD ECX,0x1c
+                        self.ecx = self.add32(self.ecx, 0x1c);
+                        // 00d8f372: PUSH ECX
+                        self.push(self.ecx);
+                        // 00d8f373: LEA EDX,[ESP + 0x7f]
+                        self.edx = self.esp.wrapping_add(0x7f);
+                        // 00d8f377: PUSH EDX
+                        self.push(self.edx);
+                        // 00d8f378: LEA EDI,[EDI + EAX*0x4]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(4));
+                        // 00d8f37b: CALL 0x00d921c0
+                        self.call_copy_byte();
+                        // 00d8f380: MOVSX EAX,byte ptr [EAX]
+                        self.eax = i32::from(self.e.mem.i8(self.eax)) as u32;
+                        // 00d8f383: ADD dword ptr [ESP + 0x28],0x50
+                        {
+                            let at = self.esp.wrapping_add(0x28);
+                            let value = self.add32(self.e.mem.u32(at), 0x50);
+                            self.e.mem.set_u32(at, value);
+                        }
+                        // 00d8f388: ADD ESP,0x18
+                        self.esp = self.add32(self.esp, 0x18);
+                        // 00d8f38b: ADD ESI,0x50
+                        self.esi = self.add32(self.esi, 0x50);
+                        // 00d8f38e: CMP EAX,0xa
+                        self.cmp32(self.eax, 0xa);
+                        // 00d8f391: JZ 0x00d8f064
+                        if self.zf {
+                            block = 0x00d8_f064;
+                            continue;
+                        }
+                        // 00d8f397: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_f39c => {
+                        // 00d8f39c: MOVAPS XMM0,xmmword ptr [EBX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8f3a0: MOVAPS XMM1,xmmword ptr [ESI]
+                        self.xmm[1] = load_vec(self.e, self.esi);
+                        // 00d8f3a3: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8f3a7: MOVAPS XMM2,xmmword ptr [ESI + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8f3ab: MOVAPS XMM3,xmmword ptr [EBX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8f3af: MOVAPS XMM4,xmmword ptr [ESI + 0x30]
+                        self.xmm[4] = load_vec(self.e, self.esi.wrapping_add(0x30));
+                        // 00d8f3b3: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8f3b6: MOVAPS XMM0,xmmword ptr [EAX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8f3ba: MULPS XMM2,XMM0
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[0]);
+                        // 00d8f3bd: MOVAPS XMM0,xmmword ptr [ESI + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8f3c1: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8f3c4: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8f3c8: SUBPS XMM1,XMM2
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[2]);
+                        // 00d8f3cb: MULPS XMM0,XMM4
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[4]);
+                        // 00d8f3ce: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8f3d1: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8f3d4: MOVAPS XMM1,XMM0
+                        self.xmm[1] = self.xmm[0];
+                        // 00d8f3d7: SHUFPS XMM1,XMM0,0x55
+                        self.xmm[1] = shufps(self.xmm[1], self.xmm[0], 85);
+                        // 00d8f3db: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8f3de: ADDSS XMM1,XMM0
+                        self.xmm[1] = addss(self.xmm[1], self.xmm[0]);
+                        // 00d8f3e2: SHUFPS XMM2,XMM0,0xaa
+                        self.xmm[2] = shufps(self.xmm[2], self.xmm[0], 170);
+                        // 00d8f3e6: LEA EAX,[ESP + 0x240]
+                        self.eax = self.esp.wrapping_add(0x240);
+                        // 00d8f3ed: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8f3ee: LEA ECX,[ESP + 0x294]
+                        self.ecx = self.esp.wrapping_add(0x294);
+                        // 00d8f3f5: ADDSS XMM2,XMM1
+                        self.xmm[2] = addss(self.xmm[2], self.xmm[1]);
+                        // 00d8f3f9: MOVAPS xmmword ptr [ESP + 0x244],XMM2
+                        store_vec(self.e, self.esp.wrapping_add(0x244), self.xmm[2]);
+                        // 00d8f401: MOVAPS XMM0,xmmword ptr [ESI]
+                        self.xmm[0] = load_vec(self.e, self.esi);
+                        // 00d8f404: PUSH ECX
+                        self.push(self.ecx);
+                        // 00d8f405: LEA EDX,[ESP + 0x2b8]
+                        self.edx = self.esp.wrapping_add(0x2b8);
+                        // 00d8f40c: SHUFPS XMM0,XMM0,0xff
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 255);
+                        // 00d8f410: PUSH EDX
+                        self.push(self.edx);
+                        // 00d8f411: MOVAPS xmmword ptr [ESP + 0x29c],XMM0
+                        store_vec(self.e, self.esp.wrapping_add(0x29c), self.xmm[0]);
+                        // 00d8f419: CALL 0x00c6ccc0
+                        self.call_cdecl_returning_first(VECTOR_SUBTRACT_FIRST_LANE, 3);
+                        // 00d8f41e: MOVAPS XMM0,xmmword ptr [ESI + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8f422: LEA EAX,[ESP + 0x26c]
+                        self.eax = self.esp.wrapping_add(0x26c);
+                        // 00d8f429: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8f42a: LEA ECX,[ESP + 0x2c0]
+                        self.ecx = self.esp.wrapping_add(0x2c0);
+                        // 00d8f431: PUSH ECX
+                        self.push(self.ecx);
+                        // 00d8f432: LEA EDX,[ESP + 0x1d4]
+                        self.edx = self.esp.wrapping_add(0x1d4);
+                        // 00d8f439: SHUFPS XMM0,XMM0,0xff
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 255);
+                        // 00d8f43d: PUSH EDX
+                        self.push(self.edx);
+                        // 00d8f43e: MOVAPS xmmword ptr [ESP + 0x278],XMM0
+                        store_vec(self.e, self.esp.wrapping_add(0x278), self.xmm[0]);
+                        // 00d8f446: CALL 0x00891060
+                        self.call_cdecl_returning_first(VECTOR_MULTIPLY_FIRST_LANE, 3);
+                        // 00d8f44b: MOVAPS XMM0,xmmword ptr [ESP + 0x1d8]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x1d8));
+                        // 00d8f453: MOV EAX,dword ptr [ESP + 0x64]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x64));
+                        // 00d8f457: MOVAPS XMM1,xmmword ptr [EAX + 0x30]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x30));
+                        // 00d8f45b: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8f45f: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8f462: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8f466: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8f469: MULPS XMM1,XMM2
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[2]);
+                        // 00d8f46c: MOVAPS XMM2,xmmword ptr [ESI]
+                        self.xmm[2] = load_vec(self.e, self.esi);
+                        // 00d8f46f: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8f472: SHUFPS XMM3,XMM0,0xff
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[0], 255);
+                        // 00d8f476: MULPS XMM2,XMM3
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[3]);
+                        // 00d8f479: MOVAPS XMM3,xmmword ptr [ESI + 0x10]
+                        self.xmm[3] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8f47d: MOVAPS XMM4,XMM1
+                        self.xmm[4] = self.xmm[1];
+                        // 00d8f480: SHUFPS XMM4,XMM1,0xff
+                        self.xmm[4] = shufps(self.xmm[4], self.xmm[1], 255);
+                        // 00d8f484: MULPS XMM3,XMM4
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[4]);
+                        // 00d8f487: MOVAPS XMM4,xmmword ptr [EBX + 0x10]
+                        self.xmm[4] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8f48b: ADDPS XMM2,XMM4
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[4]);
+                        // 00d8f48e: MOVAPS xmmword ptr [EBX + 0x10],XMM2
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8f492: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8f496: SUBPS XMM2,XMM3
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[3]);
+                        // 00d8f499: MOVAPS xmmword ptr [EAX + 0x10],XMM2
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8f49d: MOVAPS XMM2,xmmword ptr [ESI + 0x20]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x20));
+                        // 00d8f4a1: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8f4a4: MOVAPS XMM2,xmmword ptr [ESI + 0x30]
+                        self.xmm[2] = load_vec(self.e, self.esi.wrapping_add(0x30));
+                        // 00d8f4a8: MULPS XMM2,XMM1
+                        self.xmm[2] = mulps(self.xmm[2], self.xmm[1]);
+                        // 00d8f4ab: MOVSS XMM1,dword ptr [EDI]
+                        self.xmm[1] = movss_load(self.e.mem.u32(self.edi));
+                        // 00d8f4af: LEA ECX,[ESP + 0xf8]
+                        self.ecx = self.esp.wrapping_add(0xf8);
+                        // 00d8f4b6: MOVAPS xmmword ptr [ESP + 0xf8],XMM1
+                        store_vec(self.e, self.esp.wrapping_add(0xf8), self.xmm[1]);
+                        // 00d8f4be: MOVAPS XMM1,xmmword ptr [EBX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.ebx.wrapping_add(0x20));
+                        // 00d8f4c2: ADDPS XMM1,XMM0
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[0]);
+                        // 00d8f4c5: MOVAPS xmmword ptr [EBX + 0x20],XMM1
+                        store_vec(self.e, self.ebx.wrapping_add(0x20), self.xmm[1]);
+                        // 00d8f4c9: MOVAPS XMM0,xmmword ptr [EAX + 0x20]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8f4cd: ADDPS XMM0,XMM2
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[2]);
+                        // 00d8f4d0: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8f4d4: LEA EAX,[ESP + 0x1d8]
+                        self.eax = self.esp.wrapping_add(0x1d8);
+                        // 00d8f4db: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8f4dc: PUSH ECX
+                        self.push(self.ecx);
+                        // 00d8f4dd: LEA EDX,[ESP + 0x300]
+                        self.edx = self.esp.wrapping_add(0x300);
+                        // 00d8f4e4: PUSH EDX
+                        self.push(self.edx);
+                        // 00d8f4e5: CALL 0x00c6cce0
+                        self.call_cdecl_returning_first(VECTOR_ADD_FIRST_LANE, 3);
+                        // 00d8f4ea: MOV ECX,dword ptr [EAX]
+                        self.ecx = self.e.mem.u32(self.eax);
+                        // 00d8f4ec: MOV EDX,dword ptr [EAX + 0x4]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0x4));
+                        // 00d8f4ef: MOV dword ptr [ESP + 0x104],ECX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x104), self.ecx);
+                        // 00d8f4f6: MOV ECX,dword ptr [EAX + 0x8]
+                        self.ecx = self.e.mem.u32(self.eax.wrapping_add(0x8));
+                        // 00d8f4f9: MOV dword ptr [ESP + 0x108],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x108), self.edx);
+                        // 00d8f500: MOV EDX,dword ptr [EAX + 0xc]
+                        self.edx = self.e.mem.u32(self.eax.wrapping_add(0xc));
+                        // 00d8f503: MOV dword ptr [ESP + 0x10c],ECX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x10c), self.ecx);
+                        // 00d8f50a: MOV dword ptr [ESP + 0x110],EDX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x110), self.edx);
+                        // 00d8f511: MOVAPS XMM0,xmmword ptr [ESP + 0x104]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x104));
+                        // 00d8f519: MOVSS dword ptr [EDI],XMM0
+                        self.e.mem.set_u32(self.edi, self.xmm[0][0].to_bits());
+                        // 00d8f51d: ADD ESP,0x24
+                        self.esp = self.add32(self.esp, 0x24);
+                        // 00d8f520: ADD EDI,0x4
+                        self.edi = self.add32(self.edi, 0x4);
+                        // 00d8f523: ADD ESI,0x40
+                        self.esi = self.add32(self.esi, 0x40);
+                        // 00d8f526: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_f52b => {
+                        // 00d8f52b: MOVAPS XMM0,xmmword ptr [ESI]
+                        self.xmm[0] = load_vec(self.e, self.esi);
+                        // 00d8f52e: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8f532: MOVAPS xmmword ptr [EBX + 0x30],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x30), self.xmm[0]);
+                        // 00d8f536: MOVAPS XMM0,xmmword ptr [ESI + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.esi.wrapping_add(0x10));
+                        // 00d8f53a: MOVAPS xmmword ptr [EAX + 0x30],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x30), self.xmm[0]);
+                        // 00d8f53e: ADD ESI,0x20
+                        self.esi = self.add32(self.esi, 0x20);
+                        // 00d8f541: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_f546 => {
+                        // 00d8f546: MOV ECX,dword ptr [ESI + 0x10]
+                        self.ecx = self.e.mem.u32(self.esi.wrapping_add(0x10));
+                        // 00d8f549: MOV EAX,EBX
+                        self.eax = self.ebx;
+                        // 00d8f54b: XOR EAX,dword ptr [ESP + 0x4c]
+                        self.eax =
+                            self.xor32(self.eax, self.e.mem.u32(self.esp.wrapping_add(0x4c)));
+                        // 00d8f54f: NEG ECX
+                        self.ecx = self.neg32(self.ecx);
+                        // 00d8f551: AND EAX,ECX
+                        self.eax = self.and32(self.eax, self.ecx);
+                        // 00d8f553: MOV ECX,dword ptr [EBP + 0x8]
+                        self.ecx = self.e.mem.u32(self.ebp.wrapping_add(0x8));
+                        // 00d8f556: FLD float ptr [ECX + 0x30]
+                        self.fld32(self.ecx.wrapping_add(0x30));
+                        // 00d8f559: PUSH ECX
+                        self.push(self.ecx);
+                        // 00d8f55a: FIMUL dword ptr [ESP + 0x78]
+                        self.x87_fimul(self.esp.wrapping_add(0x78));
+                        // 00d8f55e: XOR EAX,EBX
+                        self.eax = self.xor32(self.eax, self.ebx);
+                        // 00d8f560: LEA ECX,[ESP + 0x214]
+                        self.ecx = self.esp.wrapping_add(0x214);
+                        // 00d8f567: MOV dword ptr [ESP + 0x14],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x14), self.eax);
+                        // 00d8f56b: FSTP float ptr [ESP + 0x30]
+                        self.fstp32(self.esp.wrapping_add(0x30));
+                        // 00d8f56f: FLD float ptr [ESP + 0x30]
+                        self.fld32(self.esp.wrapping_add(0x30));
+                        // 00d8f573: FSTP float ptr [ESP]
+                        self.fstp32(self.esp);
+                        // 00d8f576: CALL 0x005dbf20
+                        self.call_this(VECTOR_FROM_FLOAT, 1);
+                        // 00d8f57b: MOVAPS XMM1,xmmword ptr [ESI]
+                        self.xmm[1] = load_vec(self.e, self.esi);
+                        // 00d8f57e: MOVAPS XMM0,xmmword ptr [ESP + 0x210]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x210));
+                        // 00d8f586: MOV EAX,dword ptr [ESP + 0x10]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x10));
+                        // 00d8f58a: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8f58e: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8f591: MOVAPS XMM0,XMM1
+                        self.xmm[0] = self.xmm[1];
+                        // 00d8f594: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8f597: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8f59b: ADDPS XMM2,XMM1
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[1]);
+                        // 00d8f59e: MOVAPS xmmword ptr [EAX + 0x10],XMM2
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8f5a2: MOVAPS XMM1,xmmword ptr [EAX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8f5a6: ADDPS XMM1,XMM0
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[0]);
+                        // 00d8f5a9: MOVAPS xmmword ptr [EAX + 0x10],XMM1
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[1]);
+                        // 00d8f5ad: MOVAPS XMM1,xmmword ptr [EAX + 0x40]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8f5b1: ADDPS XMM1,XMM0
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[0]);
+                        // 00d8f5b4: MOVAPS xmmword ptr [EAX + 0x40],XMM1
+                        store_vec(self.e, self.eax.wrapping_add(0x40), self.xmm[1]);
+                        // 00d8f5b8: ADD ESI,0x20
+                        self.esi = self.add32(self.esi, 0x20);
+                        // 00d8f5bb: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_f5c0 => {
+                        // 00d8f5c0: LEA EDX,[EBX + 0x20]
+                        self.edx = self.ebx.wrapping_add(0x20);
+                        // 00d8f5c3: PUSH EDX
+                        self.push(self.edx);
+                        // 00d8f5c4: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8f5c5: LEA ECX,[ESP + 0x2a8]
+                        self.ecx = self.esp.wrapping_add(0x2a8);
+                        // 00d8f5cc: CALL 0x00c7f750
+                        self.call_this(SET_MUL3, 2);
+                        // 00d8f5d1: MOV ECX,dword ptr [ESP + 0x4c]
+                        self.ecx = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8f5d5: ADD ECX,0x20
+                        self.ecx = self.add32(self.ecx, 0x20);
+                        // 00d8f5d8: PUSH ECX
+                        self.push(self.ecx);
+                        // 00d8f5d9: LEA EAX,[ESI + 0x30]
+                        self.eax = self.esi.wrapping_add(0x30);
+                        // 00d8f5dc: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8f5dd: LEA ECX,[ESP + 0x238]
+                        self.ecx = self.esp.wrapping_add(0x238);
+                        // 00d8f5e4: CALL 0x00c7f750
+                        self.call_this(SET_MUL3, 2);
+                        // 00d8f5e9: LEA EDX,[EBX + 0x50]
+                        self.edx = self.ebx.wrapping_add(0x50);
+                        // 00d8f5ec: PUSH EDX
+                        self.push(self.edx);
+                        // 00d8f5ed: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8f5ee: LEA ECX,[ESP + 0x228]
+                        self.ecx = self.esp.wrapping_add(0x228);
+                        // 00d8f5f5: CALL 0x00c7f750
+                        self.call_this(SET_MUL3, 2);
+                        // 00d8f5fa: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8f5fe: ADD EAX,0x50
+                        self.eax = self.add32(self.eax, 0x50);
+                        // 00d8f601: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8f602: LEA EAX,[ESI + 0x30]
+                        self.eax = self.esi.wrapping_add(0x30);
+                        // 00d8f605: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8f606: LEA ECX,[ESP + 0x258]
+                        self.ecx = self.esp.wrapping_add(0x258);
+                        // 00d8f60d: CALL 0x00c7f750
+                        self.call_this(SET_MUL3, 2);
+                        // 00d8f612: MOVAPS XMM1,xmmword ptr [ESP + 0x2a0]
+                        self.xmm[1] = load_vec(self.e, self.esp.wrapping_add(0x2a0));
+                        // 00d8f61a: MOVAPS XMM0,xmmword ptr [EBX + 0x10]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x10));
+                        // 00d8f61e: MOV EAX,dword ptr [ESP + 0x4c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x4c));
+                        // 00d8f622: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8f625: MOVAPS xmmword ptr [EBX + 0x10],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x10), self.xmm[0]);
+                        // 00d8f629: MOVAPS XMM1,xmmword ptr [ESP + 0x220]
+                        self.xmm[1] = load_vec(self.e, self.esp.wrapping_add(0x220));
+                        // 00d8f631: MOVAPS XMM0,xmmword ptr [EBX + 0x40]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x40));
+                        // 00d8f635: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8f638: MOVAPS xmmword ptr [EBX + 0x40],XMM0
+                        store_vec(self.e, self.ebx.wrapping_add(0x40), self.xmm[0]);
+                        // 00d8f63c: MOVAPS XMM1,xmmword ptr [EAX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8f640: MOVAPS XMM0,xmmword ptr [ESP + 0x230]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x230));
+                        // 00d8f648: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8f64b: MOVAPS xmmword ptr [EAX + 0x10],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[0]);
+                        // 00d8f64f: MOVAPS XMM0,xmmword ptr [EAX + 0x40]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8f653: MOVAPS XMM1,xmmword ptr [ESP + 0x250]
+                        self.xmm[1] = load_vec(self.e, self.esp.wrapping_add(0x250));
+                        // 00d8f65b: ADDPS XMM0,XMM1
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[1]);
+                        // 00d8f65e: MOVAPS xmmword ptr [EAX + 0x40],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x40), self.xmm[0]);
+                        // 00d8f662: ADD ESI,0x60
+                        self.esi = self.add32(self.esi, 0x60);
+                        // 00d8f665: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_f66a => {
+                        // 00d8f66a: MOV ECX,dword ptr [EBP + 0x10]
+                        self.ecx = self.e.mem.u32(self.ebp.wrapping_add(0x10));
+                        // 00d8f66d: MOV EAX,dword ptr [EBP + 0x8]
+                        self.eax = self.e.mem.u32(self.ebp.wrapping_add(0x8));
+                        // 00d8f670: PUSH EDI
+                        self.push(self.edi);
+                        // 00d8f671: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8f672: PUSH ECX
+                        self.push(self.ecx);
+                        // 00d8f673: LEA EDX,[ESP + 0x80]
+                        self.edx = self.esp.wrapping_add(0x80);
+                        // 00d8f67a: PUSH EDX
+                        self.push(self.edx);
+                        // 00d8f67b: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8f67c: CALL 0x00d893a0
+                        self.call_stiff_spring_chain();
+                        // 00d8f681: MOVZX ECX,word ptr [ESI + 0x2]
+                        self.ecx = u32::from(self.e.mem.u16(self.esi.wrapping_add(0x2)));
+                        // 00d8f685: ADD ESP,0x14
+                        self.esp = self.add32(self.esp, 0x14);
+                        // 00d8f688: ADD ESI,dword ptr [ESI + 0x4]
+                        self.esi = self.add32(self.esi, self.e.mem.u32(self.esi.wrapping_add(0x4)));
+                        // 00d8f68b: LEA EDI,[EDI + ECX*0x4]
+                        self.edi = self.edi.wrapping_add(self.ecx.wrapping_mul(4));
+                        // 00d8f68e: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_f693 => {
+                        // 00d8f693: MOV EDX,dword ptr [EBP + 0x10]
+                        self.edx = self.e.mem.u32(self.ebp.wrapping_add(0x10));
+                        // 00d8f696: MOV ECX,dword ptr [EBP + 0x8]
+                        self.ecx = self.e.mem.u32(self.ebp.wrapping_add(0x8));
+                        // 00d8f699: PUSH EDI
+                        self.push(self.edi);
+                        // 00d8f69a: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8f69b: PUSH EDX
+                        self.push(self.edx);
+                        // 00d8f69c: LEA EAX,[ESP + 0x80]
+                        self.eax = self.esp.wrapping_add(0x80);
+                        // 00d8f6a3: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8f6a4: PUSH ECX
+                        self.push(self.ecx);
+                        // 00d8f6a5: CALL 0x00d89690
+                        self.call_ball_and_socket_chain();
+                        // 00d8f6aa: MOVZX EAX,word ptr [ESI + 0x2]
+                        self.eax = u32::from(self.e.mem.u16(self.esi.wrapping_add(0x2)));
+                        // 00d8f6ae: LEA EDX,[EAX + EAX*0x2]
+                        self.edx = self.eax.wrapping_add(self.eax.wrapping_mul(2));
+                        // 00d8f6b1: ADD ESP,0x14
+                        self.esp = self.add32(self.esp, 0x14);
+                        // 00d8f6b4: LEA EDI,[EDI + EDX*0x4]
+                        self.edi = self.edi.wrapping_add(self.edx.wrapping_mul(4));
+                        block = 0x00d8_f6b7;
+                    }
+                    0x00d8_f6b7 => {
+                        // 00d8f6b7: ADD ESI,dword ptr [ESI + 0x4]
+                        self.esi = self.add32(self.esi, self.e.mem.u32(self.esi.wrapping_add(0x4)));
+                        // 00d8f6ba: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_f6bf => {
+                        // 00d8f6bf: MOV EAX,dword ptr [EBP + 0x10]
+                        self.eax = self.e.mem.u32(self.ebp.wrapping_add(0x10));
+                        // 00d8f6c2: MOV EDX,dword ptr [EBP + 0x8]
+                        self.edx = self.e.mem.u32(self.ebp.wrapping_add(0x8));
+                        // 00d8f6c5: PUSH EDI
+                        self.push(self.edi);
+                        // 00d8f6c6: PUSH ESI
+                        self.push(self.esi);
+                        // 00d8f6c7: PUSH EAX
+                        self.push(self.eax);
+                        // 00d8f6c8: LEA ECX,[ESP + 0x80]
+                        self.ecx = self.esp.wrapping_add(0x80);
+                        // 00d8f6cf: PUSH ECX
+                        self.push(self.ecx);
+                        // 00d8f6d0: PUSH EDX
+                        self.push(self.edx);
+                        // 00d8f6d1: CALL 0x00d8a3a0
+                        self.call_powered_chain();
+                        // 00d8f6d6: MOVZX EAX,word ptr [ESI + 0x4]
+                        self.eax = u32::from(self.e.mem.u16(self.esi.wrapping_add(0x4)));
+                        // 00d8f6da: LEA EAX,[EAX + EAX*0x2]
+                        self.eax = self.eax.wrapping_add(self.eax.wrapping_mul(2));
+                        // 00d8f6dd: ADD ESP,0x14
+                        self.esp = self.add32(self.esp, 0x14);
+                        // 00d8f6e0: ADD ESI,dword ptr [ESI + 0x10]
+                        self.esi =
+                            self.add32(self.esi, self.e.mem.u32(self.esi.wrapping_add(0x10)));
+                        // 00d8f6e3: LEA EDI,[EDI + EAX*0x8]
+                        self.edi = self.edi.wrapping_add(self.eax.wrapping_mul(8));
+                        // 00d8f6e6: JMP 0x00d8d18c
+                        block = 0x00d8_d18c;
+                        continue;
+                    }
+                    0x00d8_f6eb => {
+                        // 00d8f6eb: INT3
+                        panic!("INT3 at 00d8f6eb");
+                    }
+                    0x00d8_f6ec => {
+                        // 00d8f6ec: MOVAPS XMM7,xmmword ptr [ESP + 0xf0]
+                        self.xmm[7] = load_vec(self.e, self.esp.wrapping_add(0xf0));
+                        block = 0x00d8_f6f4;
+                    }
+                    0x00d8_f6f4 => {
+                        // 00d8f6f4: MOV EAX,dword ptr [ESP + 0x70]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x70));
+                        // 00d8f6f8: FLDZ
+                        self.x87.push(0.0);
+                        // 00d8f6fa: DEC EAX
+                        self.eax = self.dec32(self.eax);
+                        // 00d8f6fb: FSTP float ptr [ESP + 0x78]
+                        self.fstp32(self.esp.wrapping_add(0x78));
+                        // 00d8f6ff: MOV dword ptr [ESP + 0x70],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x70), self.eax);
+                        // 00d8f703: TEST EAX,EAX
+                        self.test32(self.eax, self.eax);
+                        // 00d8f705: JG 0x00d8d160
+                        if (self.eax as i32) > 0 {
+                            // the flags of TEST EAX,EAX at 00d8f703
+                            block = 0x00d8_d160;
+                            continue;
+                        }
+                        // 00d8f70b: MOV EBX,dword ptr [EBP + 0x8]
+                        self.ebx = self.e.mem.u32(self.ebp.wrapping_add(0x8));
+                        // 00d8f70e: MOV ECX,dword ptr [EBX + 0x114]
+                        self.ecx = self.e.mem.u32(self.ebx.wrapping_add(0x114));
+                        // 00d8f714: DEC ECX
+                        self.ecx = self.dec32(self.ecx);
+                        // 00d8f715: MOV byte ptr [ESP + 0x65],0x0
+                        self.e.mem.set_u8(self.esp.wrapping_add(0x65), 0x0);
+                        // 00d8f71a: CMP dword ptr [ESP + 0x6c],ECX
+                        self.cmp32(self.e.mem.u32(self.esp.wrapping_add(0x6c)), self.ecx);
+                        // 00d8f71e: JNZ 0x00d8f725
+                        if !self.zf {
+                            block = 0x00d8_f725;
+                            continue;
+                        }
+                        // 00d8f720: MOV byte ptr [ESP + 0x65],0x1
+                        self.e.mem.set_u8(self.esp.wrapping_add(0x65), 0x1);
+                        block = 0x00d8_f725;
+                    }
+                    0x00d8_f725 => {
+                        // 00d8f725: MOV EAX,dword ptr [EBP + 0x10]
+                        self.eax = self.e.mem.u32(self.ebp.wrapping_add(0x10));
+                        // 00d8f728: CMP EAX,-0x1
+                        self.cmp32(self.eax, 0xffff_ffff);
+                        // 00d8f72b: JNC 0x00d8f8f8
+                        if !self.cf {
+                            block = 0x00d8_f8f8;
+                            continue;
+                        }
+                        block = 0x00d8_f731;
+                    }
+                    0x00d8_f731 => {
+                        // 00d8f731: MOVZX ECX,byte ptr [EAX]
+                        self.ecx = u32::from(self.e.mem.u8(self.eax));
+                        // 00d8f734: CMP ECX,0x3
+                        self.cmp32(self.ecx, 0x3);
+                        // 00d8f737: JA 0x00d8f8ef
+                        if !self.cf && !self.zf {
+                            block = 0x00d8_f8ef;
+                            continue;
+                        }
+                        // 00d8f73d: JMP dword ptr [ECX*0x4 + 0xd8fb5c]
+                        block = match self.ecx {
+                            0 => 0x00d8_f920,
+                            1 => 0x00d8_f83b,
+                            2 => 0x00d8_f744,
+                            3 => 0x00d8_f8f8,
+                            _ => unreachable!("the bound check above leaves 0 to 3"),
+                        };
+                        continue;
+                    }
+                    0x00d8_f744 => {
+                        // 00d8f744: MOV ECX,dword ptr [EAX + 0x4]
+                        self.ecx = self.e.mem.u32(self.eax.wrapping_add(0x4));
+                        // 00d8f747: MOVAPS XMM4,xmmword ptr [0x01017d10]
+                        self.xmm[4] = load_vec(self.e, 0x0101_7d10);
+                        // 00d8f74e: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8f752: MOVAPS XMM3,xmmword ptr [EAX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8f756: MOVAPS XMM6,xmmword ptr [0x010d3da0]
+                        self.xmm[6] = load_vec(self.e, 0x010d_3da0);
+                        // 00d8f75d: LEA EDX,[ECX*0x8 + 0x0]
+                        self.edx = self.ecx.wrapping_mul(8);
+                        // 00d8f764: SUB EDX,ECX
+                        self.edx = self.sub32(self.edx, self.ecx);
+                        // 00d8f766: LEA ESI,[EBX + EDX*0x4 + 0x64]
+                        self.esi = self
+                            .ebx
+                            .wrapping_add(self.edx.wrapping_mul(4))
+                            .wrapping_add(0x64);
+                        // 00d8f76a: MOVAPS XMM0,XMM2
+                        self.xmm[0] = self.xmm[2];
+                        // 00d8f76d: ANDPS XMM0,XMM4
+                        self.xmm[0] = andps(self.xmm[0], self.xmm[4]);
+                        // 00d8f770: MOVAPS XMM1,XMM3
+                        self.xmm[1] = self.xmm[3];
+                        // 00d8f773: ANDPS XMM1,XMM4
+                        self.xmm[1] = andps(self.xmm[1], self.xmm[4]);
+                        // 00d8f776: MOVSS XMM4,dword ptr [ESI]
+                        self.xmm[4] = movss_load(self.e.mem.u32(self.esi));
+                        // 00d8f77a: CMPEQPS XMM2,XMM2
+                        self.xmm[2] = cmpeqps(self.xmm[2], self.xmm[2]);
+                        // 00d8f77e: CMPEQPS XMM3,XMM3
+                        self.xmm[3] = cmpeqps(self.xmm[3], self.xmm[3]);
+                        // 00d8f782: MOVMSKPS EDI,XMM2
+                        self.edi = movmskps(self.xmm[2]);
+                        // 00d8f785: MOVAPS XMM5,XMM4
+                        self.xmm[5] = self.xmm[4];
+                        // 00d8f788: MOVSS XMM4,dword ptr [ESI + 0x4]
+                        self.xmm[4] = movss_load(self.e.mem.u32(self.esi.wrapping_add(0x4)));
+                        // 00d8f78d: SHUFPS XMM5,XMM5,0x0
+                        self.xmm[5] = shufps(self.xmm[5], self.xmm[5], 0);
+                        // 00d8f791: MULPS XMM5,XMM0
+                        self.xmm[5] = mulps(self.xmm[5], self.xmm[0]);
+                        // 00d8f794: CMPLTPS XMM0,XMM6
+                        self.xmm[0] = cmpltps(self.xmm[0], self.xmm[6]);
+                        // 00d8f798: MOVMSKPS EDX,XMM0
+                        self.edx = movmskps(self.xmm[0]);
+                        // 00d8f79b: SHUFPS XMM4,XMM4,0x0
+                        self.xmm[4] = shufps(self.xmm[4], self.xmm[4], 0);
+                        // 00d8f79f: MULPS XMM4,XMM1
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[1]);
+                        // 00d8f7a2: CMPLTPS XMM1,XMM6
+                        self.xmm[1] = cmpltps(self.xmm[1], self.xmm[6]);
+                        // 00d8f7a6: MOVMSKPS ECX,XMM1
+                        self.ecx = movmskps(self.xmm[1]);
+                        // 00d8f7a9: AND ECX,EDX
+                        self.ecx = self.and32(self.ecx, self.edx);
+                        // 00d8f7ab: MOVMSKPS EDX,XMM3
+                        self.edx = movmskps(self.xmm[3]);
+                        // 00d8f7ae: AND EDX,EDI
+                        self.edx = self.and32(self.edx, self.edi);
+                        // 00d8f7b0: AND EDX,ECX
+                        self.edx = self.and32(self.edx, self.ecx);
+                        // 00d8f7b2: ADDPS XMM4,XMM5
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[5]);
+                        // 00d8f7b5: MOVSS XMM5,dword ptr [EBX]
+                        self.xmm[5] = movss_load(self.e.mem.u32(self.ebx));
+                        // 00d8f7b9: AND EDX,0x7
+                        self.edx = self.and32(self.edx, 0x7);
+                        // 00d8f7bc: SHUFPS XMM5,XMM5,0x0
+                        self.xmm[5] = shufps(self.xmm[5], self.xmm[5], 0);
+                        // 00d8f7c0: CMP DL,0x7
+                        self.cmp8((self.edx & 0xff) as u8, 0x7_u8);
+                        // 00d8f7c3: JZ 0x00d8f7db
+                        if self.zf {
+                            block = 0x00d8_f7db;
+                            continue;
+                        }
+                        // 00d8f7c5: MOVAPS XMM0,xmmword ptr [0x01268370]
+                        self.xmm[0] = load_vec(self.e, 0x0126_8370);
+                        // 00d8f7cc: MOVAPS xmmword ptr [EAX + 0x10],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[0]);
+                        // 00d8f7d0: MOVAPS XMM0,xmmword ptr [0x01268370]
+                        self.xmm[0] = load_vec(self.e, 0x0126_8370);
+                        // 00d8f7d7: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        block = 0x00d8_f7db;
+                    }
+                    0x00d8_f7db => {
+                        // 00d8f7db: MOVAPS XMM0,XMM4
+                        self.xmm[0] = self.xmm[4];
+                        // 00d8f7de: CMPLEPS XMM0,XMM5
+                        self.xmm[0] = cmpleps(self.xmm[0], self.xmm[5]);
+                        // 00d8f7e2: MOVMSKPS ECX,XMM0
+                        self.ecx = movmskps(self.xmm[0]);
+                        // 00d8f7e5: AND ECX,0x7
+                        self.ecx = self.and32(self.ecx, 0x7);
+                        // 00d8f7e8: CMP CL,0x7
+                        self.cmp8((self.ecx & 0xff) as u8, 0x7_u8);
+                        // 00d8f7eb: JNZ 0x00d8f83b
+                        if !self.zf {
+                            block = 0x00d8_f83b;
+                            continue;
+                        }
+                        // 00d8f7ed: MOVSS XMM0,dword ptr [ESI + 0xc]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esi.wrapping_add(0xc)));
+                        // 00d8f7f2: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8f7f6: CMPLEPS XMM4,XMM0
+                        self.xmm[4] = cmpleps(self.xmm[4], self.xmm[0]);
+                        // 00d8f7fa: MOVMSKPS EDX,XMM4
+                        self.edx = movmskps(self.xmm[4]);
+                        // 00d8f7fd: AND EDX,0x7
+                        self.edx = self.and32(self.edx, 0x7);
+                        // 00d8f800: CMP DL,CL
+                        self.cmp8((self.edx & 0xff) as u8, (self.ecx & 0xff) as u8);
+                        // 00d8f802: JNZ 0x00d8f811
+                        if !self.zf {
+                            block = 0x00d8_f811;
+                            continue;
+                        }
+                        // 00d8f804: XORPS XMM0,XMM0
+                        self.xmm[0] = [0.0; 4];
+                        // 00d8f807: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8f80b: MOVAPS xmmword ptr [EAX + 0x10],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[0]);
+                        // 00d8f80f: JMP 0x00d8f83b
+                        block = 0x00d8_f83b;
+                        continue;
+                    }
+                    0x00d8_f811 => {
+                        // 00d8f811: MOVSS XMM0,dword ptr [ESI + 0x8]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esi.wrapping_add(0x8)));
+                        // 00d8f816: MOVAPS XMM1,xmmword ptr [EAX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8f81a: LEA ECX,[ESI + 0x8]
+                        self.ecx = self.esi.wrapping_add(0x8);
+                        // 00d8f81d: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8f821: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8f824: MOVAPS xmmword ptr [EAX + 0x20],XMM1
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[1]);
+                        // 00d8f828: MOVSS XMM0,dword ptr [ECX]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.ecx));
+                        // 00d8f82c: MOVAPS XMM1,xmmword ptr [EAX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8f830: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8f834: MULPS XMM1,XMM0
+                        self.xmm[1] = mulps(self.xmm[1], self.xmm[0]);
+                        // 00d8f837: MOVAPS xmmword ptr [EAX + 0x10],XMM1
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[1]);
+                        block = 0x00d8_f83b;
+                    }
+                    0x00d8_f83b => {
+                        // 00d8f83b: CMP byte ptr [ESP + 0x65],0x0
+                        self.cmp8(self.e.mem.u8(self.esp.wrapping_add(0x65)), 0x0_u8);
+                        // 00d8f840: MOVSS XMM0,dword ptr [EAX + 0x8]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.eax.wrapping_add(0x8)));
+                        // 00d8f845: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8f849: MOVAPS XMM1,xmmword ptr [EAX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8f84d: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8f850: MOVAPS XMM0,xmmword ptr [0x01267e30]
+                        self.xmm[0] = load_vec(self.e, 0x0126_7e30);
+                        // 00d8f857: SHUFPS XMM3,XMM3,0x0
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[3], 0);
+                        // 00d8f85b: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8f85e: MOVAPS XMM0,xmmword ptr [EAX + 0x40]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8f862: SUBPS XMM2,XMM0
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[0]);
+                        // 00d8f865: MOVAPS XMM0,xmmword ptr [EAX + 0x50]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x50));
+                        // 00d8f869: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8f86c: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8f870: MOVAPS xmmword ptr [ESP + 0x300],XMM0
+                        store_vec(self.e, self.esp.wrapping_add(0x300), self.xmm[0]);
+                        // 00d8f878: MOVAPS XMM4,xmmword ptr [EAX + 0x40]
+                        self.xmm[4] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8f87c: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8f880: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8f883: ADDPS XMM4,XMM0
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[0]);
+                        // 00d8f886: MOVAPS xmmword ptr [EAX + 0x40],XMM4
+                        store_vec(self.e, self.eax.wrapping_add(0x40), self.xmm[4]);
+                        // 00d8f88a: MOVAPS XMM0,xmmword ptr [EBX + 0x30]
+                        self.xmm[0] = load_vec(self.e, self.ebx.wrapping_add(0x30));
+                        // 00d8f88e: MOVAPS xmmword ptr [ESP + 0x2d0],XMM0
+                        store_vec(self.e, self.esp.wrapping_add(0x2d0), self.xmm[0]);
+                        // 00d8f896: MOVAPS XMM4,xmmword ptr [EAX + 0x50]
+                        self.xmm[4] = load_vec(self.e, self.eax.wrapping_add(0x50));
+                        // 00d8f89a: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8f89e: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8f8a1: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8f8a4: MOVAPS xmmword ptr [EAX + 0x50],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x50), self.xmm[0]);
+                        // 00d8f8a8: JNZ 0x00d8f8c3
+                        if !self.zf {
+                            block = 0x00d8_f8c3;
+                            continue;
+                        }
+                        // 00d8f8aa: MOVAPS XMM0,xmmword ptr [EAX + 0x40]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8f8ae: ADDPS XMM0,XMM2
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[2]);
+                        // 00d8f8b1: MOVAPS XMM2,xmmword ptr [EAX + 0x50]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x50));
+                        // 00d8f8b5: ADDPS XMM2,XMM1
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[1]);
+                        // 00d8f8b8: MOVAPS XMM1,XMM2
+                        self.xmm[1] = self.xmm[2];
+                        // 00d8f8bb: ADDPS XMM0,XMM3
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[3]);
+                        // 00d8f8be: MOVAPS XMM2,XMM0
+                        self.xmm[2] = self.xmm[0];
+                        // 00d8f8c1: JMP 0x00d8f8e4
+                        block = 0x00d8_f8e4;
+                        continue;
+                    }
+                    0x00d8_f8c3 => {
+                        // 00d8f8c3: MOVAPS XMM0,xmmword ptr [ESP + 0x200]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x200));
+                        // 00d8f8cb: MOVAPS XMM4,xmmword ptr [EAX + 0x40]
+                        self.xmm[4] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8f8cf: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8f8d2: MULPS XMM3,XMM4
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[4]);
+                        // 00d8f8d5: MOVAPS xmmword ptr [EAX + 0x40],XMM3
+                        store_vec(self.e, self.eax.wrapping_add(0x40), self.xmm[3]);
+                        // 00d8f8d9: MOVAPS XMM3,xmmword ptr [EAX + 0x50]
+                        self.xmm[3] = load_vec(self.e, self.eax.wrapping_add(0x50));
+                        // 00d8f8dd: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8f8e0: MOVAPS xmmword ptr [EAX + 0x50],XMM3
+                        store_vec(self.e, self.eax.wrapping_add(0x50), self.xmm[3]);
+                        block = 0x00d8_f8e4;
+                    }
+                    0x00d8_f8e4 => {
+                        // 00d8f8e4: MOVAPS xmmword ptr [EAX + 0x10],XMM2
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8f8e8: MOVAPS xmmword ptr [EAX + 0x20],XMM1
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[1]);
+                        // 00d8f8ec: SUB EAX,-0x80
+                        self.eax = self.sub32(self.eax, 0xffff_ff80);
+                        block = 0x00d8_f8ef;
+                    }
+                    0x00d8_f8ef => {
+                        // 00d8f8ef: CMP EAX,-0x1
+                        self.cmp32(self.eax, 0xffff_ffff);
+                        // 00d8f8f2: JC 0x00d8f731
+                        if self.cf {
+                            block = 0x00d8_f731;
+                            continue;
+                        }
+                        block = 0x00d8_f8f8;
+                    }
+                    0x00d8_f8f8 => {
+                        // 00d8f8f8: MOV EAX,dword ptr [ESP + 0x6c]
+                        self.eax = self.e.mem.u32(self.esp.wrapping_add(0x6c));
+                        // 00d8f8fc: INC EAX
+                        self.eax = self.inc32(self.eax);
+                        // 00d8f8fd: CMP EAX,dword ptr [EBX + 0x114]
+                        self.cmp32(self.eax, self.e.mem.u32(self.ebx.wrapping_add(0x114)));
+                        // 00d8f903: MOV dword ptr [ESP + 0x6c],EAX
+                        self.e.mem.set_u32(self.esp.wrapping_add(0x6c), self.eax);
+                        // 00d8f907: JL 0x00d8d140
+                        if (self.eax as i32) < (self.e.mem.u32(self.ebx.wrapping_add(0x114)) as i32)
+                        {
+                            // the flags of CMP EAX,dword ptr [EBX + 0x114] at 00d8f8fd
+                            block = 0x00d8_d140;
+                            continue;
+                        }
+                        block = 0x00d8_f90d;
+                    }
+                    0x00d8_f90d => {
+                        // 00d8f90d: POP EDI
+                        self.edi = self.pop();
+                        // 00d8f90e: POP ESI
+                        self.esi = self.pop();
+                        // 00d8f90f: MOV EAX,0x1
+                        self.eax = 0x1;
+                        // 00d8f914: POP EBX
+                        self.ebx = self.pop();
+                        // 00d8f915: MOV ESP,EBP
+                        self.esp = self.ebp;
+                        // 00d8f917: POP EBP
+                        self.ebp = self.pop();
+                        // 00d8f918: RET
+                        return self.eax;
+                    }
+                    0x00d8_f920 => {
+                        // 00d8f920: MOV ECX,dword ptr [EAX + 0x4]
+                        self.ecx = self.e.mem.u32(self.eax.wrapping_add(0x4));
+                        // 00d8f923: MOVAPS XMM4,xmmword ptr [0x01017d10]
+                        self.xmm[4] = load_vec(self.e, 0x0101_7d10);
+                        // 00d8f92a: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8f92e: MOVAPS XMM3,xmmword ptr [EAX + 0x20]
+                        self.xmm[3] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8f932: MOVAPS XMM6,xmmword ptr [0x010d3da0]
+                        self.xmm[6] = load_vec(self.e, 0x010d_3da0);
+                        // 00d8f939: LEA EDX,[ECX*0x8 + 0x0]
+                        self.edx = self.ecx.wrapping_mul(8);
+                        // 00d8f940: SUB EDX,ECX
+                        self.edx = self.sub32(self.edx, self.ecx);
+                        // 00d8f942: LEA ESI,[EBX + EDX*0x4 + 0x64]
+                        self.esi = self
+                            .ebx
+                            .wrapping_add(self.edx.wrapping_mul(4))
+                            .wrapping_add(0x64);
+                        // 00d8f946: MOVAPS XMM0,XMM2
+                        self.xmm[0] = self.xmm[2];
+                        // 00d8f949: ANDPS XMM0,XMM4
+                        self.xmm[0] = andps(self.xmm[0], self.xmm[4]);
+                        // 00d8f94c: MOVAPS XMM1,XMM3
+                        self.xmm[1] = self.xmm[3];
+                        // 00d8f94f: ANDPS XMM1,XMM4
+                        self.xmm[1] = andps(self.xmm[1], self.xmm[4]);
+                        // 00d8f952: MOVSS XMM4,dword ptr [ESI]
+                        self.xmm[4] = movss_load(self.e.mem.u32(self.esi));
+                        // 00d8f956: CMPEQPS XMM2,XMM2
+                        self.xmm[2] = cmpeqps(self.xmm[2], self.xmm[2]);
+                        // 00d8f95a: CMPEQPS XMM3,XMM3
+                        self.xmm[3] = cmpeqps(self.xmm[3], self.xmm[3]);
+                        // 00d8f95e: MOVMSKPS EDI,XMM2
+                        self.edi = movmskps(self.xmm[2]);
+                        // 00d8f961: MOVAPS XMM5,XMM4
+                        self.xmm[5] = self.xmm[4];
+                        // 00d8f964: MOVSS XMM4,dword ptr [ESI + 0x4]
+                        self.xmm[4] = movss_load(self.e.mem.u32(self.esi.wrapping_add(0x4)));
+                        // 00d8f969: SHUFPS XMM5,XMM5,0x0
+                        self.xmm[5] = shufps(self.xmm[5], self.xmm[5], 0);
+                        // 00d8f96d: MULPS XMM5,XMM0
+                        self.xmm[5] = mulps(self.xmm[5], self.xmm[0]);
+                        // 00d8f970: CMPLTPS XMM0,XMM6
+                        self.xmm[0] = cmpltps(self.xmm[0], self.xmm[6]);
+                        // 00d8f974: MOVMSKPS EDX,XMM0
+                        self.edx = movmskps(self.xmm[0]);
+                        // 00d8f977: SHUFPS XMM4,XMM4,0x0
+                        self.xmm[4] = shufps(self.xmm[4], self.xmm[4], 0);
+                        // 00d8f97b: MULPS XMM4,XMM1
+                        self.xmm[4] = mulps(self.xmm[4], self.xmm[1]);
+                        // 00d8f97e: CMPLTPS XMM1,XMM6
+                        self.xmm[1] = cmpltps(self.xmm[1], self.xmm[6]);
+                        // 00d8f982: MOVMSKPS ECX,XMM1
+                        self.ecx = movmskps(self.xmm[1]);
+                        // 00d8f985: AND ECX,EDX
+                        self.ecx = self.and32(self.ecx, self.edx);
+                        // 00d8f987: MOVMSKPS EDX,XMM3
+                        self.edx = movmskps(self.xmm[3]);
+                        // 00d8f98a: AND EDX,EDI
+                        self.edx = self.and32(self.edx, self.edi);
+                        // 00d8f98c: AND EDX,ECX
+                        self.edx = self.and32(self.edx, self.ecx);
+                        // 00d8f98e: ADDPS XMM4,XMM5
+                        self.xmm[4] = addps(self.xmm[4], self.xmm[5]);
+                        // 00d8f991: MOVSS XMM5,dword ptr [EBX]
+                        self.xmm[5] = movss_load(self.e.mem.u32(self.ebx));
+                        // 00d8f995: AND EDX,0x7
+                        self.edx = self.and32(self.edx, 0x7);
+                        // 00d8f998: SHUFPS XMM5,XMM5,0x0
+                        self.xmm[5] = shufps(self.xmm[5], self.xmm[5], 0);
+                        // 00d8f99c: CMP DL,0x7
+                        self.cmp8((self.edx & 0xff) as u8, 0x7_u8);
+                        // 00d8f99f: JZ 0x00d8f9b7
+                        if self.zf {
+                            block = 0x00d8_f9b7;
+                            continue;
+                        }
+                        // 00d8f9a1: MOVAPS XMM0,xmmword ptr [0x01268370]
+                        self.xmm[0] = load_vec(self.e, 0x0126_8370);
+                        // 00d8f9a8: MOVAPS xmmword ptr [EAX + 0x10],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[0]);
+                        // 00d8f9ac: MOVAPS XMM0,xmmword ptr [0x01268370]
+                        self.xmm[0] = load_vec(self.e, 0x0126_8370);
+                        // 00d8f9b3: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        block = 0x00d8_f9b7;
+                    }
+                    0x00d8_f9b7 => {
+                        // 00d8f9b7: MOVAPS XMM0,XMM4
+                        self.xmm[0] = self.xmm[4];
+                        // 00d8f9ba: CMPLEPS XMM0,XMM5
+                        self.xmm[0] = cmpleps(self.xmm[0], self.xmm[5]);
+                        // 00d8f9be: MOVMSKPS ECX,XMM0
+                        self.ecx = movmskps(self.xmm[0]);
+                        // 00d8f9c1: AND ECX,0x7
+                        self.ecx = self.and32(self.ecx, 0x7);
+                        // 00d8f9c4: CMP CL,0x7
+                        self.cmp8((self.ecx & 0xff) as u8, 0x7_u8);
+                        // 00d8f9c7: JNZ 0x00d8fa13
+                        if !self.zf {
+                            block = 0x00d8_fa13;
+                            continue;
+                        }
+                        // 00d8f9c9: MOVSS XMM0,dword ptr [ESI + 0xc]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esi.wrapping_add(0xc)));
+                        // 00d8f9ce: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8f9d2: CMPLEPS XMM4,XMM0
+                        self.xmm[4] = cmpleps(self.xmm[4], self.xmm[0]);
+                        // 00d8f9d6: MOVMSKPS EDX,XMM4
+                        self.edx = movmskps(self.xmm[4]);
+                        // 00d8f9d9: AND EDX,0x7
+                        self.edx = self.and32(self.edx, 0x7);
+                        // 00d8f9dc: CMP DL,CL
+                        self.cmp8((self.edx & 0xff) as u8, (self.ecx & 0xff) as u8);
+                        // 00d8f9de: JNZ 0x00d8f9e9
+                        if !self.zf {
+                            block = 0x00d8_f9e9;
+                            continue;
+                        }
+                        // 00d8f9e0: XORPS XMM0,XMM0
+                        self.xmm[0] = [0.0; 4];
+                        // 00d8f9e3: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8f9e7: JMP 0x00d8fa0f
+                        block = 0x00d8_fa0f;
+                        continue;
+                    }
+                    0x00d8_f9e9 => {
+                        // 00d8f9e9: MOVSS XMM0,dword ptr [ESI + 0x8]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.esi.wrapping_add(0x8)));
+                        // 00d8f9ee: MOVAPS XMM1,xmmword ptr [EAX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8f9f2: LEA ECX,[ESI + 0x8]
+                        self.ecx = self.esi.wrapping_add(0x8);
+                        // 00d8f9f5: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8f9f9: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8f9fc: MOVAPS xmmword ptr [EAX + 0x20],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[0]);
+                        // 00d8fa00: MOVSS XMM0,dword ptr [ECX]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.ecx));
+                        // 00d8fa04: MOVAPS XMM1,xmmword ptr [EAX + 0x10]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8fa08: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8fa0c: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        block = 0x00d8_fa0f;
+                    }
+                    0x00d8_fa0f => {
+                        // 00d8fa0f: MOVAPS xmmword ptr [EAX + 0x10],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[0]);
+                        block = 0x00d8_fa13;
+                    }
+                    0x00d8_fa13 => {
+                        // 00d8fa13: CMP byte ptr [ESP + 0x65],0x0
+                        self.cmp8(self.e.mem.u8(self.esp.wrapping_add(0x65)), 0x0_u8);
+                        // 00d8fa18: MOVSS XMM0,dword ptr [EAX + 0x8]
+                        self.xmm[0] = movss_load(self.e.mem.u32(self.eax.wrapping_add(0x8)));
+                        // 00d8fa1d: MOVAPS XMM2,xmmword ptr [EAX + 0x10]
+                        self.xmm[2] = load_vec(self.e, self.eax.wrapping_add(0x10));
+                        // 00d8fa21: MOVAPS XMM1,xmmword ptr [EAX + 0x20]
+                        self.xmm[1] = load_vec(self.e, self.eax.wrapping_add(0x20));
+                        // 00d8fa25: LEA ECX,[EBX + 0x30]
+                        self.ecx = self.ebx.wrapping_add(0x30);
+                        // 00d8fa28: MOVAPS XMM3,XMM0
+                        self.xmm[3] = self.xmm[0];
+                        // 00d8fa2b: MOVAPS XMM0,xmmword ptr [EAX + 0x40]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8fa2f: SUBPS XMM2,XMM0
+                        self.xmm[2] = subps(self.xmm[2], self.xmm[0]);
+                        // 00d8fa32: MOVAPS XMM0,xmmword ptr [EAX + 0x50]
+                        self.xmm[0] = load_vec(self.e, self.eax.wrapping_add(0x50));
+                        // 00d8fa36: SUBPS XMM1,XMM0
+                        self.xmm[1] = subps(self.xmm[1], self.xmm[0]);
+                        // 00d8fa39: MOVAPS XMM0,xmmword ptr [ECX]
+                        self.xmm[0] = load_vec(self.e, self.ecx);
+                        // 00d8fa3c: MOVAPS xmmword ptr [ESP + 0x2f0],XMM0
+                        store_vec(self.e, self.esp.wrapping_add(0x2f0), self.xmm[0]);
+                        // 00d8fa44: MOVAPS XMM4,xmmword ptr [EAX + 0x40]
+                        self.xmm[4] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8fa48: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8fa4c: MULPS XMM0,XMM2
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[2]);
+                        // 00d8fa4f: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8fa52: MOVAPS xmmword ptr [EAX + 0x40],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x40), self.xmm[0]);
+                        // 00d8fa56: MOVAPS XMM0,xmmword ptr [ECX]
+                        self.xmm[0] = load_vec(self.e, self.ecx);
+                        // 00d8fa59: MOVAPS xmmword ptr [ESP + 0x310],XMM0
+                        store_vec(self.e, self.esp.wrapping_add(0x310), self.xmm[0]);
+                        // 00d8fa61: MOVAPS XMM4,xmmword ptr [EAX + 0x50]
+                        self.xmm[4] = load_vec(self.e, self.eax.wrapping_add(0x50));
+                        // 00d8fa65: SHUFPS XMM0,XMM0,0x0
+                        self.xmm[0] = shufps(self.xmm[0], self.xmm[0], 0);
+                        // 00d8fa69: MULPS XMM0,XMM1
+                        self.xmm[0] = mulps(self.xmm[0], self.xmm[1]);
+                        // 00d8fa6c: SHUFPS XMM3,XMM3,0x0
+                        self.xmm[3] = shufps(self.xmm[3], self.xmm[3], 0);
+                        // 00d8fa70: ADDPS XMM0,XMM4
+                        self.xmm[0] = addps(self.xmm[0], self.xmm[4]);
+                        // 00d8fa73: MULPS XMM3,XMM7
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[7]);
+                        // 00d8fa76: MOVAPS xmmword ptr [EAX + 0x50],XMM0
+                        store_vec(self.e, self.eax.wrapping_add(0x50), self.xmm[0]);
+                        // 00d8fa7a: JNZ 0x00d8fa8b
+                        if !self.zf {
+                            block = 0x00d8_fa8b;
+                            continue;
+                        }
+                        // 00d8fa7c: MOVAPS XMM4,xmmword ptr [EAX + 0x40]
+                        self.xmm[4] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8fa80: ADDPS XMM2,XMM4
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[4]);
+                        // 00d8fa83: ADDPS XMM1,XMM0
+                        self.xmm[1] = addps(self.xmm[1], self.xmm[0]);
+                        // 00d8fa86: ADDPS XMM2,XMM3
+                        self.xmm[2] = addps(self.xmm[2], self.xmm[3]);
+                        // 00d8fa89: JMP 0x00d8faa9
+                        block = 0x00d8_faa9;
+                        continue;
+                    }
+                    0x00d8_fa8b => {
+                        // 00d8fa8b: MOVAPS XMM3,xmmword ptr [EAX + 0x40]
+                        self.xmm[3] = load_vec(self.e, self.eax.wrapping_add(0x40));
+                        // 00d8fa8f: MOVAPS XMM0,xmmword ptr [ESP + 0x200]
+                        self.xmm[0] = load_vec(self.e, self.esp.wrapping_add(0x200));
+                        // 00d8fa97: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8fa9a: MOVAPS xmmword ptr [EAX + 0x40],XMM3
+                        store_vec(self.e, self.eax.wrapping_add(0x40), self.xmm[3]);
+                        // 00d8fa9e: MOVAPS XMM3,xmmword ptr [EAX + 0x50]
+                        self.xmm[3] = load_vec(self.e, self.eax.wrapping_add(0x50));
+                        // 00d8faa2: MULPS XMM3,XMM0
+                        self.xmm[3] = mulps(self.xmm[3], self.xmm[0]);
+                        // 00d8faa5: MOVAPS xmmword ptr [EAX + 0x50],XMM3
+                        store_vec(self.e, self.eax.wrapping_add(0x50), self.xmm[3]);
+                        block = 0x00d8_faa9;
+                    }
+                    0x00d8_faa9 => {
+                        // 00d8faa9: MOVAPS xmmword ptr [EAX + 0x10],XMM2
+                        store_vec(self.e, self.eax.wrapping_add(0x10), self.xmm[2]);
+                        // 00d8faad: MOVAPS xmmword ptr [EAX + 0x20],XMM1
+                        store_vec(self.e, self.eax.wrapping_add(0x20), self.xmm[1]);
+                        // 00d8fab1: SUB EAX,-0x80
+                        self.eax = self.sub32(self.eax, 0xffff_ff80);
+                        // 00d8fab4: CMP byte ptr [EAX],0x0
+                        self.cmp8(self.e.mem.u8(self.eax), 0x0_u8);
+                        // 00d8fab7: JNZ 0x00d8f8ef
+                        if !self.zf {
+                            block = 0x00d8_f8ef;
+                            continue;
+                        }
+                        // 00d8fabd: CMP EAX,-0x1
+                        self.cmp32(self.eax, 0xffff_ffff);
+                        // 00d8fac0: JC 0x00d8f920
+                        if self.cf {
+                            block = 0x00d8_f920;
+                            continue;
+                        }
+                        // 00d8fac6: JMP 0x00d8f8f8
+                        block = 0x00d8_f8f8;
+                        continue;
+                    }
+                    _ => unreachable!("no block starts at {block:08x}"),
+                }
+            }
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -7589,6 +14235,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d9_21c0, fn_00d921c0(u32, u32)),
         entry!(0x00d9_21d0, fn_00d921d0(u32) -> u8),
         entry!(0x00d8_aac0, hk_solve_step_jacobians(u32, u32, u32, u32)),
+        entry!(0x00d8_d030, hk_solve_constraints(u32, u32, u32, u32) -> u32),
         entry!(
             0x00d8_fb70,
             hk_solve_constraints_by_the_steps(u32, u32, u32, u32, u32, u32) -> u32
@@ -9993,5 +16640,179 @@ mod tests {
         }
         assert_eq!(results[0].0, results[0].1);
         assert_ne!(results[1].0, results[1].1);
+    }
+}
+
+#[cfg(test)]
+mod solve_constraints_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The lane mask (`01017d10`), the velocity limit vector (`010d3da0`) and the zero vector
+    /// (`01268370`) the element pass reads.
+    const ABS_MASK_VECTOR: u32 = 0x0101_7d10;
+    const LIMIT_VECTOR: u32 = 0x010d_3da0;
+    const ZERO_VECTOR_DATA: u32 = 0x0126_8370;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        store_vec(&mut e, ABS_MASK_VECTOR, [f32::from_bits(0x7fff_ffff); 4]);
+        store_vec(&mut e, LIMIT_VECTOR, [1.0e6; 4]);
+        store_vec(&mut e, ZERO_VECTOR_DATA, [0.0; 4]);
+        e.mem.set_u8(LICENSE_VALID_FLAG, 1);
+        e
+    }
+
+    /// A 16-byte aligned block of `size` bytes, zeroed.
+    fn block(e: &mut Engine, size: u32) -> u32 {
+        let raw = e.mem.alloc(size + 0x10);
+        let at = (raw + 0xf) & !0xf;
+        for offset in (0..size).step_by(4) {
+            e.mem.set_u32(at + offset, 0);
+        }
+        at
+    }
+
+    /// The parameter block: gravity `(0, 0, -1, 0)` at `+0x10`, one iteration of one sub-step,
+    /// `+0x40` 2.0 and `+0x120` 3.0 (the last iteration's pseudo velocity factor 6), the
+    /// velocity limit 100 at `+0`, damping entry 0 at `+0x64` = (1, 1, 0.5, 1).
+    fn info(e: &mut Engine) -> u32 {
+        let info = block(e, 0x140);
+        e.mem.set_f32(info, 100.0);
+        store_vec(e, info + 0x10, [0.0, 0.0, -1.0, 0.0]);
+        e.mem.set_f32(info + 0x40, 2.0);
+        for (index, value) in [1.0, 1.0, 0.5, 1.0].iter().enumerate() {
+            e.mem.set_f32(info + 0x64 + 4 * index as u32, *value);
+        }
+        e.mem.set_u32(info + 0x114, 1);
+        e.mem.set_u32(info + 0x118, 1);
+        e.mem.set_f32(info + 0x120, 3.0);
+        info
+    }
+
+    #[test]
+    fn a_clear_license_flag_answers_zero_without_touching_anything() {
+        let mut e = engine();
+        e.mem.set_u8(LICENSE_VALID_FLAG, 0);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        e.register_double(LICENSE_CHECK, move |_, a| {
+            sink.borrow_mut().push(a[0]);
+            Ret::default()
+        });
+        let info = info(&mut e);
+        let bodies = block(&mut e, 0x100);
+        store_vec(&mut e, bodies + 0x10, [1.0, 2.0, 3.0, 0.0]);
+        e.mem.set_u8(bodies + 0x80, 3);
+        let schema = block(&mut e, 0x10);
+        let accumulators = block(&mut e, 0x10);
+        let answer = e.call(0x00d8_d030, &args![info, schema, bodies, accumulators]);
+        assert_eq!(answer.eax, 0);
+        assert_eq!(*seen.borrow(), vec![LICENSE_VALID_FLAG]);
+        assert_eq!(load_vec(&e, bodies + 0x10), [1.0, 2.0, 3.0, 0.0]);
+    }
+
+    #[test]
+    fn the_element_passes_add_gravity_clip_and_scale_the_last_iteration() {
+        let mut e = engine();
+        let info = info(&mut e);
+        let bodies = block(&mut e, 0x100);
+        // Element 0: type 0, damping entry 0, gravity factor 2, velocities (1, 2, 3) and
+        // (0.5, 0, 0), stale pseudo velocities; element 1 ends the array.
+        e.mem.set_f32(bodies + 8, 2.0);
+        store_vec(&mut e, bodies + 0x10, [1.0, 2.0, 3.0, 0.0]);
+        store_vec(&mut e, bodies + 0x20, [0.5, 0.0, 0.0, 0.0]);
+        store_vec(&mut e, bodies + 0x40, [9.0; 4]);
+        store_vec(&mut e, bodies + 0x50, [9.0; 4]);
+        store_vec(&mut e, info + 0x30, [0.5, 0.0, 0.0, 0.0]);
+        e.mem.set_u8(bodies + 0x80, 3);
+        let schema = block(&mut e, 0x10);
+        let accumulators = block(&mut e, 0x10);
+        let answer = e.call(0x00d8_d030, &args![info, schema, bodies, accumulators]);
+        assert_eq!(answer.eax, 1);
+        // Gravity: (1, 2, 3) + 2 * (0, 0, -1) = (1, 2, 1). |v| + |w| = (1.5, 2, 1) is within the
+        // limit 100 but not all within the entry's 1.0, so both are scaled by 0.5.
+        assert_eq!(load_vec(&e, bodies + 0x10), [0.5, 1.0, 0.5, 0.0]);
+        assert_eq!(load_vec(&e, bodies + 0x20), [0.25, 0.0, 0.0, 0.0]);
+        // Pseudo velocities: cleared, then 0.5 * velocity, times 2 * 3 in the last iteration.
+        assert_eq!(load_vec(&e, bodies + 0x40), [1.5, 3.0, 1.5, 0.0]);
+        assert_eq!(load_vec(&e, bodies + 0x50), [0.75, 0.0, 0.0, 0.0]);
+        // Within the entry's 1000 in every lane the velocities are cleared instead.
+        let mut e = engine();
+        let info = info_with_threshold(&mut e, 1000.0);
+        let bodies = block(&mut e, 0x100);
+        e.mem.set_f32(bodies + 8, 2.0);
+        store_vec(&mut e, bodies + 0x10, [1.0, 2.0, 3.0, 0.0]);
+        store_vec(&mut e, bodies + 0x20, [0.5, 0.0, 0.0, 0.0]);
+        e.mem.set_u8(bodies + 0x80, 3);
+        let schema = block(&mut e, 0x10);
+        let accumulators = block(&mut e, 0x10);
+        e.call(0x00d8_d030, &args![info, schema, bodies, accumulators]);
+        assert_eq!(load_vec(&e, bodies + 0x10), [0.0; 4]);
+        assert_eq!(load_vec(&e, bodies + 0x20), [0.0; 4]);
+    }
+
+    fn info_with_threshold(e: &mut Engine, threshold: f32) -> u32 {
+        let info = info(e);
+        e.mem.set_f32(info + 0x64 + 0xc, threshold);
+        info
+    }
+
+    #[test]
+    fn a_type_5_row_pushes_the_two_bodies_apart_and_adds_its_impulse() {
+        let mut e = engine();
+        e.mem.set_u8(BYTE_TABLE + 5, 1);
+        let info = info(&mut e);
+        // Bodies 0 and 1 are type 1 elements (the passes only clear and blend their pseudo
+        // velocities, which stay zero with `info + 0x30` zero); body 2 ends the array.
+        let bodies = block(&mut e, 0x180);
+        e.mem.set_u8(bodies, 1);
+        e.mem.set_u8(bodies + 0x80, 1);
+        e.mem.set_u8(bodies + 0x100, 3);
+        store_vec(&mut e, bodies + 0x10, [1.0, 0.0, 0.0, 0.0]);
+        store_vec(&mut e, bodies + 0x30, [1.0, 1.0, 1.0, 0.5]);
+        store_vec(&mut e, bodies + 0xb0, [1.0, 1.0, 1.0, 0.25]);
+        // Schema: select bodies (0, 1); one type 5 row (linear Jacobian (1, 0, 0), target 2,
+        // effective mass 0.5, angular parts zero but the second body's last lane 1); a type 25
+        // record copying two vectors into the bodies' `+0x30`; the end.
+        let schema = block(&mut e, 0x80);
+        e.mem.set_u8(schema, 1);
+        e.mem.set_u16(schema + 6, 1);
+        let row = schema + 0x10;
+        store_vec(&mut e, row, [1.0, 0.0, 0.0, 2.0]);
+        store_vec(&mut e, row + 0x10, [0.0, 0.0, 0.0, 0.5]);
+        store_vec(&mut e, row + 0x20, [0.0, 0.0, 0.0, 1.0]);
+        e.mem.set_u8(row, 5);
+        let copy = row + 0x30;
+        store_vec(&mut e, copy, [7.0; 4]);
+        store_vec(&mut e, copy + 0x10, [8.0; 4]);
+        e.mem.set_u8(copy, 25);
+        let accumulators = block(&mut e, 0x10);
+        e.mem.set_f32(accumulators, 0.25);
+        let answer = e.call(0x00d8_d030, &args![info, schema, bodies, accumulators]);
+        assert_eq!(answer.eax, 1);
+        // The row's first float carries the type byte in its low byte (5: a tiny denormal-free
+        // change of 1.0 in its last bits), so read the impulse back from the accumulator.
+        let impulse = e.mem.f32(accumulators) - 0.25;
+        let x = f32::from_bits(e.mem.u32(row));
+        // impulse = (2 - x * (1 - 0)) * 0.5
+        assert_eq!(impulse, (2.0 - x) * 0.5);
+        let first = load_vec(&e, bodies + 0x10);
+        let second = load_vec(&e, bodies + 0x90);
+        assert_eq!(
+            first,
+            [1.0 + x * impulse * 0.5, 0.0, 0.0, 2.0 * impulse * 0.5]
+        );
+        assert_eq!(
+            second,
+            [-(x * impulse * 0.25), 0.0, 0.0, -(2.0 * impulse * 0.25)]
+        );
+        assert_eq!(e.mem.f32(bodies + 0x2c), 0.5 * impulse * 0.5);
+        assert_eq!(e.mem.f32(bodies + 0xac), 1.0 * impulse * 0.25);
+        // The type 25 record replaced both `+0x30` vectors (the type byte is in the first).
+        assert_eq!(load_vec(&e, bodies + 0xb0), [8.0; 4]);
+        assert_eq!(e.mem.f32(bodies + 0x34), 7.0);
     }
 }

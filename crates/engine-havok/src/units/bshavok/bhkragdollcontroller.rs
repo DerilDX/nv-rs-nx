@@ -6773,12 +6773,198 @@ fn look_at_update(e: &mut Engine, base: u32, index: u32, transform: u32, frame: 
     !solved
 }
 
+/// The two look-at helpers of this file that `DoLookAtIK` calls, by address (as `look_at_update`
+/// calls `00c755e0`): `AdjustCurrentTarget` (`00c78160`) and the bone record update
+/// `fn_00c78610`.
+const ADJUST_CURRENT_TARGET: u32 = 0x00c7_8160;
+const LOOK_AT_UPDATE: u32 = 0x00c7_8610;
+/// The scalars `DoLookAtIK` builds its three axes from (`0.0` at `01011d78`, `1.0` at
+/// `01012068`, `-1.0` at `01012054`, read with `MOVSS`) and the `double` the arc cosines are
+/// subtracted from (`01030f38`, a quarter turn).
+const AXIS_ZERO: u32 = 0x0101_1d78;
+const AXIS_ONE: u32 = 0x0101_2068;
+const AXIS_MINUS_ONE: u32 = 0x0101_2054;
+const QUARTER_TURN: u32 = 0x0103_0f38;
+
+/// The angle between `axis` and a unit vector, as the exe takes it: the dot product goes
+/// through `FLD`, the CRT `acos` (`00eca1d0`) and an `FSTP`, and is subtracted from the quarter
+/// turn with `FSUBR` and rounded to a float again.
+fn quarter_turn_minus_arc_cosine(e: &mut Engine, dot: f32) -> u32 {
+    let loaded = x87_load32(dot.to_bits());
+    let angle = x87_store32(e.call(CRT_ARC_COSINE, &args![loaded]).f64());
+    x87_store32(x87_sub(e.mem.f64(QUARTER_TURN), x87_load32(angle)))
+}
+
+// Translated from 00c7aa60 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00c7aa60 - the /GS stack cookie check (00ec408c) at the exit is not translated
+/// `bhkRagdollController::DoLookAtIK` (Xbox PDB name per the engine map), thiscall
+/// `(transform)`, `RET 4`. Runs `AdjustCurrentTarget`; when the byte `+0x181` is set or the
+/// byte `+0x190` clear, sets the word `+0x194` to 1 and runs the bone record update for record
+/// 1 with `transform`. The model transform of the bone `+0x144` in the pose at `+0x88`
+/// (`hkaPose::accessBoneModelSpace`, `00cdad80`, with 1) has its rotation multiplied by the
+/// quaternion at `+0xc0` (`00c66320`). The bone gets flag 4; every later bone whose parent is
+/// flagged 4 is then handled as `GetSGPoseLocalSpace` does (bones also flagged 1 are composed
+/// with their parent, see `compose_with_parent`, and lose flag 1; all of them gain flag 4 and
+/// clear the pose's byte `+0x28`), and the later bones flagged 4 become flagged 2. The kept
+/// transform is copied to the bone's entry of the array at `pose + 0x10`, the bone's flag word
+/// becomes 1 and the pose's byte `+0x29` is cleared. With the byte `+0x190` set the bone's
+/// model transform (`target_bone_transform`) is composed with `transform` (translation `t +
+/// rotate(bone translation)`, rotation `00c66320(transform rotation, bone rotation)`, scale the
+/// product) on the stack and the bone record update runs for record 0 with it; the byte
+/// `+0x181` becomes whether it answered true or the word `+0x194` is not zero. The up axis `(0,
+/// 1, 0, 0)` is rotated by the rotation of bone 1 of the pose at `+0x54` (its array entry, or
+/// `calculateBoneModelSpace` when the bone has flag 2); the quarter turn minus the arc cosine
+/// of its dot product with `(0, 0, -1)` goes to `+0x19c`, with `(1, 0, 0)` to `+0x1a0`. When
+/// the limit `+0x138` is below the absolute value of the second angle, or the limit `+0x134`
+/// below that of the first (ordered compares), the byte `+0x181` is set. Last the pose at
+/// `+0x54` is set to its reference pose (`00cda110`).
+pub fn bhk_ragdoll_controller_do_look_at_ik(e: &mut Engine, this: Ptr, transform: u32) {
+    let base = this.addr();
+    e.call(ADJUST_CURRENT_TARGET, &args![base]);
+    if e.mem.u8(base + 0x181) != 0 || e.mem.u8(base + 0x190) == 0 {
+        e.mem.set_u32(base + 0x194, 1);
+        e.call(LOOK_AT_UPDATE, &args![base, 1u32, transform]);
+    }
+    let pose = e.mem.u32(base + 0x88);
+    let bone = i32::from(e.mem.u16(base + 0x144) as i16) as u32;
+    let kept = e
+        .call(LOOK_AT_ACCESS_MODEL_SPACE, &args![pose, bone, 1u32])
+        .u32();
+    e.call(
+        QUATERNION_SET_MUL,
+        &args![kept + 0x10, kept + 0x10, base + 0xc0],
+    );
+    let root = i32::from(e.mem.u16(base + 0x144) as i16);
+    let pose = e.mem.u32(base + 0x88);
+    let skeleton = e.mem.u32(pose);
+    let count = e.mem.i32(skeleton + 0x1c);
+    let flag_of = |e: &Engine, bone: i32| {
+        e.mem
+            .u32(pose + 0x1c)
+            .wrapping_add((bone as u32).wrapping_mul(4))
+    };
+    let root_flag = flag_of(e, root);
+    e.mem.set_u32(root_flag, e.mem.u32(root_flag) | 4);
+    let constants = load_pose_constants(e);
+    let mut bone = root.wrapping_add(1);
+    if bone < count {
+        let mut offset = (bone as u32).wrapping_mul(0x30);
+        loop {
+            let skeleton = e.mem.u32(pose);
+            let parents = e.mem.u32(skeleton + 0xc);
+            let parent = e
+                .mem
+                .u16(parents.wrapping_add((bone as u32).wrapping_mul(2)));
+            if parent != 0xffff && e.mem.u8(flag_of(e, i32::from(parent as i16))) & 4 != 0 {
+                if e.mem.u8(flag_of(e, bone)) & 1 != 0 {
+                    let local = e.mem.u32(pose + 0x10);
+                    if parent == 0xffff {
+                        // Unreachable (the test above already skipped a parent of -1), but in
+                        // the exe: the local entry is copied as it is.
+                        let output = e.mem.u32(pose + 4).wrapping_add(offset);
+                        for part in [0, 0x10, 0x20] {
+                            copy16(e, local.wrapping_add(offset) + part, output + part);
+                        }
+                    } else {
+                        compose_with_parent(e, pose, parent, &constants, local, offset);
+                    }
+                    let flag = flag_of(e, bone);
+                    e.mem.set_u32(flag, e.mem.u32(flag) & 0xffff_fffe);
+                }
+                let flag = flag_of(e, bone);
+                e.mem.set_u32(flag, e.mem.u32(flag) | 4);
+                e.mem.set_u8(pose + 0x28, 0);
+            }
+            offset = offset.wrapping_add(0x30);
+            bone = bone.wrapping_add(1);
+            if bone >= count {
+                break;
+            }
+        }
+    }
+    let mut later = root.wrapping_add(1);
+    while later < count {
+        let flag = flag_of(e, later);
+        let word = e.mem.u32(flag);
+        if word & 4 != 0 {
+            e.mem.set_u32(flag, (word & 0xffff_fffb) | 2);
+        }
+        later = later.wrapping_add(1);
+    }
+    let entry = (root as u32)
+        .wrapping_mul(0x30)
+        .wrapping_add(e.mem.u32(pose + 0x10));
+    for part in [0, 0x10, 0x20] {
+        copy16(e, kept + part, entry + part);
+    }
+    let flag = flag_of(e, root);
+    e.mem.set_u32(flag, 1);
+    e.mem.set_u8(pose + 0x29, 0);
+    if e.mem.u8(base + 0x190) == 0 {
+        return;
+    }
+    let model = target_bone_transform(e, base);
+    let moved = e.with_stack(0x30, |e, composed| {
+        let composed = composed.addr();
+        let rotated = rotate_lanes(
+            load4(e, model),
+            load4(e, transform + 0x10),
+            constants.half,
+            true,
+        );
+        store4(e, composed, addps(rotated, load4(e, transform)));
+        e.call(
+            QUATERNION_SET_MUL,
+            &args![composed + 0x10, transform + 0x10, model + 0x10],
+        );
+        let scale = mulps(load4(e, transform + 0x20), load4(e, model + 0x20));
+        store4(e, composed + 0x20, scale);
+        e.call(LOOK_AT_UPDATE, &args![base, 0u32, composed]).u32() as u8 != 0
+    });
+    let looking = moved || e.mem.u32(base + 0x194) != 0;
+    let (zero, one, minus_one) = (
+        f32::from_bits(e.mem.u32(AXIS_ZERO)),
+        f32::from_bits(e.mem.u32(AXIS_ONE)),
+        f32::from_bits(e.mem.u32(AXIS_MINUS_ONE)),
+    );
+    e.mem.set_u8(base + 0x181, looking as u8);
+    let forward = [one, zero, zero, zero];
+    let up = [zero, one, zero, zero];
+    let down = [zero, zero, minus_one, zero];
+    let other_pose = e.mem.u32(base + 0x54);
+    let other_flags = e.mem.u32(other_pose + 0x1c);
+    let bone_one = if e.mem.u8(other_flags + 4) & 2 == 0 {
+        e.mem.u32(other_pose + 0x10) + 0x30
+    } else {
+        e.call(CALCULATE_BONE_MODEL_SPACE, &args![other_pose, 1u32])
+            .u32()
+    };
+    let axis = rotate_lanes(up, load4(e, bone_one + 0x10), constants.half, true);
+    let first = quarter_turn_minus_arc_cosine(e, dot_xyz(mulps(axis, down)));
+    e.mem.set_u32(base + 0x19c, x87_store32(x87_load32(first)));
+    let second = quarter_turn_minus_arc_cosine(e, dot_xyz(mulps(axis, forward)));
+    e.mem.set_u32(base + 0x1a0, x87_store32(x87_load32(second)));
+    // `FABS`, `FSTP`, `FLD` and `FCOMPP` against the limit: only an ordered "limit below the
+    // angle" sets the byte.
+    let second_size = x87_store32(x87_load32(second).abs());
+    if x87_load32(e.mem.u32(base + 0x138)) < x87_load32(second_size) {
+        e.mem.set_u8(base + 0x181, 1);
+    }
+    let first_size = x87_store32(x87_load32(first).abs());
+    if x87_load32(e.mem.u32(base + 0x134)) < x87_load32(first_size) {
+        e.mem.set_u8(base + 0x181, 1);
+    }
+    let other_pose = e.mem.u32(base + 0x54);
+    e.call(SET_TO_REFERENCE_POSE, &args![other_pose]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00c7_9340, bhk_ragdoll_controller_init_bone_params(Ptr, u32, u32, u32) -> bool),
         entry!(0x00c7_de60, bhk_ragdoll_controller_init_look_ik(Ptr, u32)),
         entry!(0x00c7_8610, fn_00c78610(Ptr, u32, u32) -> bool),
+        entry!(0x00c7_aa60, bhk_ragdoll_controller_do_look_at_ik(Ptr, u32)),
         entry!(
             0x00c7_8160,
             bhk_ragdoll_controller_adjust_current_target(Ptr)
@@ -14208,5 +14394,278 @@ mod look_at_update_tests {
         s.e.mem.set_u8(s.this + 0x190, 1);
         s.e.call(0x00c7_8610, &args![s.this, 0u32, 0u32]);
         assert!(calls(&s.seen, POSE_BONE_TRANSFORM).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod do_look_at_ik_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    type CallLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    struct Rig {
+        e: Engine,
+        log: CallLog,
+        this: u32,
+        pose: u32,
+        kept: u32,
+        transform: u32,
+        other_pose: u32,
+        moved: Rc<Cell<u32>>,
+    }
+
+    fn set_lanes(e: &mut Engine, address: u32, lanes: [f32; 4]) {
+        store4(e, address, lanes);
+    }
+
+    /// A controller (bone 1 of a pose of four bones: parents -1, 0, 1, 0; bone 2 flagged 1,
+    /// bone 3 flagged 4) with doubles for every callee: the bone record update answers what
+    /// `moved` holds, `acos` answers its argument plus 0.5 and the quarter turn is 2.
+    fn rig() -> Rig {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        set_lanes(&mut e, NEG_HALF_LANES, [-0.5; 4]);
+        set_lanes(&mut e, ONE_LANES, [1.0; 4]);
+        for lane in 0..4u32 {
+            e.mem.set_u32(SIGN_LANES + 4 * lane, 0x8000_0000);
+            let xyz = lane < 3;
+            e.mem
+                .set_u32(SIGN_XYZ_LANES + 4 * lane, if xyz { 0x8000_0000 } else { 0 });
+            e.mem
+                .set_u32(MASK_XYZ_LANES + 4 * lane, if xyz { 0xffff_ffff } else { 0 });
+        }
+        e.mem.set_f32(AXIS_ZERO, 0.0);
+        e.mem.set_f32(AXIS_ONE, 1.0);
+        e.mem.set_f32(AXIS_MINUS_ONE, -1.0);
+        e.mem.set_f64(QUARTER_TURN, 2.0);
+        let log: CallLog = Rc::new(RefCell::new(Vec::new()));
+        let moved = Rc::new(Cell::new(0u32));
+        for address in [
+            ADJUST_CURRENT_TARGET,
+            QUATERNION_SET_MUL,
+            SET_TO_REFERENCE_POSE,
+        ] {
+            let log = Rc::clone(&log);
+            e.register_double(address, move |_, a| {
+                let mut entry = vec![address];
+                entry.extend_from_slice(a);
+                log.borrow_mut().push(entry);
+                Ret::default()
+            });
+        }
+        e.register_double(LOOK_AT_UPDATE, {
+            let log = Rc::clone(&log);
+            let moved = Rc::clone(&moved);
+            move |e, a| {
+                let mut entry = vec![LOOK_AT_UPDATE, a[0], a[1], a[2]];
+                if a[1] == 0 {
+                    entry.extend((0..12).map(|word| e.mem.u32(a[2] + 4 * word)));
+                }
+                log.borrow_mut().push(entry);
+                moved.get().into_ret()
+            }
+        });
+        e.register_double(CRT_ARC_COSINE, {
+            let log = Rc::clone(&log);
+            move |_, a| {
+                let value = f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32));
+                log.borrow_mut().push(vec![CRT_ARC_COSINE]);
+                Ret {
+                    st0: value + 0.5,
+                    ..Ret::default()
+                }
+            }
+        });
+        let skeleton = e.mem.alloc(0x20);
+        let parents = e.mem.alloc(8);
+        for (bone, parent) in [0xffffu16, 0, 1, 0].into_iter().enumerate() {
+            e.mem.set_u16(parents + 2 * bone as u32, parent);
+        }
+        e.mem.set_u32(skeleton + 0xc, parents);
+        e.mem.set_u32(skeleton + 0x1c, 4);
+        let flags = e.mem.alloc(0x10);
+        e.mem.set_u32(flags + 8, 1);
+        e.mem.set_u32(flags + 0xc, 4);
+        let local = e.mem.alloc(4 * 0x30);
+        let output = e.mem.alloc(4 * 0x30);
+        // The parent of bone 2 (bone 1) is the identity; bone 2's local translation is (1, 2, 3).
+        set_lanes(&mut e, local + 0x40, [0.0, 0.0, 0.0, 1.0]);
+        set_lanes(&mut e, local + 0x50, [1.0; 4]);
+        set_lanes(&mut e, local + 0x60, [1.0, 2.0, 3.0, 0.0]);
+        let pose = e.mem.alloc(0x30);
+        e.mem.set_u32(pose, skeleton);
+        e.mem.set_u32(pose + 4, output);
+        e.mem.set_u32(pose + 0x10, local);
+        e.mem.set_u32(pose + 0x1c, flags);
+        e.mem.set_u8(pose + 0x28, 1);
+        e.mem.set_u8(pose + 0x29, 1);
+        // The kept bone transform: translation (1, 0, 0), the identity, scale 2.
+        let kept = e.mem.alloc(0x30);
+        set_lanes(&mut e, kept, [1.0, 0.0, 0.0, 0.0]);
+        set_lanes(&mut e, kept + 0x10, [0.0, 0.0, 0.0, 1.0]);
+        set_lanes(&mut e, kept + 0x20, [2.0; 4]);
+        e.register_double(LOOK_AT_ACCESS_MODEL_SPACE, {
+            let log = Rc::clone(&log);
+            move |_, a| {
+                log.borrow_mut()
+                    .push(vec![LOOK_AT_ACCESS_MODEL_SPACE, a[0], a[1], a[2]]);
+                kept.into_ret()
+            }
+        });
+        // The second pose: bone 1 turned by the (unnormalised) quaternion (1, 0, 0, 1).
+        let other_flags = e.mem.alloc(8);
+        let other_local = e.mem.alloc(0x60);
+        set_lanes(&mut e, other_local + 0x40, [1.0, 0.0, 0.0, 1.0]);
+        let other_pose = e.mem.alloc(0x30);
+        e.mem.set_u32(other_pose + 0x10, other_local);
+        e.mem.set_u32(other_pose + 0x1c, other_flags);
+        let transform = e.mem.alloc(0x30);
+        set_lanes(&mut e, transform, [10.0, 20.0, 30.0, 0.0]);
+        set_lanes(&mut e, transform + 0x10, [0.0, 0.0, 0.0, 1.0]);
+        set_lanes(&mut e, transform + 0x20, [3.0; 4]);
+        let this = e.mem.alloc(0x2b0);
+        e.mem.set_u32(this + 0x88, pose);
+        e.mem.set_u32(this + 0x54, other_pose);
+        e.mem.set_u16(this + 0x144, 1);
+        e.mem.set_f32(this + 0x134, 10.0);
+        e.mem.set_f32(this + 0x138, 10.0);
+        Rig {
+            e,
+            log,
+            this,
+            pose,
+            kept,
+            transform,
+            other_pose,
+            moved,
+        }
+    }
+
+    fn run(r: &mut Rig) {
+        let (this, transform) = (r.this, r.transform);
+        r.e.call(0x00c7_aa60, &args![this, transform]);
+    }
+
+    fn logged(r: &Rig, address: u32) -> Vec<Vec<u32>> {
+        r.log
+            .borrow()
+            .iter()
+            .filter(|entry| entry[0] == address)
+            .map(|entry| entry[1..].to_vec())
+            .collect()
+    }
+
+    fn flags(r: &Rig) -> Vec<u32> {
+        let flags = r.e.mem.u32(r.pose + 0x1c);
+        (0..4).map(|bone| r.e.mem.u32(flags + 4 * bone)).collect()
+    }
+
+    #[test]
+    fn bhk_ragdoll_controller_do_look_at_ik_propagates_the_kept_bone() {
+        let mut r = rig();
+        run(&mut r);
+        let (this, pose, kept, transform) = (r.this, r.pose, r.kept, r.transform);
+        // Without `+0x190` the record 1 update runs first and the word `+0x194` is 1.
+        assert_eq!(logged(&r, ADJUST_CURRENT_TARGET), vec![vec![this]]);
+        assert_eq!(logged(&r, LOOK_AT_UPDATE), vec![vec![this, 1, transform]]);
+        assert_eq!(r.e.mem.u32(this + 0x194), 1);
+        assert_eq!(
+            logged(&r, LOOK_AT_ACCESS_MODEL_SPACE),
+            vec![vec![pose, 1, 1]]
+        );
+        let multiplications = logged(&r, QUATERNION_SET_MUL);
+        assert_eq!(
+            multiplications[0],
+            vec![kept + 0x10, kept + 0x10, this + 0xc0]
+        );
+        // Bone 2 is composed with bone 1 (one more multiplication), bone 3 (parent 0) is not.
+        assert_eq!(multiplications.len(), 2);
+        let output = r.e.mem.u32(pose + 4);
+        assert_eq!(load4(&r.e, output + 0x60), [1.0, 2.0, 3.0, 0.0]);
+        // Root 1, the composed bone and the later flagged bone 2, bone 0 untouched.
+        assert_eq!(flags(&r), vec![0, 1, 2, 2]);
+        assert_eq!(r.e.mem.u8(pose + 0x28), 0);
+        assert_eq!(r.e.mem.u8(pose + 0x29), 0);
+        let local = r.e.mem.u32(pose + 0x10);
+        for word in 0..12 {
+            assert_eq!(
+                r.e.mem.u32(local + 0x30 + 4 * word),
+                r.e.mem.u32(kept + 4 * word)
+            );
+        }
+        // Nothing of the second part ran.
+        assert!(logged(&r, CRT_ARC_COSINE).is_empty());
+        assert!(logged(&r, SET_TO_REFERENCE_POSE).is_empty());
+    }
+
+    #[test]
+    fn bhk_ragdoll_controller_do_look_at_ik_measures_the_head_angles() {
+        let mut r = rig();
+        r.e.mem.set_u8(r.this + 0x190, 1);
+        run(&mut r);
+        let (this, transform) = (r.this, r.transform);
+        // Only the record 0 update runs, with the bone composed with `transform`.
+        let updates = logged(&r, LOOK_AT_UPDATE);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(&updates[0][..2], &[this, 0]);
+        let composed: Vec<f32> = updates[0][3..].iter().map(|&w| f32::from_bits(w)).collect();
+        assert_eq!(&composed[0..4], &[11.0, 20.0, 30.0, 0.0]);
+        assert_eq!(&composed[8..12], &[6.0; 4]);
+        let model = r.e.mem.u32(r.pose + 0x10) + 0x30;
+        assert_eq!(
+            *logged(&r, QUATERNION_SET_MUL).last().unwrap(),
+            vec![updates[0][2] + 0x10, transform + 0x10, model + 0x10]
+        );
+        // The up axis turned by (1, 0, 0, 1) is (0, 1, 2): 2 - (-2 + 0.5) and 2 - (0 + 0.5).
+        assert_eq!(r.e.mem.f32(this + 0x19c), 3.5);
+        assert_eq!(r.e.mem.f32(this + 0x1a0), 1.5);
+        assert_eq!(r.e.mem.u8(this + 0x181), 0);
+        assert_eq!(logged(&r, SET_TO_REFERENCE_POSE), vec![vec![r.other_pose]]);
+    }
+
+    #[test]
+    fn bhk_ragdoll_controller_do_look_at_ik_sets_the_looking_byte() {
+        // The update answering true.
+        let mut r = rig();
+        r.e.mem.set_u8(r.this + 0x190, 1);
+        r.moved.set(1);
+        run(&mut r);
+        assert_eq!(r.e.mem.u8(r.this + 0x181), 1);
+        // The word `+0x194` set (and `+0x181` set before: the record 1 update runs too).
+        let mut r = rig();
+        r.e.mem.set_u8(r.this + 0x190, 1);
+        r.e.mem.set_u8(r.this + 0x181, 1);
+        run(&mut r);
+        assert_eq!(logged(&r, LOOK_AT_UPDATE).len(), 2);
+        assert_eq!(r.e.mem.u8(r.this + 0x181), 1);
+        // The second angle above its limit, then the first.
+        for (offset, limit) in [(0x138, 1.0f32), (0x134, 3.0)] {
+            let mut r = rig();
+            r.e.mem.set_u8(r.this + 0x190, 1);
+            r.e.mem.set_f32(r.this + offset, limit);
+            run(&mut r);
+            assert_eq!(r.e.mem.u8(r.this + 0x181), 1);
+        }
+        // A NaN limit never sets it.
+        let mut r = rig();
+        r.e.mem.set_u8(r.this + 0x190, 1);
+        r.e.mem.set_u32(r.this + 0x138, 0x7fc0_0000);
+        run(&mut r);
+        assert_eq!(r.e.mem.u8(r.this + 0x181), 0);
+        // Bone 1 of the second pose flagged 2: its transform comes from
+        // `calculateBoneModelSpace`.
+        let mut r = rig();
+        r.e.mem.set_u8(r.this + 0x190, 1);
+        let other_flags = r.e.mem.u32(r.other_pose + 0x1c);
+        r.e.mem.set_u32(other_flags + 4, 2);
+        let identity = r.e.mem.alloc(0x30);
+        set_lanes(&mut r.e, identity + 0x10, [0.0, 0.0, 0.0, 1.0]);
+        r.e.register_double(CALCULATE_BONE_MODEL_SPACE, move |_, _| identity.into_ret());
+        run(&mut r);
+        // The up axis unturned: both dot products 0.
+        assert_eq!(r.e.mem.f32(r.this + 0x19c), 1.5);
+        assert_eq!(r.e.mem.f32(r.this + 0x1a0), 1.5);
     }
 }

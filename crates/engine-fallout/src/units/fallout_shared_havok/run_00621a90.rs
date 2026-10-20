@@ -42,11 +42,28 @@ pub fn fn_00621a90(e: &mut Engine, this: Ptr) -> u32 {
     }
 }
 
+// Translated from 00621b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. `fastcall`: the `float` at `this + 0x10`, returned in `ST0`
+/// (an `FLD`, so a signalling NaN comes back quieted).
+pub fn fn_00621b00(e: &mut Engine, this: Ptr) -> f32 {
+    x87_quiet(e.mem.f32(this.addr().wrapping_add(0x10)))
+}
+
+// Translated from 00621b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. `thiscall`, `RET 4`: stores the `float` argument at
+/// `this + 0x10` (an `FLD`/`FSTP` copy, so a signalling NaN is stored quieted).
+pub fn fn_00621b20(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem
+        .set_f32(this.addr().wrapping_add(0x10), x87_quiet(value));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0062_1a90, fn_00621a90(Ptr) -> u32),
         entry!(0x00621ad0, fn_00621ad0(Ptr) -> u32),
+        entry!(0x0062_1b00, fn_00621b00(Ptr) -> f32),
+        entry!(0x0062_1b20, fn_00621b20(Ptr, f32)),
     ]
 }
 
@@ -95,5 +112,36 @@ mod physics_work_ahead_tests {
         assert_eq!(hits, 0);
         e.mem.set_u32(this, 0x7000);
         assert_eq!(e.call(0x0062_1a90, &args![this]).u32(), 0x7030);
+    }
+}
+
+#[cfg(test)]
+mod havok_glue_tests {
+    use super::*;
+
+    #[test]
+    fn at_00621b00_loads_the_float_at_plus_0x10() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        e.mem.set_f32(this + 0x10, 2.5);
+        assert_eq!(e.call(0x0062_1b00, &args![this]).f32(), 2.5);
+        // FLD quiets a signalling NaN.
+        e.mem.set_u32(this + 0x10, 0x7f80_0001);
+        assert_eq!(
+            e.call(0x0062_1b00, &args![this]).f32().to_bits(),
+            0x7fc0_0001
+        );
+    }
+
+    #[test]
+    fn at_00621b20_stores_the_float_at_plus_0x10() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x20);
+        e.call(0x0062_1b20, &args![this, -1.25f32]);
+        assert_eq!(e.mem.f32(this + 0x10), -1.25);
+        // FLD/FSTP quiets a signalling NaN on the way.
+        e.call(0x0062_1b20, &args![this, f32::from_bits(0x7f80_0001)]);
+        assert_eq!(e.mem.u32(this + 0x10), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
     }
 }

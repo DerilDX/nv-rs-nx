@@ -2722,6 +2722,841 @@ pub fn hkp_world_remove_phantom_batch(
     });
 }
 
+// ---------------------------------------------------------------------------------------
+// The constructor (`00c95a80`) and its pieces.
+// ---------------------------------------------------------------------------------------
+
+/// The `hkpWorld` vtable the constructor installs.
+const CTOR_WORLD_VTABLE: u32 = 0x010c_6714;
+/// The Havok version the libraries were built with; the constructor compares the caller's
+/// version (its second stack argument) with it.
+const CTOR_HAVOK_VERSION: u32 = 0x111d4;
+/// Global function pointer (cdecl `(min, max, markers)`) that creates the broad phase.
+const CTOR_CREATE_BROAD_PHASE: u32 = 0x011b_37a0;
+/// A global byte: when set, the cinfo's `m_simulationType` (+0xd1) is forced to 3.
+const CTOR_FORCE_MULTITHREADED: u32 = 0x0126_81dc;
+/// The error reporter object (a pointer); its slot +0xc takes `(3, id, message, file, line)`
+/// and answers non-zero to ask for a break (`INT3`).
+const CTOR_ERROR_REPORTER: u32 = 0x0126_8360;
+/// The version message pieces, the source file name, the message id and the line (0xbb5).
+const CTOR_VERSION_TEXT_FIRST: u32 = 0x010c_687c;
+const CTOR_VERSION_TEXT_SECOND: u32 = 0x010c_68a0;
+const CTOR_VERSION_TEXT_LAST: u32 = 0x010c_68c0;
+const CTOR_SOURCE_FILE: u32 = 0x010c_6864;
+const CTOR_VERSION_MESSAGE_ID: u32 = 0x53c9_4b42;
+const CTOR_VERSION_MESSAGE_LINE: u32 = 0xbb5;
+/// The error stream (`00cb1600(stream, buffer, size)`), its text and integer appends
+/// (`00cc01c0`, `00cc0280`, `00cc02d0`; each returns the stream) and its destructor.
+const CTOR_ERROR_STREAM_CONSTRUCT: u32 = 0x00cb_1600;
+const CTOR_STREAM_APPEND_TEXT: u32 = 0x00cc_01c0;
+const CTOR_STREAM_APPEND_FIRST_INT: u32 = 0x00cc_0280;
+const CTOR_STREAM_APPEND_SECOND_INT: u32 = 0x00cc_02d0;
+const CTOR_ERROR_STREAM_DESTRUCT: u32 = 0x00cc_00e0;
+/// Constructors and helpers the world's constructor calls (`this` first, as registered).
+const CTOR_OPERATION_QUEUE: u32 = 0x00cf_75c0;
+const CTOR_SOLVER_TABLES: u32 = 0x00d1_0890;
+const CTOR_BROAD_PHASE_DISPATCHER: u32 = 0x00cf_6f90;
+const CTOR_ENTITY_ENTITY_LISTENER: u32 = 0x00d1_07d0;
+const CTOR_CONTACT_MGR_FACTORY: u32 = 0x00cf_d450;
+const CTOR_COLLISION_DISPATCHER: u32 = 0x00cf_c030;
+/// The default agent function `00d10790` handed to the collision dispatcher.
+const CTOR_DEFAULT_AGENT_FUNCTION: u32 = 0x00d1_0790;
+const CTOR_DEFAULT_COLLISION_FILTER: u32 = 0x00cb_fba0;
+const CTOR_SIMULATION: u32 = 0x00cf_87c0;
+const CTOR_CONTINUOUS_SIMULATION: u32 = 0x00d0_d020;
+const CTOR_MULTI_THREADED_SIMULATION: u32 = 0x00d0_2c80;
+const CTOR_CRITICAL_SECTION: u32 = 0x00cf_6da0;
+const CTOR_COLLISION_QUALITY: u32 = 0x00cf_b570;
+const CTOR_SIMULATION_ISLAND: u32 = 0x00d0_7830;
+const CTOR_ARRAY_GROW: u32 = 0x00c9_0940;
+const CTOR_RIGID_BODY_CINFO: u32 = 0x00cf_5ea0;
+const CTOR_RIGID_BODY: u32 = 0x00ca_8c90;
+const CTOR_BROAD_PHASE_BORDER: u32 = 0x00d0_b710;
+const CTOR_MAINTENANCE_MGR: u32 = 0x00d0_b250;
+const CTOR_COLLISION_CALLBACKS: u32 = 0x00d0_b040;
+const CTOR_KD_TREE_MANAGER: u32 = 0x00d0_a2d0;
+const CTOR_AABB_TREE_MANAGER: u32 = 0x00d0_8cf0;
+const CTOR_MULTI_THREAD_CHECK_DISABLE: u32 = 0x00cf_6d20;
+/// Vtables (and second table words) of the small objects built inline.
+const CTOR_PHANTOM_LISTENER_VTABLE: u32 = 0x010c_63f0;
+const CTOR_PHANTOM_LISTENER_TABLE: u32 = 0x010c_63e0;
+const CTOR_BORDER_LISTENER_VTABLE: u32 = 0x010c_6410;
+const CTOR_BORDER_LISTENER_TABLE: u32 = 0x010c_6400;
+const CTOR_FILTER_TABLES: [u32; 5] = [
+    0x010c_646c,
+    0x010c_6460,
+    0x010c_644c,
+    0x010c_6440,
+    0x010c_6434,
+];
+const CTOR_CONVEX_LIST_FILTER_VTABLE: u32 = 0x010c_63cc;
+/// `float` constants: the default gravity length (9.81, used when the gravity is zero), the
+/// 0.01 the agent configuration starts with, the large value for a zero resting threshold,
+/// the 1/60 time step of the step information, and the three SSE factors of the broad-phase
+/// conversion (lane 3 filler, scale, inverse scale).
+const CTOR_DEFAULT_GRAVITY: u32 = 0x010c_6860;
+const CTOR_HUNDREDTH: u32 = 0x0101_3ea4;
+const CTOR_NO_THRESHOLD: u32 = 0x010c_6848;
+const CTOR_STEP_TIME: u32 = 0x010c_42e8;
+const CTOR_LANE_FILLER: u32 = 0x0101_1d78;
+const CTOR_EXTENT_SCALE: u32 = 0x010c_6844;
+const CTOR_EXTENT_INVERSE_SCALE: u32 = 0x010c_6840;
+/// The 16-byte sign mask the minimum corner is XORed with.
+const CTOR_SIGN_MASK: u32 = 0x010c_44d0;
+/// `double` constants: 0.1, 0.016, 4.0, 8.0 and the step time 1/60.
+const CTOR_TENTH: u32 = 0x0101_ffa0;
+const CTOR_FRAME_FACTOR: u32 = 0x010c_6858;
+const CTOR_FOUR: u32 = 0x0101_db80;
+const CTOR_EIGHT: u32 = 0x0102_40b0;
+const CTOR_STEP_DOUBLE: u32 = 0x010c_6838;
+/// The `float` pairs (linear factor, angular factor) of the deactivation levels 2, 3 and 4
+/// and of the last level (the jump table at `00c96a0c`); levels 0 and 1 take the `float`
+/// at `0104da4c` and 0.0.
+const CTOR_LEVEL_LOW_FACTOR: u32 = 0x0104_da4c;
+const CTOR_LEVEL_FACTORS: [(u32, u32); 4] = [
+    (0x0101_3ea4, 0x010c_6850),
+    (0x010c_684c, 0x0101_df44),
+    (0x0102_d934, 0x0101_7870),
+    (0x0103_13d4, 0x0102_31a8),
+];
+
+/// The SSE length of the vector at `at`: `MULPS` of the vector with itself, then
+/// `sqrt(z + (y + x))` with `ADDSS` and `SQRTSS`.
+fn ctor_vector_length(e: &Engine, at: u32) -> f32 {
+    let x = e.mem.f32(at);
+    let y = e.mem.f32(at + 4);
+    let z = e.mem.f32(at + 8);
+    let (xx, yy, zz) = (x * x, y * y, z * z);
+    (zz + (yy + xx)).sqrt()
+}
+
+/// The version mismatch report (`00c95ceb`..`00c95d6d`): builds the message in the error
+/// stream at `frame + 0x20` over the 0x200-byte buffer at `frame + 0x120`, hands it to the
+/// error reporter and destroys the stream. A non-zero answer of the reporter reaches the
+/// `INT3` at `00c95d68`.
+fn ctor_report_version_mismatch(e: &mut Engine, frame: u32, version: u32) {
+    let stream = frame + 0x20;
+    let buffer = frame + 0x120;
+    e.call(
+        CTOR_ERROR_STREAM_CONSTRUCT,
+        &args![stream, buffer, 0x200u32],
+    );
+    let out = e
+        .call(
+            CTOR_STREAM_APPEND_TEXT,
+            &args![stream, CTOR_VERSION_TEXT_FIRST],
+        )
+        .u32();
+    let out = e
+        .call(
+            CTOR_STREAM_APPEND_FIRST_INT,
+            &args![out, CTOR_HAVOK_VERSION],
+        )
+        .u32();
+    let out = e
+        .call(
+            CTOR_STREAM_APPEND_TEXT,
+            &args![out, CTOR_VERSION_TEXT_SECOND],
+        )
+        .u32();
+    let out = e
+        .call(CTOR_STREAM_APPEND_SECOND_INT, &args![out, version])
+        .u32();
+    e.call(CTOR_STREAM_APPEND_TEXT, &args![out, CTOR_VERSION_TEXT_LAST]);
+    let reporter: u32 = e.global(CTOR_ERROR_REPORTER);
+    let answer = e
+        .vcall(
+            reporter,
+            0xc,
+            &args![
+                3u32,
+                CTOR_VERSION_MESSAGE_ID,
+                buffer,
+                CTOR_SOURCE_FILE,
+                CTOR_VERSION_MESSAGE_LINE
+            ],
+        )
+        .u32();
+    if answer != 0 {
+        panic!("INT3 at 00c95d68: the error reporter asked for a break");
+    }
+    e.call(CTOR_ERROR_STREAM_DESTRUCT, &args![stream]);
+}
+
+/// The six deactivation levels of `m_dynamicsStepInfo.m_solverInfo.m_deactivationInfo`
+/// (`00c95f06`..`00c96060`, rows of 0x1c bytes at `world + 0x244`), x87 code. `gravity` is
+/// the gravity length, `zero` and `one` the 0.0 and 1.0 the x87 stack holds through the loop.
+fn ctor_deactivation_levels(e: &mut Engine, world: u32, cinfo: u32, gravity: f64) {
+    let one = 1.0f64;
+    let zero = 0.0f64;
+    // FLD double 0.1; FMUL ST0,ST1 (D8 C9); FSTP: the angular scale.
+    let tenth = x87_load64(e.global::<u64>(CTOR_TENTH));
+    let angular_scale = x87_store32(x87_mul(tenth, gravity));
+    let frame_factor = x87_load64(e.global::<u64>(CTOR_FRAME_FACTOR));
+    for level in 0..6u32 {
+        // The switch on the level (jump table `00c96a0c` for 0..4, default above 4).
+        let (linear_bits, angular_bits) = match level {
+            0 | 1 => {
+                let linear = x87_store32(x87_load32(e.global::<u32>(CTOR_LEVEL_LOW_FACTOR)));
+                // FXCH ST2; FST: the 0.0 of the stack.
+                (linear, x87_store32(zero))
+            }
+            _ => {
+                let index = match level {
+                    2 => 0,
+                    3 => 1,
+                    4 => 2,
+                    _ => 3,
+                };
+                let (linear_at, angular_at) = CTOR_LEVEL_FACTORS[index];
+                let linear = x87_store32(x87_load32(e.global::<u32>(linear_at)));
+                let angular = x87_store32(x87_load32(e.global::<u32>(angular_at)));
+                (linear, angular)
+            }
+        };
+        let row = world + 0x244 + 0x1c * level;
+        // 00c95f8a: the linear factor times the gravity (FMUL ST0,ST2).
+        let linear = x87_store32(x87_mul(x87_load32(linear_bits), gravity));
+        let angular = x87_load32(angular_bits);
+        let angular_gravity = x87_mul(angular, gravity);
+        let linear = x87_load32(linear);
+        // FDIVP ST2,ST0: the angular product over the linear one, through a float.
+        let ratio = x87_load32(x87_store32(x87_div(angular_gravity, linear)));
+        // m_invNumSteps (+0x300) times the frame factor (FMUL ST0,ST6), times the ratio.
+        let inverse_steps = x87_load32(e.mem.u32(world + 0x300));
+        let product = x87_mul(ratio, x87_mul(inverse_steps, frame_factor));
+        // +8 (m_slowObjectVelocityMultiplier): FSUBR ST0,ST6.
+        e.mem.set_u32(row + 8, x87_store32(x87_sub(one, product)));
+        // +0 (m_linearVelocityThresholdInv): FDIVR ST0,ST6.
+        e.mem.set_u32(row, x87_store32(x87_div(one, linear)));
+        // +4 (m_angularVelocityThresholdInv): FMUL dword (the angular scale), FDIVR ST0,ST5.
+        let scaled = x87_mul(linear, x87_m32(angular_scale));
+        e.mem.set_u32(row + 4, x87_store32(x87_div(one, scaled)));
+        // +0xc (m_relativeSleepVelocityThreshold): FCOM with 0.0; the jump (C0 or C3) takes
+        // a negative, zero or unordered factor to the large constant.
+        let threshold = if angular > zero {
+            let inverse_steps = x87_load32(e.mem.u32(world + 0x300));
+            x87_store32(x87_div(x87_mul(inverse_steps, frame_factor), angular))
+        } else {
+            x87_store32(x87_load32(e.global::<u32>(CTOR_NO_THRESHOLD)))
+        };
+        e.mem.set_u32(row + 0xc, threshold);
+        // m_deactivationReferenceDistance (cinfo +0xa8) through a float slot.
+        let distance = x87_load32(x87_quiet_bits(e.mem.u32(cinfo + 0xa8)));
+        // +0x10 / +0x14 (m_maxDistSqrd): d * d and (4 d)^2.
+        e.mem
+            .set_u32(row + 0x10, x87_store32(x87_mul(distance, distance)));
+        let four = x87_mul(x87_load64(e.global::<u64>(CTOR_FOUR)), distance);
+        e.mem.set_u32(row + 0x14, x87_store32(x87_mul(four, four)));
+        // +0x18 / +0x1a (m_maxRotSqrd, hkHalf): the top 16 bits of (2 d)^2 and (8 d)^2.
+        let twice = x87_add(distance, distance);
+        let twice_bits = x87_store32(x87_mul(twice, twice));
+        e.mem
+            .set_u16(row + 0x18, ((twice_bits as i32) >> 16) as u16);
+        let eight = x87_mul(distance, f64::from_bits(e.global::<u64>(CTOR_EIGHT)));
+        let eight_bits = x87_store32(x87_mul(eight, eight));
+        e.mem
+            .set_u16(row + 0x1a, ((eight_bits as i32) >> 16) as u16);
+    }
+}
+
+/// The collision input's step information and broad-phase conversion (`00c963b1`..
+/// `00c964cc`): `+0x50`..`+0x5c` (`m_stepInfo`: start, end, delta = 0 - 0 and its inverse,
+/// 0.0 when the delta is 0.0), then `m_aabb32Info` from the cinfo's world AABB (+0x30 min,
+/// +0x40 max): `+0x40` = the per-axis inverse spans times the scale, `+0x20` = the minimum
+/// with the sign mask applied, `+0x30` = the inverse scale times the span plus `+0x20`, each
+/// with lane 3 cleared at the end.
+fn ctor_collision_input_extents(e: &mut Engine, input: u32, cinfo: u32) {
+    let zero = 0.0f64;
+    let one = 1.0f64;
+    e.mem.set_u32(input + 0x50, x87_store32(zero));
+    e.mem.set_u32(input + 0x54, x87_store32(zero));
+    let delta = x87_load32(x87_store32(x87_sub(zero, zero)));
+    e.mem.set_u32(input + 0x58, x87_store32(delta));
+    // FUCOM against the stack's 0.0; JP takes "not equal or unordered" to the division.
+    // The delta is 0 - 0, so the equal path always runs.
+    if delta == zero {
+        e.mem.set_u32(input + 0x5c, x87_store32(zero));
+    } else {
+        e.mem
+            .set_u32(input + 0x5c, x87_store32(x87_div(one, delta)));
+    }
+    let lane_filler = e.global::<f32>(CTOR_LANE_FILLER);
+    let mut min = [0f32; 4];
+    let mut span = [0f32; 4];
+    for lane in 0..4u32 {
+        let low = e.mem.f32(cinfo + 0x30 + 4 * lane);
+        let high = e.mem.f32(cinfo + 0x40 + 4 * lane);
+        min[lane as usize] = low;
+        span[lane as usize] = high - low;
+    }
+    // FLD dword (x and y) and FDIVR; FDIV dword (z), all with the stack's 1.0.
+    let inverse_x = f32::from_bits(x87_store32(x87_div(one, x87_load32(span[0].to_bits()))));
+    let inverse_y = f32::from_bits(x87_store32(x87_div(one, x87_load32(span[1].to_bits()))));
+    let inverse_z = f32::from_bits(x87_store32(x87_div(one, x87_m32(span[2].to_bits()))));
+    let scale = e.global::<f32>(CTOR_EXTENT_SCALE);
+    let scaled = [
+        inverse_x * scale,
+        inverse_y * scale,
+        inverse_z * scale,
+        lane_filler * scale,
+    ];
+    let inverse_scale = e.global::<f32>(CTOR_EXTENT_INVERSE_SCALE);
+    for lane in 0..4u32 {
+        let index = lane as usize;
+        e.mem.set_f32(input + 0x40 + 4 * lane, scaled[index]);
+    }
+    for lane in 0..4u32 {
+        let index = lane as usize;
+        let mask = e.global::<u32>(CTOR_SIGN_MASK + 4 * lane);
+        let negated = min[index].to_bits() ^ mask;
+        e.mem.set_u32(input + 0x20 + 4 * lane, negated);
+        let high = inverse_scale * span[index] + f32::from_bits(negated);
+        e.mem.set_f32(input + 0x30 + 4 * lane, high);
+    }
+    for vector in [0x40, 0x20, 0x30] {
+        e.mem.set_u32(input + vector + 0xc, 0);
+    }
+}
+
+// Translated from 00c95a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorld::hkpWorld` (Xbox PDB), `(cinfo, version)`: the world's constructor. Field
+/// names below are the Xbox PDB's `hkpWorld` and `hkpWorldCinfo`, at their PC offsets.
+///
+/// Empties the island, phantom and listener arrays, then allocates through the memory
+/// router: the violated-constraint array (0x204), the pending operation queue (0x28,
+/// `00cf75c0`), and the broad phase (the creator at `011b37a0` with the world's copy of the
+/// AABB and the marker count). A `version` other than `0x111d4` is reported (the reporter's
+/// non-zero answer is an `INT3`). Copies gravity and the cinfo's settings, builds the solver
+/// information (`00d10890`, `00c90e60`, the six deactivation levels), takes the memory
+/// watchdog, builds the broad-phase dispatcher and its three listeners, the collision
+/// dispatcher (with the contact manager factory `00cfd450` and the default agent
+/// function), the collision filter and convex list filter (default ones unless the cinfo has
+/// them, which then get a reference), the collision input with its agent configuration and
+/// broad-phase conversion, runs the outlined `00c912e0` and creates the simulation chosen by
+/// `m_simulationType` (forced to 3 by the global byte `012681dc`; 1 single-threaded, 2
+/// continuous, 3 multi-threaded with two critical sections; others none), the island-dirty
+/// critical section, the collision-quality information (`00cfb570`), the fixed island (and
+/// one active island when simulation islands are off), the fixed rigid body (mass 0, motion
+/// type 5) added with `addEntity`, the step information, the broad-phase border (unless the
+/// behaviour is 3), the maintenance manager (initialized through its slot +0xc), the
+/// collision callbacks, the kd-tree or AABB-tree manager, the multi-thread check, and the
+/// multi-threaded job data (0x120). Returns `this`.
+pub fn hkp_world_hkp_world(
+    e: &mut Engine,
+    this: Ptr<HkpWorld>,
+    cinfo: Ptr,
+    version: u32,
+) -> Ptr<HkpWorld> {
+    let w = this.addr();
+    let c = cinfo.addr();
+    // The function's stack frame (0x320 bytes after the aligned base): the error stream at
+    // +0x20 and its buffer at +0x120, the collision-quality input at +0x34 and the rigid
+    // body cinfo at +0x60.
+    e.with_stack(0x320, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(w, CTOR_WORLD_VTABLE);
+        // m_referenceCount.
+        e.mem.set_u16(w + 6, 1);
+        // m_activeSimulationIslands, m_inactiveSimulationIslands and
+        // m_dirtySimulationIslands: empty, capacity word 0x80000000 (not owned).
+        e.mem.set_u32(w + 0x30, 0x8000_0000);
+        e.mem.set_u32(w + 0x28, 0);
+        e.mem.set_u32(w + 0x2c, 0);
+        e.mem.set_u32(w + 0x3c, 0x8000_0000);
+        e.mem.set_u32(w + 0x34, 0);
+        e.mem.set_u32(w + 0x38, 0);
+        e.mem.set_u32(w + 0x48, 0x8000_0000);
+        e.mem.set_u32(w + 0x40, 0);
+        e.mem.set_u32(w + 0x44, 0);
+        // m_memoryWatchDog.
+        e.mem.set_u32(w + 0x50, 0);
+        // m_multiThreadCheck (+0xa8, +0xac).
+        e.mem.set_u32(w + 0xa8, 0xffff_fff1);
+        e.mem.set_u16(w + 0xac, 0x8000);
+        // m_phantoms and the thirteen listener arrays (+0x110..+0x1ac).
+        let mut array = 0x110;
+        while array <= 0x1ac {
+            e.mem.set_u32(w + array + 8, 0x8000_0000);
+            e.mem.set_u32(w + array, 0);
+            e.mem.set_u32(w + array + 4, 0);
+            array += 0xc;
+        }
+        // m_lastEntityUid, m_lastConstraintUid, m_isLocked,
+        // m_assertOnRunningOutOfSolverMemory.
+        e.mem.set_u32(w + 0x104, 0xffff_ffff);
+        e.mem.set_u32(w + 0x10c, 0xffff_ffff);
+        e.mem.set_u32(w + 0xbc, 0);
+        e.mem.set_u8(w + 0x54, 1);
+        // m_violatedConstraintArray.
+        let violated = router_alloc(e, 0x204);
+        if violated != 0 {
+            e.mem.set_u32(violated, 0);
+        }
+        e.mem.set_u32(w + 0x1b8, violated);
+        // m_pendingOperations.
+        let block = router_alloc(e, 0x28);
+        let queue = if block != 0 {
+            e.call(CTOR_OPERATION_QUEUE, &args![block, w]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(w + 0x88, queue);
+        // m_pendingOperationQueues, the pending counts, m_blockExecutingPendingOperations,
+        // m_criticalOperationsAllowed, the three critical section pointers,
+        // m_pendingOperationQueueCount, m_destructionWorld.
+        e.mem.set_u32(w + 0xa0, 0);
+        e.mem.set_u32(w + 0x8c, 0);
+        e.mem.set_u32(w + 0x90, 0);
+        e.mem.set_u32(w + 0x94, 0);
+        e.mem.set_u32(w + 0x98, 0);
+        e.mem.set_u8(w + 0x9c, 0);
+        e.mem.set_u8(w + 0x9d, 1);
+        e.mem.set_u32(w + 0xb8, 0);
+        e.mem.set_u32(w + 0xc4, 0);
+        e.mem.set_u32(w + 0xc0, 0);
+        e.mem.set_u32(w + 0xa4, 1);
+        e.mem.set_u32(w + 0x1c4, 0);
+        // m_broadPhaseExtents[0..2] from m_broadPhaseWorldAabb, m_broadPhaseNumMarkers.
+        copy_vector(e, c + 0x30, w + 0x310);
+        copy_vector(e, c + 0x40, w + 0x320);
+        copy_word(e, c + 0x70, w + 0x330);
+        let markers = e.mem.u32(c + 0x70);
+        let create_broad_phase: u32 = e.global(CTOR_CREATE_BROAD_PHASE);
+        let broad_phase = e
+            .call(create_broad_phase, &args![w + 0x310, w + 0x320, markers])
+            .u32();
+        e.mem.set_u32(w + 0x58, broad_phase);
+        // m_broadPhaseQuerySize, m_broadPhaseUpdateSize (half of it, rounded toward zero),
+        // m_sizeOfToiEventQueue.
+        let query_size = e.mem.u32(c + 0x20) as i32;
+        e.mem.set_u32(w + 0x338, query_size as u32);
+        e.mem.set_u32(w + 0x33c, (query_size / 2) as u32);
+        copy_word(e, c + 0x64, w + 0x334);
+        if version != CTOR_HAVOK_VERSION {
+            ctor_report_version_mismatch(e, frame, version);
+        }
+        // 00c95d72: m_gravity.
+        copy_vector(e, c + 0x10, w + 0x10);
+        // The two snap thresholds as floats through the stack (cdecl).
+        let convex_snap = x87_quiet_bits(e.mem.u32(c + 0x90));
+        let concave_snap = x87_quiet_bits(e.mem.u32(c + 0x94));
+        e.call(CTOR_SOLVER_TABLES, &args![convex_snap, concave_snap]);
+        copy_float(e, c + 0x90, w + 0xcc);
+        copy_float(e, c + 0x90, w + 0xd0);
+        copy_byte(e, c + 0x98, w + 0xd4);
+        copy_byte(e, c + 0xa7, w + 0xd6);
+        copy_float(e, c + 0xac, w + 0xdc);
+        copy_word(e, c + 0xb0, w + 0xe0);
+        copy_byte(e, c + 0xb4, w + 0xe4);
+        copy_word(e, c + 0xb8, w + 0xe8);
+        copy_word(e, c + 0xbc, w + 0xec);
+        copy_float(e, c + 0xa8, w + 0xd8);
+        // m_dynamicsStepInfo.m_solverInfo (+0x1e0): m_one, then tau and damping.
+        e.mem.set_u32(w + 0x1e0, x87_store32(1.0));
+        let tau = f32::from_bits(x87_quiet_bits(e.mem.u32(c + 0x78)));
+        let damping = f32::from_bits(x87_quiet_bits(e.mem.u32(c + 0x7c)));
+        fn_00c90e60(e, Ptr::new(w + 0x1e0), tau, damping);
+        // m_contactRestingVelocity, m_numSteps and m_invNumSteps (FILD, FDIVRP).
+        copy_float(e, c + 0x24, w + DYNAMICS_FLOAT_240);
+        copy_word(e, c + 0x80, w + DYNAMICS_WORD_2F4);
+        let iterations = f64::from(e.mem.u32(c + 0x80) as i32);
+        e.mem
+            .set_u32(w + 0x300, x87_store32(x87_div(1.0, iterations)));
+        // m_numMicroSteps, m_maxConstraintViolationSqrd, m_invNumMicroSteps (FDIVR).
+        copy_word(e, c + 0x84, w + DYNAMICS_WORD_2F8);
+        let violation = x87_load32(e.mem.u32(c + 0x88));
+        e.mem.set_u32(
+            w + DYNAMICS_FLOAT_308,
+            x87_store32(x87_mul(violation, violation)),
+        );
+        let micro_steps = f64::from(e.mem.u32(c + 0x84) as i32);
+        e.mem
+            .set_u32(w + 0x2fc, x87_store32(x87_div(1.0, micro_steps)));
+        // m_forceCoherentConstraintOrderingInSolver, the two inactive-frame flags and the
+        // integrate counter; m_deltaTime and m_invDeltaTime are 0.
+        copy_byte(e, c + 0x8c, w + DYNAMICS_BYTE_304);
+        copy_byte(e, c + 0xa4, w + DYNAMICS_BYTES_305);
+        copy_byte(e, c + 0xa5, w + DYNAMICS_BYTES_305 + 1);
+        e.mem.set_u32(w + 0x2ec, x87_store32(0.0));
+        e.mem.set_u32(w + 0x2f0, x87_store32(0.0));
+        copy_byte(e, c + 0xa6, w + DYNAMICS_BYTES_305 + 2);
+        // The gravity length of the cinfo (SSE), 9.81 when it is 0.0 (FUCOMPP; JP skips
+        // the default for "not equal" and unordered).
+        let length = x87_load32(ctor_vector_length(e, c + 0x10).to_bits());
+        let mut gravity_bits = x87_store32(length);
+        if length == 0.0 {
+            gravity_bits = x87_store32(x87_load32(e.global::<u32>(CTOR_DEFAULT_GRAVITY)));
+        }
+        ctor_deactivation_levels(e, w, c, x87_load32(gravity_bits));
+        // 00c96057: m_memoryWatchDog takes the cinfo's, with its reference.
+        let watchdog = e.mem.u32(c + 0x6c);
+        if watchdog != 0 {
+            e.call(ADD_REFERENCE, &args![watchdog]);
+        }
+        let previous = e.mem.u32(w + 0x50);
+        if previous != 0 {
+            e.call(REMOVE_REFERENCE, &args![previous]);
+        }
+        copy_word(e, c + 0x6c, w + 0x50);
+        // m_wantSimulationIslands and m_wantDeactivation (off without islands).
+        let islands = e.mem.u8(c + 0xd2);
+        e.mem.set_u8(w + 0xc8, islands);
+        let deactivation = e.mem.u8(c + 0xd0);
+        e.mem.set_u8(w + 0xd5, deactivation);
+        if islands == 0 && deactivation != 0 {
+            e.mem.set_u8(w + 0xd5, islands);
+        }
+        copy_byte(e, c + 0xd8, w + 0xb0);
+        e.mem.set_u8(w + 0xb1, 0);
+        // m_broadPhaseDispatcher.
+        let block = router_alloc(e, 0x10c);
+        let dispatcher = if block != 0 {
+            e.call(CTOR_BROAD_PHASE_DISPATCHER, &args![block]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(w + 0x64, dispatcher);
+        // m_phantomBroadPhaseListener (no null check).
+        let listener = router_alloc(e, 0xc);
+        e.mem.set_u16(listener + 4, 0xc);
+        e.mem.set_u16(listener + 6, 1);
+        e.mem.set_u32(listener, CTOR_PHANTOM_LISTENER_VTABLE);
+        e.mem.set_u32(listener + 8, CTOR_PHANTOM_LISTENER_TABLE);
+        e.mem.set_u32(w + 0x68, listener);
+        // m_entityEntityBroadPhaseListener.
+        let block = router_alloc(e, 0x10);
+        e.mem.set_u16(block + 4, 0x10);
+        let listener = e.call(CTOR_ENTITY_ENTITY_LISTENER, &args![block, w]).u32();
+        e.mem.set_u32(w + 0x6c, listener);
+        // m_broadPhaseBorderListener.
+        let listener = router_alloc(e, 0xc);
+        e.mem.set_u16(listener + 4, 0xc);
+        e.mem.set_u16(listener + 6, 1);
+        e.mem.set_u32(listener, CTOR_BORDER_LISTENER_VTABLE);
+        e.mem.set_u32(listener + 8, CTOR_BORDER_LISTENER_TABLE);
+        e.mem.set_u32(w + 0x70, listener);
+        // The dispatcher's listener slots: each listener's interface at +8 (0 for none),
+        // both pointers read again for every slot.
+        for (source, slot) in [
+            (0x68, 0x28),
+            (0x68, 0x44),
+            (0x68, 0x48),
+            (0x6c, 0x24),
+            (0x70, 0x2c),
+            (0x70, 0x64),
+            (0x70, 0x4c),
+            (0x70, 0x68),
+            (0x70, 0x6c),
+        ] {
+            let listener = e.mem.u32(w + source);
+            let interface = if listener != 0 { listener + 8 } else { 0 };
+            let dispatcher = e.mem.u32(w + 0x64);
+            e.mem.set_u32(dispatcher + slot, interface);
+        }
+        // m_collisionDispatcher, built with a contact manager factory whose creation
+        // reference is dropped afterwards.
+        let block = router_alloc(e, 0xc);
+        e.mem.set_u16(block + 4, 0xc);
+        let factory = e.call(CTOR_CONTACT_MGR_FACTORY, &args![block, w]).u32();
+        let block = router_alloc(e, 0x1e50);
+        e.mem.set_u16(block + 4, 0x1e50);
+        let collision_dispatcher = e
+            .call(
+                CTOR_COLLISION_DISPATCHER,
+                &args![block, CTOR_DEFAULT_AGENT_FUNCTION, factory],
+            )
+            .u32();
+        e.mem.set_u32(w + 0x80, collision_dispatcher);
+        e.call(REMOVE_REFERENCE, &args![factory]);
+        // m_collisionFilter.
+        let filter = e.mem.u32(c + 0x58);
+        if filter == 0 {
+            let filter = router_alloc(e, 0x30);
+            e.mem.set_u16(filter + 4, 0x30);
+            e.call(CTOR_DEFAULT_COLLISION_FILTER, &args![filter]);
+            e.mem.set_u32(filter, CTOR_FILTER_TABLES[0]);
+            e.mem.set_u32(filter + 8, CTOR_FILTER_TABLES[1]);
+            e.mem.set_u32(filter + 0xc, CTOR_FILTER_TABLES[2]);
+            e.mem.set_u32(filter + 0x10, CTOR_FILTER_TABLES[3]);
+            e.mem.set_u32(filter + 0x14, CTOR_FILTER_TABLES[4]);
+            e.mem.set_u32(filter + 0x20, 1);
+            e.mem.set_u32(w + 0x7c, filter);
+        } else {
+            e.mem.set_u32(w + 0x7c, filter);
+            e.call(ADD_REFERENCE, &args![filter]);
+        }
+        // m_convexListFilter.
+        let convex_filter = e.mem.u32(c + 0x5c);
+        if convex_filter == 0 {
+            let convex_filter = router_alloc(e, 8);
+            e.mem.set_u16(convex_filter + 4, 8);
+            e.mem.set_u16(convex_filter + 6, 1);
+            e.mem.set_u32(convex_filter, CTOR_CONVEX_LIST_FILTER_VTABLE);
+            e.mem.set_u32(w + 0x84, convex_filter);
+        } else {
+            e.mem.set_u32(w + 0x84, convex_filter);
+            e.call(ADD_REFERENCE, &args![convex_filter]);
+        }
+        // m_collisionInput (`hkpProcessCollisionInput`, 0x80 bytes; used without a null
+        // check after the allocation's).
+        let block = router_alloc(e, 0x80);
+        let input = if block != 0 {
+            e.mem.set_u32(block + 0x64, 0);
+            e.mem.set_u32(block + 4, 0);
+            block
+        } else {
+            0
+        };
+        e.mem.set_u32(w + 0x78, input);
+        e.mem.set_u32(input + 4, 0);
+        copy_word(e, w + 0x80, input);
+        copy_float(e, c + 0x54, input + 8);
+        copy_word(e, w + 0x7c, input + 0xc);
+        copy_word(e, w + 0x84, input + 0x10);
+        copy_byte(e, c + 0x74, w + 0x340);
+        copy_byte(e, c + 0x75, input + 0x6d);
+        // m_config (`hkpCollisionAgentConfig`): starts at 0.01 and 0x14, then takes the
+        // cinfo's iterative linear cast settings (no null check).
+        let block = router_alloc(e, 0x10);
+        let config = if block != 0 {
+            e.mem.set_u32(block + 4, 0x14);
+            let hundredth = x87_store32(x87_load32(e.global::<u32>(CTOR_HUNDREDTH)));
+            e.mem.set_u32(block, hundredth);
+            block
+        } else {
+            0
+        };
+        e.mem.set_u32(input + 0x70, config);
+        copy_float(e, c + 0x9c, config);
+        let iterations = e.mem.u32(c + 0xa0);
+        let config = e.mem.u32(input + 0x70);
+        e.mem.set_u32(config + 4, iterations);
+        copy_byte(e, c + 0x99, input + 0x6c);
+        let quality = e.mem.u32(input).wrapping_add(0x1c60);
+        e.mem.set_u32(input + 0x14, 0);
+        e.mem.set_u32(input + 0x60, quality);
+        ctor_collision_input_extents(e, input, c);
+        // The broad phase's slot +0x70 with (+0x20, +0x30, +0x40) of the input.
+        let broad_phase = e.mem.u32(w + 0x58);
+        e.vcall(
+            broad_phase,
+            0x70,
+            &args![input + 0x20, input + 0x30, input + 0x40],
+        );
+        let collision_dispatcher = e.mem.u32(w + 0x80);
+        fn_00c912e0(e, Ptr::new(w), Ptr::new(collision_dispatcher));
+        if e.global::<u8>(CTOR_FORCE_MULTITHREADED) != 0 {
+            e.mem.set_u8(c + 0xd1, 3);
+        }
+        // m_minDesiredIslandSize, m_simulationType and the simulation.
+        e.mem.set_u32(w + 0xb4, 0);
+        let simulation_type = e.mem.u8(c + 0xd1) as i8 as i32;
+        e.mem.set_u32(w + 0xf0, simulation_type as u32);
+        match simulation_type {
+            1 => {
+                let block = router_alloc(e, 0x2c);
+                e.mem.set_u16(block + 4, 0x2c);
+                let simulation = e.call(CTOR_SIMULATION, &args![block, w]).u32();
+                e.mem.set_u32(w + 8, simulation);
+            }
+            2 => {
+                let block = router_alloc(e, 0x50);
+                e.mem.set_u16(block + 4, 0x50);
+                let simulation = e.call(CTOR_CONTINUOUS_SIMULATION, &args![block, w]).u32();
+                e.mem.set_u32(w + 8, simulation);
+            }
+            3 => {
+                for slot in [0xb8, 0xc4] {
+                    let block = router_alloc(e, 0x18);
+                    let section = if block != 0 {
+                        e.call(CTOR_CRITICAL_SECTION, &args![block, 0xfa0u32]).u32()
+                    } else {
+                        0
+                    };
+                    e.mem.set_u32(w + slot, section);
+                }
+                let block = router_alloc(e, 0x180);
+                e.mem.set_u16(block + 4, 0x180);
+                let simulation = e
+                    .call(CTOR_MULTI_THREADED_SIMULATION, &args![block, w])
+                    .u32();
+                e.mem.set_u32(w + 8, simulation);
+                copy_word(e, c + 0xd4, w + 0xb4);
+            }
+            _ => {}
+        }
+        // 00c96600: m_islandDirtyListCriticalSection.
+        let block = router_alloc(e, 0x18);
+        let section = if block != 0 {
+            e.call(CTOR_CRITICAL_SECTION, &args![block, 0xfa0u32]).u32()
+        } else {
+            0
+        };
+        let simulation = e.mem.u32(w + 8);
+        e.mem.set_u32(w + 0xc0, section);
+        // The simulation's +0x24 (m_frameMarkerPsiSnap).
+        copy_float(e, c + 0xdc, simulation + 0x24);
+        // The world's gravity length (SSE), 9.81 when 0.0.
+        let length = x87_load32(ctor_vector_length(e, w + 0x10).to_bits());
+        let mut gravity_bits = x87_store32(length);
+        if length == 0.0 {
+            gravity_bits = x87_store32(x87_load32(e.global::<u32>(CTOR_DEFAULT_GRAVITY)));
+        }
+        // The four penetration counts.
+        copy_float(e, c + 0xc0, w + 0xf4);
+        copy_float(e, c + 0xc4, w + 0xf8);
+        copy_float(e, c + 0xc8, w + 0xfc);
+        copy_float(e, c + 0xcc, w + 0x100);
+        // The collision-quality input (`frame + 0x34`, see `00cfb570`).
+        let info = frame + 0x34;
+        let wants_continuous = e.mem.u8(c + 0xd1) as i8 >= 2;
+        let input = e.mem.u32(w + 0x78);
+        e.mem.set_u32(info, x87_store32(x87_load32(gravity_bits)));
+        copy_float(e, input + 8, info + 4);
+        let generation = e.mem.u8(c + 0x74) as i8;
+        e.mem.set_u8(info + 0x28, u8::from(wants_continuous));
+        copy_float(e, c + 0x68, info + 8);
+        copy_float(e, c + 0x60, info + 0xc);
+        e.mem.set_u8(info + 0x29, u8::from(generation == 2));
+        copy_float(e, c + 0xc0, info + 0x10);
+        e.mem.set_u8(info + 0x2a, u8::from(generation >= 1));
+        copy_float(e, c + 0xc4, info + 0x14);
+        copy_float(e, c + 0xc8, info + 0x18);
+        e.mem.set_u16(info + 0x22, 3);
+        copy_float(e, c + 0xcc, info + 0x1c);
+        e.mem.set_u16(info + 0x24, 4);
+        e.mem.set_u16(info + 0x20, 1);
+        copy_byte(e, c + 0x98, info + 0x2b);
+        e.mem.set_u16(info + 0x26, 5);
+        let collision_dispatcher = e.mem.u32(w + 0x80);
+        e.call(CTOR_COLLISION_QUALITY, &args![collision_dispatcher, info]);
+        let quality = e.mem.u32(w + 0x80).wrapping_add(0x1c60);
+        let input = e.mem.u32(w + 0x78);
+        e.mem.set_u32(input + 0x60, quality);
+        // m_fixedIsland: storage index 0xffff, two flag pairs of byte +0x26 cleared.
+        let block = router_alloc(e, 0x6c);
+        e.mem.set_u16(block + 4, 0x6c);
+        let island = e.call(CTOR_SIMULATION_ISLAND, &args![block, w]).u32();
+        e.mem.set_u32(w + 0x20, island);
+        e.mem.set_u16(island + 0x20, 0xffff);
+        let island = e.mem.u32(w + 0x20);
+        let flags = e.mem.u8(island + 0x26);
+        e.mem.set_u8(island + 0x26, flags & 0xf3);
+        let island = e.mem.u32(w + 0x20);
+        let flags = e.mem.u8(island + 0x26);
+        e.mem.set_u8(island + 0x26, flags & 0xfc);
+        if e.mem.u8(w + 0xc8) == 0 {
+            // Without simulation islands: one active island, storage index 0.
+            let block = router_alloc(e, 0x6c);
+            e.mem.set_u16(block + 4, 0x6c);
+            let island = e.call(CTOR_SIMULATION_ISLAND, &args![block, w]).u32();
+            let router = e.call(MEMORY_ROUTER, &args![]).u32();
+            let capacity = e.mem.u32(w + 0x30) & 0x3fff_ffff;
+            if e.mem.u32(w + 0x2c) == capacity {
+                let allocator = e.mem.u32(router + 0x10);
+                e.call(CTOR_ARRAY_GROW, &args![allocator, w + 0x28, 4u32]);
+            }
+            let size = e.mem.u32(w + 0x2c);
+            let data = e.mem.u32(w + 0x28);
+            e.mem
+                .set_u32(data.wrapping_add(size.wrapping_mul(4)), island);
+            e.mem.set_u32(w + 0x2c, size.wrapping_add(1));
+            e.mem.set_u16(island + 0x20, 0);
+        }
+        // m_fixedRigidBody: a rigid body cinfo with mass 0 and motion type 5.
+        let body_cinfo = frame + 0x60;
+        e.call(CTOR_RIGID_BODY_CINFO, &args![body_cinfo]);
+        e.mem.set_u32(body_cinfo + 0x90, x87_store32(0.0));
+        e.mem.set_u8(body_cinfo + 0xb4, 5);
+        let block = router_alloc(e, 0x220);
+        e.mem.set_u16(block + 4, 0x220);
+        let body = e.call(CTOR_RIGID_BODY, &args![block, body_cinfo]).u32();
+        e.mem.set_u32(w + 0x24, body);
+        hkp_world_add_entity(e, this, Ptr::new(body), 1);
+        let body = e.mem.u32(w + 0x24);
+        e.call(REMOVE_REFERENCE, &args![body]);
+        // m_dynamicsStepInfo.m_stepInfo (+0x1d0): start 0, end 1/60 (float), delta =
+        // 1/60 (double) - 0 through a float, and its inverse (0.0 for a zero delta: FUCOM,
+        // JP takes "not equal" and unordered to the division).
+        e.mem.set_u32(w + 0x1d0, x87_store32(0.0));
+        let step_end = x87_store32(x87_load32(e.global::<u32>(CTOR_STEP_TIME)));
+        e.mem.set_u32(w + 0x1d4, step_end);
+        let step = x87_load64(e.global::<u64>(CTOR_STEP_DOUBLE));
+        let delta = x87_load32(x87_store32(x87_sub(step, 0.0)));
+        e.mem.set_u32(w + 0x1d8, x87_store32(delta));
+        if delta == 0.0 {
+            e.mem.set_u32(w + 0x1dc, x87_store32(0.0));
+        } else {
+            e.mem.set_u32(w + 0x1dc, x87_store32(x87_div(1.0, delta)));
+        }
+        let input = e.mem.u32(w + 0x78);
+        e.mem.set_u32(input + 0x68, w + 0x1d0);
+        // m_broadPhaseBorder, unless m_broadPhaseBorderBehaviour is 3.
+        if e.mem.u8(c + 0x28) == 3 {
+            e.mem.set_u32(w + 0x1bc, 0);
+        } else {
+            let block = router_alloc(e, 0x44);
+            e.mem.set_u16(block + 4, 0x44);
+            let behaviour = e.mem.u8(c + 0x28) as i8 as i32 as u32;
+            let postpone = u32::from(e.mem.u8(c + 0x29));
+            let border = e
+                .call(
+                    CTOR_BROAD_PHASE_BORDER,
+                    &args![block, w, behaviour, postpone],
+                )
+                .u32();
+            e.mem.set_u32(w + 0x1bc, border);
+        }
+        // m_maintenanceMgr, initialized through its slot +0xc with the world.
+        let block = router_alloc(e, 0x10);
+        e.mem.set_u16(block + 4, 0x10);
+        let manager = e.call(CTOR_MAINTENANCE_MGR, &args![block]).u32();
+        e.mem.set_u32(w + 0x4c, manager);
+        e.vcall(manager, 0xc, &args![w]);
+        // m_collisionCallbackUtil.
+        e.mem.set_u32(w + 0x1c0, 0);
+        if e.mem.u8(c + 0xe0) != 0 {
+            e.call(CTOR_COLLISION_CALLBACKS, &args![w]);
+        }
+        // m_kdTreeManager and m_autoUpdateTree.
+        if e.mem.u8(c + 0x50) != 0 {
+            let block = router_alloc(e, 0x24);
+            e.mem.set_u16(block + 4, 0x24);
+            let manager = e.call(CTOR_KD_TREE_MANAGER, &args![block, w, 0u32]).u32();
+            e.mem.set_u32(w + 0x5c, manager);
+            copy_byte(e, c + 0x53, w + 0x60);
+        } else if e.mem.u8(c + 0x51) != 0 {
+            let block = router_alloc(e, 0x70);
+            e.mem.set_u16(block + 4, 0x70);
+            let update_type = e.mem.u8(c + 0x52) as i8 as i32 as u32;
+            let manager = e
+                .call(
+                    CTOR_AABB_TREE_MANAGER,
+                    &args![block, w, update_type, x87_store32(0.0)],
+                )
+                .u32();
+            e.mem.set_u32(w + 0x5c, manager);
+            copy_byte(e, c + 0x53, w + 0x60);
+        } else {
+            e.mem.set_u32(w + 0x5c, 0);
+        }
+        if e.mem.u8(c + 0xd1) != 3 {
+            e.call(CTOR_MULTI_THREAD_CHECK_DISABLE, &args![w + 0xa8]);
+        }
+        // m_multithreadedSimulationJobData.
+        let block = router_alloc(e, 0x120);
+        if block != 0 {
+            e.mem.set_u32(block + 0xf4, 0);
+            e.mem.set_u32(block + 0x94, 0);
+            e.mem.set_u32(w + 0x74, block);
+        } else {
+            e.mem.set_u32(w + 0x74, 0);
+        }
+    });
+    this
+}
+
 // Translated from 00c96ff0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpWorld::updateCollisionFilterOnWorld` (Xbox PDB), `(mode, flag)`. While critical
 /// operations are locked the request is queued (operation 0x15: mode byte at +1, flag byte
@@ -4808,6 +5643,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00c9_5800,
             hkp_world_remove_phantom_batch(Ptr<HkpWorld>, u32, i32)
+        ),
+        entry!(
+            0x00c9_5a80,
+            hkp_world_hkp_world(Ptr<HkpWorld>, Ptr, u32) -> Ptr<HkpWorld>
         ),
         entry!(
             0x00c9_6ff0,
@@ -10630,5 +11469,752 @@ mod le81_thunk_tests {
             check(0x00c9_8340, 0x00c9_82e0, 0x10, &[0x1]).u32(),
             0xdead_beef
         );
+    }
+}
+
+/// Tests of the constructor `00c95a80`.
+#[cfg(test)]
+mod tests_world_ctor {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Addresses for the doubles of virtual functions and of the broad-phase creator.
+    const ALLOCATE: u32 = 0x0900_0201;
+    const CREATE_BROAD_PHASE_DOUBLE: u32 = 0x0900_0202;
+    const BROAD_PHASE_SET_EXTENTS: u32 = 0x0900_0203;
+    const MANAGER_INIT: u32 = 0x0900_0204;
+    const REPORT: u32 = 0x0900_0205;
+
+    type Words = Rc<RefCell<Vec<u32>>>;
+
+    struct Rig {
+        e: Engine,
+        world: u32,
+        cinfo: u32,
+        sizes: Words,
+        failing: Words,
+        answer: Words,
+    }
+
+    /// The constants the constructor reads, with the exe's values (read from FalloutNV.exe
+    /// 1.4.0.525 through the read-only Ghidra server).
+    const FLOATS: [(u32, u32); 15] = [
+        (CTOR_LEVEL_LOW_FACTOR, 0x3400_0000),
+        (0x0101_3ea4, 0x3c23_d70a),
+        (0x010c_6850, 0x3da3_d70a),
+        (0x010c_684c, 0x3c8b_4396),
+        (0x0101_df44, 0x3e4c_cccd),
+        (0x0102_d934, 0x3ca3_d70a),
+        (0x0101_7870, 0x3e99_999a),
+        (0x0103_13d4, 0x3ccc_cccd),
+        (0x0102_31a8, 0x3ecc_cccd),
+        (CTOR_NO_THRESHOLD, 0x7d7f_ffee),
+        (CTOR_LANE_FILLER, 0),
+        (CTOR_EXTENT_SCALE, 0x4eff_fc00),
+        (CTOR_EXTENT_INVERSE_SCALE, 0x3000_0200),
+        (CTOR_STEP_TIME, 0x3c88_8889),
+        (CTOR_DEFAULT_GRAVITY, 0x411c_f5c3),
+    ];
+    const DOUBLES: [(u32, u64); 6] = [
+        (CTOR_TENTH, 0x3fb9_9999_a000_0000),
+        (CTOR_FRAME_FACTOR, 0x3f90_624d_e000_0000),
+        (CTOR_FOUR, 0x4010_0000_0000_0000),
+        (CTOR_EIGHT, 0x4020_0000_0000_0000),
+        (CTOR_STEP_DOUBLE, 0x3f91_1111_2000_0000),
+        (HALF, 0x3fe0_0000_0000_0000),
+    ];
+
+    /// The callees that only return their `this` (constructors).
+    const CONSTRUCTORS: [u32; 14] = [
+        CTOR_OPERATION_QUEUE,
+        CTOR_BROAD_PHASE_DISPATCHER,
+        CTOR_ENTITY_ENTITY_LISTENER,
+        CTOR_CONTACT_MGR_FACTORY,
+        CTOR_COLLISION_DISPATCHER,
+        CTOR_DEFAULT_COLLISION_FILTER,
+        CTOR_SIMULATION,
+        CTOR_CONTINUOUS_SIMULATION,
+        CTOR_MULTI_THREADED_SIMULATION,
+        CTOR_CRITICAL_SECTION,
+        CTOR_RIGID_BODY_CINFO,
+        CTOR_BROAD_PHASE_BORDER,
+        CTOR_KD_TREE_MANAGER,
+        CTOR_AABB_TREE_MANAGER,
+    ];
+    /// The callees that do nothing here.
+    const SILENT: [u32; 21] = [
+        CTOR_SOLVER_TABLES,
+        ADD_REFERENCE,
+        REMOVE_REFERENCE,
+        CTOR_COLLISION_QUALITY,
+        CTOR_COLLISION_CALLBACKS,
+        CTOR_MULTI_THREAD_CHECK_DISABLE,
+        MAKE_HELPER_SECOND,
+        REGISTER_HELPER,
+        SET_CACHED_SHAPE_DATA,
+        SET_TIME_INFORMATION,
+        ADD_ENTITY_SI,
+        ADD_ENTITY_BP,
+        FIRE_WORLD_ENTITY_ADDED,
+        FIRE_ENTITY_ADDED,
+        BROAD_PHASE_SET_EXTENTS,
+        MANAGER_INIT,
+        CTOR_ERROR_STREAM_CONSTRUCT,
+        CTOR_STREAM_APPEND_TEXT,
+        CTOR_STREAM_APPEND_FIRST_INT,
+        CTOR_STREAM_APPEND_SECOND_INT,
+        CTOR_ERROR_STREAM_DESTRUCT,
+    ];
+
+    fn words() -> Words {
+        Rc::new(RefCell::new(vec![]))
+    }
+
+    fn rig() -> Rig {
+        let mut e = Engine::new();
+        for page in [
+            0x0101_1000u32,
+            0x0101_3000,
+            0x0101_7000,
+            0x0101_d000,
+            0x0101_f000,
+            0x0102_3000,
+            0x0102_4000,
+            0x0102_d000,
+            0x0103_1000,
+            0x0104_d000,
+            0x010c_4000,
+            0x010c_6000,
+            0x011b_3000,
+            0x0126_8000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        for (address, bits) in FLOATS {
+            e.set_global(address, bits);
+        }
+        for (address, bits) in DOUBLES {
+            e.set_global(address, bits);
+        }
+        for lane in 0..4 {
+            e.set_global(CTOR_SIGN_MASK + 4 * lane, 0x8000_0000u32);
+        }
+        // The memory router and its allocator (slot 4 allocates; sizes in `failing` fail).
+        let sizes = words();
+        let failing = words();
+        let (log, refuse) = (sizes.clone(), failing.clone());
+        e.register_double(ALLOCATE, move |e, a| {
+            log.borrow_mut().push(a[1]);
+            let block = if refuse.borrow().contains(&a[1]) {
+                0
+            } else {
+                e.mem.alloc(a[1])
+            };
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        let table = e.mem.alloc(0x10);
+        e.mem.set_u32(table + 4, ALLOCATE);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, table);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        for address in CONSTRUCTORS {
+            e.register(address, |_, a| Ret {
+                eax: a[0],
+                ..Ret::default()
+            });
+        }
+        for address in SILENT {
+            e.register(address, |_, a| Ret {
+                eax: a.first().copied().unwrap_or(0),
+                ..Ret::default()
+            });
+        }
+        // The fixed islands come with all flags of byte +0x26 set.
+        e.register(CTOR_SIMULATION_ISLAND, |e, a| {
+            e.mem.set_u8(a[0] + 0x26, 0xff);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        // The rigid body keeps the mass and motion type it was given and has a motion.
+        e.register(CTOR_RIGID_BODY, |e, a| {
+            let mass = e.mem.u32(a[1] + 0x90);
+            let motion_type = e.mem.u8(a[1] + 0xb4);
+            e.mem.set_u32(a[0] + 0x200, mass);
+            e.mem.set_u8(a[0] + 0x204, motion_type);
+            e.mem.set_u32(a[0] + 0x18, 1);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        // The maintenance manager gets a vtable whose slot +0xc is `MANAGER_INIT`.
+        let manager_table = e.mem.alloc(0x10);
+        e.mem.set_u32(manager_table + 0xc, MANAGER_INIT);
+        e.register_double(CTOR_MAINTENANCE_MGR, move |e, a| {
+            e.mem.set_u32(a[0], manager_table);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        // The array growth gives the island array room for four entries.
+        e.register(CTOR_ARRAY_GROW, |e, a| {
+            let data = e.mem.alloc(0x10);
+            e.mem.set_u32(a[1], data);
+            e.mem.set_u32(a[1] + 8, 4);
+            Ret::default()
+        });
+        // The broad phase made by the creator: slot +0x70 is `BROAD_PHASE_SET_EXTENTS`.
+        let broad_phase_table = e.mem.alloc(0x80);
+        e.mem
+            .set_u32(broad_phase_table + 0x70, BROAD_PHASE_SET_EXTENTS);
+        let broad_phase = e.mem.alloc(0x10);
+        e.mem.set_u32(broad_phase, broad_phase_table);
+        e.register_double(CREATE_BROAD_PHASE_DOUBLE, move |_, _| Ret {
+            eax: broad_phase,
+            ..Ret::default()
+        });
+        e.set_global(CTOR_CREATE_BROAD_PHASE, CREATE_BROAD_PHASE_DOUBLE);
+        // The error reporter answers the word in `answer`.
+        let answer = words();
+        answer.borrow_mut().push(0);
+        let reply = answer.clone();
+        e.register_double(REPORT, move |_, _| Ret {
+            eax: reply.borrow()[0],
+            ..Ret::default()
+        });
+        let reporter_table = e.mem.alloc(0x10);
+        e.mem.set_u32(reporter_table + 0xc, REPORT);
+        let reporter = e.mem.alloc(8);
+        e.mem.set_u32(reporter, reporter_table);
+        e.set_global(CTOR_ERROR_REPORTER, reporter);
+        let world = e.new_object::<HkpWorld>().addr();
+        // A cinfo: gravity (0, -10, 0), world AABB (-100, -50, -200) to (100, 50, 200),
+        // 4 solver iterations, 1 micro step, single-threaded with simulation islands.
+        let cinfo = e.mem.alloc(0xf0);
+        e.mem.set_f32(cinfo + 0x14, -10.0);
+        for (lane, (low, high)) in [(-100.0f32, 100.0f32), (-50.0, 50.0), (-200.0, 200.0)]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_f32(cinfo + 0x30 + 4 * lane as u32, low);
+            e.mem.set_f32(cinfo + 0x40 + 4 * lane as u32, high);
+        }
+        e.mem.set_u32(cinfo + 0x20, (-7i32) as u32);
+        e.mem.set_f32(cinfo + 0x24, 1.5);
+        e.mem.set_f32(cinfo + 0x54, 0.25);
+        e.mem.set_f32(cinfo + 0x60, 200.0);
+        e.mem.set_u32(cinfo + 0x64, 0x30);
+        e.mem.set_f32(cinfo + 0x68, 0.125);
+        e.mem.set_u32(cinfo + 0x70, 0x40);
+        e.mem.set_u8(cinfo + 0x74, 1);
+        e.mem.set_f32(cinfo + 0x78, 0.5);
+        e.mem.set_f32(cinfo + 0x7c, 1.0);
+        e.mem.set_u32(cinfo + 0x80, 4);
+        e.mem.set_u32(cinfo + 0x84, 1);
+        e.mem.set_f32(cinfo + 0x88, 3.0);
+        e.mem.set_f32(cinfo + 0x90, 0.75);
+        e.mem.set_f32(cinfo + 0x94, 0.625);
+        e.mem.set_f32(cinfo + 0x9c, 0.0625);
+        e.mem.set_u32(cinfo + 0xa0, 9);
+        e.mem.set_f32(cinfo + 0xa8, 0.5);
+        e.mem.set_u8(cinfo + 0xd0, 1);
+        e.mem.set_u8(cinfo + 0xd1, 1);
+        e.mem.set_u8(cinfo + 0xd2, 1);
+        e.mem.set_u32(cinfo + 0xd4, 77);
+        e.call_log = Some(vec![]);
+        Rig {
+            e,
+            world,
+            cinfo,
+            sizes,
+            failing,
+            answer,
+        }
+    }
+
+    fn construct(rig: &mut Rig, version: u32) -> u32 {
+        rig.e
+            .call(0x00c9_5a80, &args![rig.world, rig.cinfo, version])
+            .u32()
+    }
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .map(|log| {
+                log.iter()
+                    .filter(|(called, _)| *called == address)
+                    .map(|(_, words)| words.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn f32_at(e: &Engine, at: u32) -> f32 {
+        e.mem.f32(at)
+    }
+
+    /// One deactivation level as plain `f64` arithmetic rounded to `float` at each store.
+    fn expected_level(linear: f32, angular: f32, gravity: f64) -> [u32; 4] {
+        let inverse_steps = 0.25f64;
+        let frame = f64::from_bits(0x3f90_624d_e000_0000);
+        let tenth = f64::from_bits(0x3fb9_9999_a000_0000);
+        let linear = f64::from((f64::from(linear) * gravity) as f32);
+        let angular = f64::from(angular);
+        let ratio = f64::from((angular * gravity / linear) as f32);
+        let angular_scale = f64::from((tenth * gravity) as f32);
+        let threshold = if angular > 0.0 {
+            ((inverse_steps * frame) / angular) as f32
+        } else {
+            f32::from_bits(0x7d7f_ffee)
+        };
+        [
+            ((1.0 / linear) as f32).to_bits(),
+            ((1.0 / (linear * angular_scale)) as f32).to_bits(),
+            ((1.0 - ratio * (inverse_steps * frame)) as f32).to_bits(),
+            threshold.to_bits(),
+        ]
+    }
+
+    #[test]
+    fn world_constructor_builds_the_single_threaded_world() {
+        let mut rig = rig();
+        let returned = construct(&mut rig, 0x111d4);
+        let (e, w) = (&rig.e, rig.world);
+        assert_eq!(returned, w);
+        assert_eq!(e.mem.u32(w), CTOR_WORLD_VTABLE);
+        assert_eq!(e.mem.u16(w + 6), 1);
+        for array in [0x28, 0x34, 0x40, 0x110, 0x14c, 0x1ac] {
+            assert_eq!(e.mem.u32(w + array + 8), 0x8000_0000);
+        }
+        assert_eq!(e.mem.u32(w + 0xa8), 0xffff_fff1);
+        assert_eq!(e.mem.u16(w + 0xac), 0x8000);
+        assert_eq!(e.mem.u8(w + 0x54), 1);
+        assert_eq!(e.mem.u8(w + 0x9d), 1);
+        assert_eq!(e.mem.u32(w + 0xa4), 1);
+        // No error report.
+        assert!(calls_to(e, CTOR_ERROR_STREAM_CONSTRUCT).is_empty());
+        // The violated-constraint array and the operation queue.
+        let violated = e.mem.u32(w + 0x1b8);
+        assert_ne!(violated, 0);
+        let queue = e.mem.u32(w + 0x88);
+        assert_eq!(calls_to(e, CTOR_OPERATION_QUEUE), vec![vec![queue, w]]);
+        // The broad phase from the creator, with the extents and the marker count.
+        assert_eq!(
+            calls_to(e, CREATE_BROAD_PHASE_DOUBLE),
+            vec![vec![w + 0x310, w + 0x320, 0x40]]
+        );
+        assert_eq!(f32_at(e, w + 0x310), -100.0);
+        assert_eq!(f32_at(e, w + 0x328), 200.0);
+        let broad_phase = e.mem.u32(w + 0x58);
+        assert_ne!(broad_phase, 0);
+        assert_eq!(e.mem.u32(w + 0x338) as i32, -7);
+        assert_eq!(e.mem.u32(w + 0x33c) as i32, -3);
+        assert_eq!(e.mem.u32(w + 0x334), 0x30);
+        // Gravity and the solver settings.
+        assert_eq!(f32_at(e, w + 0x14), -10.0);
+        assert_eq!(
+            calls_to(e, CTOR_SOLVER_TABLES),
+            vec![vec![0.75f32.to_bits(), 0.625f32.to_bits()]]
+        );
+        assert_eq!(f32_at(e, w + 0xcc), 0.75);
+        assert_eq!(f32_at(e, w + 0xd0), 0.75);
+        assert_eq!(f32_at(e, w + 0x1e0), 1.0);
+        assert_eq!(f32_at(e, w + 0x1e4), 0.5);
+        assert_eq!(f32_at(e, w + 0x1e8), 1.0);
+        assert_eq!(f32_at(e, w + 0x240), 1.5);
+        assert_eq!(e.mem.u32(w + 0x2f4), 4);
+        assert_eq!(f32_at(e, w + 0x300), 0.25);
+        assert_eq!(e.mem.u32(w + 0x2f8), 1);
+        assert_eq!(f32_at(e, w + 0x2fc), 1.0);
+        assert_eq!(f32_at(e, w + 0x308), 9.0);
+        // The deactivation levels for a gravity length of 10.
+        let levels = [
+            (f32::from_bits(0x3400_0000), 0.0f32),
+            (f32::from_bits(0x3400_0000), 0.0),
+            (f32::from_bits(0x3c23_d70a), f32::from_bits(0x3da3_d70a)),
+            (f32::from_bits(0x3c8b_4396), f32::from_bits(0x3e4c_cccd)),
+            (f32::from_bits(0x3ca3_d70a), f32::from_bits(0x3e99_999a)),
+            (f32::from_bits(0x3ccc_cccd), f32::from_bits(0x3ecc_cccd)),
+        ];
+        for (level, (linear, angular)) in levels.into_iter().enumerate() {
+            let row = w + 0x244 + 0x1c * level as u32;
+            let expected = expected_level(linear, angular, 10.0);
+            for (index, bits) in expected.into_iter().enumerate() {
+                assert_eq!(e.mem.u32(row + 4 * index as u32), bits, "level {level}");
+            }
+            assert_eq!(f32_at(e, row + 0x10), 0.25);
+            assert_eq!(f32_at(e, row + 0x14), 4.0);
+            assert_eq!(e.mem.u16(row + 0x18), 0x3f80);
+            assert_eq!(e.mem.u16(row + 0x1a), 0x4180);
+        }
+        // The broad-phase dispatcher and its listener slots.
+        let dispatcher = e.mem.u32(w + 0x64);
+        let phantom_listener = e.mem.u32(w + 0x68);
+        let border_listener = e.mem.u32(w + 0x70);
+        assert_eq!(e.mem.u32(phantom_listener), CTOR_PHANTOM_LISTENER_VTABLE);
+        assert_eq!(e.mem.u32(border_listener + 8), CTOR_BORDER_LISTENER_TABLE);
+        assert_eq!(e.mem.u32(dispatcher + 0x28), phantom_listener + 8);
+        assert_eq!(e.mem.u32(dispatcher + 0x24), e.mem.u32(w + 0x6c) + 8);
+        assert_eq!(e.mem.u32(dispatcher + 0x6c), border_listener + 8);
+        // The collision dispatcher, with the factory whose reference is dropped.
+        let factory_call = calls_to(e, CTOR_CONTACT_MGR_FACTORY);
+        assert_eq!(factory_call.len(), 2, "the dispatcher's and 00c912e0's");
+        let factory = factory_call[0][0];
+        let collision_dispatcher = e.mem.u32(w + 0x80);
+        assert_eq!(
+            calls_to(e, CTOR_COLLISION_DISPATCHER),
+            vec![vec![
+                collision_dispatcher,
+                CTOR_DEFAULT_AGENT_FUNCTION,
+                factory
+            ]]
+        );
+        assert!(calls_to(e, REMOVE_REFERENCE).contains(&vec![factory]));
+        // The default filters.
+        let filter = e.mem.u32(w + 0x7c);
+        assert_eq!(e.mem.u32(filter), CTOR_FILTER_TABLES[0]);
+        assert_eq!(e.mem.u32(filter + 0x20), 1);
+        assert_eq!(
+            e.mem.u32(e.mem.u32(w + 0x84)),
+            CTOR_CONVEX_LIST_FILTER_VTABLE
+        );
+        // The collision input.
+        let input = e.mem.u32(w + 0x78);
+        assert_eq!(e.mem.u32(input), collision_dispatcher);
+        assert_eq!(f32_at(e, input + 8), 0.25);
+        assert_eq!(e.mem.u32(input + 0xc), filter);
+        assert_eq!(e.mem.u8(w + 0x340), 1);
+        let config = e.mem.u32(input + 0x70);
+        assert_eq!(f32_at(e, config), 0.0625);
+        assert_eq!(e.mem.u32(config + 4), 9);
+        assert_eq!(e.mem.u32(input + 0x58), 0);
+        assert_eq!(e.mem.u32(input + 0x5c), 0);
+        let scale = f32::from_bits(0x4eff_fc00);
+        let inverse_scale = f32::from_bits(0x3000_0200);
+        let spans = [200.0f32, 100.0, 400.0];
+        let minimum = [-100.0f32, -50.0, -200.0];
+        for (lane, (span, low)) in spans.into_iter().zip(minimum).enumerate() {
+            let at = 4 * lane as u32;
+            let inverse = (1.0f64 / f64::from(span)) as f32;
+            assert_eq!(f32_at(e, input + 0x40 + at), inverse * scale);
+            assert_eq!(f32_at(e, input + 0x20 + at), -low);
+            assert_eq!(f32_at(e, input + 0x30 + at), inverse_scale * span + -low);
+        }
+        for vector in [0x20, 0x30, 0x40] {
+            assert_eq!(e.mem.u32(input + vector + 0xc), 0);
+        }
+        assert_eq!(
+            calls_to(e, BROAD_PHASE_SET_EXTENTS),
+            vec![vec![broad_phase, input + 0x20, input + 0x30, input + 0x40]]
+        );
+        assert_eq!(e.mem.u32(input + 0x60), collision_dispatcher + 0x1c60);
+        assert_eq!(e.mem.u32(input + 0x68), w + 0x1d0);
+        // 00c912e0 registered its three helpers with the collision dispatcher.
+        let registered = calls_to(e, REGISTER_HELPER);
+        assert_eq!(registered.len(), 3);
+        assert!(registered
+            .iter()
+            .all(|call| call[0] == collision_dispatcher));
+        // The single-threaded simulation and the island-dirty critical section.
+        let simulation = e.mem.u32(w + 8);
+        assert_eq!(calls_to(e, CTOR_SIMULATION), vec![vec![simulation, w]]);
+        assert_eq!(e.mem.u32(w + 0xf0), 1);
+        assert_eq!(e.mem.u32(w + 0xb4), 0);
+        let section = e.mem.u32(w + 0xc0);
+        assert_eq!(
+            calls_to(e, CTOR_CRITICAL_SECTION),
+            vec![vec![section, 0xfa0]]
+        );
+        assert_eq!(e.mem.u32(w + 0xb8), 0);
+        // The collision-quality call.
+        assert_eq!(
+            calls_to(e, CTOR_COLLISION_QUALITY)[0][0],
+            collision_dispatcher
+        );
+        // The fixed island; with simulation islands no active island is made.
+        let island = e.mem.u32(w + 0x20);
+        assert_eq!(e.mem.u16(island + 0x20), 0xffff);
+        assert_eq!(e.mem.u8(island + 0x26), 0xf0);
+        assert_eq!(calls_to(e, CTOR_SIMULATION_ISLAND).len(), 1);
+        assert_eq!(e.mem.u32(w + 0x2c), 0);
+        // The fixed rigid body: mass 0, motion type 5, added and released.
+        let body = e.mem.u32(w + 0x24);
+        assert_eq!(e.mem.u32(body + 0x200), 0);
+        assert_eq!(e.mem.u8(body + 0x204), 5);
+        assert_eq!(calls_to(e, ADD_ENTITY_SI), vec![vec![w, body, 1]]);
+        assert!(calls_to(e, REMOVE_REFERENCE).contains(&vec![body]));
+        // The step information.
+        assert_eq!(e.mem.u32(w + 0x1d0), 0);
+        assert_eq!(e.mem.u32(w + 0x1d4), 0x3c88_8889);
+        let delta = f64::from_bits(0x3f91_1111_2000_0000) as f32;
+        assert_eq!(f32_at(e, w + 0x1d8), delta);
+        assert_eq!(f32_at(e, w + 0x1dc), (1.0 / f64::from(delta)) as f32);
+        // Border, maintenance manager, no tree, the multi-thread check, the job data.
+        let border = e.mem.u32(w + 0x1bc);
+        assert_eq!(
+            calls_to(e, CTOR_BROAD_PHASE_BORDER),
+            vec![vec![border, w, 0, 0]]
+        );
+        let manager = e.mem.u32(w + 0x4c);
+        assert_eq!(calls_to(e, MANAGER_INIT), vec![vec![manager, w]]);
+        assert_eq!(e.mem.u32(w + 0x5c), 0);
+        assert!(calls_to(e, CTOR_COLLISION_CALLBACKS).is_empty());
+        assert_eq!(
+            calls_to(e, CTOR_MULTI_THREAD_CHECK_DISABLE),
+            vec![vec![w + 0xa8]]
+        );
+        assert_ne!(e.mem.u32(w + 0x74), 0);
+        assert!(rig.sizes.borrow().contains(&0x120));
+    }
+
+    #[test]
+    fn world_constructor_fills_the_collision_quality_input() {
+        let mut rig = rig();
+        let seen = words();
+        let sink = seen.clone();
+        rig.e.register_double(CTOR_COLLISION_QUALITY, move |e, a| {
+            for offset in (0..0x2c).step_by(4) {
+                sink.borrow_mut().push(e.mem.u32(a[1] + offset));
+            }
+            Ret::default()
+        });
+        for (offset, value) in [(0xc0, 1.0f32), (0xc4, 2.0), (0xc8, 3.0), (0xcc, 4.0)] {
+            rig.e.mem.set_f32(rig.cinfo + offset, value);
+        }
+        rig.e.mem.set_u8(rig.cinfo + 0x98, 1);
+        construct(&mut rig, 0x111d4);
+        let seen = seen.borrow().clone();
+        assert_eq!(
+            seen,
+            vec![
+                10.0f32.to_bits(),
+                0.25f32.to_bits(),
+                0.125f32.to_bits(),
+                200.0f32.to_bits(),
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits(),
+                4.0f32.to_bits(),
+                0x0003_0001,
+                0x0005_0004,
+                // Continuous wanted (type 1: no), generation == 2 (no), >= 1 (yes), welding.
+                0x0101_0000,
+            ]
+        );
+        assert_eq!(f32_at(&rig.e, rig.world + 0xf4), 1.0);
+        assert_eq!(f32_at(&rig.e, rig.world + 0x100), 4.0);
+    }
+
+    #[test]
+    fn world_constructor_reports_a_version_mismatch() {
+        let mut rig = rig();
+        construct(&mut rig, 0x1234);
+        let e = &rig.e;
+        let streams = calls_to(e, CTOR_ERROR_STREAM_CONSTRUCT);
+        assert_eq!(streams.len(), 1);
+        let stream = streams[0][0];
+        assert_eq!(streams[0][1..], [stream + 0x100, 0x200]);
+        assert_eq!(
+            calls_to(e, CTOR_STREAM_APPEND_TEXT),
+            vec![
+                vec![stream, CTOR_VERSION_TEXT_FIRST],
+                vec![stream, CTOR_VERSION_TEXT_SECOND],
+                vec![stream, CTOR_VERSION_TEXT_LAST],
+            ]
+        );
+        assert_eq!(
+            calls_to(e, CTOR_STREAM_APPEND_FIRST_INT),
+            vec![vec![stream, 0x111d4]]
+        );
+        assert_eq!(
+            calls_to(e, CTOR_STREAM_APPEND_SECOND_INT),
+            vec![vec![stream, 0x1234]]
+        );
+        let reporter: u32 = e.global(CTOR_ERROR_REPORTER);
+        assert_eq!(
+            calls_to(e, REPORT),
+            vec![vec![
+                reporter,
+                3,
+                0x53c9_4b42,
+                stream + 0x100,
+                0x010c_6864,
+                0xbb5
+            ]]
+        );
+        assert_eq!(calls_to(e, CTOR_ERROR_STREAM_DESTRUCT), vec![vec![stream]]);
+        // The construction goes on.
+        assert_eq!(f32_at(e, rig.world + 0x14), -10.0);
+        assert_ne!(e.mem.u32(rig.world + 0x74), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "INT3 at 00c95d68")]
+    fn world_constructor_breaks_when_the_reporter_asks() {
+        let mut rig = rig();
+        rig.answer.borrow_mut()[0] = 1;
+        construct(&mut rig, 0x1234);
+    }
+
+    #[test]
+    fn world_constructor_takes_the_cinfo_objects_and_the_continuous_simulation() {
+        let mut rig = rig();
+        let c = rig.cinfo;
+        let (filter, convex, watchdog) = (rig.e.mem.alloc(0x30), rig.e.mem.alloc(8), 0x5555);
+        rig.e.mem.set_u32(c + 0x58, filter);
+        rig.e.mem.set_u32(c + 0x5c, convex);
+        rig.e.mem.set_u32(c + 0x6c, watchdog);
+        // No gravity: the length is the default 9.81.
+        rig.e.mem.set_f32(c + 0x14, 0.0);
+        rig.e.mem.set_u8(c + 0xd1, 2);
+        rig.e.mem.set_u8(c + 0xd2, 0);
+        rig.e.mem.set_u8(c + 0x28, 3);
+        rig.e.mem.set_u8(c + 0x50, 1);
+        rig.e.mem.set_u8(c + 0x53, 1);
+        rig.e.mem.set_u8(c + 0xe0, 1);
+        rig.e.mem.set_u8(c + 0x74, 2);
+        let gravity_seen = words();
+        let sink = gravity_seen.clone();
+        rig.e.register_double(CTOR_COLLISION_QUALITY, move |e, a| {
+            sink.borrow_mut().push(e.mem.u32(a[1]));
+            sink.borrow_mut().push(e.mem.u32(a[1] + 0x28));
+            Ret::default()
+        });
+        construct(&mut rig, 0x111d4);
+        let (e, w) = (&rig.e, rig.world);
+        assert_eq!(e.mem.u32(w + 0x7c), filter);
+        assert_eq!(e.mem.u32(w + 0x84), convex);
+        assert_eq!(e.mem.u32(w + 0x50), watchdog);
+        let referenced = calls_to(e, ADD_REFERENCE);
+        for object in [watchdog, filter, convex] {
+            assert!(referenced.contains(&vec![object]));
+        }
+        assert!(calls_to(e, CTOR_DEFAULT_COLLISION_FILTER).is_empty());
+        // Deactivation without simulation islands is off.
+        assert_eq!(e.mem.u8(w + 0xc8), 0);
+        assert_eq!(e.mem.u8(w + 0xd5), 0);
+        // The continuous simulation.
+        let simulation = e.mem.u32(w + 8);
+        assert_eq!(
+            calls_to(e, CTOR_CONTINUOUS_SIMULATION),
+            vec![vec![simulation, w]]
+        );
+        assert_eq!(e.mem.u32(w + 0xf0), 2);
+        // Gravity 9.81 (the default), continuous wanted, generation 2 (== 2 and >= 1).
+        let seen = gravity_seen.borrow().clone();
+        assert_eq!(seen, vec![0x411c_f5c3, 0x0001_0101]);
+        // The deactivation levels with the default gravity length.
+        let expected = expected_level(
+            f32::from_bits(0x3c23_d70a),
+            f32::from_bits(0x3da3_d70a),
+            f64::from(f32::from_bits(0x411c_f5c3)),
+        );
+        for (index, bits) in expected.into_iter().enumerate() {
+            assert_eq!(e.mem.u32(w + 0x244 + 0x38 + 4 * index as u32), bits);
+        }
+        // Without simulation islands: one active island (the array grew first).
+        assert_eq!(calls_to(e, CTOR_SIMULATION_ISLAND).len(), 2);
+        assert_eq!(calls_to(e, CTOR_ARRAY_GROW).len(), 1);
+        assert_eq!(calls_to(e, CTOR_ARRAY_GROW)[0][1..], [w + 0x28, 4]);
+        assert_eq!(e.mem.u32(w + 0x2c), 1);
+        let active = e.mem.u32(e.mem.u32(w + 0x28));
+        assert_ne!(active, e.mem.u32(w + 0x20));
+        assert_eq!(e.mem.u16(active + 0x20), 0);
+        // Border behaviour 3: no border; the kd-tree manager; the collision callbacks.
+        assert_eq!(e.mem.u32(w + 0x1bc), 0);
+        assert!(calls_to(e, CTOR_BROAD_PHASE_BORDER).is_empty());
+        let manager = e.mem.u32(w + 0x5c);
+        assert_eq!(calls_to(e, CTOR_KD_TREE_MANAGER), vec![vec![manager, w, 0]]);
+        assert_eq!(e.mem.u8(w + 0x60), 1);
+        assert_eq!(calls_to(e, CTOR_COLLISION_CALLBACKS), vec![vec![w]]);
+    }
+
+    #[test]
+    fn world_constructor_builds_the_multithreaded_simulation_when_forced() {
+        let mut rig = rig();
+        let c = rig.cinfo;
+        rig.e.set_global(CTOR_FORCE_MULTITHREADED, 1u8);
+        rig.e.mem.set_u8(c + 0x51, 1);
+        rig.e.mem.set_u8(c + 0x52, 0xff);
+        rig.e.mem.set_u8(c + 0x28, 0x80);
+        rig.e.mem.set_u8(c + 0x29, 1);
+        construct(&mut rig, 0x111d4);
+        let (e, w) = (&rig.e, rig.world);
+        assert_eq!(e.mem.u8(c + 0xd1), 3);
+        assert_eq!(e.mem.u32(w + 0xf0), 3);
+        let sections = calls_to(e, CTOR_CRITICAL_SECTION);
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0][0], e.mem.u32(w + 0xb8));
+        assert_eq!(sections[1][0], e.mem.u32(w + 0xc4));
+        assert_eq!(sections[2][0], e.mem.u32(w + 0xc0));
+        let simulation = e.mem.u32(w + 8);
+        assert_eq!(
+            calls_to(e, CTOR_MULTI_THREADED_SIMULATION),
+            vec![vec![simulation, w]]
+        );
+        assert_eq!(e.mem.u32(w + 0xb4), 77);
+        // The AABB-tree manager with the sign-extended update type and 0.0.
+        let manager = e.mem.u32(w + 0x5c);
+        assert_eq!(
+            calls_to(e, CTOR_AABB_TREE_MANAGER),
+            vec![vec![manager, w, 0xffff_ffff, 0]]
+        );
+        // The border behaviour is sign-extended, the second byte zero-extended.
+        let border = e.mem.u32(w + 0x1bc);
+        assert_eq!(
+            calls_to(e, CTOR_BROAD_PHASE_BORDER),
+            vec![vec![border, w, 0xffff_ff80, 1]]
+        );
+        // The multi-thread check stays on.
+        assert!(calls_to(e, CTOR_MULTI_THREAD_CHECK_DISABLE).is_empty());
+    }
+
+    #[test]
+    fn world_constructor_survives_failed_allocations_and_no_simulation() {
+        let mut rig = rig();
+        let c = rig.cinfo;
+        rig.failing
+            .borrow_mut()
+            .extend_from_slice(&[0x204, 0x28, 0x18, 0x120]);
+        rig.e.mem.set_u8(c + 0xd1, 0);
+        // A simulation the world already points to (the constructor leaves +8 alone).
+        let simulation = rig.e.mem.alloc(0x40);
+        rig.e.mem.set_u32(rig.world + 8, simulation);
+        rig.e.mem.set_f32(c + 0xdc, 2.5);
+        // A zero step time takes the zero inverse.
+        rig.e.set_global(CTOR_STEP_DOUBLE, 0u64);
+        construct(&mut rig, 0x111d4);
+        let (e, w) = (&rig.e, rig.world);
+        assert_eq!(e.mem.u32(w + 0x1b8), 0);
+        assert_eq!(e.mem.u32(w + 0x88), 0);
+        assert!(calls_to(e, CTOR_OPERATION_QUEUE).is_empty());
+        assert_eq!(e.mem.u32(w + 0xc0), 0);
+        assert!(calls_to(e, CTOR_CRITICAL_SECTION).is_empty());
+        assert_eq!(e.mem.u32(w + 0x74), 0);
+        assert_eq!(e.mem.u32(w + 8), simulation);
+        assert_eq!(f32_at(e, simulation + 0x24), 2.5);
+        assert_eq!(e.mem.u32(w + 0xf0), 0);
+        for constructor in [
+            CTOR_SIMULATION,
+            CTOR_CONTINUOUS_SIMULATION,
+            CTOR_MULTI_THREADED_SIMULATION,
+        ] {
+            assert!(calls_to(e, constructor).is_empty());
+        }
+        assert_eq!(e.mem.u32(w + 0x1d8), 0);
+        assert_eq!(e.mem.u32(w + 0x1dc), 0);
     }
 }

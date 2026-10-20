@@ -183,6 +183,57 @@ pub fn hk_packed_ni_tri_strips_shape_get_next_key(e: &mut Engine, this: Ptr, key
     (next & 0x00ff_ffff) | (part << 24)
 }
 
+// Translated from 00ca35f5 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The second half of `hkPackedNiTriStripsShape::getNextKey` (Ghidra made a function of it; its
+/// one reference is the conditional jump at `00ca35eb` in `00ca35d0`, whose translation above
+/// carries the same steps). It runs on the frame of `getNextKey`: `EBP` holds the data object,
+/// `EDX` the sub-part of the key and the frame word at `ESP + 4` the next triangle index; the
+/// uniform form takes them in that order. The sub-parts `0..=part` add up their `uiNumVerts`
+/// (pairs first, through even and odd running sums, then a last single one when `part` is
+/// even); the answer is the key of the next triangle, whose sub-part moves on when the
+/// triangle's first vertex index (`us1`) is not below that sum. The exe also clears the key
+/// argument slot of `getNextKey` (`ESP + 0x18`), which its `RET 4` drops unread.
+pub fn fn_00ca35f5(
+    e: &mut Engine,
+    data: Ptr<HkPackedNiTriStripsData>,
+    part: u32,
+    next: u32,
+) -> u32 {
+    let mut even_sum = 0u32;
+    let mut odd_sum = 0u32;
+    let mut pair_end = 0u32;
+    if (part.wrapping_add(1) as i32) >= 2 {
+        let sub_parts = e.get(data, HkPackedNiTriStripsData::paSubPartData);
+        let pairs = part.wrapping_add(1) >> 1;
+        pair_end = pairs.wrapping_mul(2);
+        let mut cursor = sub_parts.wrapping_add(0x10);
+        for _ in 0..pairs {
+            even_sum = even_sum.wrapping_add(e.mem.u32(cursor.wrapping_sub(0xc)));
+            odd_sum = odd_sum.wrapping_add(e.mem.u32(cursor));
+            cursor = cursor.wrapping_add(0x18);
+        }
+    }
+    let last = if (pair_end as i32) <= (part as i32) {
+        let sub_parts = e.get(data, HkPackedNiTriStripsData::paSubPartData);
+        e.mem.u32(
+            sub_parts
+                .wrapping_add(pair_end.wrapping_mul(12))
+                .wrapping_add(4),
+        )
+    } else {
+        0
+    };
+    let triangles = e.get(data, HkPackedNiTriStripsData::paTriData);
+    let first_vertex = u32::from(e.mem.u16(triangles.wrapping_add(next.wrapping_mul(8))));
+    let total = odd_sum.wrapping_add(even_sum).wrapping_add(last);
+    let part = if first_vertex >= total {
+        part.wrapping_add(1)
+    } else {
+        part
+    };
+    (next & 0x00ff_ffff) | (part << 24)
+}
+
 // Translated from 00ca3670 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkPackedNiTriStripsShape::getCollisionFilterInfo` (`hkpShapeContainer` slot `0x10`, Xbox
 /// PDB); `this` is the container sub-object. The filter (`uiFilter`) of the key's sub-part
@@ -802,6 +853,10 @@ pub fn hk_packed_ni_tri_strips_data_load_binary(e: &mut Engine, this: u32, strea
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00ca34c0, fn_00ca34c0() -> u32),
+        entry!(
+            0x00ca_35f5,
+            fn_00ca35f5(Ptr<HkPackedNiTriStripsData>, u32, u32) -> u32
+        ),
         entry!(0x00ca3570, fn_00ca3570(u32)),
         entry!(0x00ca36a0, fn_00ca36a0(u32, u32)),
         entry!(
@@ -1744,5 +1799,50 @@ mod data_tests {
             load_vec(&e, this + WORLD_AABB + 0x10),
             [-100.0, -100.0, -100.0, 0.0]
         );
+    }
+}
+
+#[cfg(test)]
+mod next_key_tail_tests {
+    use super::*;
+
+    /// A data object with `uiNumVerts` 3, 4, 5 and 6 for the sub-parts 0 to 3 and the first
+    /// vertex index of triangle `t` set to `10 * t`.
+    fn data_object(e: &mut Engine) -> u32 {
+        let data = e.mem.alloc(0x30);
+        let sub_parts = e.mem.alloc(4 * 12);
+        for (part, count) in [3u32, 4, 5, 6].into_iter().enumerate() {
+            e.mem.set_u32(sub_parts + 12 * part as u32 + 4, count);
+        }
+        let triangles = e.mem.alloc(8 * 8);
+        for triangle in 0..8u32 {
+            e.mem
+                .set_u16(triangles + 8 * triangle, (10 * triangle) as u16);
+        }
+        e.mem.set_u32(data + 0x24, sub_parts);
+        e.mem.set_u32(data + 0x14, triangles);
+        data
+    }
+
+    fn next_key(e: &mut Engine, data: u32, part: u32, next: u32) -> u32 {
+        e.call(0x00ca_35f5, &args![data, part, next]).u32()
+    }
+
+    #[test]
+    fn fn_00ca35f5_moves_to_the_next_sub_part_once_its_vertices_are_used() {
+        let mut e = Engine::new();
+        let data = data_object(&mut e);
+        // Part 0 holds 3 vertices: triangle 0 (vertex 0) stays, triangle 1 (vertex 10) moves on.
+        assert_eq!(next_key(&mut e, data, 0, 0), 0);
+        assert_eq!(next_key(&mut e, data, 0, 1), 0x0100_0001);
+        // Parts 0 and 1 hold 7 (one pair, no single one): vertex 0 stays, vertex 10 moves on.
+        assert_eq!(next_key(&mut e, data, 1, 0), 0x0100_0000);
+        assert_eq!(next_key(&mut e, data, 1, 1), 0x0200_0001);
+        // Parts 0 to 2 hold 12 (a pair and a single one): vertex 10 stays, vertex 20 moves on.
+        assert_eq!(next_key(&mut e, data, 2, 1), 0x0200_0001);
+        assert_eq!(next_key(&mut e, data, 2, 2), 0x0300_0002);
+        // Parts 0 to 3 hold 18 (two pairs).
+        assert_eq!(next_key(&mut e, data, 3, 1), 0x0300_0001);
+        assert_eq!(next_key(&mut e, data, 3, 2), 0x0400_0002);
     }
 }

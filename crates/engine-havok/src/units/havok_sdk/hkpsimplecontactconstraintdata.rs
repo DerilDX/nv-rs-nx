@@ -389,10 +389,318 @@ pub fn hkp_simple_contact_constraint_data_allocate_contact_point(
     hkp_dynamics_cp_id_mgr_new_id(e, Ptr::new(data + 0xc), count as u8)
 }
 
+/// Callees of `fireCallbacks`: the impulse estimate `00df2510` (cdecl `(entity a, entity b,
+/// motion a + 0x40, motion b + 0x40, contact point)`, answers `ST0`),
+/// `hkpWorldCallbackUtil::fireContactPointCallback` (`00d00ca0`, cdecl `(world, event)`),
+/// `hkpEntityCallbackUtil::fireContactPointCallbackInternal` (`00cfff00`, cdecl `(entity,
+/// event)`), `hkpSimpleCollisionResponse::solveSingleContact2` (`00d9ee50`, cdecl, eight
+/// words) and `hkpWorldCallbackUtil::fireContactImpulseLimitBreached` (`00d01700`, cdecl
+/// `(world, event, count)`).
+const ESTIMATE_IMPULSE: u32 = 0x00df_2510;
+const FIRE_CONTACT_POINT_CALLBACK: u32 = 0x00d0_0ca0;
+const FIRE_ENTITY_CONTACT_POINT_CALLBACK: u32 = 0x00cf_ff00;
+const SOLVE_SINGLE_CONTACT: u32 = 0x00d9_ee50;
+const FIRE_CONTACT_IMPULSE_LIMIT_BREACHED: u32 = 0x00d0_1700;
+/// The constants of the contact response: `1/128` (`double`, `010cc8d0`), the restitution
+/// limit (`float`, `01017870`), the small `double` added to the inverse masses (`0109cc78`),
+/// the two `double` factors (`010cc8d8`, `010d3dc0`), the `float` stored in a contact's `+0x1c`
+/// when its properties have bit 3 (`010cc3b0`), the default maximum impulse (`float`,
+/// `0104da48`) and the table of `float` limits indexed by the property bytes (`010c7948`).
+const RESTITUTION_SCALE: u32 = 0x010c_c8d0;
+const RESTITUTION_LIMIT: u32 = 0x0101_7870;
+const INVERSE_MASS_EPSILON: u32 = 0x0109_cc78;
+const IMPULSE_FACTOR: u32 = 0x010c_c8d8;
+const VELOCITY_FACTOR: u32 = 0x010d_3dc0;
+const DISABLED_CONTACT_VALUE: u32 = 0x010c_c3b0;
+const DEFAULT_MAX_IMPULSE: u32 = 0x0104_da48;
+const LIMIT_TABLE: u32 = 0x010c_7948;
+
+/// What `fireCallbacks` passes to every contact point event.
+struct ContactEventContext {
+    /// The stack frame: the event at `+0x6c`, the impulse at `+0x30`, the solver's parameters
+    /// at `+0x6c` too and its output at `+0x4c`, the breach event at `+0x50` (the exe's
+    /// offsets).
+    frame: u32,
+    data: Ptr,
+    world: u32,
+    entity_a: u32,
+    entity_b: u32,
+    word: u32,
+    motion_a: u32,
+    motion_b: u32,
+}
+
+/// Fills the contact point event at `frame + 0x6c` (type 2, the two entities, the contact
+/// manager, `word`, the contact, its properties, `flag`, whether this is the first and the last
+/// contact handled, `impulse`, 0, the contact's `+0x14`, the two motions) and fires it to the
+/// world (`00d00ca0`), then as type 0 to entity a and as type 1 to entity b when their
+/// listener counts (`u16` at `+0x204`) are not zero (`00cfff00`).
+fn fire_contact_point(
+    e: &mut Engine,
+    context: &ContactEventContext,
+    contact: (u32, u32),
+    order: (bool, bool),
+    flag: u8,
+    impulse: u32,
+) {
+    let (point, properties) = contact;
+    let (first, last) = order;
+    let event = context.frame + 0x6c;
+    e.mem.set_u32(event, 2);
+    let manager =
+        hkp_simple_contact_constraint_data_get_simple_constraint_contact_mgr(e, context.data);
+    e.mem.set_u32(event + 0xc, manager.addr());
+    e.mem.set_u32(event + 8, context.entity_b);
+    e.mem.set_u32(event + 0x10, context.word);
+    e.mem.set_u32(event + 0x14, point);
+    e.mem.set_u8(event + 0x1c, flag);
+    e.mem.set_u8(event + 0x1d, first as u8);
+    e.mem.set_u32(event + 0x28, properties.wrapping_add(0x14));
+    e.mem.set_u32(event + 0x2c, context.motion_a);
+    e.mem.set_u8(event + 0x1e, last as u8);
+    e.mem.set_u32(event + 0x20, impulse);
+    e.mem.set_u32(event + 4, context.entity_a);
+    e.mem.set_u32(event + 0x18, properties);
+    e.mem.set_u32(event + 0x24, 0);
+    e.mem.set_u32(event + 0x30, context.motion_b);
+    e.call(FIRE_CONTACT_POINT_CALLBACK, &args![context.world, event]);
+    e.mem.set_u32(event, 0);
+    if e.mem.u16(context.entity_a + 0x204) != 0 {
+        e.call(
+            FIRE_ENTITY_CONTACT_POINT_CALLBACK,
+            &args![context.entity_a, event],
+        );
+    }
+    e.mem.set_u32(event, 1);
+    if e.mem.u16(context.entity_b + 0x204) != 0 {
+        e.call(
+            FIRE_ENTITY_CONTACT_POINT_CALLBACK,
+            &args![context.entity_b, event],
+        );
+    }
+}
+
+/// The response to one contact after its callbacks (the exe from `00d92abe`): `info` the
+/// second argument, `impulse_bits` the estimated impulse stored at `frame + 0x30`.
+fn respond_to_contact(
+    e: &mut Engine,
+    context: &ContactEventContext,
+    info: u32,
+    contact: (u32, u32),
+    impulse_bits: u32,
+) {
+    let (point, properties) = contact;
+    let frame = context.frame;
+    let flags = properties + 0xf;
+    if e.mem.u8(flags) & 8 != 0 {
+        let value = x87_quiet_bits(e.mem.u32(DISABLED_CONTACT_VALUE));
+        e.mem.set_u32(point + 0x1c, value);
+        e.mem.set_u32(properties, 0);
+        e.mem.set_u32(properties + 4, 0);
+        e.mem.set_u32(properties + 0x10, 0);
+        e.mem.set_u8(flags, e.mem.u8(flags) & 0xfe);
+        return;
+    }
+    let restitution_byte = e.mem.u8(properties + 0xd);
+    let collision_input = e.mem.u32(context.world + 0x78);
+    let tolerances = e.mem.u32(collision_input + 0x68);
+    let restitution_bits = x87_store32(x87_mul(
+        f64::from(i32::from(restitution_byte)),
+        e.mem.f64(RESTITUTION_SCALE),
+    ));
+    let restitution = x87_load32(restitution_bits);
+    let impulse = x87_load32(impulse_bits);
+    let negated_tolerance = -x87_load32(e.mem.u32(tolerances + 0x70));
+    // `FCOMP` with `TEST AH,0x41` and then `TEST AH,5` / `JP`: the solver runs only when the
+    // negated tolerance is above the impulse and the restitution above the limit (both
+    // ordered).
+    let solve =
+        negated_tolerance > impulse && x87_load32(e.mem.u32(RESTITUTION_LIMIT)) < restitution;
+    if solve {
+        let parameters = frame + 0x6c;
+        let limit_index = u32::from(e.mem.u8(properties + 0xc));
+        let limit = x87_quiet_bits(e.mem.u32(LIMIT_TABLE + 4 * limit_index));
+        e.mem.set_u32(parameters, limit);
+        e.mem.set_u32(parameters + 4, x87_store32(restitution));
+        e.mem.set_u32(parameters + 0x10, 0);
+        e.mem.set_u32(parameters + 0x14, 0);
+        e.mem.set_u32(parameters + 0xc, x87_store32(impulse));
+        let maximum = x87_quiet_bits(e.mem.u32(DEFAULT_MAX_IMPULSE));
+        e.mem.set_u32(parameters + 8, maximum);
+        let maximum_index = u32::from(e.mem.u8(properties + 0xe));
+        if maximum_index != 0 {
+            let maximum = x87_quiet_bits(e.mem.u32(LIMIT_TABLE + 4 * maximum_index));
+            e.mem.set_u32(parameters + 8, maximum);
+        }
+        let (motion_a, motion_b) = (e.mem.u32(info + 0x30), e.mem.u32(info + 0x34));
+        e.call(
+            SOLVE_SINGLE_CONTACT,
+            &args![
+                context.data,
+                point,
+                parameters,
+                context.entity_a,
+                context.entity_b,
+                motion_a,
+                motion_b,
+                frame + 0x4c
+            ],
+        );
+        if e.mem.u8(frame + 0x84) != 0 {
+            let event = frame + 0x50;
+            e.mem.set_u16(event, 1);
+            let owner = e.mem.u32(info + 0x60);
+            e.mem.set_u32(event + 4, owner);
+            e.mem.set_u16(event + 2, 1);
+            e.mem.set_u32(event + 0xc, point);
+            e.mem.set_u32(event + 8, properties);
+            e.call(
+                FIRE_CONTACT_IMPULSE_LIMIT_BREACHED,
+                &args![context.world, event, 1u32],
+            );
+        }
+        e.mem.set_u32(properties, 0);
+        e.mem.set_u32(properties + 0x10, 0);
+        e.mem.set_u8(flags, e.mem.u8(flags) & 0xfe);
+        return;
+    }
+    // The inverse masses are the fourth lanes of the entities' `+0x1a0` vectors.
+    let inverse_mass_b = e.mem.u32(context.entity_b + 0x1ac);
+    let inverse_mass_a = e.mem.u32(context.entity_a + 0x1ac);
+    let sum = x87_store32(x87_add(x87_load32(inverse_mass_b), x87_m32(inverse_mass_a)));
+    let sum = x87_add(x87_load32(sum), e.mem.f64(INVERSE_MASS_EPSILON));
+    let inverse = x87_store32(x87_div(1.0, sum));
+    let scaled = x87_mul(x87_load32(inverse), e.mem.f64(IMPULSE_FACTOR));
+    let scaled = x87_mul(scaled, impulse);
+    let bounce = x87_add(1.0, restitution);
+    let first = x87_mul(scaled, bounce);
+    e.mem.set_u32(properties, x87_store32(first));
+    let velocity = x87_mul(impulse, restitution);
+    let velocity = x87_store32(x87_mul(velocity, x87_m32(e.mem.u32(info))));
+    let velocity = x87_store32(x87_mul(x87_load32(velocity), e.mem.f64(VELOCITY_FACTOR)));
+    e.mem
+        .set_u32(properties + 4, x87_store32(x87_load32(velocity)));
+    // `FLDZ` / `FCOM ST2` / `TEST AH,5` / `JP`: only an ordered positive restitution adds
+    // the contact's `+0x1c`.
+    let last = if 0.0 < restitution {
+        let total = x87_store32(x87_add(
+            x87_load32(velocity),
+            x87_m32(e.mem.u32(point + 0x1c)),
+        ));
+        x87_store32(x87_load32(total))
+    } else {
+        x87_store32(x87_load32(x87_store32(0.0)))
+    };
+    e.mem.set_u32(properties + 0x10, last);
+    e.mem.set_u8(flags, e.mem.u8(flags) & 0xfe);
+}
+
+// Translated from 00d92900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkSimpleContactConstraintData_fireCallbacks` (Xbox PDB name per the engine map), cdecl
+/// `(data, info, atom, word)`. With `owner = info[+0x60]`, the entities `owner[+0x14]` (a) and
+/// `owner[+0x18]` (b) and the world `a[+8]`, it walks the atom's contacts (count `u16` at
+/// `+4`, the contact points from `+0x30` at 0x20 bytes each, their properties from the point
+/// array's entry `u16 [+6]`, `[+0xa]` bytes apart), the last index first. A contact whose
+/// properties have bit 0 of `+0xf` gets an impulse estimate (`00df2510`), its contact point
+/// event (flag byte = bit 3 of `owner[+0x30]`'s byte `+0x12`, the impulse's address) and its
+/// response: with bit 3 of `+0xf` the contact is disabled (`+0x1c` of the point from
+/// `010cc3b0`, three floats zeroed); else when the negated tolerance (`[world[+0x78] + 0x68]
+/// + 0x70`) is above the impulse and the restitution (`+0xd` / 128) above the limit, the
+/// single-contact solver runs (with the limits from the table at `010c7948`) and, when it
+/// reports a breach (its byte at `+0x18`), the impulse-limit-breached event fires; otherwise
+/// the impulse and the separating velocity are written from the inverse masses (the fourth
+/// lanes at `+0x1a0`). The other contacts only get an event (flag byte 1, no impulse) when the
+/// bit of `owner[+0x30]` is set. After a contact's callbacks, when an earlier contact was
+/// handled and its byte `+0xe` is set, bit 1 of `+0xf` is cleared. Last, bits 0 and 3 of
+/// `owner[+0x30]`'s byte `+0x12` are cleared.
+pub fn hk_simple_contact_constraint_data_fire_callbacks(
+    e: &mut Engine,
+    data: Ptr,
+    info: Ptr,
+    atom: Ptr,
+    word: u32,
+) {
+    let (info, atom) = (info.addr(), atom.addr());
+    let owner = e.mem.u32(info + 0x60);
+    let entity_b = e.mem.u32(owner + 0x18);
+    let entity_a = e.mem.u32(owner + 0x14);
+    let world = e.mem.u32(entity_a + 8);
+    let motion_a = e.mem.u32(info + 0x30);
+    let motion_b = e.mem.u32(info + 0x34);
+    let notify = e.mem.u8(e.mem.u32(owner + 0x30) + 0x12) & 8 != 0;
+    let stride = u32::from(e.mem.u8(atom + 0xa));
+    let mut point = atom + 0x30;
+    let mut properties = (u32::from(e.mem.u16(atom + 6)) << 5)
+        .wrapping_add(atom)
+        .wrapping_add(0x30);
+    let last = i32::from(e.mem.u16(atom + 4)) - 1;
+    e.with_stack(0xa0, |e, frame| {
+        let context = ContactEventContext {
+            frame: frame.addr(),
+            data,
+            world,
+            entity_a,
+            entity_b,
+            word,
+            motion_a,
+            motion_b,
+        };
+        let mut previous = 0u32;
+        let mut index = last;
+        while index >= 0 {
+            let contact = (point, properties);
+            let order = (index == last, index == 0);
+            let active = e.mem.u8(properties + 0xf) & 1 != 0;
+            let mut impulse = None;
+            if active {
+                let motion_a = e.mem.u32(info + 0x30);
+                let motion_b = e.mem.u32(info + 0x34);
+                let estimate = e
+                    .call(
+                        ESTIMATE_IMPULSE,
+                        &args![
+                            entity_a,
+                            entity_b,
+                            motion_a.wrapping_add(0x40),
+                            motion_b.wrapping_add(0x40),
+                            point
+                        ],
+                    )
+                    .f64();
+                let slot = context.frame + 0x30;
+                e.mem.set_u32(slot, x87_store32(estimate));
+                fire_contact_point(e, &context, contact, order, notify as u8, slot);
+                impulse = Some(slot);
+            } else if notify {
+                fire_contact_point(e, &context, contact, order, 1, 0);
+            }
+            if (active || notify) && index < last && e.mem.u8(previous + 0xe) != 0 {
+                let flags = e.mem.u8(properties + 0xf) & 0xfd;
+                e.mem.set_u8(properties + 0xf, flags);
+            }
+            if let Some(slot) = impulse {
+                // The response reads the impulse back after the callbacks had its address.
+                let bits = e.mem.u32(slot);
+                respond_to_contact(e, &context, info, contact, bits);
+            }
+            index -= 1;
+            point = point.wrapping_add(0x20);
+            previous = properties;
+            properties = properties.wrapping_add(stride);
+        }
+    });
+    let bits = e.mem.u32(owner + 0x30) + 0x12;
+    e.mem.set_u8(bits, e.mem.u8(bits) & 0xf6);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d9_2df0, hkp_simple_contact_constraint_data_allocate_contact_point(Ptr, Ptr, Ptr, Ptr) -> i32),
+        entry!(
+            0x00d9_2900,
+            hk_simple_contact_constraint_data_fire_callbacks(Ptr, Ptr, Ptr, u32)
+        ),
         entry!(
             0x00d9_27b0,
             hkp_simple_contact_constraint_data_get_constraint_info(Ptr, Ptr)
@@ -827,5 +1135,313 @@ mod allocate_tests {
             vec![vec![0x7777, atom, moved, 0x321]]
         );
         assert_eq!(e.mem.u32(data + 0x2c), 0x321);
+    }
+}
+
+#[cfg(test)]
+mod fire_callbacks_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type CallLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    struct Rig {
+        e: Engine,
+        log: CallLog,
+        data: u32,
+        info: u32,
+        atom: u32,
+        owner_flags: u32,
+        entity_a: u32,
+        entity_b: u32,
+    }
+
+    /// The contact point `index` (in the order handled) and its properties.
+    fn contact(r: &Rig, index: u32) -> (u32, u32) {
+        (r.atom + 0x30 + 0x20 * index, r.atom + 0x90 + 0x18 * index)
+    }
+
+    /// A contact constraint with `count` contacts (properties from entry 3 of the point
+    /// array, 0x18 bytes apart), the impulse double answering `impulse`, the solver double
+    /// writing `breach` to its parameters' `+0x18`, and the exe constants the response reads
+    /// (exact ones: the inverse-mass epsilon 1, the factors -0.25 and -1.5).
+    fn rig(count: u16, owner_bits: u8, impulse: f64, breach: u8) -> Rig {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.mem.set_f64(RESTITUTION_SCALE, 1.0 / 128.0);
+        e.mem.set_f32(RESTITUTION_LIMIT, 0.3);
+        e.mem.set_f64(INVERSE_MASS_EPSILON, 1.0);
+        e.mem.set_f64(IMPULSE_FACTOR, -0.25);
+        e.mem.set_f64(VELOCITY_FACTOR, -1.5);
+        e.mem.set_u32(DISABLED_CONTACT_VALUE, 0x7f80_0005);
+        e.mem.set_f32(DEFAULT_MAX_IMPULSE, 1000.0);
+        for index in 0..4u32 {
+            e.mem.set_f32(LIMIT_TABLE + 4 * index, 10.0 * index as f32);
+        }
+        let log: CallLog = Rc::new(RefCell::new(Vec::new()));
+        e.register_double(ESTIMATE_IMPULSE, {
+            let log = Rc::clone(&log);
+            move |_, a| {
+                let mut entry = vec![ESTIMATE_IMPULSE];
+                entry.extend_from_slice(a);
+                log.borrow_mut().push(entry);
+                Ret {
+                    st0: impulse,
+                    ..Ret::default()
+                }
+            }
+        });
+        e.register_double(FIRE_CONTACT_POINT_CALLBACK, {
+            let log = Rc::clone(&log);
+            move |e, a| {
+                let mut entry = vec![FIRE_CONTACT_POINT_CALLBACK, a[0]];
+                entry.extend((0..13).map(|word| e.mem.u32(a[1] + 4 * word)));
+                // The impulse the event points at, when it points at one.
+                let impulse = e.mem.u32(a[1] + 0x20);
+                entry.push(if impulse == 0 { 0 } else { e.mem.u32(impulse) });
+                log.borrow_mut().push(entry);
+                Ret::default()
+            }
+        });
+        e.register_double(FIRE_ENTITY_CONTACT_POINT_CALLBACK, {
+            let log = Rc::clone(&log);
+            move |e, a| {
+                let kind = e.mem.u32(a[1]);
+                log.borrow_mut()
+                    .push(vec![FIRE_ENTITY_CONTACT_POINT_CALLBACK, a[0], kind]);
+                Ret::default()
+            }
+        });
+        e.register_double(SOLVE_SINGLE_CONTACT, {
+            let log = Rc::clone(&log);
+            move |e, a| {
+                let mut entry = vec![SOLVE_SINGLE_CONTACT];
+                entry.extend_from_slice(a);
+                entry.extend((0..6).map(|word| e.mem.u32(a[2] + 4 * word)));
+                log.borrow_mut().push(entry);
+                e.mem.set_u8(a[2] + 0x18, breach);
+                Ret::default()
+            }
+        });
+        e.register_double(FIRE_CONTACT_IMPULSE_LIMIT_BREACHED, {
+            let log = Rc::clone(&log);
+            move |e, a| {
+                let event = a[1];
+                log.borrow_mut().push(vec![
+                    FIRE_CONTACT_IMPULSE_LIMIT_BREACHED,
+                    a[0],
+                    u32::from(e.mem.u16(event)),
+                    u32::from(e.mem.u16(event + 2)),
+                    e.mem.u32(event + 4),
+                    e.mem.u32(event + 8),
+                    e.mem.u32(event + 0xc),
+                    a[2],
+                ]);
+                Ret::default()
+            }
+        });
+        let tolerances = e.mem.alloc(0x80);
+        e.mem.set_f32(tolerances + 0x70, 1.0);
+        let collision_input = e.mem.alloc(0x80);
+        e.mem.set_u32(collision_input + 0x68, tolerances);
+        let world = e.mem.alloc(0x100);
+        e.mem.set_u32(world + 0x78, collision_input);
+        let entity_a = e.mem.alloc(0x210);
+        let entity_b = e.mem.alloc(0x210);
+        e.mem.set_u32(entity_a + 8, world);
+        e.mem.set_u16(entity_a + 0x204, 1);
+        e.mem.set_f32(entity_a + 0x1ac, 1.0);
+        e.mem.set_f32(entity_b + 0x1ac, 2.0);
+        let owner_flags = e.mem.alloc(0x20);
+        e.mem.set_u8(owner_flags + 0x12, owner_bits);
+        let owner = e.mem.alloc(0x40);
+        e.mem.set_u32(owner + 0x14, entity_a);
+        e.mem.set_u32(owner + 0x18, entity_b);
+        e.mem.set_u32(owner + 0x30, owner_flags);
+        let info = e.mem.alloc(0x70);
+        e.mem.set_f32(info, 2.0);
+        e.mem.set_u32(info + 0x30, 0x3000);
+        e.mem.set_u32(info + 0x34, 0x3400);
+        e.mem.set_u32(info + 0x60, owner);
+        let atom = e.mem.alloc(0x100);
+        e.mem.set_u16(atom + 4, count);
+        e.mem.set_u16(atom + 6, 3);
+        e.mem.set_u8(atom + 0xa, 0x18);
+        let data = e.mem.alloc(0x40);
+        Rig {
+            e,
+            log,
+            data,
+            info,
+            atom,
+            owner_flags,
+            entity_a,
+            entity_b,
+        }
+    }
+
+    fn fire(r: &mut Rig) {
+        let (data, info, atom) = (r.data, r.info, r.atom);
+        r.e.call(0x00d9_2900, &args![data, info, atom, 0x77u32]);
+    }
+
+    fn logged(r: &Rig, address: u32) -> Vec<Vec<u32>> {
+        r.log
+            .borrow()
+            .iter()
+            .filter(|entry| entry[0] == address)
+            .map(|entry| entry[1..].to_vec())
+            .collect()
+    }
+
+    #[test]
+    fn fire_callbacks_estimates_disables_and_notifies_the_contacts() {
+        let mut r = rig(3, 0x0f, 2.0, 0);
+        let (point0, properties0) = contact(&r, 0);
+        let (point1, properties1) = contact(&r, 1);
+        let (point2, properties2) = contact(&r, 2);
+        // The first contact: active, restitution 64 / 128, its `+0xe` set for the next one.
+        r.e.mem.set_u8(properties0 + 0xf, 1);
+        r.e.mem.set_u8(properties0 + 0xd, 0x40);
+        r.e.mem.set_u8(properties0 + 0xe, 1);
+        r.e.mem.set_f32(point0 + 0x1c, 0.5);
+        // The second: active and disabled (bit 3), bit 1 set; the third: inactive.
+        r.e.mem.set_u8(properties1 + 0xf, 0x0b);
+        r.e.mem.set_u8(properties2 + 0xf, 0x02);
+        fire(&mut r);
+        // Impulse 2, restitution 0.5: inverse 1 / (2 + 1 + 1) = 0.25, so the impulse is
+        // 0.25 * -0.25 * 2 * 1.5 and the velocity 2 * 0.5 * 2 * -1.5, plus the point's 0.5.
+        assert_eq!(r.e.mem.f32(properties0), -0.1875);
+        assert_eq!(r.e.mem.f32(properties0 + 4), -3.0);
+        assert_eq!(r.e.mem.f32(properties0 + 0x10), -2.5);
+        assert_eq!(r.e.mem.u8(properties0 + 0xf), 0);
+        // The disabled contact: bit 1 cleared by the previous one's `+0xe`, the floats zeroed.
+        assert_eq!(r.e.mem.u32(point1 + 0x1c), 0x7fc0_0005);
+        assert_eq!(r.e.mem.u8(properties1 + 0xf), 0x08);
+        for offset in [0, 4, 0x10] {
+            assert_eq!(r.e.mem.u32(properties1 + offset), 0);
+        }
+        assert_eq!(r.e.mem.u8(properties2 + 0xf), 0x02);
+        // Bits 0 and 3 of the owner's byte are cleared.
+        assert_eq!(r.e.mem.u8(r.owner_flags + 0x12), 0x06);
+        assert_eq!(
+            logged(&r, ESTIMATE_IMPULSE),
+            vec![
+                vec![r.entity_a, r.entity_b, 0x3040, 0x3440, point0],
+                vec![r.entity_a, r.entity_b, 0x3040, 0x3440, point1],
+            ]
+        );
+        let world = r.e.mem.u32(r.entity_a + 8);
+        let manager = r.data - 0x14;
+        let events = logged(&r, FIRE_CONTACT_POINT_CALLBACK);
+        assert_eq!(events.len(), 3);
+        let expect = |point: u32, properties: u32, bytes: u32, impulse: u32| {
+            vec![
+                world,
+                2,
+                r.entity_a,
+                r.entity_b,
+                manager,
+                0x77,
+                point,
+                properties,
+                bytes,
+                impulse,
+                0,
+                properties + 0x14,
+                0x3000,
+                0x3400,
+            ]
+        };
+        // The flag byte (the owner's bit 3), whether first, whether last.
+        assert_eq!(events[0][..9], expect(point0, properties0, 0x0101, 0)[..9]);
+        assert_ne!(events[0][9], 0);
+        assert_eq!(events[0][10..14], expect(point0, properties0, 0, 0)[10..14]);
+        assert_eq!(events[0][14], 2.0f32.to_bits());
+        assert_eq!(events[1][..9], expect(point1, properties1, 0x0001, 0)[..9]);
+        assert_eq!(
+            &events[2][..14],
+            expect(point2, properties2, 0x0001_0001, 0).as_slice()
+        );
+        // Entity a (one listener) gets types 0; entity b (none) is skipped.
+        assert_eq!(
+            logged(&r, FIRE_ENTITY_CONTACT_POINT_CALLBACK),
+            vec![vec![r.entity_a, 0]; 3]
+        );
+        assert!(logged(&r, SOLVE_SINGLE_CONTACT).is_empty());
+    }
+
+    #[test]
+    fn fire_callbacks_solves_a_bouncing_contact_and_reports_the_breach() {
+        let mut r = rig(1, 0, -2.0, 1);
+        let (point, properties) = contact(&r, 0);
+        r.e.mem.set_u8(properties + 0xf, 1);
+        r.e.mem.set_u8(properties + 0xd, 0x50);
+        r.e.mem.set_u8(properties + 0xc, 2);
+        r.e.mem.set_u8(properties + 0xe, 3);
+        r.e.mem.set_u32(properties + 4, 0x1234);
+        r.e.mem.set_f32(properties, 9.0);
+        r.e.mem.set_f32(properties + 0x10, 9.0);
+        fire(&mut r);
+        let solve = &logged(&r, SOLVE_SINGLE_CONTACT)[0];
+        assert_eq!(solve[0], r.data);
+        assert_eq!(solve[1], point);
+        assert_eq!(&solve[3..7], &[r.entity_a, r.entity_b, 0x3000, 0x3400]);
+        // The limit (table entry 2), the restitution 80 / 128, the maximum (table entry 3),
+        // the impulse and two zeros.
+        assert_eq!(
+            &solve[8..14],
+            &[
+                20.0f32.to_bits(),
+                0.625f32.to_bits(),
+                30.0f32.to_bits(),
+                (-2.0f32).to_bits(),
+                0,
+                0
+            ]
+        );
+        let owner = r.e.mem.u32(r.info + 0x60);
+        let world = r.e.mem.u32(r.entity_a + 8);
+        assert_eq!(
+            logged(&r, FIRE_CONTACT_IMPULSE_LIMIT_BREACHED),
+            vec![vec![world, 1, 1, owner, properties, point, 1]]
+        );
+        assert_eq!(r.e.mem.u32(properties), 0);
+        assert_eq!(r.e.mem.u32(properties + 0x10), 0);
+        assert_eq!(r.e.mem.u32(properties + 4), 0x1234);
+        assert_eq!(r.e.mem.u8(properties + 0xf), 0);
+        // Without the owner's bit 3 the event's flag byte is 0.
+        let events = logged(&r, FIRE_CONTACT_POINT_CALLBACK);
+        assert_eq!(events[0][8], 0x0001_0100);
+        // Without a breach, and with no maximum index, the default maximum is used.
+        let mut r = rig(1, 0, -2.0, 0);
+        let (_, properties) = contact(&r, 0);
+        r.e.mem.set_u8(properties + 0xf, 1);
+        r.e.mem.set_u8(properties + 0xd, 0x50);
+        fire(&mut r);
+        assert_eq!(logged(&r, SOLVE_SINGLE_CONTACT)[0][10], 1000.0f32.to_bits());
+        assert!(logged(&r, FIRE_CONTACT_IMPULSE_LIMIT_BREACHED).is_empty());
+    }
+
+    #[test]
+    fn fire_callbacks_without_active_contacts_or_notification_only_clears_the_bits() {
+        let mut r = rig(2, 0x01, 2.0, 0);
+        fire(&mut r);
+        assert!(r.log.borrow().is_empty());
+        assert_eq!(r.e.mem.u8(r.owner_flags + 0x12), 0);
+        // A low restitution takes the response path even when the tolerance is passed.
+        let mut r = rig(1, 0, -2.0, 0);
+        let (_, properties) = contact(&r, 0);
+        r.e.mem.set_u8(properties + 0xf, 1);
+        r.e.mem.set_u8(properties + 0xd, 0x20);
+        fire(&mut r);
+        assert!(logged(&r, SOLVE_SINGLE_CONTACT).is_empty());
+        // 0.25 * -0.25 * -2 * 1.25.
+        assert_eq!(r.e.mem.f32(properties), 0.15625);
+        let mut r = rig(0, 0x08, 2.0, 0);
+        fire(&mut r);
+        assert!(r.log.borrow().is_empty());
+        assert_eq!(r.e.mem.u8(r.owner_flags + 0x12), 0);
     }
 }

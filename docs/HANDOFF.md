@@ -7,7 +7,51 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-18 evening (current; give this to the next account first)
+### Claude lead, 2026-10-19 (current; read this first, then the 2026-10-18 section below)
+
+**Havok is translated:** all 9,011 Havok functions on the full ledger list
+(Ghidra-gap functions included). 739 of them keep a `Translation incomplete`
+marker, almost all for C++ exception frames (FS:[0]) or the /GS cookie check;
+every branch of their bodies is in. This PR carries the last ones: 00c95a80
+(hkpWorld constructor), 00d1a330, 00d28a30, 00d29bf0, 00d6f460 (all 29 atom
+types), 00d72190, 00d8d030 (hkSolveConstraints, block state machine), 00daf8e0,
+00def570 and the last ten smaller ones, plus the game's Havok glue (120,
+fallout shared/havok) and 009070a0 (LowProcess, a play-build blocker).
+Engine total 28,511 translated (41.0 % of 69,475), 72.3 % covered.
+
+**Notes on these batches:** 00def570 and its sister 00d9f6f0 panic where the
+exe spins forever (commands 4, 0x1c, above 0x1f). 00ca35f5 is a tail of
+getNextKey (00ca35d0) entered by a jump, registered with the registers it
+reads. 00cf9c60's writes to its own argument slots (scratch nobody reads) are
+not reproduced. The solver's `SolverMachine` (hkpsolver.rs) does x87 maths in
+plain f64: identical at the 53-bit precision the Havok thread runs at, except
+for the exponent range; revisit with the x87 helpers.
+
+**Machine:** the PC crashed twice on 2026-10-19 with ten agents running: a
+freeze, then a Windows bug check (0xC2 BAD_POOL_CALLER in audiodg.exe, an
+audio driver; WinDbg read the dump). Since then at most four agents run, the
+compile queue lets only one small compile beside a big one (16 GB free), the
+gate runs with `CARGO_BUILD_JOBS=1`, and a memory watchdog logs low memory.
+
+**Play build (branch `claude/build43-movement`, not pushed):** the Havok step
+runs on AI linear task thread 2 (committed). NiInit now gets past the IO
+thread and through NiMainSDM::Init. The player stage stops in
+MobileObject::InitHavok on the TES object at [011dea10]: TES::TES needs
+00c44980, 004ba280, 0084fc70, 00856380, 00c3da50 (being translated in slots
+a01 and a02).
+
+**Pending outside this PR:** a07's NiCollision batch (75 of 120, commit
+99ed8c98, parked: not Havok or the play build); a06's nv-pure `--fpcw` oracle
+option (3063abd3, branch parked/a06-fpcw-oracle, to land after #200); PR #200
+merged with main and its list regenerated in wt-pr200 (uncommitted), oracle
+check still to run.
+
+**Suggested next step:** record every function the real game runs while
+walking in Doc Mitchell's house (a tracer on the real exe, built on the
+nv-probe hooks) and compare it with the ledger, so the play build's missing
+functions can be handed out at once instead of one stop at a time.
+
+### Claude lead, 2026-10-18 evening
 
 Stopped at 93 % weekly usage (95-96 % rule). Maintainer priority: **finish
 Havok, then only the next play build (the game's own physics and movement in

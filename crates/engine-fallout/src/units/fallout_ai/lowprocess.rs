@@ -181,9 +181,105 @@ pub fn fn_00906fe0(e: &mut Engine, this: Ptr<LowProcess>) {
     e.call(BASE_PROCESS_DESTRUCT, &args![base]);
 }
 
+/// `007b3fa0` (`thiscall`, `RET 4`): a scalar deleting destructor whose destructor is empty
+/// (identical-code folding: many classes share the body); frees the object when bit 0 of
+/// its argument is set.
+const DELETE_EMPTY_DESTRUCTOR: u32 = 0x007b_3fa0;
+/// `008256d0` (`thiscall`): whether both words at `+0` and `+4` of a list head are zero.
+const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+/// `006815c0` (`thiscall`): returns `this` (here the list head, whose first word is the
+/// head node's item).
+const LIST_HEAD_ITEM: u32 = 0x0068_15c0;
+/// `00905330` (`thiscall`, `RET 4`): removes from a `BSSimpleList` the item held in the word
+/// its argument points to.
+const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
+/// `00470470` (`thiscall`, plain `RET`): empties a list (frees its chained nodes, zeroes the
+/// head item).
+const LIST_CLEAR: u32 = 0x0047_0470;
+
+/// `pGenericLocation` (Xbox PDB), `+0x44`.
+const GENERIC_LOCATION: u32 = 0x44;
+/// `ObjectList` (Xbox PDB `BSSimpleList<ObjectstoAcquire *>`), `+0x5c`.
+const OBJECT_LIST: u32 = 0x5c;
+/// `GenericLocationsList` (Xbox PDB `BSSimpleList<TESObjectREFR *>`), `+0x6c`.
+const GENERIC_LOCATIONS_LIST: u32 = 0x6c;
+/// `TempObjectList` (Xbox PDB `BSSimpleList<ObjectstoAcquire *>`), `+0x74`.
+const TEMP_OBJECT_LIST: u32 = 0x74;
+/// `TempLocList` (Xbox PDB `BSSimpleList<TESObjectREFR *>`), `+0x7c`.
+const TEMP_LOC_LIST: u32 = 0x7c;
+/// `pObjecttoAcquire` (Xbox PDB, typed `TESBoundObject*` there), `+0x84`.
+const OBJECT_TO_ACQUIRE: u32 = 0x84;
+/// The vtable slot `+0x10` the code calls with the argument 1 on the object at `+0x84`.
+const OBJECT_TO_ACQUIRE_DELETE_SLOT: u32 = 0x10;
+
+/// Takes every item off the list at `list` (`008256d0` until empty): reads the head item
+/// through `006815c0` into a stack word, removes it with `00905330(list, &word)`, and frees
+/// the word's value afterwards, when non-zero, with `007b3fa0(value, 1)`.
+fn free_list_items(e: &mut Engine, list: u32) {
+    while !e.call(LIST_IS_EMPTY, &args![list]).bool() {
+        let head = e.call(LIST_HEAD_ITEM, &args![list]).u32();
+        let item = e.mem.u32(head);
+        let removed = e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), item);
+            e.call(LIST_REMOVE_ITEM, &args![list, slot]);
+            // The code reads the stack word again after the call.
+            e.mem.u32(slot.addr())
+        });
+        if removed != 0 {
+            e.call(DELETE_EMPTY_DESTRUCTOR, &args![removed, 1u32]);
+        }
+    }
+}
+
+// Translated from 009070a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `lowprocess.cpp`; `thiscall`, plain `RET`; the destructor
+/// body `00906fe0` runs it after `ClearCurrentPackage`): releases the low process's acquire
+/// state. When `pAcquireObject` (`+0x64`) is set it clears `pSavedAcquireObject` (`+0x68`)
+/// if that is the same object, frees the object (`007b3fa0`, flag 1) and clears `+0x64`;
+/// then, when `+0x68` is still set, frees and clears it the same way. Every item of
+/// `ObjectList` (`+0x5c`) is removed and freed, `GenericLocationsList` (`+0x6c`) is emptied
+/// (`00470470`) and `pGenericLocation` (`+0x44`) cleared; every item of `TempObjectList`
+/// (`+0x74`) is removed and freed and `TempLocList` (`+0x7c`) emptied. Last, the object at
+/// `+0x84` (when set) is called through its vtable slot `+0x10` with the argument 1, and
+/// `+0x84` is cleared. Field names are the Xbox PDB's; the code's own offsets match them.
+pub fn fn_009070a0(e: &mut Engine, this: Ptr<LowProcess>) {
+    let base = this.addr();
+    let acquire = e.mem.u32(base.wrapping_add(ACQUIRE_OBJECT));
+    if acquire != 0 {
+        if e.mem.u32(base.wrapping_add(SAVED_ACQUIRE_OBJECT)) == acquire {
+            e.mem.set_u32(base.wrapping_add(SAVED_ACQUIRE_OBJECT), 0);
+        }
+        // The code reads +0x64 again for the delete.
+        let acquire = e.mem.u32(base.wrapping_add(ACQUIRE_OBJECT));
+        if acquire != 0 {
+            e.call(DELETE_EMPTY_DESTRUCTOR, &args![acquire, 1u32]);
+        }
+        e.mem.set_u32(base.wrapping_add(ACQUIRE_OBJECT), 0);
+    }
+    let saved = e.mem.u32(base.wrapping_add(SAVED_ACQUIRE_OBJECT));
+    if saved != 0 {
+        e.call(DELETE_EMPTY_DESTRUCTOR, &args![saved, 1u32]);
+        e.mem.set_u32(base.wrapping_add(SAVED_ACQUIRE_OBJECT), 0);
+    }
+    free_list_items(e, base.wrapping_add(OBJECT_LIST));
+    e.call(
+        LIST_CLEAR,
+        &args![base.wrapping_add(GENERIC_LOCATIONS_LIST)],
+    );
+    e.mem.set_u32(base.wrapping_add(GENERIC_LOCATION), 0);
+    free_list_items(e, base.wrapping_add(TEMP_OBJECT_LIST));
+    e.call(LIST_CLEAR, &args![base.wrapping_add(TEMP_LOC_LIST)]);
+    let object = e.mem.u32(base.wrapping_add(OBJECT_TO_ACQUIRE));
+    if object != 0 {
+        e.vcall(object, OBJECT_TO_ACQUIRE_DELETE_SLOT, &args![1u32]);
+    }
+    e.mem.set_u32(base.wrapping_add(OBJECT_TO_ACQUIRE), 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0090_70a0, fn_009070a0(Ptr<LowProcess>)),
         entry!(0x0090_6fe0, fn_00906fe0(Ptr<LowProcess>)),
         entry!(0x0090_6fb0, low_process_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0090_7510, fn_00907510(Ptr<LowProcess>, Ptr<LowProcess>)),
@@ -385,5 +481,128 @@ mod destructor_body_tests {
                 (BASE_PROCESS_DESTRUCT, vec![this]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+
+    type Log = std::rc::Rc<std::cell::RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    const OBJECT_DELETE: u32 = 0x00ee_0010;
+
+    /// Doubles for every callee outside this file. A list is modelled as its two head words:
+    /// empty when both are zero, removal shifts the second word into the first.
+    fn fixture() -> (Engine, Log, u32) {
+        let mut e = Engine::new();
+        let log: Log = Log::default();
+        let logged = |log: &Log, address: u32, words: &[u32]| {
+            log.borrow_mut().push((address, words.to_vec()));
+        };
+        let l = log.clone();
+        e.register_double(DELETE_EMPTY_DESTRUCTOR, move |_, a| {
+            logged(&l, DELETE_EMPTY_DESTRUCTOR, a);
+            a[0].into_ret()
+        });
+        e.register(LIST_IS_EMPTY, |e, a| {
+            (e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        e.register(LIST_HEAD_ITEM, |_, a| a[0].into_ret());
+        let l = log.clone();
+        e.register_double(LIST_REMOVE_ITEM, move |e, a| {
+            logged(&l, LIST_REMOVE_ITEM, &[a[0], e.mem.u32(a[1])]);
+            let next = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(a[0], next);
+            e.mem.set_u32(a[0] + 4, 0);
+            Ret::default()
+        });
+        let l = log.clone();
+        e.register_double(LIST_CLEAR, move |_, a| {
+            logged(&l, LIST_CLEAR, a);
+            Ret::default()
+        });
+        let l = log.clone();
+        e.register_double(OBJECT_DELETE, move |_, a| {
+            logged(&l, OBJECT_DELETE, a);
+            Ret::default()
+        });
+        let mut slots = vec![0u32; 5];
+        slots[4] = OBJECT_DELETE;
+        e.put_vtable(0x0300_0000, &slots);
+        let this = e.mem.alloc(0xb4);
+        (e, log, this)
+    }
+
+    #[test]
+    fn frees_the_shared_acquire_object_once_and_empties_the_lists() {
+        let (mut e, log, this) = fixture();
+        e.mem.set_u32(this + 0x44, 0x4444);
+        e.mem.set_u32(this + 0x64, 0x6400);
+        e.mem.set_u32(this + 0x68, 0x6400);
+        // ObjectList: a null item first, then 0x5c01.
+        e.mem.set_u32(this + 0x5c, 0);
+        e.mem.set_u32(this + 0x60, 0x5c01);
+        // TempObjectList: two items.
+        e.mem.set_u32(this + 0x74, 0x7401);
+        e.mem.set_u32(this + 0x78, 0x7402);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0300_0000);
+        e.mem.set_u32(this + 0x84, object);
+        e.call(0x0090_70a0, &args![this]);
+        assert_eq!(
+            *log.borrow(),
+            [
+                (DELETE_EMPTY_DESTRUCTOR, vec![0x6400, 1]),
+                (LIST_REMOVE_ITEM, vec![this + 0x5c, 0]),
+                (LIST_REMOVE_ITEM, vec![this + 0x5c, 0x5c01]),
+                (DELETE_EMPTY_DESTRUCTOR, vec![0x5c01, 1]),
+                (LIST_CLEAR, vec![this + 0x6c]),
+                (LIST_REMOVE_ITEM, vec![this + 0x74, 0x7401]),
+                (DELETE_EMPTY_DESTRUCTOR, vec![0x7401, 1]),
+                (LIST_REMOVE_ITEM, vec![this + 0x74, 0x7402]),
+                (DELETE_EMPTY_DESTRUCTOR, vec![0x7402, 1]),
+                (LIST_CLEAR, vec![this + 0x7c]),
+                (OBJECT_DELETE, vec![object, 1]),
+            ]
+        );
+        for offset in [0x44, 0x64, 0x68, 0x84] {
+            assert_eq!(e.mem.u32(this + offset), 0, "+{offset:#x}");
+        }
+    }
+
+    #[test]
+    fn frees_both_acquire_objects_when_they_differ() {
+        let (mut e, log, this) = fixture();
+        e.mem.set_u32(this + 0x64, 0x6400);
+        e.mem.set_u32(this + 0x68, 0x6800);
+        e.call(0x0090_70a0, &args![this]);
+        assert_eq!(
+            *log.borrow(),
+            [
+                (DELETE_EMPTY_DESTRUCTOR, vec![0x6400, 1]),
+                (DELETE_EMPTY_DESTRUCTOR, vec![0x6800, 1]),
+                (LIST_CLEAR, vec![this + 0x6c]),
+                (LIST_CLEAR, vec![this + 0x7c]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x64), 0);
+        assert_eq!(e.mem.u32(this + 0x68), 0);
+    }
+
+    #[test]
+    fn frees_only_the_saved_acquire_object_when_the_current_is_null() {
+        let (mut e, log, this) = fixture();
+        e.mem.set_u32(this + 0x68, 0x6800);
+        e.call(0x0090_70a0, &args![this]);
+        assert_eq!(
+            log.borrow()
+                .iter()
+                .filter(|(a, _)| *a == DELETE_EMPTY_DESTRUCTOR)
+                .cloned()
+                .collect::<Vec<_>>(),
+            [(DELETE_EMPTY_DESTRUCTOR, vec![0x6800, 1])]
+        );
+        assert_eq!(e.mem.u32(this + 0x68), 0);
     }
 }

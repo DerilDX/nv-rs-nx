@@ -9,7 +9,8 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::units::havok_sdk::hkpsphereshape::{
-    load_bits, load_vec, store_bits, store_vec, sum3, zip_with, Vec4,
+    load_bits, load_vec, movhlps, movlhps, rcp_estimate, shufps, store_bits, store_vec, sum3,
+    unpckhps, unpcklps, zip_with, Vec4,
 };
 
 /// The CRT square root (`00ec6040`, argument and result in `ST0`).
@@ -424,6 +425,681 @@ pub fn hk_rigid_motion_util_apply_forces_and_build_accumulators(
     Ptr::new(accumulator)
 }
 
+/// `hkVector4::setRotatedDir` (`00c7f700`, thiscall on the result: the rotation, the vector;
+/// `RET 8`).
+const SET_ROTATED_DIR: u32 = 0x00c7_f700;
+/// `004b4ab0` (no map name; thiscall on the result: three 16-byte rows, the vector; `RET 8`):
+/// per its translation, the vector times the rows (lanes 0 to 2 are the rows' dot products).
+const ROWS_TIMES_VECTOR: u32 = 0x004b_4ab0;
+/// `hkVector4Util::packQuaternionIntoInt32` (`00d975d0`, cdecl: the quaternion; answers the
+/// packed word).
+const PACK_QUATERNION: u32 = 0x00d9_75d0;
+/// The scale of a packed orientation byte (double `010ce488`), the mask that keeps the first
+/// three lanes (`010cbfc0`) and the double `1.0` (`01012070`).
+const PACKED_SCALE: u32 = 0x010c_e488;
+const XYZ_MASK: u32 = 0x010c_bfc0;
+const ONE_DOUBLE: u32 = 0x0101_2070;
+
+/// One lane of `MULPS`/`ADDPS`/`SUBPS`/`ADDSS` (`dest op src`): a NaN operand comes back
+/// quieted, the destination's first; a NaN the operation itself makes is the default NaN.
+fn sse_lane(dest: f32, src: f32, op: fn(f32, f32) -> f32) -> f32 {
+    if dest.is_nan() {
+        f32::from_bits(dest.to_bits() | 0x0040_0000)
+    } else if src.is_nan() {
+        f32::from_bits(src.to_bits() | 0x0040_0000)
+    } else {
+        let result = op(dest, src);
+        if result.is_nan() {
+            f32::from_bits(0xffc0_0000)
+        } else {
+            result
+        }
+    }
+}
+
+fn ps_mul(dest: Vec4, src: Vec4) -> Vec4 {
+    std::array::from_fn(|lane| sse_lane(dest[lane], src[lane], |a, b| a * b))
+}
+
+fn ps_add(dest: Vec4, src: Vec4) -> Vec4 {
+    std::array::from_fn(|lane| sse_lane(dest[lane], src[lane], |a, b| a + b))
+}
+
+fn ps_sub(dest: Vec4, src: Vec4) -> Vec4 {
+    std::array::from_fn(|lane| sse_lane(dest[lane], src[lane], |a, b| a - b))
+}
+
+fn ss_add(dest: f32, src: f32) -> f32 {
+    sse_lane(dest, src, |a, b| a + b)
+}
+
+/// The `SHUFPS`/`ADDSS` sum of the first three lanes, `z + (y + x)`.
+fn lane_sum3(v: Vec4) -> f32 {
+    ss_add(v[2], ss_add(v[1], v[0]))
+}
+
+/// `RCPPS` refined once: `(r + r) - ((r * x) * r)`.
+fn refined_rcp(x: Vec4) -> Vec4 {
+    let estimate = x.map(rcp_estimate);
+    let twice = ps_add(estimate, estimate);
+    let error = ps_mul(ps_mul(estimate, x), estimate);
+    ps_sub(twice, error)
+}
+
+/// The vector rotated by the three columns at `columns`: `(y * c1 + x * c0) + z * c2`.
+fn rotate_by_columns(e: &Engine, v: Vec4, columns: u32) -> Vec4 {
+    let first = ps_mul([v[1]; 4], load_vec(e, columns + 0x10));
+    let second = ps_mul([v[0]; 4], load_vec(e, columns));
+    let sum = ps_add(first, second);
+    ps_add(sum, ps_mul([v[2]; 4], load_vec(e, columns + 0x20)))
+}
+
+/// The factor `limit / root(value)` as the code makes it: the CRT root of the x87 value, one
+/// over it and the product with the float `limit` (an `FMUL dword` operand), each stored as a
+/// float.
+fn limit_factor(e: &mut Engine, value: f64, limit: u32) -> f32 {
+    let root = x87_store32(e.call(X87_SQRT, &args![value]).f64());
+    let inverse = x87_store32(x87_div(1.0, x87_load32(root)));
+    f32::from_bits(x87_store32(x87_mul(x87_load32(inverse), x87_m32(limit))))
+}
+
+/// `1 - product` stored as a float, replaced by `+0` when it is below zero (a NaN stays).
+fn clamped_damping(product: f64) -> f32 {
+    let factor = x87_store32(x87_sub(1.0, product));
+    if x87_load32(factor) < 0.0 {
+        0.0
+    } else {
+        f32::from_bits(factor)
+    }
+}
+
+/// The damping of `hkpMotion::m_linearVelocity` (`+0xD0`) by `m_linearDamping` (`+0xB4`) and
+/// of `m_angularVelocity` (`+0xE0`) by `m_angularDamping` (`+0xB8`) over the step's
+/// `m_deltaTime` (`hkStepInfo` `+8`; Xbox PDB names).
+fn damp_motion(e: &mut Engine, info: u32, state: u32) {
+    let step = x87_load32(e.mem.u32(info + 8));
+    let linear = clamped_damping(x87_mul(x87_load32(e.mem.u32(state + 0xb4)), step));
+    let damped = ps_mul([linear; 4], load_vec(e, state + 0xd0));
+    store_vec(e, state + 0xd0, damped);
+    let angular = clamped_damping(x87_mul(step, x87_load32(e.mem.u32(state + 0xb8))));
+    let damped = ps_mul([angular; 4], load_vec(e, state + 0xe0));
+    store_vec(e, state + 0xe0, damped);
+}
+
+/// The gravity: the linear velocity gains `m_gravityFactor` (`+0x11E`, an `hkHalf`: the top 16
+/// bits of a float) times the gravity vector.
+fn add_gravity(e: &mut Engine, state: u32, gravity: u32) {
+    let factor = f32::from_bits(u32::from(e.mem.u16(state + 0x11e)) << 16);
+    let pull = ps_mul([factor; 4], load_vec(e, gravity));
+    let velocity = ps_add(pull, load_vec(e, state + 0xd0));
+    store_vec(e, state + 0xd0, velocity);
+}
+
+/// Whether the first three lanes of both velocities are below the limit in absolute value
+/// (`CMPLTPS`, no NaN) and ordered (`CMPEQPS` with themselves).
+fn velocities_valid(e: &Engine, linear: [u32; 4], angular: [u32; 4]) -> bool {
+    let abs_mask = load_bits(e, ABS_MASK);
+    let limit = load_vec(e, VELOCITY_LIMIT);
+    let mask = mask_below(linear, abs_mask, limit)
+        & mask_below(angular, abs_mask, limit)
+        & mask_ordered(linear)
+        & mask_ordered(angular);
+    mask & 7 == 7
+}
+
+/// The previous centre of mass (`+0x50`) takes the current one (`+0x60`) with the step's
+/// `m_startTime` (`hkStepInfo` `+0`) in its fourth lane.
+fn keep_previous_centre(e: &mut Engine, info: u32, state: u32) {
+    let centre = load_bits(e, state + 0x60);
+    store_bits(e, state + 0x50, centre);
+    let start = x87_quiet_bits(e.mem.u32(info));
+    e.mem.set_u32(state + 0x5c, start);
+}
+
+/// The fourth lane of the rotation delta: `((1 - c1 * x) - c2 * x2) - x2 * (x * c3)` with the
+/// series coefficients (doubles), `x2` the float `x * x`.
+fn cosine_series(e: &Engine, x: f64, squared: u32) -> u32 {
+    let first = x87_load64(e.mem.u64(SERIES_FIRST));
+    let second = x87_load64(e.mem.u64(SERIES_SECOND));
+    let third = e.mem.f64(SERIES_THIRD);
+    let squared = x87_load32(squared);
+    let value = x87_sub(1.0, x87_mul(first, x));
+    let value = x87_sub(value, x87_mul(second, squared));
+    let term = x87_mul(squared, x87_mul(x, third));
+    x87_store32(x87_sub(value, term))
+}
+
+/// Where one integration keeps its vectors: the linear velocity it reads (and the copy the
+/// limit scales, and where a scaled one is stored, if anywhere), the angular velocity (read
+/// and scaled in place, from its copy), and the stack slots of the rotation and its delta.
+struct Integration {
+    linear: u32,
+    linear_copy: u32,
+    linear_target: Option<u32>,
+    angular: u32,
+    angular_copy: u32,
+    rotation: u32,
+    delta: u32,
+}
+
+/// The integration both functions share (after the validity test and the previous centre):
+/// the linear speed limit `table[m_maxLinearVelocity]` (`+0xBC`), the new centre of mass
+/// (`+0x60`, `m_invDeltaTime` of the step in its fourth lane), the previous rotation (`+0x70`),
+/// the half angle `half the step times the angular velocity` with its squared length times
+/// `4 / pi^2` as the estimate, the largest angle `table[m_maxAngularVelocity] * step` (`+0xBD`,
+/// replaced by the float `010177e8` when above `0.9`), a larger estimate scaling the angular
+/// velocity and the half angle to it, the cosine series in the delta's fourth lane, the
+/// rotation times the delta (`hkQuaternion::setMul`), normalised, `m_deltaAngle` (`+0xA0`, the
+/// doubled delta with `root * pi` in its fourth lane), the new rotation (`+0x80`), the
+/// transform's rotation from it (`00cb2d90`) and its translation (`+0x40`, the centre minus the
+/// local centre of mass `+0x90` rotated).
+fn integrate(e: &mut Engine, info: u32, state: u32, at: &Integration) {
+    // The linear speed limit.
+    let linear = load_vec(e, at.linear);
+    store_vec(e, at.linear_copy, linear);
+    let top = x87_load32(
+        e.mem
+            .u32(QUALITY_TABLE + 4 * u32::from(e.mem.u8(state + 0xbc))),
+    );
+    let speed_squared = x87_load32(lane_sum3(ps_mul(linear, linear)).to_bits());
+    let mut moving = linear;
+    if speed_squared > x87_mul(top, top) {
+        let limit = e
+            .mem
+            .u32(QUALITY_TABLE + 4 * u32::from(e.mem.u8(state + 0xbc)));
+        let factor = limit_factor(e, speed_squared, limit);
+        moving = ps_mul([factor; 4], load_vec(e, at.linear_copy));
+        if let Some(target) = at.linear_target {
+            store_vec(e, target, moving);
+        }
+    }
+    // The centre of mass moves by the velocity times the time step.
+    let step = f32::from_bits(x87_quiet_bits(e.mem.u32(info + 8)));
+    let moved = ps_add(ps_mul([step; 4], moving), load_vec(e, state + 0x60));
+    store_vec(e, state + 0x60, moved);
+    let inverse_step = x87_quiet_bits(e.mem.u32(info + 0xc));
+    e.mem.set_u32(state + 0x6c, inverse_step);
+    // The rotation is kept as the previous one.
+    let rotation = load_bits(e, state + 0x80);
+    store_bits(e, at.rotation, rotation);
+    let angular_quality = u32::from(e.mem.u8(state + 0xbd));
+    let kept = load_bits(e, at.rotation);
+    store_bits(e, state + 0x70, kept);
+    // The half angle and its estimate.
+    let half = x87_store32(x87_mul(x87_load32(e.mem.u32(info + 8)), e.mem.f64(HALF)));
+    let angular = load_vec(e, at.angular);
+    store_vec(e, at.angular_copy, angular);
+    let delta = ps_mul([f32::from_bits(half); 4], angular);
+    store_vec(e, at.delta, delta);
+    let angle_squared = lane_sum3(ps_mul(delta, delta));
+    let estimate = x87_store32(x87_mul(
+        x87_load32(angle_squared.to_bits()),
+        e.mem.f64(ANGLE_FACTOR),
+    ));
+    let allowed = x87_store32(x87_mul(
+        x87_load32(e.mem.u32(QUALITY_TABLE + 4 * angular_quality)),
+        x87_m32(e.mem.u32(info + 8)),
+    ));
+    let mut allowed_value = x87_load32(allowed);
+    if allowed_value > e.mem.f64(ANGLE_LIMIT) {
+        allowed_value = x87_load32(e.mem.u32(ANGLE_LIMIT_FLOAT));
+    }
+    let allowed = x87_store32(allowed_value);
+    let allowed_squared = x87_store32(x87_mul(x87_load32(allowed), x87_load32(allowed)));
+    let angle = if x87_load32(allowed_squared) >= x87_load32(estimate) {
+        estimate
+    } else {
+        // Too fast a turn: the angular velocity and the half angle are scaled to the allowed
+        // angle.
+        let factor = limit_factor(e, x87_load32(estimate), allowed);
+        let scaled = ps_mul([factor; 4], load_vec(e, at.angular_copy));
+        store_vec(e, at.angular, scaled);
+        let scaled = ps_mul([factor; 4], load_vec(e, at.delta));
+        store_vec(e, at.delta, scaled);
+        allowed_squared
+    };
+    let angle_value = x87_load32(angle);
+    let squared = x87_store32(x87_mul(angle_value, angle_value));
+    let cosine = cosine_series(e, angle_value, squared);
+    e.mem.set_u32(at.delta + 0xc, cosine);
+    e.call(
+        QUATERNION_SET_MUL,
+        &args![at.rotation, at.delta, at.rotation],
+    );
+    e.call(QUATERNION_NORMALIZE, &args![at.rotation]);
+    let delta = load_vec(e, at.delta);
+    store_vec(e, state + 0xa0, ps_add(delta, delta));
+    let root = x87_store32(e.call(X87_SQRT, &args![angle_value]).f64());
+    let turned = load_bits(e, at.rotation);
+    let angle_pi = x87_store32(x87_mul(x87_load32(root), e.mem.f64(PI)));
+    e.mem.set_u32(state + 0xac, angle_pi);
+    store_bits(e, state + 0x80, turned);
+    e.call(SET_ROTATION, &args![state + 0x10, state + 0x80]);
+    // The transform's translation.
+    let centre = load_vec(e, state + 0x90);
+    let rotated = rotate_by_columns(e, centre, state + 0x10);
+    let translation = ps_sub(load_vec(e, state + 0x60), rotated);
+    store_vec(e, state + 0x40, translation);
+}
+
+/// The velocities brought back under their limits after the step: the linear one (its copy
+/// kept at `copy`) when its squared length is above `table[+0xBC]` squared (as a float) or NaN,
+/// the angular one likewise with `table[+0xBD]`; a NaN squared length then resets the velocity
+/// to the vector at `01268370`.
+fn limit_velocities(e: &mut Engine, state: u32, copy: u32) {
+    let angular_quality = u32::from(e.mem.u8(state + 0xbd));
+    let linear = load_vec(e, state + 0xd0);
+    let quality = u32::from(e.mem.u8(state + 0xbc));
+    let angular_top = x87_load32(e.mem.u32(QUALITY_TABLE + 4 * angular_quality));
+    let angular_top = x87_store32(x87_mul(angular_top, angular_top));
+    store_vec(e, copy, linear);
+    let top = x87_load32(e.mem.u32(QUALITY_TABLE + 4 * quality));
+    let speed_squared = lane_sum3(ps_mul(linear, linear)).to_bits();
+    let angular = load_vec(e, state + 0xe0);
+    let spin_squared = lane_sum3(ps_mul(angular, angular)).to_bits();
+    let top = x87_store32(x87_mul(top, top));
+    let speed = x87_load32(speed_squared);
+    if x87_load32(top) < speed || speed.is_nan() {
+        let limit = e
+            .mem
+            .u32(QUALITY_TABLE + 4 * u32::from(e.mem.u8(state + 0xbc)));
+        let factor = limit_factor(e, speed, limit);
+        let scaled = ps_mul([factor; 4], load_vec(e, copy));
+        store_vec(e, state + 0xd0, scaled);
+        if speed.is_nan() {
+            let reset = load_bits(e, VELOCITY_RESET);
+            store_bits(e, state + 0xd0, reset);
+        }
+    }
+    let spin = x87_load32(spin_squared);
+    if x87_load32(angular_top) < spin || spin.is_nan() {
+        let limit = e
+            .mem
+            .u32(QUALITY_TABLE + 4 * u32::from(e.mem.u8(state + 0xbd)));
+        let factor = limit_factor(e, spin, limit);
+        let scaled = ps_mul([factor; 4], load_vec(e, state + 0xe0));
+        store_vec(e, state + 0xe0, scaled);
+        if spin.is_nan() {
+            let reset = load_bits(e, VELOCITY_RESET);
+            store_bits(e, state + 0xe0, reset);
+        }
+    }
+}
+
+/// The deactivation bookkeeping (Xbox PDB names of `hkpMotion` and `hkpSolverInfo`): the
+/// `m_deactivationIntegrateCounter` (`+9`) counts up; on every fourth step one of the two
+/// checks runs (index 1 when the counter reaches a multiple of 16, which restarts it at 0;
+/// 256 sets it to 0xFF and checks nothing). A check keeps the larger of the motion's energy
+/// (`min(m_objectRadius, one)^2 * |angular|^2 + |linear|^2`) and the fourth lane of
+/// `m_deactivationRefPosition[index]`, then compares the distance from that reference to the
+/// centre of mass with `m_maxDistSqrd[index]` and the packed reference orientation
+/// (`m_deactivationRefOrientation[index]`, four signed bytes times the scale) with the
+/// rotation against `m_maxRotSqrd[index]` (an `hkHalf`), both of the solver info's
+/// `m_deactivationInfo[m_deactivationClass]`. Within both, `m_deactivationNumInactiveFrames
+/// [index]` counts up (bits 0 to 6, held at 64 and above); otherwise it is cleared, the
+/// reference takes the centre (fourth lane zero) and the orientation is packed again. Both
+/// keep `m_deactivationNumInactiveFramesSelectFlag[index]` of the solver info in bits 14 and
+/// up (the 16-bit shifts of the code).
+fn deactivation_step(e: &mut Engine, solver: u32, state: u32, one: f64) {
+    let counter = u32::from(e.mem.u8(state + 9)) + 1;
+    e.mem.set_u8(state + 9, counter as u8);
+    if counter & 3 != 0 {
+        return;
+    }
+    let index = if counter & 0xf != 0 {
+        0
+    } else if counter == 0x100 {
+        e.mem.set_u8(state + 9, 0xff);
+        return;
+    } else {
+        e.mem.set_u8(state + 9, 0);
+        1
+    };
+    let mut radius = x87_load32(e.mem.u32(state + 0xb0));
+    if radius > one {
+        radius = 1.0;
+    }
+    let radius = x87_load32(x87_store32(radius));
+    let linear = load_vec(e, state + 0xd0);
+    let speed_squared = lane_sum3(ps_mul(linear, linear));
+    let angular = load_vec(e, state + 0xe0);
+    let spin_squared = lane_sum3(ps_mul(angular, angular));
+    let energy = x87_mul(x87_mul(radius, radius), x87_m32(spin_squared.to_bits()));
+    let energy = x87_store32(x87_add(energy, x87_m32(speed_squared.to_bits())));
+    let slot = state + 0xfc + 16 * index;
+    let previous = x87_load32(e.mem.u32(slot));
+    let energy = x87_load32(energy);
+    let larger = if energy < previous { previous } else { energy };
+    e.mem.set_u32(slot, x87_store32(larger));
+    // The distance from the reference position.
+    let class = u32::from(e.mem.u8(state + 0xbe));
+    let reference = state + 0xf0 + 16 * index;
+    let offset = ps_sub(load_vec(e, reference), load_vec(e, state + 0x60));
+    let distance = x87_load32(lane_sum3(ps_mul(offset, offset)).to_bits());
+    let limits = solver + 0x64 + 0x1c * class;
+    let max_distance = x87_load32(e.mem.u32(limits + 0x10 + 4 * index));
+    let mut still = !(max_distance < distance);
+    if still {
+        // The distance from the reference orientation (all four lanes).
+        let packed = e.mem.u32(state + 0x110 + 4 * index);
+        let scale = x87_load64(e.mem.u64(PACKED_SCALE));
+        let byte = |shift: u32| f64::from(((packed >> shift) & 0xff) as i32 - 0x80);
+        let unpacked = [
+            x87_mul(byte(0), scale),
+            x87_mul(byte(8), scale),
+            x87_mul(byte(16), scale),
+            x87_mul(scale, byte(24)),
+        ]
+        .map(|value| f32::from_bits(x87_store32(value)));
+        let max_rotation = f32::from_bits(u32::from(e.mem.u16(limits + 0x18 + 2 * index)) << 16);
+        let turn = ps_sub(unpacked, load_vec(e, state + 0x80));
+        let squares = ps_mul(turn, turn);
+        let total = ss_add(
+            ss_add(squares[3], squares[1]),
+            ss_add(squares[2], squares[0]),
+        );
+        still = !(x87_load32(max_rotation.to_bits()) < x87_load32(total.to_bits()));
+    }
+    let select = u16::from(e.mem.u8(solver + 0x125 + index));
+    let frames_at = state + 0xa + 2 * index;
+    let frames = e.mem.u16(frames_at) & 0x7f;
+    if still {
+        let next = frames - (frames >> 6) + 1;
+        e.mem
+            .set_u16(frames_at, (((select << 7) | frames) << 7) | next);
+    } else {
+        e.mem.set_u16(frames_at, ((select << 7) | frames) << 7);
+        let centre = load_bits(e, state + 0x60);
+        let mask = load_bits(e, XYZ_MASK);
+        let masked = std::array::from_fn(|lane| centre[lane] & mask[lane]);
+        store_bits(e, reference, masked);
+        let packed = e.call(PACK_QUATERNION, &args![state + 0x80]).u32();
+        e.mem.set_u32(state + 0x110 + 4 * index, packed);
+    }
+}
+
+/// The smaller of `least` and the larger of the two inactive frame counts (bits 0 to 6 of
+/// `+0xA` and `+0xC`).
+fn fewest_inactive_frames(e: &Engine, state: u32, least: i32) -> i32 {
+    let second = i32::from(e.mem.u16(state + 0xc) & 0x7f);
+    let first = i32::from(e.mem.u16(state + 0xa) & 0x7f);
+    least.min(first.max(second))
+}
+
+/// The validity test of a motion's own velocities (reset to the vector at `01268370` when it
+/// fails) and the previous centre.
+fn check_velocities(e: &mut Engine, info: u32, state: u32) {
+    let linear = load_bits(e, state + 0xd0);
+    let angular = load_bits(e, state + 0xe0);
+    if !velocities_valid(e, linear, angular) {
+        let reset = load_bits(e, VELOCITY_RESET);
+        store_bits(e, state + 0xd0, reset);
+        let reset = load_bits(e, VELOCITY_RESET);
+        store_bits(e, state + 0xe0, reset);
+    }
+    keep_previous_centre(e, info, state);
+}
+
+// Translated from 00d28a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkRigidMotionUtilApplyForcesAndStep` (engine map), cdecl with the `hkpSolverInfo`, the
+/// `hkStepInfo`, the gravity vector, the motion list, the number of motions and the offset of
+/// the `hkpMotion` in each listed object; answers the fewest inactive frames (see
+/// `fewest_inactive_frames`; `0x7FFFFFFF` without motions). By the motion type (`+8`; the
+/// compiler's jump table for 4 to 7, `00d2981c`):
+///
+/// * 5: nothing (and the motion does not count for the answer);
+/// * 6: the gravity and the damping, then the angular momentum kept through the step: the
+///   angular velocity through the rows (`004b4ab0`), times the refined reciprocal of
+///   `m_inertiaAndMassInv` (`+0xC0`), rotated (`setRotatedDir`) into a stack slot; the
+///   validity test, the integration, and the angular velocity made again from that momentum
+///   (through the new rows, times the inverse inertia, rotated); then `limit_velocities`;
+/// * 7: the damping; 4: nothing; any other: the gravity and the damping; then the validity
+///   test and the integration.
+///
+/// Every motion but type 5 then goes through `deactivation_step` and counts for the answer.
+/// The code keeps the constants 1 and 0 on the x87 stack and uses them as `1.0` and `+0`.
+pub fn hk_rigid_motion_util_apply_forces_and_step(
+    e: &mut Engine,
+    solver_info: Ptr,
+    info: Ptr,
+    gravity: Ptr,
+    motions: Ptr,
+    count: i32,
+    offset: u32,
+) -> i32 {
+    let mut least = i32::MAX;
+    let mut remaining = count.wrapping_sub(1);
+    if remaining < 0 {
+        return least;
+    }
+    let solver = solver_info.addr();
+    let info = info.addr();
+    let gravity = gravity.addr();
+    let mut list = motions.addr();
+    e.with_stack(0x100, |e, frame| {
+        let frame = frame.addr();
+        loop {
+            let state = e.mem.u32(list).wrapping_add(offset);
+            let kind = e.mem.u8(state + 8);
+            if kind != 5 {
+                if kind == 6 {
+                    add_gravity(e, state, gravity);
+                    damp_motion(e, info, state);
+                    e.call(
+                        ROWS_TIMES_VECTOR,
+                        &args![frame + 0xd0, state + 0x10, state + 0xe0],
+                    );
+                    let inertia = refined_rcp(load_vec(e, state + 0xc0));
+                    let momentum = ps_mul(inertia, load_vec(e, frame + 0xd0));
+                    store_vec(e, frame + 0xd0, momentum);
+                    e.call(
+                        SET_ROTATED_DIR,
+                        &args![frame + 0xf0, state + 0x10, frame + 0xd0],
+                    );
+                    check_velocities(e, info, state);
+                    let at = Integration {
+                        linear: state + 0xd0,
+                        linear_copy: frame + 0x30,
+                        linear_target: Some(state + 0xd0),
+                        angular: state + 0xe0,
+                        angular_copy: frame + 0x30,
+                        rotation: frame + 0x40,
+                        delta: frame + 0x90,
+                    };
+                    integrate(e, info, state, &at);
+                    e.call(
+                        ROWS_TIMES_VECTOR,
+                        &args![frame + 0xe0, state + 0x10, frame + 0xf0],
+                    );
+                    let spin = ps_mul(load_vec(e, frame + 0xe0), load_vec(e, state + 0xc0));
+                    store_vec(e, frame + 0xe0, spin);
+                    e.call(
+                        SET_ROTATED_DIR,
+                        &args![state + 0xe0, state + 0x10, frame + 0xe0],
+                    );
+                    limit_velocities(e, state, frame + 0x30);
+                } else {
+                    if kind != 4 && kind != 7 {
+                        add_gravity(e, state, gravity);
+                    }
+                    if kind != 4 {
+                        damp_motion(e, info, state);
+                    }
+                    check_velocities(e, info, state);
+                    let at = Integration {
+                        linear: state + 0xd0,
+                        linear_copy: frame + 0x30,
+                        linear_target: Some(state + 0xd0),
+                        angular: state + 0xe0,
+                        angular_copy: frame + 0x30,
+                        rotation: frame + 0x50,
+                        delta: frame + 0xa0,
+                    };
+                    integrate(e, info, state, &at);
+                }
+                deactivation_step(e, solver, state, 1.0);
+                least = fewest_inactive_frames(e, state, least);
+            }
+            list = list.wrapping_add(4);
+            remaining = remaining.wrapping_sub(1);
+            if remaining < 0 {
+                break;
+            }
+        }
+    });
+    least
+}
+
+// Translated from 00d29bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkRigidMotionUtilApplyAccumulators` (engine map), cdecl with the `hkpSolverInfo`, the
+/// `hkStepInfo`, the `hkpVelocityAccumulator` array (0x80 bytes per motion), the motion list,
+/// the number of motions and the offset of the `hkpMotion` in each listed object; answers the
+/// fewest inactive frames like `00d28a30`. By the motion type (`+8`; jump table `00d2a5cc`):
+///
+/// * 0 and 6: the accumulator's angular velocity (`+0x20`) times the refined reciprocal of
+///   `m_inertiaAndMassInv`, rotated into a stack slot (the momentum), then as 3;
+/// * 3: the linear velocity from the accumulator (`+0x10`), the angular velocity its `+0x20`
+///   rotated by the motion's columns, the step taken with the accumulator's `+0x40` (linear)
+///   and its `+0x50` rotated (`setRotatedDir`, angular);
+/// * 4: the step taken with the motion's own velocities;
+/// * 2 and 7: both velocities from the accumulator (`+0x10`, `+0x20`), the step taken with its
+///   `+0x40` and `+0x50`;
+///
+/// those types then go through the validity test of the step's two vectors (both reset to the
+/// vector at `01268370` when it fails), the previous centre and the integration (the scaled
+/// linear vector is used but not stored). Type 6 then takes the linear velocity from the
+/// accumulator again and its angular velocity from the momentum (through the transposed
+/// rows, times the inverse inertia, rotated). Every motion (1, 5 and above 7 too) then goes
+/// through `limit_velocities` and `deactivation_step` and counts for the answer.
+pub fn hk_rigid_motion_util_apply_accumulators(
+    e: &mut Engine,
+    solver_info: Ptr,
+    info: Ptr,
+    accumulators: Ptr,
+    motions: Ptr,
+    count: i32,
+    offset: u32,
+) -> i32 {
+    let mut least = i32::MAX;
+    let mut remaining = count.wrapping_sub(1);
+    if remaining < 0 {
+        return least;
+    }
+    let solver = solver_info.addr();
+    let info = info.addr();
+    let mut accumulator = accumulators.addr();
+    let mut list = motions.addr();
+    e.with_stack(0x100, |e, frame| {
+        let frame = frame.addr();
+        loop {
+            let state = e.mem.u32(list).wrapping_add(offset);
+            let kind = e.mem.u8(state + 8);
+            let steps = match kind {
+                0 | 3 | 6 => {
+                    if kind != 3 {
+                        let angular = load_bits(e, accumulator + 0x20);
+                        store_bits(e, frame + 0x80, angular);
+                        let inertia = refined_rcp(load_vec(e, state + 0xc0));
+                        let momentum = ps_mul(inertia, load_vec(e, frame + 0x80));
+                        store_vec(e, frame + 0x80, momentum);
+                        e.call(
+                            SET_ROTATED_DIR,
+                            &args![frame + 0xd0, state + 0x10, frame + 0x80],
+                        );
+                    }
+                    let linear = load_bits(e, accumulator + 0x10);
+                    store_bits(e, state + 0xd0, linear);
+                    let angular = load_vec(e, accumulator + 0x20);
+                    let rotated = rotate_by_columns(e, angular, state + 0x10);
+                    store_vec(e, state + 0xe0, rotated);
+                    let moving = load_bits(e, accumulator + 0x40);
+                    store_bits(e, frame + 0xa0, moving);
+                    e.call(
+                        SET_ROTATED_DIR,
+                        &args![frame + 0x70, state + 0x10, accumulator + 0x50],
+                    );
+                    true
+                }
+                4 => {
+                    let linear = load_bits(e, state + 0xd0);
+                    let angular = load_bits(e, state + 0xe0);
+                    store_bits(e, frame + 0x70, angular);
+                    store_bits(e, frame + 0xa0, linear);
+                    true
+                }
+                2 | 7 => {
+                    let linear = load_bits(e, accumulator + 0x10);
+                    store_bits(e, state + 0xd0, linear);
+                    let angular = load_bits(e, accumulator + 0x20);
+                    store_bits(e, state + 0xe0, angular);
+                    let moving = load_bits(e, accumulator + 0x40);
+                    let turning = load_bits(e, accumulator + 0x50);
+                    store_bits(e, frame + 0x70, turning);
+                    store_bits(e, frame + 0xa0, moving);
+                    true
+                }
+                _ => false,
+            };
+            if steps {
+                let turning = load_bits(e, frame + 0x70);
+                let moving = load_bits(e, frame + 0xa0);
+                if !velocities_valid(e, moving, turning) {
+                    let reset = load_bits(e, VELOCITY_RESET);
+                    store_bits(e, frame + 0xa0, reset);
+                    store_bits(e, frame + 0x70, reset);
+                }
+                keep_previous_centre(e, info, state);
+                let at = Integration {
+                    linear: frame + 0xa0,
+                    linear_copy: frame + 0xa0,
+                    linear_target: None,
+                    angular: frame + 0x70,
+                    angular_copy: frame + 0x70,
+                    rotation: frame + 0x40,
+                    delta: frame + 0x90,
+                };
+                integrate(e, info, state, &at);
+            }
+            if e.mem.u8(state + 8) == 6 {
+                let linear = load_bits(e, accumulator + 0x10);
+                store_bits(e, state + 0xd0, linear);
+                // The rows transposed into columns (`UNPCKLPS`/`UNPCKHPS`/`MOVLHPS`/
+                // `MOVHLPS`/`SHUFPS`), the fourth lanes as the shuffles leave them.
+                let row_0 = load_vec(e, state + 0x10);
+                let row_1 = load_vec(e, state + 0x20);
+                let row_2 = load_vec(e, state + 0x30);
+                let high = unpckhps(row_0, row_1);
+                let low = unpcklps(row_0, row_1);
+                let column_0 = movlhps(low, row_2);
+                let column_1 = shufps(movhlps(column_0, low), row_2, 0xd4);
+                let momentum = load_vec(e, frame + 0xd0);
+                let first = ps_mul([momentum[1]; 4], column_1);
+                let second = ps_mul([momentum[0]; 4], column_0);
+                let sum = ps_add(first, second);
+                let column_2 = shufps(high, row_2, 0xe4);
+                let sum = ps_add(sum, ps_mul([momentum[2]; 4], column_2));
+                let spin = ps_mul(sum, load_vec(e, state + 0xc0));
+                store_vec(e, frame + 0xe0, spin);
+                e.call(
+                    SET_ROTATED_DIR,
+                    &args![state + 0xe0, state + 0x10, frame + 0xe0],
+                );
+            }
+            limit_velocities(e, state, frame + 0xf0);
+            let one = e.mem.f64(ONE_DOUBLE);
+            deactivation_step(e, solver, state, one);
+            least = fewest_inactive_frames(e, state, least);
+            list = list.wrapping_add(4);
+            accumulator = accumulator.wrapping_add(0x80);
+            remaining = remaining.wrapping_sub(1);
+            if remaining < 0 {
+                break;
+            }
+        }
+    });
+    least
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -431,6 +1107,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00d2_9830,
             hk_rigid_motion_util_apply_forces_and_build_accumulators(Ptr, Ptr, i32, u32, Ptr) -> Ptr
+        ),
+        entry!(
+            0x00d2_8a30,
+            hk_rigid_motion_util_apply_forces_and_step(Ptr, Ptr, Ptr, Ptr, i32, u32) -> i32
+        ),
+        entry!(
+            0x00d2_9bf0,
+            hk_rigid_motion_util_apply_accumulators(Ptr, Ptr, Ptr, Ptr, i32, u32) -> i32
         ),
     ]
 }
@@ -1033,5 +1717,395 @@ mod tests {
                 .u32();
             assert_eq!(end, acc + 0x40);
         }
+    }
+
+    /// The word the packing double answers.
+    const PACKED: u32 = 0x1234_5678;
+
+    /// The constants the two step functions read besides those of `set_constants`.
+    fn set_step_constants(e: &mut Engine) {
+        set_constants(e);
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        e.set_global(PACKED_SCALE, f64::from_bits(0x3f81_9999_a000_0000));
+        for lane in 0..4 {
+            e.set_global(XYZ_MASK + 4 * lane, if lane < 3 { u32::MAX } else { 0 });
+        }
+    }
+
+    /// Doubles for the step functions: the root (host), the quaternion product, the rotated
+    /// direction and the rows product (each copies its vector argument into its result: the
+    /// delta, the vector), the normalisation, the rotation set (identity rows) and the packing
+    /// (answers `PACKED`).
+    fn step_function_doubles(e: &mut Engine) -> Log {
+        let log = new_log();
+        let logged = Rc::clone(&log);
+        e.register_double(X87_SQRT, move |_, a| {
+            logged.borrow_mut().push((X87_SQRT, a.to_vec()));
+            let value = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+            Ret {
+                st0: value.sqrt(),
+                ..Ret::default()
+            }
+        });
+        for address in [QUATERNION_SET_MUL, SET_ROTATED_DIR, ROWS_TIMES_VECTOR] {
+            let logged = Rc::clone(&log);
+            e.register_double(address, move |e, a| {
+                logged.borrow_mut().push((address, a.to_vec()));
+                let source = if address == QUATERNION_SET_MUL {
+                    a[1]
+                } else {
+                    a[2]
+                };
+                let words = load_bits(e, source);
+                store_bits(e, a[0], words);
+                Ret::default()
+            });
+        }
+        log_double(e, &log, QUATERNION_NORMALIZE, 0);
+        log_double(e, &log, PACK_QUATERNION, PACKED);
+        let logged = Rc::clone(&log);
+        e.register_double(SET_ROTATION, move |e, a| {
+            logged.borrow_mut().push((SET_ROTATION, a.to_vec()));
+            store_vec(e, a[0], [1.0, 0.0, 0.0, 0.0]);
+            store_vec(e, a[0] + 0x10, [0.0, 1.0, 0.0, 0.0]);
+            store_vec(e, a[0] + 0x20, [0.0, 0.0, 1.0, 0.0]);
+            Ret::default()
+        });
+        log
+    }
+
+    /// A solver info whose deactivation class 1 allows the squared distance and rotation 1
+    /// (check 0) and 4 (check 1), with the select flags 1 and 2.
+    fn solver_info(e: &mut Engine) -> u32 {
+        let solver = e.mem.alloc(0x130);
+        let limits = solver + 0x64 + 0x1c;
+        e.mem.set_f32(limits + 0x10, 1.0);
+        e.mem.set_f32(limits + 0x14, 4.0);
+        e.mem.set_u16(limits + 0x18, 0x3f80);
+        e.mem.set_u16(limits + 0x1a, 0x4080);
+        e.mem.set_u8(solver + 0x125, 1);
+        e.mem.set_u8(solver + 0x126, 2);
+        solver
+    }
+
+    /// A quiet motion of class 1: identity rows, zero velocities and centres, the rotation
+    /// (0, 0, 0, 1), no damping or gravity, radius 0.5, inverse inertia 2, counter 1,
+    /// inactive frames 5 and 3, references at the centre with the packed rotation 0 and
+    /// energies -1.
+    fn step_state(e: &mut Engine, state: u32) {
+        quiet_state(e, state);
+        store_vec(e, state + 0x10, [1.0, 0.0, 0.0, 0.0]);
+        store_vec(e, state + 0x20, [0.0, 1.0, 0.0, 0.0]);
+        store_vec(e, state + 0x30, [0.0, 0.0, 1.0, 0.0]);
+        for offset in [0x40, 0x70, 0xa0, 0xf0, 0x100] {
+            store_vec(e, state + offset, [0.0; 4]);
+        }
+        store_vec(e, state + 0x80, [0.0, 0.0, 0.0, 1.0]);
+        store_vec(e, state + 0xc0, [2.0; 4]);
+        e.mem.set_f32(state + 0xfc, -1.0);
+        e.mem.set_f32(state + 0x10c, -1.0);
+        e.mem.set_f32(state + 0xb0, 0.5);
+        e.mem.set_f32(state + 0xb4, 0.0);
+        e.mem.set_f32(state + 0xb8, 0.0);
+        e.mem.set_u16(state + 0x11e, 0);
+        e.mem.set_u8(state + 0xbe, 1);
+        e.mem.set_u8(state + 9, 1);
+        e.mem.set_u16(state + 0xa, 5);
+        e.mem.set_u16(state + 0xc, 3);
+        e.mem.set_u32(state + 0x110, 0x8080_8080);
+        e.mem.set_u32(state + 0x114, 0x8080_8080);
+    }
+
+    type StepSetup = (Engine, Log, u32, u32, u32, u32, Vec<u32>);
+
+    /// An engine with the constants and doubles, a solver info, the step info (start 7, step
+    /// 0.5, inverse step 9), a gravity vector (0, -2, 0, 0) and quiet motions of `kinds`.
+    fn step_setup(kinds: &[u8]) -> StepSetup {
+        let mut e = engine();
+        set_step_constants(&mut e);
+        let log = step_function_doubles(&mut e);
+        let solver = solver_info(&mut e);
+        let info = info(&mut e, 7.0, 0.5, 9.0);
+        let gravity = e.mem.alloc(0x10);
+        store_vec(&mut e, gravity, [0.0, -2.0, 0.0, 0.0]);
+        let (list, states) = motions(&mut e, kinds);
+        for state in &states {
+            step_state(&mut e, *state);
+        }
+        (e, log, solver, info, gravity, list, states)
+    }
+
+    #[test]
+    fn forces_and_step_by_motion_type_and_the_fewest_frames_00d28a30() {
+        let (mut e, _log, solver, info, gravity, list, states) = step_setup(&[0, 5, 4, 7]);
+        for state in &states {
+            e.mem.set_u16(state + 0x11e, 0x3f80);
+            e.mem.set_f32(state + 0xb4, 0.2);
+            store_vec(&mut e, state + 0xd0, [1.0, 0.0, 0.0, 0.0]);
+        }
+        e.mem.set_u16(states[1] + 0xa, 1);
+        e.mem.set_u16(states[2] + 0xa, 0x89);
+        e.mem.set_u16(states[3] + 0xa, 7);
+        let least = e
+            .call(
+                0x00d2_8a30,
+                &args![solver, info, gravity, list, 4i32, OFFSET],
+            )
+            .u32();
+        assert_eq!(least, 5);
+        let factor = (1.0 - f64::from(0.2f32) * 0.5) as f32;
+        // Type 0: gravity, then damping.
+        let velocity = [factor, factor * -2.0, 0.0, 0.0];
+        assert_eq!(load_vec(&e, states[0] + 0xd0), velocity);
+        assert_eq!(
+            load_vec(&e, states[0] + 0x60),
+            [0.5 * velocity[0], 0.5 * velocity[1], 0.0, 9.0]
+        );
+        assert_eq!(load_vec(&e, states[0] + 0x50), [0.0, 0.0, 0.0, 7.0]);
+        // Type 5: untouched.
+        assert_eq!(load_vec(&e, states[1] + 0xd0), [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(e.mem.u8(states[1] + 9), 1);
+        // Type 4: neither gravity nor damping.
+        assert_eq!(load_vec(&e, states[2] + 0xd0), [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(load_vec(&e, states[2] + 0x60), [0.5, 0.0, 0.0, 9.0]);
+        // Type 7: damping only.
+        assert_eq!(load_vec(&e, states[3] + 0xd0), [factor, 0.0, 0.0, 0.0]);
+        for state in [states[0], states[2], states[3]] {
+            // The counters count up; no check runs at 2.
+            assert_eq!(e.mem.u8(state + 9), 2);
+            // No turn: the delta is (0, 0, 0, 1), the rotation takes it, the angle is 0.
+            assert_eq!(load_vec(&e, state + 0x80), [0.0, 0.0, 0.0, 1.0]);
+            assert_eq!(load_vec(&e, state + 0xa0), [0.0; 4]);
+            assert_eq!(load_vec(&e, state + 0x70), [0.0, 0.0, 0.0, 1.0]);
+            assert_eq!(load_vec(&e, state + 0x40), load_vec(&e, state + 0x60));
+        }
+        // No motions: the largest answer.
+        let none = e
+            .call(
+                0x00d2_8a30,
+                &args![solver, info, gravity, list, 0i32, OFFSET],
+            )
+            .u32();
+        assert_eq!(none, 0x7fff_ffff);
+    }
+
+    #[test]
+    fn a_type_6_motion_keeps_its_angular_momentum_00d28a30() {
+        let (mut e, log, solver, info, gravity, list, states) = step_setup(&[6]);
+        let state = states[0];
+        let spin = [0.1, 0.0, 0.0, 0.0];
+        store_vec(&mut e, state + 0xe0, spin);
+        e.mem.set_u16(state + 0x11e, 0x3f80);
+        e.call(
+            0x00d2_8a30,
+            &args![solver, info, gravity, list, 1i32, OFFSET],
+        );
+        // Gravity applied.
+        assert_eq!(load_vec(&e, state + 0xd0), [0.0, -2.0, 0.0, 0.0]);
+        let rows = calls(&log, ROWS_TIMES_VECTOR);
+        let turns = calls(&log, SET_ROTATED_DIR);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(turns.len(), 2);
+        let frame = rows[0][0] - 0xd0;
+        assert_eq!(rows[0], vec![frame + 0xd0, state + 0x10, state + 0xe0]);
+        assert_eq!(turns[0], vec![frame + 0xf0, state + 0x10, frame + 0xd0]);
+        assert_eq!(rows[1], vec![frame + 0xe0, state + 0x10, frame + 0xf0]);
+        assert_eq!(turns[1], vec![state + 0xe0, state + 0x10, frame + 0xe0]);
+        assert_eq!(
+            calls(&log, QUATERNION_SET_MUL),
+            vec![vec![frame + 0x40, frame + 0x90, frame + 0x40]]
+        );
+        let momentum = ps_mul(refined_rcp([2.0; 4]), spin);
+        assert_eq!(load_vec(&e, state + 0xe0), ps_mul(momentum, [2.0; 4]));
+        close(load_vec(&e, state + 0xe0)[0], 0.1);
+    }
+
+    #[test]
+    fn invalid_velocities_reset_and_fast_motions_are_limited_00d28a30() {
+        let (mut e, log, solver, info, gravity, list, states) = step_setup(&[4, 4]);
+        for lane in 0..4 {
+            e.set_global(VELOCITY_RESET + 4 * lane, 0.0f32);
+        }
+        store_vec(&mut e, states[0] + 0xd0, [f32::NAN, 0.0, 0.0, 0.0]);
+        store_vec(&mut e, states[0] + 0xe0, [1.0, 0.0, 0.0, 0.0]);
+        // Too fast in both: speed 50 against 10, a half angle of 1 against 0.25.
+        store_vec(&mut e, states[1] + 0xd0, [30.0, 40.0, 0.0, 0.0]);
+        store_vec(&mut e, states[1] + 0xe0, [4.0, 0.0, 0.0, 0.0]);
+        e.call(
+            0x00d2_8a30,
+            &args![solver, info, gravity, list, 2i32, OFFSET],
+        );
+        assert_eq!(load_vec(&e, states[0] + 0xd0), [0.0; 4]);
+        assert_eq!(load_vec(&e, states[0] + 0xe0), [0.0; 4]);
+        let velocity = load_vec(&e, states[1] + 0xd0);
+        close(velocity[0], 6.0);
+        close(velocity[1], 8.0);
+        let centre = load_vec(&e, states[1] + 0x60);
+        close(centre[0], 3.0);
+        close(centre[1], 4.0);
+        // The half angle and the spin scaled by 0.25 / root(estimate) (type 4 has no limit
+        // after the step).
+        let delta = load_vec(&e, states[1] + 0x80);
+        close(delta[0], 0.25 / FACTOR.sqrt());
+        close(load_vec(&e, states[1] + 0xe0)[0], 1.0 / FACTOR.sqrt());
+        let roots: Vec<f64> = calls(&log, X87_SQRT)
+            .iter()
+            .map(|a| f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32))
+            .collect();
+        // The speed (2500) and the allowed squared angle (0.0625) were rooted.
+        assert!(roots.contains(&2500.0));
+        assert!(roots.contains(&0.0625));
+    }
+
+    #[test]
+    fn the_deactivation_checks_keep_or_reset_their_references_00d28a30() {
+        // (counter, packed orientation, reference x) per motion.
+        let cases: [(u8, u32, f32); 5] = [
+            (3, 0x8080_8080, 0.0),
+            (3, 0x8080_8080, 5.0),
+            (3, 0x8080_8000, 0.0),
+            (15, 0x8080_8080, 0.0),
+            (0xff, 0x8080_8080, 0.0),
+        ];
+        let (mut e, log, solver, info, gravity, list, states) = step_setup(&[4; 5]);
+        for (state, (counter, packed, x)) in states.iter().zip(cases) {
+            e.mem.set_u8(state + 9, counter);
+            e.mem.set_u32(state + 0x110, packed);
+            e.mem.set_u32(state + 0x114, packed);
+            store_vec(&mut e, state + 0xf0, [x, 0.0, 0.0, 0.0]);
+            e.mem.set_f32(state + 0xfc, -1.0);
+            e.mem.set_f32(state + 0x10c, 2.5);
+        }
+        let least = e
+            .call(
+                0x00d2_8a30,
+                &args![solver, info, gravity, list, 5i32, OFFSET],
+            )
+            .u32();
+        // Kept: frames 5 -> 6 with the select flag 1 above; the energy 0 beats -1.
+        assert_eq!(e.mem.u16(states[0] + 0xa), (((1 << 7) | 5) << 7) | 6);
+        assert_eq!(e.mem.u8(states[0] + 9), 4);
+        assert_eq!(e.mem.f32(states[0] + 0xfc), 0.0);
+        assert_eq!(e.mem.u32(states[0] + 0x110), 0x8080_8080);
+        // Too far, or turned too far: cleared, the reference takes the centre, packed again.
+        for state in [states[1], states[2]] {
+            assert_eq!(e.mem.u16(state + 0xa), ((1 << 7) | 5) << 7);
+            assert_eq!(load_vec(&e, state + 0xf0), [0.0; 4]);
+            assert_eq!(e.mem.u32(state + 0x110), PACKED);
+        }
+        assert_eq!(
+            calls(&log, PACK_QUATERNION),
+            vec![vec![states[1] + 0x80], vec![states[2] + 0x80]]
+        );
+        // Counter 16: the second check (limits 4), the counter restarts.
+        assert_eq!(e.mem.u8(states[3] + 9), 0);
+        assert_eq!(e.mem.u16(states[3] + 0xc), (((2 << 7) | 3) << 7) | 4);
+        assert_eq!(e.mem.u16(states[3] + 0xa), 5);
+        assert_eq!(e.mem.f32(states[3] + 0x10c), 2.5);
+        // Counter 256: 0xFF and no check.
+        assert_eq!(e.mem.u8(states[4] + 9), 0xff);
+        assert_eq!(e.mem.u16(states[4] + 0xa), 5);
+        assert_eq!(e.mem.f32(states[4] + 0xfc), -1.0);
+        // The smallest of max(6, 3), max(0, 3), max(0, 3), max(5, 4), max(5, 3).
+        assert_eq!(least, 3);
+    }
+
+    #[test]
+    fn accumulator_types_2_7_and_4_take_their_velocities_00d29bf0() {
+        let (mut e, log, solver, info, _gravity, list, states) = step_setup(&[2, 7, 4]);
+        let acc = accumulators(&mut e, 3);
+        for (index, state) in states.iter().enumerate() {
+            let at = acc + 0x80 * index as u32;
+            store_vec(&mut e, at + 0x10, [1.0, 2.0, 3.0, 0.0]);
+            store_vec(&mut e, at + 0x20, [0.1, 0.2, 0.3, 0.0]);
+            store_vec(&mut e, at + 0x40, [4.0, 0.0, 0.0, 0.0]);
+            store_vec(&mut e, at + 0x50, [0.0; 4]);
+            store_vec(&mut e, state + 0xd0, [0.0, 2.0, 0.0, 0.0]);
+        }
+        let least = e
+            .call(0x00d2_9bf0, &args![solver, info, acc, list, 3i32, OFFSET])
+            .u32();
+        assert_eq!(least, 5);
+        for state in [states[0], states[1]] {
+            assert_eq!(load_vec(&e, state + 0xd0), [1.0, 2.0, 3.0, 0.0]);
+            assert_eq!(load_vec(&e, state + 0xe0), [0.1, 0.2, 0.3, 0.0]);
+            assert_eq!(load_vec(&e, state + 0x60), [2.0, 0.0, 0.0, 9.0]);
+        }
+        // Type 4 steps with its own velocities.
+        assert_eq!(load_vec(&e, states[2] + 0xd0), [0.0, 2.0, 0.0, 0.0]);
+        assert_eq!(load_vec(&e, states[2] + 0x60), [0.0, 1.0, 0.0, 9.0]);
+        assert!(calls(&log, SET_ROTATED_DIR).is_empty());
+        assert_eq!(calls(&log, SET_ROTATION).len(), 3);
+    }
+
+    #[test]
+    fn accumulator_types_0_3_and_6_rotate_their_velocities_00d29bf0() {
+        let (mut e, log, solver, info, _gravity, list, states) = step_setup(&[3, 0, 6]);
+        let acc = accumulators(&mut e, 3);
+        let spin = [0.1, 0.2, 0.3, 0.4];
+        for index in 0..3u32 {
+            let at = acc + 0x80 * index;
+            store_vec(&mut e, at + 0x10, [1.0, 2.0, 3.0, 0.0]);
+            store_vec(&mut e, at + 0x20, spin);
+            store_vec(&mut e, at + 0x40, [4.0, 0.0, 0.0, 0.0]);
+            store_vec(&mut e, at + 0x50, [0.0; 4]);
+        }
+        e.call(0x00d2_9bf0, &args![solver, info, acc, list, 3i32, OFFSET]);
+        let turns = calls(&log, SET_ROTATED_DIR);
+        // Type 3: the step's angular vector; type 0: the momentum first; type 6: also the
+        // final angular velocity.
+        assert_eq!(turns.len(), 6);
+        let frame = turns[0][0] - 0x70;
+        assert_eq!(turns[0], vec![frame + 0x70, states[0] + 0x10, acc + 0x50]);
+        assert_eq!(turns[1], vec![frame + 0xd0, states[1] + 0x10, frame + 0x80]);
+        assert_eq!(turns[2], vec![frame + 0x70, states[1] + 0x10, acc + 0xd0]);
+        assert_eq!(
+            turns[5],
+            vec![states[2] + 0xe0, states[2] + 0x10, frame + 0xe0]
+        );
+        // Identity columns: the angular velocity is the accumulator's.
+        let rotated = load_vec(&e, states[0] + 0xe0);
+        assert_eq!(rotated[..3], spin[..3]);
+        assert_eq!(load_vec(&e, states[0] + 0x60), [2.0, 0.0, 0.0, 9.0]);
+        // Type 6: the momentum through the transposed rows (fourth lane 0 from the shuffles)
+        // times the inverse inertia.
+        let momentum = ps_mul(refined_rcp([2.0; 4]), spin);
+        let expected = ps_mul([momentum[0], momentum[1], momentum[2], 0.0], [2.0; 4]);
+        assert_eq!(load_vec(&e, states[2] + 0xe0), expected);
+        assert_eq!(load_vec(&e, states[2] + 0xd0), [1.0, 2.0, 3.0, 0.0]);
+    }
+
+    #[test]
+    fn other_accumulator_types_only_limit_and_count_00d29bf0() {
+        let (mut e, log, solver, info, _gravity, list, states) = step_setup(&[1, 5, 9]);
+        let acc = accumulators(&mut e, 3);
+        let radii = [2.0f32, 0.5, 0.5];
+        for (state, radius) in states.iter().zip(radii) {
+            e.mem.set_u8(state + 9, 3);
+            e.mem.set_f32(state + 0xb0, radius);
+            store_vec(&mut e, state + 0xd0, [3.0, 4.0, 0.0, 0.0]);
+            store_vec(&mut e, state + 0xe0, [0.0, 0.25, 0.0, 0.0]);
+        }
+        store_vec(&mut e, states[1] + 0xd0, [30.0, 40.0, 0.0, 0.0]);
+        store_vec(&mut e, states[2] + 0xe0, [0.0, f32::NAN, 0.0, 0.0]);
+        let least = e
+            .call(0x00d2_9bf0, &args![solver, info, acc, list, 3i32, OFFSET])
+            .u32();
+        // Nothing integrates.
+        assert!(calls(&log, SET_ROTATION).is_empty());
+        for state in &states {
+            assert_eq!(load_vec(&e, state + 0x60), [0.0; 4]);
+        }
+        // The radius 2 counts as 1: energy 1 * 0.0625 + 25.
+        assert_eq!(e.mem.f32(states[0] + 0xfc), 25.0625);
+        // A fast motion is limited to 10 (energy 0.25 * 0.0625 + 100, nearly).
+        let velocity = load_vec(&e, states[1] + 0xd0);
+        close(velocity[0], 6.0);
+        close(velocity[1], 8.0);
+        close(e.mem.f32(states[1] + 0xfc), 100.015_625);
+        // A NaN spin is reset (to the vector 7, 7, 7, 7).
+        assert_eq!(load_vec(&e, states[2] + 0xe0), [7.0; 4]);
+        assert_eq!(least, 6);
+        assert_eq!(e.mem.u8(acc), 0xcd);
     }
 }

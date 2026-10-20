@@ -922,9 +922,89 @@ pub fn bhk_collision_filter_set_multi_layer_collision(
     }
 }
 
+/// The biped-part test (`00624070`, thiscall on the address of a filter info word, answers a
+/// bool in `AL`; unnamed in the engine map, unit `fallout shared/havok`).
+const FILTER_HAS_BIPED_PARTS: u32 = 0x0062_4070;
+
+/// Whether the part bit of `second` (bits 8 to 12) is set in the word of `first`'s part (bits 8
+/// to 12) in the table at `01268078` (the block at `00c847a1`).
+fn parts_collide(e: &Engine, first: u32, second: u32) -> bool {
+    let bit = 1u32 << ((second >> 8) & 0x1f);
+    let word = e.mem.u32(PART_FLAGS + 4 * ((first >> 8) & 0x1f));
+    bit & word != 0
+}
+
+/// Whether the 64-bit mask of `layer` in the layer table at `01267f20` (eight bytes per layer,
+/// read for any layer up to 0x7f as the exe does) holds `bit`.
+fn layer_mask_has(e: &Engine, layer: u32, bit: u64) -> bool {
+    let entry = layer_entry(layer);
+    let low = e.mem.u32(entry) & bit as u32;
+    let high = e.mem.u32(entry.wrapping_add(4)) & (bit >> 32) as u32;
+    low | high != 0
+}
+
+/// Asks `00624070` about the filter info `info`: the exe passes the address of its own stack
+/// argument, here a stack word holding the same value.
+fn has_biped_parts(e: &mut Engine, info: u32) -> bool {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), info);
+        e.call(FILTER_HAS_BIPED_PARTS, &args![slot]).u32() as u8 != 0
+    })
+}
+
+// Translated from 00c84740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkCollisionFilter::IsCollisionEnabled` (engine map name), cdecl `(first, second)` (two
+/// filter info words): answers whether the two may collide. When the layer of `first` (low 7
+/// bits) is not 0x28 and either word has bit 14 ("no collision") set, false. When either group
+/// (high 16 bits) is zero, true. With both layers 8: false for different groups, otherwise the
+/// part table at `01268078` decides (the word of `first`'s part must hold the bit of `second`'s
+/// part). Otherwise, for different groups, whether the mask of `first`'s layer in the layer
+/// table holds the bit of `second`'s layer (`__allshl(1, layer)`); for equal groups with bit 15
+/// ("linked") set in both, false when that mask lacks the bit, else whether the two part numbers
+/// (bits 8 to 12) differ by anything but exactly one; for equal groups without both linked
+/// bits, `00624070` must answer true for `first` and then for `second` (false otherwise), and
+/// the part table decides.
+pub fn bhk_collision_filter_is_collision_enabled(e: &mut Engine, first: u32, second: u32) -> bool {
+    let layer = first & 0x7f;
+    if layer != 0x28 && ((first >> 14) & 1 != 0 || (second >> 14) & 1 != 0) {
+        return false;
+    }
+    if first & 0xffff_0000 == 0 || second & 0xffff_0000 == 0 {
+        return true;
+    }
+    let group_difference = (first ^ second) & 0xffff_0000;
+    let second_layer = second & 0x7f;
+    if layer == 8 && second_layer == layer {
+        if group_difference != 0 {
+            return false;
+        }
+        return parts_collide(e, first, second);
+    }
+    if group_difference != 0 {
+        let bit = layer_bit(e, second_layer);
+        return layer_mask_has(e, layer, bit);
+    }
+    if first & second & 0x8000 != 0 {
+        let bit = layer_bit(e, second_layer);
+        if !layer_mask_has(e, layer, bit) {
+            return false;
+        }
+        let difference = (((first >> 8) & 0x1f) as i32).wrapping_sub(((second >> 8) & 0x1f) as i32);
+        return difference.wrapping_abs() != 1;
+    }
+    if !has_biped_parts(e, first) || !has_biped_parts(e, second) {
+        return false;
+    }
+    parts_collide(e, first, second)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c8_4740,
+            bhk_collision_filter_is_collision_enabled(u32, u32) -> bool
+        ),
         entry!(0x00c84470, bhk_collision_filter_get_debug_color(u32, Ptr) -> Ptr),
         entry!(0x00c84880, fn_00c84880(Ptr, Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00c848b0, fn_00c848b0(Ptr, Ptr, u32, Ptr, Ptr, u32, u32) -> Ptr),
@@ -1475,5 +1555,91 @@ mod tests {
         assert_eq!(layer_entry_words(&e, 1), [0, 0]);
         assert_eq!(layer_entry_words(&e, 0), [0xffff_fffd, 0xffff_ffff]);
         assert_eq!(layer_entry_words(&e, 42), [0xffff_fffd, 0xffff_ffff]);
+    }
+}
+
+#[cfg(test)]
+mod is_collision_enabled_tests {
+    use super::*;
+
+    /// An engine with the exe's data pages, a `__allshl` double (the 64-bit value shifted left
+    /// by the count, 0 from 64 on) and a double for `00624070` that answers whether the layer of
+    /// the word its argument points at is 8 or 0x1d.
+    fn filter_engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.call_log = Some(vec![]);
+        e.register(SHIFT_LEFT_64, |_, a| {
+            let value = u64::from(a[0]) | (u64::from(a[1]) << 32);
+            let count = a[2] as u8;
+            (if count >= 0x40 { 0 } else { value << count }).into_ret()
+        });
+        e.register(FILTER_HAS_BIPED_PARTS, |e, a| {
+            let layer = e.mem.u32(a[0]) & 0x7f;
+            u32::from(layer == 8 || layer == 0x1d).into_ret()
+        });
+        e
+    }
+
+    fn enabled(e: &mut Engine, first: u32, second: u32) -> bool {
+        e.call(0x00c8_4740, &args![first, second]).u32() != 0
+    }
+
+    fn calls_to(e: &Engine, address: u32) -> usize {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == address)
+            .count()
+    }
+
+    #[test]
+    fn bhk_collision_filter_is_collision_enabled_follows_the_groups_layers_and_parts() {
+        let mut e = filter_engine();
+        // No-collision bit: false, unless the first layer is 0x28.
+        assert!(!enabled(&mut e, 0x0001_4001, 0x0002_0001));
+        assert!(!enabled(&mut e, 0x0001_0001, 0x0002_4001));
+        // A zero group: true (also for layer 0x28 with the no-collision bit).
+        assert!(enabled(&mut e, 0x0000_4028, 0x0002_4001));
+        assert!(enabled(&mut e, 0x0001_0001, 0x0000_0001));
+        // Different groups: the first layer's mask in the layer table (layer 3 holds layer 0x22,
+        // bit 2 of its high word).
+        e.mem.set_u32(layer_entry(3) + 4, 4);
+        assert!(enabled(&mut e, 0x0001_0003, 0x0002_0022));
+        assert!(!enabled(&mut e, 0x0001_0003, 0x0002_0021));
+        assert_eq!(calls_to(&e, SHIFT_LEFT_64), 2);
+        // Both layers 8: different groups never, the same group by the part table (part 2's
+        // word holds part 5's bit).
+        e.mem.set_u32(PART_FLAGS + 4 * 2, 1 << 5);
+        assert!(!enabled(&mut e, 0x0001_0208, 0x0002_0508));
+        assert!(enabled(&mut e, 0x0001_0208, 0x0001_0508));
+        assert!(!enabled(&mut e, 0x0001_0508, 0x0001_0208));
+        assert_eq!(calls_to(&e, SHIFT_LEFT_64), 2);
+    }
+
+    #[test]
+    fn bhk_collision_filter_is_collision_enabled_handles_linked_and_biped_filters_of_one_group() {
+        let mut e = filter_engine();
+        // Linked in both, same group: the mask must hold the bit, then the parts must not be
+        // neighbours.
+        e.mem.set_u32(layer_entry(4), 1 << 6);
+        assert!(!enabled(&mut e, 0x0001_8304, 0x0001_8405));
+        assert!(!enabled(&mut e, 0x0001_8304, 0x0001_8406));
+        assert!(!enabled(&mut e, 0x0001_8404, 0x0001_8306));
+        assert!(enabled(&mut e, 0x0001_8304, 0x0001_8306));
+        assert!(enabled(&mut e, 0x0001_8304, 0x0001_8506));
+        assert!(enabled(&mut e, 0x0001_8304, 0x0001_8706));
+        // Not both linked: `00624070` for the first word, then the second, then the part table.
+        e.mem.set_u32(PART_FLAGS + 4 * 3, 1 << 4);
+        e.call_log = Some(vec![]);
+        assert!(!enabled(&mut e, 0x0001_8301, 0x0001_041d));
+        assert_eq!(calls_to(&e, FILTER_HAS_BIPED_PARTS), 1);
+        assert!(!enabled(&mut e, 0x0001_031d, 0x0001_0401));
+        assert_eq!(calls_to(&e, FILTER_HAS_BIPED_PARTS), 3);
+        assert!(enabled(&mut e, 0x0001_031d, 0x0001_8408));
+        assert!(!enabled(&mut e, 0x0001_031d, 0x0001_8508));
+        assert_eq!(calls_to(&e, FILTER_HAS_BIPED_PARTS), 7);
+        assert_eq!(calls_to(&e, SHIFT_LEFT_64), 0);
     }
 }

@@ -617,6 +617,26 @@ pub fn fn_00cb7480(e: &mut Engine, this: Ptr, instance: Ptr, info: Ptr) {
     e.mem.set_u16(record + 0x18, third as u16);
 }
 
+// Translated from 00cb3f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The comparison `cleanupDirtyIslands` sorts the dirty islands with (Ghidra made no function
+/// of it; no name in the engine map), cdecl `(result, a, b)`: stores in the byte at `result`
+/// whether island `a` goes before island `b`, and answers `result`. A null `b` gives 0, else a
+/// null `a` gives 1, else the answer is whether the unique id (`+0xd4`) of `a`'s first entity
+/// (the first word of the entity array at `+0x48`) is below `b`'s, unsigned.
+pub fn fn_00cb3f90(e: &mut Engine, result: Ptr, a: Ptr, b: Ptr) -> Ptr {
+    let before = if b.addr() == 0 {
+        false
+    } else if a.addr() == 0 {
+        true
+    } else {
+        let first_of_a = e.mem.u32(e.mem.u32(a.addr() + ISLAND_ENTITIES));
+        let first_of_b = e.mem.u32(e.mem.u32(b.addr() + ISLAND_ENTITIES));
+        e.mem.u32(first_of_a + 0xd4) < e.mem.u32(first_of_b + 0xd4)
+    };
+    e.mem.set_u8(result.addr(), before as u8);
+    result
+}
+
 // Translated from 00dd7d00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkAlgorithm::quickSortRecursive<hkpSimulationIsland*, hkBool (*)(const hkpSimulationIsland*
 /// const&, ...)>` (Xbox PDB name abbreviated), cdecl `(array, low, high, compare)`: sorts the
@@ -2029,6 +2049,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cb_5480, fn_00cb5480(Ptr, Ptr)),
         entry!(0x00cb_7480, fn_00cb7480(Ptr, Ptr, Ptr)),
         entry!(0x00dd_7d00, hk_algorithm_quick_sort_recursive_hkp_simulation_island(u32, i32, i32, u32)),
+        entry!(0x00cb_3f90, fn_00cb3f90(Ptr, Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -5828,5 +5849,45 @@ mod split_flow_tests {
             .map(|words| words[0])
             .collect();
         assert_eq!(split, vec![third, first]);
+    }
+}
+
+#[cfg(test)]
+mod dirty_island_order_tests {
+    use super::*;
+
+    /// An island whose first entity has the unique id `id`.
+    fn island(e: &mut Engine, id: u32) -> u32 {
+        let island = e.mem.alloc(0x6c);
+        let entities = e.mem.alloc(4);
+        let entity = e.mem.alloc(0x210);
+        e.mem.set_u32(entity + 0xd4, id);
+        e.mem.set_u32(entities, entity);
+        e.mem.set_u32(island + ISLAND_ENTITIES, entities);
+        island
+    }
+
+    fn before(e: &mut Engine, a: u32, b: u32) -> u8 {
+        let result = e.mem.alloc(4);
+        e.mem.set_u32(result, 0xaaaa_aaaa);
+        let answer = e.call(DIRTY_ISLAND_LESS, &args![result, a, b]).u32();
+        assert_eq!(answer, result);
+        // Only the byte is written.
+        assert_eq!(e.mem.u32(result) & 0xffff_ff00, 0xaaaa_aa00);
+        e.mem.u8(result)
+    }
+
+    #[test]
+    fn fn_00cb3f90_orders_islands_by_the_unique_id_of_their_first_entity() {
+        let mut e = Engine::new();
+        let low = island(&mut e, 5);
+        let high = island(&mut e, 0x8000_0000);
+        assert_eq!(before(&mut e, low, high), 1);
+        assert_eq!(before(&mut e, high, low), 0);
+        assert_eq!(before(&mut e, low, low), 0);
+        // A null second island is never after; a null first one is before any other.
+        assert_eq!(before(&mut e, low, 0), 0);
+        assert_eq!(before(&mut e, 0, 0), 0);
+        assert_eq!(before(&mut e, 0, high), 1);
     }
 }
