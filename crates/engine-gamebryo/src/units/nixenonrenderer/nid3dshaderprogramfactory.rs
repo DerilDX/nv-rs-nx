@@ -114,7 +114,131 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00e9_3df0, fn_00e93df0()),
         entry!(0x00e9_3e70, ni_d3d_shader_program_factory_register_shader_creator(Ptr, u32) -> bool),
+        entry!(
+            0x00b7_1300,
+            ni_t_pointer_list_base_remove_all(Ptr<crate::types::NiTPointerList>)
+        ),
     ]
+}
+
+/// The node pool's lock object (`this` of the lock enter `0040fbf0`, thiscall,
+/// one word); its owner word.
+const NODE_POOL_LOCK: u32 = 0x011c_5f80;
+/// The lock's entry count, which the inlined leave decrements.
+const NODE_POOL_LOCK_COUNT: u32 = 0x011c_5f84;
+/// The lock enter (`0040fbf0`; thiscall, one word).
+const LOCK_ENTER: u32 = 0x0040_fbf0;
+/// Head of the node pool's free list.
+const NODE_POOL_FREE_LIST: u32 = 0x011c_5f58;
+
+// Translated from 00b71300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerListBase<NiTPointerAllocator<unsigned int>,char *>::RemoveAll`
+/// (engine map): returns every node of the list to the shared node pool:
+/// for each node clears its element (+0x08), enters the pool's lock
+/// (`0040fbf0(0)`), clears its previous link (+0x04), pushes it on the free
+/// list at `011c5f58` and leaves the lock (the count at `011c5f84` drops by
+/// one; at zero the owner word `011c5f80` is cleared). Then clears the
+/// count, head and tail.
+pub fn ni_t_pointer_list_base_remove_all(e: &mut Engine, this: Ptr<crate::types::NiTPointerList>) {
+    use crate::types::NiTPointerList;
+    let mut next = e.get(this, NiTPointerList::m_pkHead);
+    while next != 0 {
+        let node = next;
+        next = e.mem.u32(node);
+        e.mem.set_u32(node + 8, 0);
+        e.call(LOCK_ENTER, &[NODE_POOL_LOCK, 0]);
+        e.mem.set_u32(node + 4, 0);
+        let free = e.mem.u32(NODE_POOL_FREE_LIST);
+        e.mem.set_u32(node, free);
+        let count = e.mem.u32(NODE_POOL_LOCK_COUNT).wrapping_sub(1);
+        e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
+        e.mem.set_u32(NODE_POOL_FREE_LIST, node);
+        if count == 0 {
+            e.mem.set_u32(NODE_POOL_LOCK, 0);
+        }
+    }
+    e.set(this, NiTPointerList::m_uiCount, 0);
+    e.set(this, NiTPointerList::m_pkHead, 0);
+    e.set(this, NiTPointerList::m_pkTail, 0);
+}
+
+#[cfg(test)]
+mod remove_all_tests {
+    use super::*;
+
+    #[test]
+    fn remove_all_returns_each_node_to_the_pool_and_empties_the_list() {
+        let mut e = Engine::new();
+        e.map(0x011c_5000, 0x1000);
+        // The lock enter double takes the lock: owner 1, count + 1.
+        e.register(LOCK_ENTER, |e, _| {
+            e.mem.set_u32(NODE_POOL_LOCK, 1);
+            let count = e.mem.u32(NODE_POOL_LOCK_COUNT);
+            e.mem.set_u32(NODE_POOL_LOCK_COUNT, count + 1);
+            0u32.into_ret()
+        });
+        // Already held once by the caller: the owner stays after each leave.
+        e.mem.set_u32(NODE_POOL_LOCK_COUNT, 1);
+        e.mem.set_u32(NODE_POOL_FREE_LIST, 0x0099_0000);
+        let list = e.mem.alloc(0xc);
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 4, 0);
+        e.mem.set_u32(first + 8, 0x11);
+        e.mem.set_u32(second, 0);
+        e.mem.set_u32(second + 4, first);
+        e.mem.set_u32(second + 8, 0x22);
+        e.mem.set_u32(list, first);
+        e.mem.set_u32(list + 4, second);
+        e.mem.set_u32(list + 8, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_1300, &[list]);
+        let locks: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == LOCK_ENTER)
+            .map(|(_, w)| w.clone())
+            .collect();
+        assert_eq!(locks, vec![vec![NODE_POOL_LOCK, 0]; 2]);
+        assert_eq!(e.mem.u32(NODE_POOL_FREE_LIST), second);
+        assert_eq!(e.mem.u32(second), first);
+        assert_eq!(e.mem.u32(first), 0x0099_0000);
+        for node in [first, second] {
+            assert_eq!(e.mem.u32(node + 4), 0);
+            assert_eq!(e.mem.u32(node + 8), 0);
+        }
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK_COUNT), 1);
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK), 1);
+        assert_eq!(e.mem.bytes(list, 0xc), vec![0; 0xc]);
+    }
+
+    #[test]
+    fn remove_all_clears_the_owner_when_the_lock_count_reaches_zero() {
+        let mut e = Engine::new();
+        e.map(0x011c_5000, 0x1000);
+        e.register(LOCK_ENTER, |e, _| {
+            e.mem.set_u32(NODE_POOL_LOCK, 1);
+            let count = e.mem.u32(NODE_POOL_LOCK_COUNT);
+            e.mem.set_u32(NODE_POOL_LOCK_COUNT, count + 1);
+            0u32.into_ret()
+        });
+        let list = e.mem.alloc(0xc);
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(list, node);
+        e.mem.set_u32(list + 4, node);
+        e.mem.set_u32(list + 8, 1);
+        e.call(0x00b7_1300, &[list]);
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK_COUNT), 0);
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK), 0);
+        assert_eq!(e.mem.u32(NODE_POOL_FREE_LIST), node);
+        // An empty list only clears its words.
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_1300, &[list]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
 }
 
 #[cfg(test)]

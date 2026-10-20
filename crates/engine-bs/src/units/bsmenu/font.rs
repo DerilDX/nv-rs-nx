@@ -4753,9 +4753,75 @@ pub fn font_manager_text_doc_render(e: &mut Engine, this: Ptr<TextDoc>, out: u32
     });
 }
 
+/// `Setting` base vtable, stored first by the font-file setting initializers.
+const SETTING_BASE_VTABLE: u32 = 0x0101_2120;
+/// The setting's own vtable, stored after the name and value.
+const INI_SETTING_VTABLE: u32 = 0x0101_7720;
+/// The getter of the settings collection singleton (`0044f570`, no arguments).
+const SETTING_COLLECTION_GETTER: u32 = 0x0044_f570;
+/// The settings collection singleton pointer; its virtual at slot +4 adds a setting.
+const SETTING_COLLECTION: u32 = 0x011f_96a0;
+/// `_atexit` (`00ec658f`, cdecl).
+const ATEXIT: u32 = 0x00ec_658f;
+
+/// The common body of the font-file setting initializers: the base vtable at +0, the name
+/// at +8, the value at +4 (in the exe's store order), the setting's vtable, then the
+/// collection getter, the collection's add (slot +4) with the setting, and `_atexit` with its
+/// destructor.
+fn init_font_file_setting(e: &mut Engine, setting: u32, name: u32, value: u32, destructor: u32) {
+    e.set_global::<u32>(setting, SETTING_BASE_VTABLE);
+    e.set_global::<u32>(setting + 8, name);
+    e.set_global::<u32>(setting + 4, value);
+    e.set_global::<u32>(setting, INI_SETTING_VTABLE);
+    e.call(SETTING_COLLECTION_GETTER, &args![]);
+    let collection = e.global::<u32>(SETTING_COLLECTION);
+    e.vcall(collection, 4, &args![setting]);
+    e.call(ATEXIT, &args![destructor]);
+}
+
+// Translated from 00fb37f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00fb37f0 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f1dfea, state variable) is not translated
+/// `_dynamic_initializer_for_FontManager::sFont_1_Filename_` (engine map): the setting at
+/// `011f3414` named `"sFontFile_1:Fonts"` (`010952b0`) with the value
+/// `"Data\Fonts\Glow_Monofonto_Large.fnt"` (`0109528c`), added to the settings collection;
+/// its destructor `00fda3c0` goes to `_atexit`.
+pub fn dynamic_initializer_for_font_manager_s_font_1_filename(e: &mut Engine) {
+    init_font_file_setting(
+        e,
+        FONT_FILENAME_SETTINGS,
+        0x0109_52b0,
+        0x0109_528c,
+        0x00fd_a3c0,
+    );
+}
+
+// Translated from 00fb3c50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00fb3c50 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f1e13a, state variable) is not translated
+/// `_dynamic_initializer_for_FontManager::sFont_8_Filename_` (engine map): the setting at
+/// `011f3468` named `"sFontFile_8:Fonts"` (`0109545c`) with the value
+/// `"Data\Fonts\Glow_Futura_Caps_Large.fnt"` (`01095434`), added to the settings collection;
+/// its destructor `00fda740` goes to `_atexit`.
+pub fn dynamic_initializer_for_font_manager_s_font_8_filename(e: &mut Engine) {
+    init_font_file_setting(
+        e,
+        FONT_FILENAME_SETTINGS + 0x0c * 7,
+        0x0109_545c,
+        0x0109_5434,
+        0x00fd_a740,
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00fb37f0,
+            dynamic_initializer_for_font_manager_s_font_1_filename()
+        ),
+        entry!(
+            0x00fb3c50,
+            dynamic_initializer_for_font_manager_s_font_8_filename()
+        ),
         entry!(
             0x00a11c00,
             ni_tpointer_list_base_add_tail(Ptr<NiTPointerList>, Ptr)
@@ -7070,5 +7136,70 @@ mod tests {
         assert_eq!(fn_00a1c080(&mut e, list), 0x22);
         assert_eq!(e.get(list, NiTPointerList::m_pkTail), 0);
         assert_eq!(e.get(list, NiTPointerList::m_uiCount), 0);
+    }
+}
+
+#[cfg(test)]
+mod b004_tests {
+    use super::*;
+
+    fn run_initializer(addr: u32, setting: u32, name: u32, value: u32, destructor: u32) {
+        let mut e = Engine::new();
+        e.map(setting, 0x0c);
+        e.map(SETTING_COLLECTION, 4);
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, 0x00aa_0004);
+        let collection = e.mem.alloc(8);
+        e.mem.set_u32(collection, vtable);
+        e.set_global::<u32>(SETTING_COLLECTION, collection);
+        e.register(SETTING_COLLECTION_GETTER, |_, _| Ret::default());
+        e.register(0x00aa_0004, |e, a| {
+            // The setting is complete when it is added.
+            assert_eq!(e.mem.u32(a[1]), INI_SETTING_VTABLE);
+            Ret::default()
+        });
+        e.register(ATEXIT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(addr, &args![]);
+        let log: Vec<_> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != addr)
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                (SETTING_COLLECTION_GETTER, vec![]),
+                (0x00aa_0004, vec![collection, setting]),
+                (ATEXIT, vec![destructor]),
+            ]
+        );
+        assert_eq!(e.mem.u32(setting), INI_SETTING_VTABLE);
+        assert_eq!(e.mem.u32(setting + 4), value);
+        assert_eq!(e.mem.u32(setting + 8), name);
+    }
+
+    #[test]
+    fn font_1_filename_initializer_builds_and_registers_the_setting() {
+        run_initializer(
+            0x00fb37f0,
+            0x011f_3414,
+            0x0109_52b0,
+            0x0109_528c,
+            0x00fd_a3c0,
+        );
+    }
+
+    #[test]
+    fn font_8_filename_initializer_builds_and_registers_the_setting() {
+        run_initializer(
+            0x00fb3c50,
+            0x011f_3468,
+            0x0109_545c,
+            0x0109_5434,
+            0x00fd_a740,
+        );
     }
 }

@@ -28,11 +28,27 @@ pub fn fn_00a74530(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `NiTriBasedGeom::NiTriBasedGeom` (engine map, `00a89720`): `thiscall`, one stack word.
+const NI_TRI_BASED_GEOM_CONSTRUCT: u32 = 0x00a8_9720;
+/// `NiTriShape`'s vtable (`0109d454`, RTTI `.?AVNiTriShape@@`).
+const NI_TRI_SHAPE_VTABLE: u32 = 0x0109_d454;
+
+// Translated from 00a74480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTriShape::NiTriShape_ov2` (Xbox PDB). `thiscall`, `RET 4`: runs the
+/// `NiTriBasedGeom` constructor (`00a89720`) on `this` with the one stack word (the
+/// geometry data), then puts this class's vtable (`0109d454`) at +0. Answers `this`.
+pub fn ni_tri_shape_ni_tri_shape_ov2(e: &mut Engine, this: Ptr, data: Ptr) -> Ptr {
+    e.call(NI_TRI_BASED_GEOM_CONSTRUCT, &args![this, data]);
+    e.mem.set_u32(this.addr(), NI_TRI_SHAPE_VTABLE);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00a74520, ni_tri_shape_get_rtti() -> Ptr),
         entry!(0x00a74530, fn_00a74530(Ptr, u32) -> Ptr),
+        entry!(0x00a7_4480, ni_tri_shape_ni_tri_shape_ov2(Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -67,5 +83,26 @@ mod tests {
         assert_eq!(e.call(0x00a74530, &args![this, 1u32]).u32(), this);
         assert_eq!(calls_to(&e, 0x00aa_1460), vec![vec![this, 0xc4]]);
         assert_eq!(calls_to(&e, 0x00a8_9760), vec![vec![this]; 2]);
+    }
+
+    #[test]
+    fn ni_tri_shape_ov2_constructs_the_base_with_the_data_then_sets_the_vtable() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc4);
+        e.register(NI_TRI_BASED_GEOM_CONSTRUCT, |e, a| {
+            // The base writes its own vtable; the class's replaces it afterwards.
+            e.mem.set_u32(a[0], 0x0101_0101);
+            a[0].into_ret()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a7_4480, &args![this, 0x7000u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        let base: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == NI_TRI_BASED_GEOM_CONSTRUCT)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(base, vec![vec![this, 0x7000]]);
+        assert_eq!(e.mem.u32(this), NI_TRI_SHAPE_VTABLE);
     }
 }

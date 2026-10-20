@@ -37,9 +37,34 @@ pub fn fn_008c71d0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `0086c6a0` (`thiscall`, `RET 8`, `fallout/misc/main.cpp`): the element's
+/// constructor body, given 0 and 0x14.
+const ELEMENT_CONSTRUCT_BODY: u32 = 0x0086_c6a0;
+/// `0055a2d0` (`thiscall`, plain `RET`): the element's destructor body.
+const ELEMENT_DESTRUCT_BODY: u32 = 0x0055_a2d0;
+
+// Translated from 008c7250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The element constructor `008c71d0` hands to the vector constructor
+/// (unoptimized code): `0086c6a0(this, 0, 0x14)`; returns `this`.
+pub fn fn_008c7250(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(ELEMENT_CONSTRUCT_BODY, &args![this, 0u32, 0x14u32]);
+    this
+}
+
+// Translated from 008c7270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The element destructor `008c71d0` hands to the vector constructor
+/// (unoptimized code): `0055a2d0(this)`.
+pub fn fn_008c7270(e: &mut Engine, this: Ptr) {
+    e.call(ELEMENT_DESTRUCT_BODY, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x008c_71d0, fn_008c71d0(Ptr) -> Ptr)]
+    vec![
+        entry!(0x008c_71d0, fn_008c71d0(Ptr) -> Ptr),
+        entry!(0x008c_7250, fn_008c7250(Ptr) -> Ptr),
+        entry!(0x008c_7270, fn_008c7270(Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -77,5 +102,20 @@ mod static_init_callee_tests {
         assert_eq!(e.mem.u32(this + 0x18), 0xeeee_eeee);
         assert_eq!(e.mem.u32(this + 0x8c), this + 0x3c);
         assert_eq!(e.mem.u32(this + 0x90), this + 0x6c);
+    }
+
+    #[test]
+    fn element_constructor_and_destructor_run_their_bodies() {
+        let mut e = Engine::new();
+        e.register(ELEMENT_CONSTRUCT_BODY, |_, _| Ret::default());
+        e.register(ELEMENT_DESTRUCT_BODY, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008c_7250, &args![0x1000u32]).u32(), 0x1000);
+        e.call(0x008c_7270, &args![0x1000u32]);
+        assert_eq!(
+            calls_to(&mut e, ELEMENT_CONSTRUCT_BODY),
+            vec![vec![0x1000, 0, 0x14]]
+        );
+        assert_eq!(calls_to(&mut e, ELEMENT_DESTRUCT_BODY), vec![vec![0x1000]]);
     }
 }

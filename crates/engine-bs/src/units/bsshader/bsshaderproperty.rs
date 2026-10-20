@@ -59,12 +59,184 @@ pub fn bs_shader_property_set_flag_recurse(e: &mut Engine, object: Ptr, flag: u3
     }
 }
 
+layout! {
+    /// `BSShaderProperty::RenderPass` (Xbox PDB), 0x10 bytes; the offsets
+    /// match the PC constructor.
+    pub struct RenderPass: 0x10 {
+        /// `pGeometry` (Xbox PDB).
+        0x00 pGeometry: u32,
+        /// `usPassEnum` (Xbox PDB).
+        0x04 usPassEnum: u16,
+        /// `eAccumulationHint` (Xbox PDB).
+        0x06 eAccumulationHint: u8,
+        /// `bFirstPass` (Xbox PDB).
+        0x07 bFirstPass: u8,
+        /// `bLastPass` (Xbox PDB).
+        0x08 bLastPass: u8,
+        /// `ucNumLights` (Xbox PDB).
+        0x09 ucNumLights: u8,
+        /// `ucMaxNumLights` (Xbox PDB).
+        0x0a ucMaxNumLights: u8,
+        /// `ucExtraParam` (Xbox PDB).
+        0x0b ucExtraParam: u8,
+        /// `ppSceneLights` (Xbox PDB).
+        0x0c ppSceneLights: u32,
+    }
+}
+
+/// The memory manager object the code passes as `this` to its allocator.
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+/// The memory manager's allocation method (thiscall, one word: the size).
+const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
+
+// Translated from 00ba8ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderProperty::RenderPass::RenderPass` (Xbox PDB): `cdecl` with a
+/// variable argument list: the pass, its geometry, its pass enum (low half
+/// of the word), its first-pass flag (low byte), the light count (low byte)
+/// and then that many light words. Clears the hint, last-pass flag, maximum
+/// light count, extra parameter and light array; with lights allocates
+/// `count * 4` bytes, sets the maximum to the count and copies the light
+/// words in. Returns the pass. The exe reads the light words from its
+/// caller's stack; here they are the words after the count (a missing word
+/// stops loudly).
+pub fn bs_shader_property_render_pass_render_pass(
+    e: &mut Engine,
+    this: Ptr<RenderPass>,
+    geometry: u32,
+    pass_enum: u16,
+    first_pass: u8,
+    light_count: u8,
+    lights: &[u32],
+) -> Ptr<RenderPass> {
+    e.set(this, RenderPass::pGeometry, geometry);
+    e.set(this, RenderPass::usPassEnum, pass_enum);
+    e.set(this, RenderPass::ucNumLights, light_count);
+    e.set(this, RenderPass::ucMaxNumLights, 0);
+    e.set(this, RenderPass::bFirstPass, first_pass);
+    e.set(this, RenderPass::bLastPass, 0);
+    e.set(this, RenderPass::ppSceneLights, 0);
+    e.set(this, RenderPass::eAccumulationHint, 0);
+    if light_count == 0 {
+        e.set(this, RenderPass::ucExtraParam, 0);
+        return this;
+    }
+    let count = u32::from(light_count);
+    let size = count.checked_mul(4).unwrap_or(u32::MAX);
+    let array = e.call(MEMORY_ALLOCATE, &[MEMORY_MANAGER, size]).u32();
+    e.set(this, RenderPass::ppSceneLights, array);
+    e.set(this, RenderPass::ucMaxNumLights, light_count);
+    // `TEST EDI,EDI; JLE`: never taken (the count is at least 1 here); the
+    // branch stores the zero in AL as the extra parameter.
+    if (count as i32) <= 0 {
+        e.set(this, RenderPass::ucExtraParam, 0);
+        return this;
+    }
+    let mut index = 0u32;
+    loop {
+        let light = lights[index as usize];
+        let array = e.get(this, RenderPass::ppSceneLights);
+        e.mem.set_u32(array + index * 4, light);
+        index += 1;
+        if (index as i32) >= (count as i32) {
+            break;
+        }
+    }
+    e.set(this, RenderPass::ucExtraParam, 0);
+    this
+}
+
+/// The registry entry of [`bs_shader_property_render_pass_render_pass`]:
+/// the five fixed words, then the light words.
+fn render_pass_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    assert!(
+        words.len() >= 5,
+        "RenderPass::RenderPass needs 5 argument words, got {}",
+        words.len()
+    );
+    bs_shader_property_render_pass_render_pass(
+        e,
+        Ptr::new(words[0]),
+        words[1],
+        words[2] as u16,
+        words[3] as u8,
+        words[4] as u8,
+        &words[5..],
+    )
+    .addr()
+    .into_ret()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00ba_91a0,
-        bs_shader_property_set_flag_recurse(Ptr, u32, u32)
-    )]
+    vec![
+        entry!(
+            0x00ba_91a0,
+            bs_shader_property_set_flag_recurse(Ptr, u32, u32)
+        ),
+        (0x00ba_8ec0, render_pass_entry as AbiFn),
+    ]
+}
+
+#[cfg(test)]
+mod render_pass_tests {
+    use super::*;
+
+    #[test]
+    fn render_pass_without_lights_clears_the_pass() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        for off in (0..0x10).step_by(4) {
+            e.mem.set_u32(this + off, 0xffff_ffff);
+        }
+        e.call_log = Some(vec![]);
+        // The accumulator's call: geometry 0, pass 0x2f5, first pass, no
+        // lights, and one more pushed word.
+        let result = e.call(0x00ba_8ec0, &[this, 0, 0x0001_02f5, 0x0101, 0, 0]);
+        assert_eq!(result.u32(), this);
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u16(this + 4), 0x2f5);
+        assert_eq!(e.mem.u8(this + 6), 0);
+        assert_eq!(e.mem.u8(this + 7), 1);
+        assert_eq!(e.mem.bytes(this + 8, 4), vec![0, 0, 0, 0]);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        let allocations = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == MEMORY_ALLOCATE)
+            .count();
+        assert_eq!(allocations, 0);
+    }
+
+    #[test]
+    fn render_pass_with_lights_copies_them_into_a_new_array() {
+        let mut e = Engine::new();
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x00ba_8ec0, &[this, 0x1234, 7, 0, 3, 0xa, 0xb, 0xc]);
+        assert_eq!(e.mem.u32(this), 0x1234);
+        assert_eq!(e.mem.u16(this + 4), 7);
+        assert_eq!(e.mem.u8(this + 7), 0);
+        assert_eq!(e.mem.u8(this + 9), 3);
+        assert_eq!(e.mem.u8(this + 0xa), 3);
+        assert_eq!(e.mem.u8(this + 0xb), 0);
+        let array = e.mem.u32(this + 0xc);
+        assert_eq!(
+            (0..3).map(|i| e.mem.u32(array + i * 4)).collect::<Vec<_>>(),
+            vec![0xa, 0xb, 0xc]
+        );
+        let sizes: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == MEMORY_ALLOCATE)
+            .map(|(_, w)| w[1])
+            .collect();
+        assert_eq!(sizes, vec![12]);
+    }
 }
 
 #[cfg(test)]

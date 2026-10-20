@@ -1,10 +1,485 @@
 //! `BSShader/run_00b7fa40` (Xbox PDB source unit), subsystem `BSShader`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
+//!
+//! The shader package: a 0x1c-byte object the shader manager's set-up (`00b57420`) keeps at
+//! `011f9498`. Unnamed in the engine map; its fields as the code uses them: the package's
+//! file name (+0, allocated), the package's contents (+4, allocated), and at +8 a string map
+//! of shaders (the code passes +8 to `NiTStringTemplateMap<NiTPointerMap<char const*,
+//! NiShader*>,NiShader*>::SetAt`, `00a642a0`): vtable (+8), bucket count (+0xc), bucket
+//! array (+0x10), item count (+0x14) and a byte at +0x18.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// The shader model setting the package index is chosen from (`011f91c0`), and the three
+/// bytes that refine it (`011f94a4`, `011f941e`, `011f941f`).
+const SHADER_SETTING_011F91C0: u32 = 0x011f_91c0;
+const BYTE_SETTING_011F94A4: u32 = 0x011f_94a4;
+const BYTE_SETTING_011F941E: u32 = 0x011f_941e;
+const BYTE_SETTING_011F941F: u32 = 0x011f_941f;
+
+// Translated from 00b7faf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`). No arguments: the shader package index for
+/// the setting at `011f91c0` (the switch's jump table at `00b7fbc4`, read from the exe's code
+/// in Ghidra, gives the arms): 1, 2, 3, 4 give 1, 2, 5, 8; 5 gives 3 or 4 (byte `011f94a4`
+/// clear or set) when `011f941e` is clear, else 0xa + (`011f941f` != 0) or 0xc + (it != 0);
+/// 6 gives 6 or 7 when `011f941e` is clear, else 0xe + .. or 0x10 + ..; 7 gives 9 when
+/// `011f941e` is clear, else 0x12 + (`011f941f` != 0); anything else gives 0. The whole
+/// `EAX` is set on every path.
+pub fn fn_00b7faf0(e: &mut Engine) -> u32 {
+    let refine = |e: &Engine, plain: u32, base: u32| -> u32 {
+        if e.global::<u8>(BYTE_SETTING_011F941E) == 0 {
+            plain
+        } else {
+            base + u32::from(e.global::<u8>(BYTE_SETTING_011F941F) != 0)
+        }
+    };
+    match e.global::<u32>(SHADER_SETTING_011F91C0).wrapping_sub(1) {
+        0 => 1,
+        1 => 2,
+        2 => 5,
+        3 => 8,
+        4 => {
+            if e.global::<u8>(BYTE_SETTING_011F94A4) == 0 {
+                refine(e, 3, 0xa)
+            } else {
+                refine(e, 4, 0xc)
+            }
+        }
+        5 => {
+            if e.global::<u8>(BYTE_SETTING_011F94A4) == 0 {
+                refine(e, 6, 0xe)
+            } else {
+                refine(e, 7, 0x10)
+            }
+        }
+        6 => refine(e, 9, 0x12),
+        _ => 0,
+    }
+}
+
+/// The memory manager singleton (`011f6238`) and its allocate (`00aa3e40`, `thiscall`,
+/// size) and deallocate (`00aa4060`, `thiscall`, block).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+/// The allocation `00aa1070` (`cdecl`, size).
+const ALLOCATE_00AA1070: u32 = 0x00aa_1070;
+/// CRT `_memset` (`00ec61c0`, `cdecl`) and `_strcpy_s` (`00ec65a6`, `cdecl`).
+const MEMSET: u32 = 0x00ec_61c0;
+const STRCPY_S: u32 = 0x00ec_65a6;
+/// The formatter `00406d00` (`cdecl`: buffer, size, format, then the format's words).
+const FORMAT_00406D00: u32 = 0x0040_6d00;
+/// `"Data\\Shaders\\shaderpackage%03i.sdp"` (`010af68c`).
+const PACKAGE_NAME_FORMAT: u32 = 0x010a_f68c;
+/// The map's vtables: the one set first (`010ade18`) and the final one (`010af6cc`); neither
+/// has an RTTI locator before it.
+const MAP_VTABLE_010ADE18: u32 = 0x010a_de18;
+const MAP_VTABLE_010AF6CC: u32 = 0x010a_f6cc;
+/// The map's bucket count (0x25) and the size `00b7ff40` allocates its buckets with (0x94).
+const MAP_BUCKETS: u32 = 0x25;
+const MAP_BUCKET_BYTES: u32 = 0x94;
+
+// Translated from 00b7ff40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`): the shader package's constructor. `thiscall`,
+/// `RET 4`, one word (the package index). Sets up the map at +8 (vtable `010ade18`, 0x25
+/// buckets at +0xc, item count +0x14 cleared, buckets from `00aa1070(0x94)` at +0x10 cleared
+/// with `_memset` for `4 * buckets` bytes, the byte at +0x18 set to 1, then the vtable
+/// `010af6cc`), clears +4 and +0, and when the index is above 0 (signed) formats
+/// `"Data\\Shaders\\shaderpackage%03i.sdp"` with it into a 100-byte stack buffer
+/// (`00406d00`), allocates its length + 1 from the memory manager into +0 and copies it there
+/// (`_strcpy_s`). Answers `this`.
+// Translation incomplete: 00b7ff40 - the C++ exception frame (FS:[0] chain, unwind state 0 after the map) and the /GS cookie check (00ec408c) are not translated.
+pub fn fn_00b7ff40(e: &mut Engine, this: Ptr, index: i32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base.wrapping_add(8), MAP_VTABLE_010ADE18);
+    e.mem.set_u32(base.wrapping_add(0xc), MAP_BUCKETS);
+    e.mem.set_u32(base.wrapping_add(0x14), 0);
+    let buckets = e.call(ALLOCATE_00AA1070, &args![MAP_BUCKET_BYTES]).u32();
+    let count = e.mem.u32(base.wrapping_add(0xc));
+    e.mem.set_u32(base.wrapping_add(0x10), buckets);
+    e.call(MEMSET, &args![buckets, 0u32, count.wrapping_mul(4)]);
+    e.mem.set_u8(base.wrapping_add(0x18), 1);
+    e.mem.set_u32(base.wrapping_add(8), MAP_VTABLE_010AF6CC);
+    e.mem.set_u32(base.wrapping_add(4), 0);
+    e.mem.set_u32(base, 0);
+    if index > 0 {
+        e.with_stack(100, |e, buffer| {
+            e.call(
+                FORMAT_00406D00,
+                &args![buffer, 100u32, PACKAGE_NAME_FORMAT, index],
+            );
+            // The inlined `strlen`, plus one for the NUL.
+            let size = (e.mem.cstr(buffer.addr()).len() as u32).wrapping_add(1);
+            let name = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, size]).u32();
+            e.mem.set_u32(base, name);
+            e.call(STRCPY_S, &args![name, size, buffer]);
+        });
+    }
+    this
+}
+
+/// `FileFinder::GetFile` (engine map, `00afdf00`, `cdecl`: name, two words).
+const FILE_FINDER_GET_FILE: u32 = 0x00af_df00;
+/// The file's read of a whole block (`00462d80`, `thiscall`, `RET 8`: buffer, size).
+const FILE_READ_00462D80: u32 = 0x0046_2d80;
+/// `NiTStringTemplateMap<NiTPointerMap<char const*,NiShader*>,NiShader*>::SetAt` (engine
+/// map, `00a642a0`, `thiscall`, `RET 8`: key, value).
+const SHADER_MAP_SET_AT: u32 = 0x00a6_42a0;
+/// The package header's version (`100`) and the header's size.
+const PACKAGE_VERSION: u32 = 100;
+const PACKAGE_HEADER_BYTES: u32 = 0xc;
+
+// Translated from 00b7fe40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`): loads the shader package. `thiscall`, `RET 4`,
+/// one word (the file name). Answers whether every shader was read (`AL`); 0 when the name
+/// is null or `FileFinder::GetFile(name, 0, 0)` (`00afdf00`) finds nothing.
+///
+/// With a file: vtable slot +0x20 with (0, 0); the 12-byte header (version, shader count,
+/// contents size; zeroed on the stack first) read through the function pointer at the file's
+/// +8 (`cdecl`: file, header, 0xc, the address of the argument's own stack slot, which the
+/// code sets to 1 just before, and 1), the result added to the file's +4. When 12 bytes came
+/// and the version is 100: the contents size is allocated from the memory manager into +4 and
+/// read (`00462d80`); if that read answers the size, the answer becomes 1 and each shader
+/// record in the contents is put into the map at +8 (`00a642a0`, the record as key and value;
+/// the next record starts `0x104 + ` the record's word at +0x100 bytes later), else the
+/// contents are freed and +4 cleared. The file is then deleted (vtable slot 0 with 1).
+pub fn fn_00b7fe40(e: &mut Engine, this: Ptr, name: Ptr) -> bool {
+    let base = this.addr();
+    let mut loaded = false;
+    if name.is_null() {
+        return loaded;
+    }
+    let file = e.call(FILE_FINDER_GET_FILE, &args![name, 0u32, 0u32]).u32();
+    if file == 0 {
+        return loaded;
+    }
+    e.vcall(file, 0x20, &args![0u32, 0u32]);
+    e.with_stack(PACKAGE_HEADER_BYTES + 4, |e, header| {
+        let header = header.addr();
+        let argument_slot = header.wrapping_add(PACKAGE_HEADER_BYTES);
+        e.mem.set_u32(argument_slot, 1);
+        let read = e.mem.u32(file.wrapping_add(8));
+        let got = e
+            .call(
+                read,
+                &args![file, header, PACKAGE_HEADER_BYTES, argument_slot, 1u32],
+            )
+            .u32();
+        let position = e.mem.u32(file.wrapping_add(4)).wrapping_add(got);
+        e.mem.set_u32(file.wrapping_add(4), position);
+        if got == PACKAGE_HEADER_BYTES && e.mem.u32(header) == PACKAGE_VERSION {
+            let size = e.mem.u32(header.wrapping_add(8));
+            let contents = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, size]).u32();
+            e.mem.set_u32(base.wrapping_add(4), contents);
+            let read = e
+                .call(FILE_READ_00462D80, &args![file, contents, size])
+                .u32();
+            if read == size {
+                let mut record = e.mem.u32(base.wrapping_add(4));
+                loaded = true;
+                let shaders = e.mem.u32(header.wrapping_add(4));
+                if shaders != 0 {
+                    let mut index = 0u32;
+                    loop {
+                        e.call(
+                            SHADER_MAP_SET_AT,
+                            &args![base.wrapping_add(8), record, record],
+                        );
+                        let length = e.mem.u32(record.wrapping_add(0x100));
+                        index = index.wrapping_add(1);
+                        record = record.wrapping_add(length).wrapping_add(0x104);
+                        if index >= e.mem.u32(header.wrapping_add(4)) {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                let contents = e.mem.u32(base.wrapping_add(4));
+                e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, contents]);
+                e.mem.set_u32(base.wrapping_add(4), 0);
+            }
+        }
+    });
+    e.vcall(file, 0, &args![1u32]);
+    loaded
+}
+
+/// The map's clean-up `00b7fc50` (`thiscall` on +8, no stack words), jumped to at the end
+/// of `00b7fd50`.
+const MAP_CLEAN_UP_00B7FC50: u32 = 0x00b7_fc50;
+
+// Translated from 00b7fd50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b7fa40`): the shader package's clean-up. `thiscall`, no
+/// stack words: frees the file name (+0) and the contents (+4) through the memory manager
+/// when not null, clearing each, then jumps to `00b7fc50` on the map at +8; answers what it
+/// answers (`EAX`).
+pub fn fn_00b7fd50(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    for offset in [0u32, 4] {
+        let block = e.mem.u32(base.wrapping_add(offset));
+        if block != 0 {
+            e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, block]);
+            e.mem.set_u32(base.wrapping_add(offset), 0);
+        }
+    }
+    e.call(MAP_CLEAN_UP_00B7FC50, &args![base.wrapping_add(8)])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![
+        entry!(0x00b7_faf0, fn_00b7faf0() -> u32),
+        entry!(0x00b7_ff40, fn_00b7ff40(Ptr, i32) -> Ptr),
+        entry!(0x00b7_fe40, fn_00b7fe40(Ptr, Ptr) -> bool),
+        entry!(0x00b7_fd50, fn_00b7fd50(Ptr) -> u32),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn settings(e: &mut Engine, setting: u32, a4: u8, e1: u8, f1: u8) -> u32 {
+        e.set_global(SHADER_SETTING_011F91C0, setting);
+        e.set_global(BYTE_SETTING_011F94A4, a4);
+        e.set_global(BYTE_SETTING_011F941E, e1);
+        e.set_global(BYTE_SETTING_011F941F, f1);
+        e.call(0x00b7_faf0, &args![]).u32()
+    }
+
+    #[test]
+    fn fn_00b7faf0_picks_the_package_for_each_setting() {
+        let mut e = Engine::new();
+        e.map(0x011f_9000, 0x1000);
+        assert_eq!(settings(&mut e, 0, 1, 1, 1), 0);
+        assert_eq!(settings(&mut e, 1, 1, 1, 1), 1);
+        assert_eq!(settings(&mut e, 2, 1, 1, 1), 2);
+        assert_eq!(settings(&mut e, 3, 1, 1, 1), 5);
+        assert_eq!(settings(&mut e, 4, 1, 1, 1), 8);
+        assert_eq!(settings(&mut e, 5, 0, 0, 1), 3);
+        assert_eq!(settings(&mut e, 5, 0, 1, 0), 0xa);
+        assert_eq!(settings(&mut e, 5, 0, 1, 7), 0xb);
+        assert_eq!(settings(&mut e, 5, 1, 0, 1), 4);
+        assert_eq!(settings(&mut e, 5, 1, 1, 0), 0xc);
+        assert_eq!(settings(&mut e, 5, 1, 1, 1), 0xd);
+        assert_eq!(settings(&mut e, 6, 0, 0, 1), 6);
+        assert_eq!(settings(&mut e, 6, 0, 1, 1), 0xf);
+        assert_eq!(settings(&mut e, 6, 1, 0, 1), 7);
+        assert_eq!(settings(&mut e, 6, 1, 1, 0), 0x10);
+        assert_eq!(settings(&mut e, 6, 1, 1, 1), 0x11);
+        assert_eq!(settings(&mut e, 7, 1, 0, 1), 9);
+        assert_eq!(settings(&mut e, 7, 0, 1, 0), 0x12);
+        assert_eq!(settings(&mut e, 7, 0, 1, 1), 0x13);
+        assert_eq!(settings(&mut e, 8, 1, 1, 1), 0);
+        assert_eq!(settings(&mut e, 0xffff_ffff, 1, 1, 1), 0);
+    }
+
+    fn package_rig() -> Engine {
+        let mut e = Engine::new();
+        e.register(ALLOCATE_00AA1070, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1].max(1)).into_ret());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            a[0].into_ret()
+        });
+        // The formatter writes the index as three digits after a short prefix.
+        e.register(FORMAT_00406D00, |e, a| {
+            let text = format!("pkg{:03}", a[3]);
+            e.mem.set_cstr(a[0], text.as_bytes());
+            (text.len() as u32).into_ret()
+        });
+        e.register(STRCPY_S, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e
+    }
+
+    #[test]
+    fn fn_00b7ff40_sets_up_the_map_and_names_the_package() {
+        let mut e = package_rig();
+        let this = e.mem.alloc(0x1c);
+        e.mem.set_u32(this, 0x1111);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b7_ff40, &args![this, 7u32]).u32(), this);
+        assert_eq!(calls(&e, ALLOCATE_00AA1070), vec![vec![0x94]]);
+        let buckets = e.mem.u32(this + 0x10);
+        assert_eq!(calls(&e, MEMSET), vec![vec![buckets, 0, 0x94]]);
+        assert_eq!(e.mem.u32(this + 8), MAP_VTABLE_010AF6CC);
+        assert_eq!(e.mem.u32(this + 0xc), 0x25);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        assert_eq!(e.mem.u8(this + 0x18), 1);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        let format = calls(&e, FORMAT_00406D00);
+        assert_eq!(format.len(), 1);
+        assert_eq!(&format[0][1..], &[100, PACKAGE_NAME_FORMAT, 7]);
+        // "pkg007" and its NUL.
+        assert_eq!(calls(&e, MEMORY_ALLOCATE), vec![vec![MEMORY_MANAGER, 7]]);
+        let name = e.mem.u32(this);
+        assert_eq!(e.mem.cstr(name), b"pkg007".to_vec());
+        assert_eq!(calls(&e, STRCPY_S)[0][..2], [name, 7]);
+    }
+
+    #[test]
+    fn fn_00b7ff40_without_a_positive_index_leaves_no_name() {
+        let mut e = package_rig();
+        let this = e.mem.alloc(0x1c);
+        e.mem.set_u32(this, 0x1111);
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_ff40, &args![this, 0u32]);
+        e.call(0x00b7_ff40, &args![this, -3i32]);
+        assert!(calls(&e, FORMAT_00406D00).is_empty());
+        assert!(calls(&e, MEMORY_ALLOCATE).is_empty());
+        assert_eq!(e.mem.u32(this), 0);
+    }
+
+    /// A file object (vtable with slot 0 and +0x20, the read pointer at +8, position at +4)
+    /// whose header read answers `header_got` bytes of (version, count, size) and whose block
+    /// read answers `block_got`.
+    fn file_rig(version: u32, count: u32, header_got: u32, block_got: u32) -> (Engine, u32) {
+        let mut e = package_rig();
+        let file = e.mem.alloc(0x10);
+        let mut slots = vec![0u32; 9];
+        slots[0] = 0x0f00_3000;
+        slots[8] = 0x0f00_3020;
+        e.put_vtable(0x0f00_1000, &slots);
+        e.mem.set_u32(file, 0x0f00_1000);
+        e.mem.set_u32(file + 4, 0x40);
+        e.mem.set_u32(file + 8, 0x0f00_4000);
+        e.register(0x0f00_3000, |_, _| Ret::default());
+        e.register(0x0f00_3020, |_, _| Ret::default());
+        e.register_double(FILE_FINDER_GET_FILE, move |_, _| file.into_ret());
+        e.register_double(0x0f00_4000, move |e, a| {
+            assert_eq!(a[2], 0xc);
+            assert_eq!(e.mem.u32(a[3]), 1);
+            assert_eq!(a[4], 1);
+            assert_eq!(e.mem.bytes(a[1], 12), vec![0; 12]);
+            e.mem.set_u32(a[1], version);
+            e.mem.set_u32(a[1] + 4, count);
+            e.mem.set_u32(a[1] + 8, 0x20c);
+            header_got.into_ret()
+        });
+        // Two records: the first 4 bytes of text after its 0x104-byte head, then the second.
+        e.register_double(FILE_READ_00462D80, move |e, a| {
+            e.mem.set_u32(a[1] + 0x100, 4);
+            block_got.into_ret()
+        });
+        e.register(SHADER_MAP_SET_AT, |_, _| Ret::default());
+        (e, file)
+    }
+
+    #[test]
+    fn fn_00b7fe40_loads_every_shader_record() {
+        let (mut e, file) = file_rig(100, 2, 12, 0x20c);
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00b7_fe40, &args![this, 0x5000u32]).bool());
+        assert_eq!(calls(&e, FILE_FINDER_GET_FILE), vec![vec![0x5000, 0, 0]]);
+        assert_eq!(calls(&e, 0x0f00_3020), vec![vec![file, 0, 0]]);
+        assert_eq!(e.mem.u32(file + 4), 0x4c);
+        let contents = e.mem.u32(this + 4);
+        assert_eq!(
+            calls(&e, MEMORY_ALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x20c]]
+        );
+        assert_eq!(
+            calls(&e, FILE_READ_00462D80),
+            vec![vec![file, contents, 0x20c]]
+        );
+        let second = contents + 0x108;
+        assert_eq!(
+            calls(&e, SHADER_MAP_SET_AT),
+            vec![
+                vec![this + 8, contents, contents],
+                vec![this + 8, second, second]
+            ]
+        );
+        assert_eq!(calls(&e, 0x0f00_3000), vec![vec![file, 1]]);
+    }
+
+    #[test]
+    fn fn_00b7fe40_frees_the_contents_after_a_short_read() {
+        let (mut e, file) = file_rig(100, 2, 12, 0x20b);
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00b7_fe40, &args![this, 0x5000u32]).bool());
+        assert_eq!(calls(&e, MEMORY_DEALLOCATE).len(), 1);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert!(calls(&e, SHADER_MAP_SET_AT).is_empty());
+        assert_eq!(calls(&e, 0x0f00_3000), vec![vec![file, 1]]);
+    }
+
+    #[test]
+    fn fn_00b7fe40_with_no_shaders_still_answers_true() {
+        let (mut e, _) = file_rig(100, 0, 12, 0x20c);
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00b7_fe40, &args![this, 0x5000u32]).bool());
+        assert!(calls(&e, SHADER_MAP_SET_AT).is_empty());
+    }
+
+    #[test]
+    fn fn_00b7fe40_skips_a_bad_header_but_still_deletes_the_file() {
+        for (version, got) in [(99u32, 12u32), (100, 11)] {
+            let (mut e, file) = file_rig(version, 2, got, 0x20c);
+            let this = e.mem.alloc(0x1c);
+            e.call_log = Some(vec![]);
+            assert!(!e.call(0x00b7_fe40, &args![this, 0x5000u32]).bool());
+            assert!(calls(&e, MEMORY_ALLOCATE).is_empty());
+            assert_eq!(calls(&e, 0x0f00_3000), vec![vec![file, 1]]);
+        }
+    }
+
+    #[test]
+    fn fn_00b7fe40_without_a_name_or_a_file_answers_false() {
+        let mut e = package_rig();
+        e.register(FILE_FINDER_GET_FILE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00b7_fe40, &args![this, 0u32]).bool());
+        assert!(calls(&e, FILE_FINDER_GET_FILE).is_empty());
+        assert!(!e.call(0x00b7_fe40, &args![this, 0x5000u32]).bool());
+        assert_eq!(calls(&e, FILE_FINDER_GET_FILE).len(), 1);
+    }
+
+    #[test]
+    fn fn_00b7fd50_frees_what_it_holds_then_cleans_up_the_map() {
+        let mut e = Engine::new();
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        e.register(MAP_CLEAN_UP_00B7FC50, |_, _| 0x99u32.into_ret());
+        let this = e.mem.alloc(0x1c);
+        e.mem.set_u32(this, 0x1000);
+        e.mem.set_u32(this + 4, 0x2000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b7_fd50, &args![this]).u32(), 0x99);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x1000], vec![MEMORY_MANAGER, 0x2000]]
+        );
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(calls(&e, MAP_CLEAN_UP_00B7FC50), vec![vec![this + 8]]);
+
+        // Nothing held: only the map's clean-up.
+        e.call_log = Some(vec![]);
+        e.call(0x00b7_fd50, &args![this]);
+        assert!(calls(&e, MEMORY_DEALLOCATE).is_empty());
+        assert_eq!(calls(&e, MAP_CLEAN_UP_00B7FC50).len(), 1);
+    }
 }

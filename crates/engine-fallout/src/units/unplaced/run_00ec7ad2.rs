@@ -81,9 +81,35 @@ pub fn fn_00ec7b08(
     );
 }
 
+/// The `.data` word `00ec7af9` sets (`__init_pointers` at `00eccf26` passes it its value).
+const POINTER_0126FD9C: u32 = 0x0126_fd9c;
+
+// Translated from 00ec7af9 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (a CRT pointer initialiser, cdecl, one word; `__init_pointers` calls it): stores
+/// its argument in the word at `0126fd9c`.
+pub fn fn_00ec7af9(e: &mut Engine, value: u32) {
+    e.mem.set_u32(POINTER_0126FD9C, value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00ec_7b08, fn_00ec7b08(u32, u32, u32, u32, u32))]
+    vec![
+        entry!(0x00ec_7b08, fn_00ec7b08(u32, u32, u32, u32, u32)),
+        entry!(0x00ec_7af9, fn_00ec7af9(u32)),
+    ]
+}
+
+#[cfg(test)]
+mod b001_tests {
+    use super::*;
+
+    #[test]
+    fn stores_the_argument_in_the_pointer_word() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.call(0x00ec_7af9, &args![0x1234_5678u32]);
+        assert_eq!(e.mem.u32(POINTER_0126FD9C), 0x1234_5678);
+    }
 }
 
 #[cfg(test)]

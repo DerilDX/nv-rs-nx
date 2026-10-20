@@ -25,9 +25,26 @@ pub fn fn_00aa4d50(e: &mut Engine) {
     e.set_global(RESULT_011AC39C, quotient as f32);
 }
 
+// Translated from 00aa4d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns 0 (thiscall, `RET 0x14`: `this` and five stack words, none of them read).
+pub fn fn_00aa4d40(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> u32 {
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00aa_4d50, fn_00aa4d50())]
+    vec![
+        entry!(0x00aa_4d50, fn_00aa4d50()),
+        entry!(0x00aa_4d40, fn_00aa4d40(Ptr, u32, u32, u32, u32, u32) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -72,5 +89,17 @@ mod static_init_callee_tests {
         });
         e.call(0x00aa_4d50, &args![]);
         assert_eq!(e.global::<f32>(RESULT_011AC39C), -2.0);
+    }
+}
+
+#[cfg(test)]
+mod b004_tests {
+    use super::*;
+
+    #[test]
+    fn returns_zero() {
+        let mut e = Engine::new();
+        let r = e.call(0x00aa_4d40, &args![1u32, 2u32, 3u32, 4u32, 5u32, 6u32]);
+        assert_eq!(r.u32(), 0);
     }
 }

@@ -7,7 +7,51 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-19 (current; read this first, then the 2026-10-18 section below)
+### Claude lead, 2026-10-20 night (current; read this first, then 2026-10-19 below)
+
+**The real game was recorded.** The maintainer played a new game with a
+recorder loaded (private `nv-cover`, an INT3 on the first byte of every one of
+the 69,474 ledger functions, first hit only; private script
+`phase0/bin/record-coverage.ps1`, list built by `phase0/bin/mkcover.pl`). It ran
+cleanly for about 8 minutes. 45,329 functions ran; 8,548 of them were
+untranslated. Leaving out the renderer, menus, audio, faces and sky, about 4,900
+of those are the play build's missing code. They are handed out in batches of
+about 120 in the order the game first ran them (private
+`phase0/lists/play/b001..b044`, `assigned.txt`); the tables are in
+`captures/coverage/` (`ran.tsv`: address, size, name, subsystem, unit, ledger
+status, first-run order). Batches b001-b004 and b006 are in this PR.
+
+**Play build priority batches (b000, b000b-b000g):** the callees the start-up
+stops on. Leaving the renderer out was wrong for start-up: Main::Main and
+InitSceneGraph build the renderer's managers (BSShaderManager,
+BSShaderAccumulator, BSBatchRenderer, the texture manager, ShadowSceneNode), so
+those were batched as they were found. The play-build branch now runs NiInit to
+the end, then Main::Main, InitSceneGraph and InitTES's head; it stops in the
+input object's DirectInput8 set-up (a DirectInput8 platform layer is being built
+on the branch, like the Direct3D 9 one).
+
+**Ledger statuses that hide game code:** functions marked `platform` (162 ran,
+mostly BSSystem, BSSystemUtilities, BSMovie) or `library` (CRT, 596 ran) are not
+in the play queue. Some are game code: the tasklet manager (BSSystem) was
+corrected on the play-build branch (ledger `GAME_FUNCS` override). The CRT's
+per-thread data chain (`_LocaleUpdate`, `__getptd`) is being translated because
+strtol needs it. Deciding whether those whole categories need review is the
+maintainer's call.
+
+**PR #200 merged** (contributor's oracle: pointer arguments, per-vector time
+limit, RustStrayRead). Two lead fixes went into it: the engine side runs on a
+256 MB stack, and an exe stack overflow counts as stuck. Its full run found two
+real translation bugs, 00b14230 (an f32 exponent) and 00df2510 (NaN bits), which
+are queued (private `phase0/lists/fix`). The gate now leaves out those two plus
+00dd8e00 (hkSystemClock, reads the clock), 00e2f8c0/00e2f9f0 (the same divide
+fault, worded differently) and 00b15110/00e3ec00 (DataFlowMiss: the list misses
+a recursive pointer walk). The questions are with the contributor on #200.
+
+**Machine:** five translators plus the play-build agent ran overnight with no
+crash under the tightened compile queue (one big compile; one small beside it
+only with 16 GB free) and the watchdog.
+
+### Claude lead, 2026-10-19
 
 **Havok is translated:** all 9,011 Havok functions on the full ledger list
 (Ghidra-gap functions included). 739 of them keep a `Translation incomplete`

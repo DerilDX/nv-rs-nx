@@ -36,9 +36,95 @@ pub fn fn_00438af0(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(this.addr() + 0xc, 0);
 }
 
+// Translated from 00438b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, no stack words): whether the words at
+/// `+8` and `+0xc` of `this` are equal.
+pub fn fn_00438b90(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 8) == e.mem.u32(this.addr() + 0xc)
+}
+
+/// `00402d00` (thiscall, no stack words): the constructor of the base part
+/// `00438bb0` builds first; it installs the vtable `01011d54`, whose RTTI
+/// names `TESFullName`.
+const BASE_CONSTRUCTOR: u32 = 0x0040_2d00;
+
+// Translated from 00438bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, no stack words): a constructor. Runs
+/// the base constructor `00402d00` on `this`, then clears the bytes at
+/// `+0xc` and `+0xd`, the 16-bit word at `+0xe` and the word at `+0x10`.
+/// Returns `this`.
+pub fn fn_00438bb0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(BASE_CONSTRUCTOR, &args![this]);
+    e.mem.set_u8(this.addr() + 0xc, 0);
+    e.mem.set_u8(this.addr() + 0xd, 0);
+    e.mem.set_u16(this.addr() + 0xe, 0);
+    e.mem.set_u32(this.addr() + 0x10, 0);
+    this
+}
+
+/// `00591300` (thiscall, no stack words): empties the container at `+4` of
+/// its `this`.
+const REMOVE_ALL: u32 = 0x0059_1300;
+
+// Translated from 00438bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, no stack words): calls `00591300` on
+/// `this`.
+pub fn fn_00438bf0(e: &mut Engine, this: Ptr) {
+    e.call(REMOVE_ALL, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00438af0, fn_00438af0(Ptr))]
+    vec![
+        entry!(0x00438af0, fn_00438af0(Ptr)),
+        entry!(0x0043_8b90, fn_00438b90(Ptr) -> bool),
+        entry!(0x0043_8bb0, fn_00438bb0(Ptr) -> Ptr),
+        entry!(0x0043_8bf0, fn_00438bf0(Ptr)),
+    ]
+}
+
+#[cfg(test)]
+mod b006_tests {
+    use super::*;
+
+    #[test]
+    fn compares_the_words_at_8_and_c() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 8, 3);
+        e.mem.set_u32(this + 0xc, 3);
+        assert!(e.call(0x0043_8b90, &args![this]).bool());
+        e.mem.set_u32(this + 0xc, 4);
+        assert!(!e.call(0x0043_8b90, &args![this]).bool());
+    }
+
+    #[test]
+    fn constructor_runs_the_base_and_clears_its_fields() {
+        let mut e = Engine::new();
+        e.register(BASE_CONSTRUCTOR, |_, _| Ret::default());
+        let this = e.mem.alloc(0x14);
+        e.mem.write(this, &[0xff; 0x14]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0043_8bb0, &args![this]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        let bases: Vec<_> = log.iter().filter(|c| c.0 == BASE_CONSTRUCTOR).collect();
+        assert_eq!(bases.len(), 1);
+        assert_eq!(bases[0].1, vec![this]);
+        assert_eq!(e.mem.bytes(this + 0xc, 8), vec![0; 8]);
+        assert_eq!(e.mem.u32(this + 8), 0xffff_ffff);
+    }
+
+    #[test]
+    fn forwards_to_remove_all() {
+        let mut e = Engine::new();
+        e.register(REMOVE_ALL, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0043_8bf0, &args![0x1000u32]);
+        let log = e.call_log.take().unwrap();
+        let hits: Vec<_> = log.iter().filter(|c| c.0 == REMOVE_ALL).collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, vec![0x1000]);
+    }
 }
 
 #[cfg(test)]

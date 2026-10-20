@@ -263,9 +263,232 @@ pub fn fn_00ee626f(e: &mut Engine) {
     e.set_global(CONSOLE_OUTPUT_HANDLE, handle);
 }
 
+/// Import slot of KERNEL32 `CloseHandle` (stdcall, one word).
+const CLOSE_HANDLE: u32 = 0x00fd_f07c;
+/// The CRT's second console handle, the word before [`CONSOLE_OUTPUT_HANDLE`].
+const CONSOLE_SECOND_HANDLE: u32 = 0x011c_2f70;
+
+// Translated from 00ee628e (decompiled, FalloutNV.exe 1.4.0.525)
+/// The exit-time partner of `___initconout` (no Ghidra function; the CRT
+/// pre-terminator table entry at `010113f8`, disassembled from its bytes):
+/// closes the console handle in `011c2f74` and then the one in `011c2f70`
+/// with `CloseHandle`, each only when it is neither -1 nor -2. The globals
+/// keep their values. No arguments, nothing returned.
+pub fn fn_00ee628e(e: &mut Engine) {
+    for slot in [CONSOLE_OUTPUT_HANDLE, CONSOLE_SECOND_HANDLE] {
+        let handle = e.global::<u32>(slot);
+        if handle != u32::MAX && handle != 0xffff_fffe {
+            e.call(CLOSE_HANDLE, &args![handle]);
+        }
+    }
+}
+
+/// `_errno` (`00ec85e3`): the address of the thread's `errno`.
+const ERRNO: u32 = 0x00ec_85e3;
+/// `_invalid_parameter` (`00ec7c30`, five words, all zero here).
+const INVALID_PARAMETER: u32 = 0x00ec_7c30;
+/// The CRT's `_fmode` (`012708dc`), the default file translation mode.
+const FMODE: u32 = 0x0127_08dc;
+
+// Translated from 00ee6236 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__get_fmode` (Ghidra library match; cdecl, one word): with a null `mode`
+/// sets `errno` to `0x16` (`EINVAL`), calls `_invalid_parameter(0, 0, 0, 0,
+/// 0)` and returns `0x16`; otherwise stores `_fmode` (`012708dc`) in `*mode`
+/// and returns 0.
+pub fn get_fmode(e: &mut Engine, mode: Ptr) -> u32 {
+    if mode.is_null() {
+        let error = e.call(ERRNO, &args![]).u32();
+        e.mem.set_u32(error, 0x16);
+        e.call(INVALID_PARAMETER, &args![0u32, 0u32, 0u32, 0u32, 0u32]);
+        return 0x16;
+    }
+    let value = e.global::<u32>(FMODE);
+    e.mem.set_u32(mode.addr(), value);
+    0
+}
+
+/// `_LocaleUpdate::_LocaleUpdate` (`00ec660e`, thiscall, one word: the `_locale_t`).
+const LOCALE_UPDATE: u32 = 0x00ec_660e;
+/// The `_LocaleUpdate` local (0x10 bytes): `locinfo` at +0, `mbcinfo` at +4,
+/// the thread data at +8 and the "updated" byte at +0xc.
+const LOCALE_UPDATE_SIZE: u32 = 0x10;
+const LOCALE_UPDATE_MBCINFO: u32 = 0x4;
+const LOCALE_UPDATE_THREAD_DATA: u32 = 0x8;
+const LOCALE_UPDATE_UPDATED: u32 = 0xc;
+/// `___crtCompareStringA` (`00ee67e8`, cdecl, eight words).
+const CRT_COMPARE_STRING_A: u32 = 0x00ee_67e8;
+/// `__strnicmp_l` (`00ec7dce`, cdecl, four words).
+const STRNICMP_L: u32 = 0x00ec_7dce;
+/// `NORM_IGNORECASE | SORT_STRINGSORT`, the compare flags both functions pass.
+const IGNORE_CASE_STRING_SORT: u32 = 0x1001;
+
+/// The end of the `_LocaleUpdate` scope: when it changed the thread's locale
+/// (its byte at +0xc), clears bit 1 of the thread data's word at +0x70.
+fn end_locale_update(e: &mut Engine, update: u32) {
+    if e.mem.u8(update + LOCALE_UPDATE_UPDATED) != 0 {
+        let thread_data = e.mem.u32(update + LOCALE_UPDATE_THREAD_DATA);
+        let flags = e.mem.u32(thread_data + 0x70);
+        e.mem.set_u32(thread_data + 0x70, flags & 0xffff_fffd);
+    }
+}
+
+/// The shared argument check of `_mbsnbicoll_l` and `_strnicoll_l`, after the
+/// `_LocaleUpdate`: `None` to go on, or the result to return (0 for a count
+/// of 0; `0x7fffffff` after `errno = EINVAL` and `_invalid_parameter` for a
+/// null string). The count check above `0x7fffffff` is the caller's (its
+/// error path differs in what follows).
+fn check_collate_arguments(
+    e: &mut Engine,
+    update: u32,
+    first: Ptr,
+    second: Ptr,
+    count: u32,
+) -> Option<i32> {
+    if count == 0 {
+        end_locale_update(e, update);
+        return Some(0);
+    }
+    if first.is_null() || second.is_null() {
+        invalid_parameter(e);
+        end_locale_update(e, update);
+        return Some(0x7fff_ffff);
+    }
+    None
+}
+
+/// `errno = EINVAL (0x16)` and `_invalid_parameter(0, 0, 0, 0, 0)`.
+fn invalid_parameter(e: &mut Engine) {
+    let error = e.call(ERRNO, &args![]).u32();
+    e.mem.set_u32(error, 0x16);
+    e.call(INVALID_PARAMETER, &args![0u32, 0u32, 0u32, 0u32, 0u32]);
+}
+
+// Translated from 00ee62bb (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__mbsnbicoll_l` (Ghidra library match; cdecl, four words): with a
+/// `_LocaleUpdate` for `locale` on the stack, 0 for a `count` of 0;
+/// `0x7fffffff` (after `errno = EINVAL` and `_invalid_parameter`) for a null
+/// string or a `count` above `0x7fffffff`. When the multibyte info
+/// (`mbcinfo`) says the code page is not multibyte (`ismbcodepage`, +8, is
+/// 0) the result is `__strnicoll_l(first, second, count, locale)`;
+/// otherwise `___crtCompareStringA(&update, <mbcinfo +0xc>, 0x1001, first,
+/// count, second, count, <mbcinfo +4, the code page>)` less 2, or
+/// `0x7fffffff` when that returns 0 (no `errno` then).
+pub fn mbsnbicoll_l(e: &mut Engine, first: Ptr, second: Ptr, count: u32, locale: u32) -> i32 {
+    e.with_stack(LOCALE_UPDATE_SIZE, |e, update| {
+        let update = update.addr();
+        e.call(LOCALE_UPDATE, &args![update, locale]);
+        if let Some(result) = check_collate_arguments(e, update, first, second, count) {
+            return result;
+        }
+        if count > 0x7fff_ffff {
+            invalid_parameter(e);
+            end_locale_update(e, update);
+            return 0x7fff_ffff;
+        }
+        let mbcinfo = e.mem.u32(update + LOCALE_UPDATE_MBCINFO);
+        let result = if e.mem.u32(mbcinfo + 8) == 0 {
+            strnicoll_l(e, first, second, count, locale)
+        } else {
+            let name = e.mem.u32(mbcinfo + 0xc);
+            let code_page = e.mem.u32(mbcinfo + 4);
+            let compared = e
+                .call(
+                    CRT_COMPARE_STRING_A,
+                    &args![
+                        update,
+                        name,
+                        IGNORE_CASE_STRING_SORT,
+                        first,
+                        count,
+                        second,
+                        count,
+                        code_page
+                    ],
+                )
+                .i32();
+            if compared == 0 {
+                end_locale_update(e, update);
+                return 0x7fff_ffff;
+            }
+            compared.wrapping_sub(2)
+        };
+        end_locale_update(e, update);
+        result
+    })
+}
+
+// Translated from 00ee63a9 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__mbsnbicoll` (Ghidra library match; cdecl, three words):
+/// `__mbsnbicoll_l(first, second, count, NULL)`.
+pub fn mbsnbicoll(e: &mut Engine, first: Ptr, second: Ptr, count: u32) -> i32 {
+    mbsnbicoll_l(e, first, second, count, 0)
+}
+
+// Translated from 00ee682a (decompiled, FalloutNV.exe 1.4.0.525)
+/// `__strnicoll_l` (Ghidra library match; cdecl, four words): with a
+/// `_LocaleUpdate` for `locale` on the stack, 0 for a `count` of 0;
+/// `0x7fffffff` (after `errno = EINVAL` and `_invalid_parameter`) for a null
+/// string or a `count` above `0x7fffffff`. When the locale's collate name
+/// (`locinfo + 0x10`) is null the result is `__strnicmp_l(first, second,
+/// count, &update)`; otherwise `___crtCompareStringA(&update, name, 0x1001,
+/// first, count, second, count, <locinfo +8, the collate code page>)` less
+/// 2, or `0x7fffffff` with `errno = EINVAL` (no `_invalid_parameter`) when
+/// that returns 0.
+pub fn strnicoll_l(e: &mut Engine, first: Ptr, second: Ptr, count: u32, locale: u32) -> i32 {
+    e.with_stack(LOCALE_UPDATE_SIZE, |e, update| {
+        let update = update.addr();
+        e.call(LOCALE_UPDATE, &args![update, locale]);
+        if let Some(result) = check_collate_arguments(e, update, first, second, count) {
+            return result;
+        }
+        if count > 0x7fff_ffff {
+            invalid_parameter(e);
+            end_locale_update(e, update);
+            return 0x7fff_ffff;
+        }
+        let locinfo = e.mem.u32(update);
+        let name = e.mem.u32(locinfo + 0x10);
+        let result = if name == 0 {
+            e.call(STRNICMP_L, &args![first, second, count, update])
+                .i32()
+        } else {
+            let code_page = e.mem.u32(locinfo + 8);
+            let compared = e
+                .call(
+                    CRT_COMPARE_STRING_A,
+                    &args![
+                        update,
+                        name,
+                        IGNORE_CASE_STRING_SORT,
+                        first,
+                        count,
+                        second,
+                        count,
+                        code_page
+                    ],
+                )
+                .i32();
+            if compared == 0 {
+                let error = e.call(ERRNO, &args![]).u32();
+                e.mem.set_u32(error, 0x16);
+                end_locale_update(e, update);
+                return 0x7fff_ffff;
+            }
+            compared.wrapping_sub(2)
+        };
+        end_locale_update(e, update);
+        result
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ee_6236, get_fmode(Ptr) -> u32),
+        entry!(0x00ee_628e, fn_00ee628e()),
+        entry!(0x00ee_62bb, mbsnbicoll_l(Ptr, Ptr, u32, u32) -> i32),
+        entry!(0x00ee_63a9, mbsnbicoll(Ptr, Ptr, u32) -> i32),
+        entry!(0x00ee_682a, strnicoll_l(Ptr, Ptr, u32, u32) -> i32),
         entry!(0x00ee_626f, fn_00ee626f()),
         entry!(0x00ee_6d44, fn_00ee6d44(u32) -> i32),
         entry!(0x00ee_6d4a, fn_00ee6d4a(u32, u32, u32) -> u32),
@@ -547,5 +770,198 @@ mod physics_step_tests {
         });
         e.call(0x00ee_626f, &args![]);
         assert_eq!(e.global::<u32>(CONSOLE_OUTPUT_HANDLE), 0xffff_ffff);
+    }
+}
+
+#[cfg(test)]
+mod b006_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn termconout_closes_only_real_handles() {
+        let mut e = Engine::new();
+        e.map(0x011c_2000, 0x1000);
+        e.register(CLOSE_HANDLE, |_, _| 1u32.into_ret());
+        e.set_global(CONSOLE_OUTPUT_HANDLE, 0x44u32);
+        e.set_global(CONSOLE_SECOND_HANDLE, 0x48u32);
+        e.call_log = Some(vec![]);
+        e.call(0x00ee_628e, &args![]);
+        assert_eq!(calls_to(&e, CLOSE_HANDLE), vec![vec![0x44], vec![0x48]]);
+        assert_eq!(e.global::<u32>(CONSOLE_OUTPUT_HANDLE), 0x44);
+        for (output, second) in [(u32::MAX, 0xffff_fffeu32), (0xffff_fffe, u32::MAX)] {
+            e.set_global(CONSOLE_OUTPUT_HANDLE, output);
+            e.set_global(CONSOLE_SECOND_HANDLE, second);
+            e.call_log = Some(vec![]);
+            e.call(0x00ee_628e, &args![]);
+            assert!(calls_to(&e, CLOSE_HANDLE).is_empty());
+        }
+    }
+
+    /// Doubles for the CRT callees; `errno` lives at a fresh word.
+    fn engine() -> (Engine, u32) {
+        let mut e = Engine::new();
+        let error = e.mem.alloc(4);
+        e.register_double(ERRNO, move |_, _| error.into_ret());
+        e.register(INVALID_PARAMETER, |_, _| Ret::default());
+        (e, error)
+    }
+
+    #[test]
+    fn get_fmode_stores_the_mode_or_rejects_null() {
+        let (mut e, error) = engine();
+        e.map(0x0127_0000, 0x1000);
+        e.set_global(FMODE, 0x8000u32);
+        let mode = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ee_6236, &args![mode]).u32(), 0);
+        assert_eq!(e.mem.u32(mode), 0x8000);
+        assert!(calls_to(&e, INVALID_PARAMETER).is_empty());
+        assert_eq!(e.call(0x00ee_6236, &args![0u32]).u32(), 0x16);
+        assert_eq!(e.mem.u32(error), 0x16);
+        assert_eq!(calls_to(&e, INVALID_PARAMETER), vec![vec![0; 5]]);
+    }
+
+    /// A `_LocaleUpdate` double that fills the local with `locinfo`,
+    /// `mbcinfo`, a thread data block and the updated byte.
+    fn locale(e: &mut Engine, locinfo: u32, mbcinfo: u32, updated: bool) -> u32 {
+        let thread_data = e.mem.alloc(0x80);
+        e.mem.set_u32(thread_data + 0x70, 0xff);
+        e.register_double(LOCALE_UPDATE, move |e, a| {
+            e.mem.set_u32(a[0], locinfo);
+            e.mem.set_u32(a[0] + 4, mbcinfo);
+            e.mem.set_u32(a[0] + 8, thread_data);
+            e.mem.set_u8(a[0] + 0xc, updated as u8);
+            Ret::default()
+        });
+        thread_data
+    }
+
+    #[test]
+    fn strnicoll_l_checks_its_arguments() {
+        let (mut e, error) = engine();
+        let locinfo = e.mem.alloc(0x20);
+        let thread_data = locale(&mut e, locinfo, 0, true);
+        let (a, b) = (e.mem.alloc(4), e.mem.alloc(4));
+        assert_eq!(e.call(0x00ee_682a, &args![a, b, 0u32, 0u32]).i32(), 0);
+        // The updated byte makes every path clear bit 1 of the thread flags.
+        assert_eq!(e.mem.u32(thread_data + 0x70), 0xfd);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00ee_682a, &args![0u32, b, 3u32, 0u32]).i32(),
+            0x7fff_ffff
+        );
+        assert_eq!(
+            e.call(0x00ee_682a, &args![a, 0u32, 3u32, 0u32]).i32(),
+            0x7fff_ffff
+        );
+        assert_eq!(
+            e.call(0x00ee_682a, &args![a, b, 0x8000_0000u32, 0u32])
+                .i32(),
+            0x7fff_ffff
+        );
+        assert_eq!(calls_to(&e, INVALID_PARAMETER).len(), 3);
+        assert_eq!(e.mem.u32(error), 0x16);
+    }
+
+    #[test]
+    fn strnicoll_l_without_a_collate_name_uses_strnicmp() {
+        let (mut e, _) = engine();
+        let locinfo = e.mem.alloc(0x20);
+        locale(&mut e, locinfo, 0, false);
+        e.register(STRNICMP_L, |_, _| (-5i32).into_ret());
+        let (a, b) = (e.mem.alloc(4), e.mem.alloc(4));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ee_682a, &args![a, b, 3u32, 9u32]).i32(), -5);
+        let calls = calls_to(&e, STRNICMP_L);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(&calls[0][..3], &[a, b, 3]);
+        // The locale passed on is the `_LocaleUpdate` local, not `locale`.
+        assert_eq!(calls_to(&e, LOCALE_UPDATE)[0][0], calls[0][3]);
+    }
+
+    #[test]
+    fn strnicoll_l_with_a_collate_name_compares_strings() {
+        let (mut e, error) = engine();
+        let locinfo = e.mem.alloc(0x20);
+        e.mem.set_u32(locinfo + 8, 1252);
+        e.mem.set_u32(locinfo + 0x10, 0x4321);
+        locale(&mut e, locinfo, 0, false);
+        let answer = std::rc::Rc::new(std::cell::Cell::new(3i32));
+        let given = answer.clone();
+        e.register_double(CRT_COMPARE_STRING_A, move |_, _| given.get().into_ret());
+        let (a, b) = (e.mem.alloc(4), e.mem.alloc(4));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ee_682a, &args![a, b, 5u32, 0u32]).i32(), 1);
+        let calls = calls_to(&e, CRT_COMPARE_STRING_A);
+        assert_eq!(&calls[0][1..], &[0x4321, 0x1001, a, 5, b, 5, 1252]);
+        answer.set(0);
+        assert_eq!(
+            e.call(0x00ee_682a, &args![a, b, 5u32, 0u32]).i32(),
+            0x7fff_ffff
+        );
+        assert_eq!(e.mem.u32(error), 0x16);
+        assert!(calls_to(&e, INVALID_PARAMETER).is_empty());
+    }
+
+    #[test]
+    fn mbsnbicoll_l_single_byte_code_page_goes_through_strnicoll_l() {
+        let (mut e, _) = engine();
+        let locinfo = e.mem.alloc(0x20);
+        let mbcinfo = e.mem.alloc(0x20);
+        locale(&mut e, locinfo, mbcinfo, false);
+        e.register(STRNICMP_L, |_, _| 7i32.into_ret());
+        let (a, b) = (e.mem.alloc(4), e.mem.alloc(4));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ee_62bb, &args![a, b, 3u32, 0u32]).i32(), 7);
+        // `_mbsnbicoll` passes a null locale.
+        assert_eq!(e.call(0x00ee_63a9, &args![a, b, 3u32]).i32(), 7);
+        assert!(calls_to(&e, LOCALE_UPDATE).iter().all(|c| c[1] == 0));
+        assert_eq!(e.call(0x00ee_62bb, &args![a, b, 0u32, 0u32]).i32(), 0);
+        assert_eq!(
+            e.call(0x00ee_62bb, &args![a, 0u32, 1u32, 0u32]).i32(),
+            0x7fff_ffff
+        );
+        assert_eq!(
+            e.call(0x00ee_62bb, &args![a, b, 0x8000_0000u32, 0u32])
+                .i32(),
+            0x7fff_ffff
+        );
+        assert_eq!(calls_to(&e, INVALID_PARAMETER).len(), 2);
+    }
+
+    #[test]
+    fn mbsnbicoll_l_multibyte_code_page_compares_strings() {
+        let (mut e, error) = engine();
+        let locinfo = e.mem.alloc(0x20);
+        let mbcinfo = e.mem.alloc(0x20);
+        e.mem.set_u32(mbcinfo + 4, 932);
+        e.mem.set_u32(mbcinfo + 8, 1);
+        e.mem.set_u32(mbcinfo + 0xc, 0x411);
+        locale(&mut e, locinfo, mbcinfo, false);
+        let answer = std::rc::Rc::new(std::cell::Cell::new(1i32));
+        let given = answer.clone();
+        e.register_double(CRT_COMPARE_STRING_A, move |_, _| given.get().into_ret());
+        let (a, b) = (e.mem.alloc(4), e.mem.alloc(4));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ee_62bb, &args![a, b, 2u32, 0u32]).i32(), -1);
+        let calls = calls_to(&e, CRT_COMPARE_STRING_A);
+        assert_eq!(&calls[0][1..], &[0x411, 0x1001, a, 2, b, 2, 932]);
+        answer.set(0);
+        assert_eq!(
+            e.call(0x00ee_62bb, &args![a, b, 2u32, 0u32]).i32(),
+            0x7fff_ffff
+        );
+        // No `errno` on this failure.
+        assert_eq!(e.mem.u32(error), 0);
     }
 }

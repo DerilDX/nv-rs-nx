@@ -26,9 +26,22 @@ pub fn fn_006629e0(_e: &mut Engine, _this: Ptr) -> u32 {
     0x011d_5bf8
 }
 
+// Translated from 006629f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFaceGenNiNode::GetAnimationData` (Xbox PDB, engine map vtable name). `thiscall`, no
+/// stack words: the smart pointer `get` (`00559450`) of the pointer at `+0xac`, whose result
+/// it answers.
+pub fn bs_face_gen_ni_node_get_animation_data(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0055_9450, &args![this.addr().wrapping_add(0xac)])
+        .ptr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0066_29f0,
+            bs_face_gen_ni_node_get_animation_data(Ptr) -> Ptr
+        ),
         entry!(0x0066_29e0, fn_006629e0(Ptr) -> u32),
         entry!(0x0066_2ac0, bs_face_gen_ni_node_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
@@ -76,5 +89,23 @@ mod constant_getter_tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x0066_29e0, &args![0x1000u32]).u32(), 0x011d_5bf8);
         assert_eq!(e.call(0x0066_29e0, &args![0u32]).u32(), 0x011d_5bf8);
+    }
+}
+
+#[cfg(test)]
+mod b000_tests {
+    use super::*;
+
+    #[test]
+    fn get_animation_data_answers_the_pointer_at_0xac() {
+        let mut e = Engine::new();
+        e.register(0x0055_9450, |e, a| e.mem.u32(a[0]).into_ret());
+        let this = e.mem.alloc(0xf0);
+        e.mem.set_u32(this + 0xac, 0x1234_0000);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_29f0, &args![this]).u32(), 0x1234_0000);
+        let log = e.call_log.take().unwrap();
+        let get: Vec<_> = log.iter().filter(|c| c.0 == 0x0055_9450).collect();
+        assert_eq!(get[0].1, vec![this + 0xac]);
     }
 }

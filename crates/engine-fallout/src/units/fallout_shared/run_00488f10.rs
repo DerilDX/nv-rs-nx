@@ -44,12 +44,23 @@ pub fn fn_00489010(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 00488fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the two-word member at `TESModel+0xc` (class
+/// unconfirmed; `00488f50` runs it): clears the byte at `+0` and the word
+/// at `+4`. Returns `this`.
+pub fn fn_00488fd0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u8(this.addr(), 0);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0048_8ff0, fn_00488ff0(Ptr) -> bool),
         entry!(0x00488f50, fn_00488f50(Ptr) -> Ptr),
         entry!(0x0048_9010, fn_00489010(Ptr, u32) -> Ptr),
+        entry!(0x00488fd0, fn_00488fd0(Ptr) -> Ptr),
     ]
 }
 
@@ -129,5 +140,19 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+
+    #[test]
+    fn at_00488fd0_clears_the_byte_and_the_word() {
+        use crate::prelude::*;
+
+        let mut e = Engine::new();
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this, 0xffff_ffff);
+        e.mem.set_u32(this + 4, 0xffff_ffff);
+        assert_eq!(e.call(0x0048_8fd0, &args![this]).u32(), this);
+        // Only the low byte of the first word is cleared.
+        assert_eq!(e.mem.u32(this), 0xffff_ff00);
+        assert_eq!(e.mem.u32(this + 4), 0);
     }
 }

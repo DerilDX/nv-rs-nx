@@ -258,6 +258,200 @@ pub fn atol_body(e: &mut Engine, s: Ptr) -> i32 {
     parse_long(&e.mem.cstr(s.addr()))
 }
 
+/// `_LocaleUpdate::_LocaleUpdate` (`00ec660e`, thiscall, one word: the
+/// locale or null): fills the 0x10-byte object (locale info, multibyte
+/// info, thread data, "updated" byte at +0x0C).
+const LOCALE_UPDATE: u32 = 0x00ec_660e;
+/// `__isctype_l` (`00ed41e7`, cdecl: character, mask, locale object).
+const ISCTYPE_L: u32 = 0x00ed_41e7;
+/// `__locale_changed`: 0 while the C locale is the global one.
+const LOCALE_CHANGED: u32 = 0x0126_fdf4;
+/// The initial locale object `strtol` passes while the locale is unchanged.
+const INITIAL_LOCALE: u32 = 0x011c_2400;
+
+/// The inlined `_LocaleUpdate` destructor: when the constructor set the
+/// "updated" byte (+0x0C), clears bit 1 of the thread data's `_ownlocale`
+/// (+0x70).
+fn locale_update_release(e: &mut Engine, update: u32) {
+    if e.mem.u8(update + 0xc) != 0 {
+        let thread = e.mem.u32(update + 8);
+        let own = e.mem.u32(thread + 0x70);
+        e.mem.set_u32(thread + 0x70, own & 0xffff_fffd);
+    }
+}
+
+// Translated from 00ec8ad9 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `strtoxl` (LIBCMT/strtol.c, engine map; cdecl: locale, text, end, base,
+/// flags; flag 1 is unsigned, 2 negative, 4 overflow, 8 a digit read).
+/// Takes the locale (`_LocaleUpdate`), stores `text` in `*end`; a null text
+/// or a base outside 0 and 2..36 sets `errno` to `EINVAL` (0x16), reports
+/// an invalid parameter and returns 0. Otherwise skips characters of type
+/// 8 (space, through `__isctype_l` when the locale's `mb_cur_max` (+0xAC)
+/// is above 1, else the ctype table at +0xC8), takes a sign, picks base 8,
+/// 10 or 16 for base 0 and skips a `0x`/`0X` prefix for base 16, then
+/// accumulates digits (type 4) and letters (types 0x103) below the base.
+/// With no digit `*end` is `text` and the result 0; on overflow (unsigned,
+/// or past `0x7FFFFFFF`/`0x80000000` signed) `errno` is `ERANGE` (0x22)
+/// and the result `0xFFFFFFFF`, `0x7FFFFFFF` or `0x80000000`. `*end` is the
+/// first unread character; a negative result is negated.
+pub fn strtoxl(e: &mut Engine, locale: u32, text: u32, end: u32, base: i32, flags: u32) -> u32 {
+    // The `_LocaleUpdate` object at EBP-0x14 and the value at EBP-0x4.
+    e.with_stack(0x14, |e, frame| {
+        let update = frame.addr();
+        e.call(LOCALE_UPDATE, &[update, locale]);
+        if end != 0 {
+            e.mem.set_u32(end, text);
+        }
+        let invalid = text == 0 || (base != 0 && !(2..=0x24).contains(&base));
+        if invalid {
+            let slot = errno(e);
+            e.mem.set_u32(slot.addr(), 0x16);
+            fn_00ec7c30(e, 0, 0, 0, 0, 0);
+            locale_update_release(e, update);
+            return 0;
+        }
+        let mut flags = flags;
+        let mut c = e.mem.u8(text);
+        let mut value: u32 = 0;
+        let mut p = text + 1;
+        loop {
+            let info = e.mem.u32(update);
+            let space = if (e.mem.u32(info + 0xac) as i32) > 1 {
+                e.call(ISCTYPE_L, &[u32::from(c), 8, update]).u32()
+            } else {
+                let table = e.mem.u32(info + 0xc8);
+                u32::from(e.mem.u16(table + u32::from(c) * 2)) & 8
+            };
+            if space == 0 {
+                break;
+            }
+            c = e.mem.u8(p);
+            p += 1;
+        }
+        if c == b'-' {
+            flags |= 2;
+            c = e.mem.u8(p);
+            p += 1;
+        } else if c == b'+' {
+            c = e.mem.u8(p);
+            p += 1;
+        }
+        // Checked again after the sign (never true after the check above).
+        if base < 0 || base == 1 || base > 0x24 {
+            if end != 0 {
+                e.mem.set_u32(end, text);
+            }
+            locale_update_release(e, update);
+            return 0;
+        }
+        let mut base = base;
+        let mut check_prefix = false;
+        if base == 0 {
+            if c != b'0' {
+                base = 10;
+            } else {
+                let next = e.mem.u8(p);
+                if next == b'x' || next == b'X' {
+                    base = 16;
+                    check_prefix = true;
+                } else {
+                    base = 8;
+                }
+            }
+        } else if base == 16 && c == b'0' {
+            check_prefix = true;
+        }
+        if check_prefix {
+            let next = e.mem.u8(p);
+            if next == b'x' || next == b'X' {
+                p += 1;
+                c = e.mem.u8(p);
+                p += 1;
+            }
+        }
+        let base = base as u32;
+        let info = e.mem.u32(update);
+        let table = e.mem.u32(info + 0xc8);
+        let limit = u32::MAX / base;
+        let last_digit = u32::MAX % base;
+        loop {
+            let kind = u32::from(e.mem.u16(table + u32::from(c) * 2));
+            let digit = if kind & 4 != 0 {
+                (i32::from(c as i8) - 0x30) as u32
+            } else if kind & 0x103 != 0 {
+                let mut letter = i32::from(c as i8);
+                if c.wrapping_sub(0x61) <= 0x19 {
+                    letter -= 0x20;
+                }
+                (letter - 0x37) as u32
+            } else {
+                break;
+            };
+            if digit >= base {
+                break;
+            }
+            flags |= 8;
+            if value < limit || (value == limit && digit <= last_digit) {
+                value = value.wrapping_mul(base).wrapping_add(digit);
+            } else {
+                flags |= 4;
+                if end == 0 {
+                    break;
+                }
+            }
+            c = e.mem.u8(p);
+            p += 1;
+        }
+        p -= 1;
+        if flags & 8 == 0 {
+            if end != 0 {
+                p = text;
+            }
+            value = 0;
+        } else {
+            let overflow = if flags & 4 != 0 {
+                true
+            } else if flags & 1 != 0 {
+                false
+            } else if flags & 2 != 0 {
+                value > 0x8000_0000
+            } else {
+                value > 0x7fff_ffff
+            };
+            if overflow {
+                let slot = errno(e);
+                e.mem.set_u32(slot.addr(), 0x22);
+                value = if flags & 1 != 0 {
+                    u32::MAX
+                } else {
+                    0x7fff_ffff + u32::from(flags & 2 != 0)
+                };
+            }
+        }
+        if end != 0 {
+            e.mem.set_u32(end, p);
+        }
+        if flags & 2 != 0 {
+            value = value.wrapping_neg();
+        }
+        locale_update_release(e, update);
+        value
+    })
+}
+
+// Translated from 00ec8d08 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `strtol` (LIBCMT/strtol.c; cdecl): `strtoxl(locale, text, end, base, 0)`
+/// with the initial locale object `011c2400` while `__locale_changed`
+/// (`0126fdf4`) is 0, else a null locale (the thread's).
+pub fn strtol(e: &mut Engine, text: u32, end: u32, base: i32) -> i32 {
+    let locale = if e.mem.u32(LOCALE_CHANGED) == 0 {
+        INITIAL_LOCALE
+    } else {
+        0
+    };
+    strtoxl(e, locale, text, end, base, 0) as i32
+}
+
 /// C `atof`: the longest prefix that is a decimal floating-point number.
 fn parse_double(s: &[u8]) -> f64 {
     let t: Vec<u8> = s
@@ -2269,6 +2463,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00eca7f4, toupper(i32) -> i32),
         entry!(0x00eca6d3, atol(Ptr) -> i32),
         entry!(0x00eca6bd, atol_body(Ptr) -> i32),
+        entry!(0x00ec8d08, strtol(u32, u32, i32) -> i32),
+        entry!(0x00ec8ad9, strtoxl(u32, u32, u32, i32, u32) -> u32),
         entry!(0x00eca573, atof(Ptr) -> f64),
         entry!(0x00ec62c0, ftol2(f64) -> u64),
         entry!(0x00ec6040, ci_sqrt(f64) -> f64),
@@ -4056,5 +4252,165 @@ mod physics_step_tests {
         assert_eq!(sqrt_body(&mut e, true, f64::INFINITY), f64::INFINITY);
         assert!(calls_to(&log, SET_CONTROL_WORD_HELPER).is_empty());
         assert_eq!(x87_control_word(&mut e), 0x037f);
+    }
+}
+
+#[cfg(test)]
+mod strtol_tests {
+    use super::*;
+
+    /// The C locale's ctype bits for `c` (upper 1, lower 2, digit 4,
+    /// space 8, hex 0x80).
+    fn c_type(c: u8) -> u16 {
+        let mut bits = 0;
+        if c.is_ascii_uppercase() {
+            bits |= 1;
+        }
+        if c.is_ascii_lowercase() {
+            bits |= 2;
+        }
+        if c.is_ascii_digit() {
+            bits |= 4;
+        }
+        if c == b' ' || (9..=13).contains(&c) {
+            bits |= 8;
+        }
+        if c.is_ascii_hexdigit() {
+            bits |= 0x80;
+        }
+        bits
+    }
+
+    const HANDLER: u32 = 0x0077_0000;
+
+    /// An engine whose `_LocaleUpdate` double fills the object with a locale
+    /// info block (`mb_cur_max` at +0xAC, the C ctype table at +0xC8), a
+    /// thread block (`_ownlocale` 3 at +0x70) and the "updated" byte
+    /// `updated`; `errno` falls back to its static slot and the invalid
+    /// parameter handler is a double. Returns the engine and the thread
+    /// block.
+    fn engine(mb_cur_max: u32, updated: u8) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.map(0x011c_1000, 0x2000);
+        let table = e.mem.alloc(0x200);
+        for c in 0..=255u8 {
+            e.mem.set_u16(table + u32::from(c) * 2, c_type(c));
+        }
+        let info = e.mem.alloc(0x100);
+        e.mem.set_u32(info + 0xac, mb_cur_max);
+        e.mem.set_u32(info + 0xc8, table);
+        let thread = e.mem.alloc(0x80);
+        e.mem.set_u32(thread + 0x70, 3);
+        e.register_double(LOCALE_UPDATE, move |e, a| {
+            e.mem.set_u32(a[0], info);
+            e.mem.set_u32(a[0] + 4, 0);
+            e.mem.set_u32(a[0] + 8, thread);
+            e.mem.set_u8(a[0] + 0xc, updated);
+            a[0].into_ret()
+        });
+        e.register(ISCTYPE_L, |e, a| {
+            let info = e.mem.u32(a[2]);
+            let table = e.mem.u32(info + 0xc8);
+            (u32::from(e.mem.u16(table + a[0] * 2)) & a[1]).into_ret()
+        });
+        e.register(GETPTD_NOEXIT, |_, _| 0u32.into_ret());
+        e.register(DECODE_POINTER, |_, _| HANDLER.into_ret());
+        e.register(HANDLER, |_, _| 0u32.into_ret());
+        (e, thread)
+    }
+
+    /// `strtol(text, &end, base)`: the value, how many bytes it read and
+    /// errno (0 when unset).
+    fn parse(e: &mut Engine, text: &[u8], base: i32) -> (i32, u32, u32) {
+        let s = e.mem.alloc(64);
+        e.mem.write(s, text);
+        e.mem.set_u8(s + text.len() as u32, 0);
+        let end = e.mem.alloc(4);
+        e.mem.set_u32(end, 0xdead_beef);
+        e.mem.set_u32(ERRNO_FALLBACK, 0);
+        let value = e.call(0x00ec_8d08, &[s, end, base as u32]).u32() as i32;
+        (value, e.mem.u32(end) - s, e.mem.u32(ERRNO_FALLBACK))
+    }
+
+    #[test]
+    fn strtol_reads_bases_signs_prefixes_and_limits() {
+        let (mut e, thread) = engine(1, 0);
+        e.call_log = Some(vec![]);
+        let mut p = |text: &[u8], base| parse(&mut e, text, base);
+        assert_eq!(p(b"1F", 16), (0x1f, 2, 0));
+        assert_eq!(p(b"0x1fz", 16), (0x1f, 4, 0));
+        assert_eq!(p(b"  -42abc", 10), (-42, 5, 0));
+        assert_eq!(p(b"\t+017", 0), (0o17, 5, 0));
+        assert_eq!(p(b"0X10", 0), (16, 4, 0));
+        assert_eq!(p(b"129", 0), (129, 3, 0));
+        assert_eq!(p(b"0", 0), (0, 1, 0));
+        assert_eq!(p(b"zz", 36), (35 * 36 + 35, 2, 0));
+        assert_eq!(p(b"102", 2), (2, 2, 0));
+        assert_eq!(p(b"7fffffff", 16), (i32::MAX, 8, 0));
+        assert_eq!(p(b"-80000000", 16), (i32::MIN, 9, 0));
+        // Out of range: ERANGE, the limit, and every digit still read.
+        assert_eq!(p(b"80000000", 16), (i32::MAX, 8, 0x22));
+        assert_eq!(p(b"-80000001", 16), (i32::MIN, 9, 0x22));
+        assert_eq!(p(b"123456789012", 10), (i32::MAX, 12, 0x22));
+        // No digits: 0 and the end at the start (also after "0x").
+        assert_eq!(p(b"", 16), (0, 0, 0));
+        assert_eq!(p(b" -x", 10), (0, 0, 0));
+        assert_eq!(p(b"0x", 16), (0, 0, 0));
+        // A bad base: EINVAL, 0, the end at the start.
+        assert_eq!(p(b"12", 1), (0, 0, 0x16));
+        assert_eq!(p(b"12", 37), (0, 0, 0x16));
+        assert_eq!(p(b"12", -1), (0, 0, 0x16));
+        assert_eq!(e.mem.u32(thread + 0x70), 3);
+        let locales: Vec<u32> = e
+            .call_log
+            .iter()
+            .flatten()
+            .filter(|(a, _)| *a == LOCALE_UPDATE)
+            .map(|(_, w)| w[1])
+            .collect();
+        assert!(locales.iter().all(|l| *l == INITIAL_LOCALE));
+    }
+
+    #[test]
+    fn strtoxl_paths_through_the_locale_and_flags() {
+        // A multibyte locale asks __isctype_l; an updated locale is released;
+        // a changed locale passes null.
+        let (mut e, thread) = engine(2, 1);
+        e.mem.set_u32(LOCALE_CHANGED, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(parse(&mut e, b"  77", 8), (0o77, 4, 0));
+        let log = e.call_log.take().unwrap();
+        let isctype = log.iter().filter(|(a, _)| *a == ISCTYPE_L).count();
+        assert_eq!(isctype, 3);
+        assert_eq!(
+            log.iter().find(|(a, _)| *a == LOCALE_UPDATE).unwrap().1[1],
+            0
+        );
+        assert_eq!(e.mem.u32(thread + 0x70), 1);
+        // Unsigned (flag 1): no signed limit; overflow gives 0xFFFFFFFF.
+        let s = e.mem.alloc(16);
+        e.mem.write(s, b"ffffffff\0");
+        assert_eq!(e.call(0x00ec_8ad9, &[0, s, 0, 16, 1]).u32(), u32::MAX);
+        e.mem.write(s, b"100000000\0");
+        e.mem.set_u32(ERRNO_FALLBACK, 0);
+        assert_eq!(e.call(0x00ec_8ad9, &[0, s, 0, 16, 1]).u32(), u32::MAX);
+        assert_eq!(e.mem.u32(ERRNO_FALLBACK), 0x22);
+        // A null text: EINVAL, the invalid parameter handler, 0.
+        e.call_log = Some(vec![]);
+        let end = e.mem.alloc(4);
+        assert_eq!(e.call(0x00ec_8ad9, &[0, 0, end, 10, 0]).u32(), 0);
+        assert_eq!(e.mem.u32(end), 0);
+        let handler = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == HANDLER)
+            .count();
+        assert_eq!(handler, 1);
+        // A null end pointer is allowed.
+        e.mem.write(s, b"-9\0");
+        assert_eq!(e.call(0x00ec_8d08, &[s, 0, 10]).u32() as i32, -9);
     }
 }

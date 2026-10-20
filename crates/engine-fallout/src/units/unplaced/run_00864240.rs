@@ -9,6 +9,22 @@ use crate::units::nimain::nistream::NiTLargeArray;
 const ARRAY_ALLOCATE: u32 = 0x0096_afc0;
 /// `004ede70`: `cdecl(storage)`, frees storage `ARRAY_ALLOCATE` made.
 const ARRAY_FREE: u32 = 0x004e_de70;
+/// `0061bd20`: the same array's `SetAt` (`thiscall(index, element pointer)`).
+const ARRAY_SET_AT: u32 = 0x0061_bd20;
+
+// Translated from 00864240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `SetAtGrow` of an `NiTLargeArray` of plain
+/// values (`thiscall`, two stack words, `RET 8`): when `index` is at or past
+/// the capacity, grows the array to `index + m_uiGrowBy` ([`fn_00864280`]),
+/// then stores the word `*element` at `index` (`0061bd20`). Returns `index`.
+pub fn fn_00864240(e: &mut Engine, this: Ptr<NiTLargeArray>, index: u32, element: Ptr) -> u32 {
+    if index >= e.get(this, NiTLargeArray::m_uiMaxSize) {
+        let grow_by = e.get(this, NiTLargeArray::m_uiGrowBy);
+        fn_00864280(e, this, index.wrapping_add(grow_by));
+    }
+    e.call(ARRAY_SET_AT, &args![this, index, element]);
+    index
+}
 
 // Translated from 00864280 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: `SetSize` of an `NiTLargeArray` of plain values (layout
@@ -66,7 +82,13 @@ pub fn fn_00864280(e: &mut Engine, this: Ptr<NiTLargeArray>, new_max: u32) {
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0086_4280, fn_00864280(Ptr<NiTLargeArray>, u32))]
+    vec![
+        entry!(0x0086_4280, fn_00864280(Ptr<NiTLargeArray>, u32)),
+        entry!(
+            0x0086_4240,
+            fn_00864240(Ptr<NiTLargeArray>, u32, Ptr) -> u32
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -145,5 +167,30 @@ mod tests {
         assert_eq!(e.get(array, NiTLargeArray::m_pBase), 0);
         assert_eq!(e.get(array, NiTLargeArray::m_uiSize), 0);
         assert_eq!(e.get(array, NiTLargeArray::m_uiESize), 0);
+    }
+
+    #[test]
+    fn set_at_grow_grows_by_the_step_only_past_the_capacity() {
+        let (mut e, array, base) = fixture(2, &[7]);
+        e.set(array, NiTLargeArray::m_uiGrowBy, 3);
+        e.register(ARRAY_SET_AT, |_, _| Ret::default());
+        let element = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        // Inside the capacity: no growth, the store gets the same words.
+        let back = e.call(0x0086_4240, &args![array, 1u32, element]).u32();
+        assert_eq!(back, 1);
+        assert_eq!(e.get(array, NiTLargeArray::m_pBase), base);
+        // At the capacity: grows to index + grow-by before the store.
+        let back = e.call(0x0086_4240, &args![array, 2u32, element]).u32();
+        assert_eq!(back, 2);
+        let log = e.call_log.take().unwrap();
+        let stores: Vec<_> = log.iter().filter(|call| call.0 == ARRAY_SET_AT).collect();
+        assert_eq!(stores.len(), 2);
+        assert_eq!(stores[0].1, args![array, 1u32, element]);
+        assert_eq!(stores[1].1, args![array, 2u32, element]);
+        let allocations: Vec<_> = log.iter().filter(|call| call.0 == ARRAY_ALLOCATE).collect();
+        assert_eq!(allocations.len(), 1);
+        assert_eq!(allocations[0].1, args![5u32]);
+        assert_eq!(e.get(array, NiTLargeArray::m_uiMaxSize), 5);
     }
 }

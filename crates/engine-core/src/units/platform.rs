@@ -85,6 +85,62 @@ pub fn bs_system_utility_q_instance(e: &mut Engine) -> Ptr {
     Ptr::new(SYSTEM_UTILITY)
 }
 
+/// `BSSaveDataSystemUtility` singleton (`BSSystemUtilities`; the vtable's
+/// RTTI name is `.?AVBSSaveDataSystemUtility@@`): its storage in `.data`
+/// (`011f72a0`, at least 0x48 bytes) and the function-local static's guard
+/// word (`011f72e8`, bit 0 = constructed).
+pub const SAVE_DATA_UTILITY: u32 = 0x011f_72a0;
+const SAVE_DATA_UTILITY_GUARD: u32 = 0x011f_72e8;
+/// Vtable stored by the constructor and the destructor (`010a4288`, first
+/// slot the scalar deleting destructor `00af2fc0`) and the `atexit`
+/// destructor stub (`00fdc300`, a row of the `atexit` table: it calls
+/// `00af2f20` on `011f72a0`).
+const SAVE_DATA_UTILITY_VTABLE: u32 = 0x010a_4288;
+const SAVE_DATA_UTILITY_ATEXIT: u32 = 0x00fd_c300;
+
+// Translated from 00af2ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the object the `00af2e50` getter builds (`__thiscall`,
+/// plain `RET`; the map gives no name): stores the vtable `010a4288`,
+/// clears the bytes at +4 and +0xC and the words at +8, +0x2C and +0x44.
+/// Returns `this`.
+pub fn fn_00af2ed0(e: &mut Engine, this: Ptr) -> Ptr {
+    let t = this.addr();
+    e.mem.set_u32(t, SAVE_DATA_UTILITY_VTABLE);
+    e.mem.set_u8(t + 4, 0);
+    e.mem.set_u32(t + 8, 0);
+    e.mem.set_u8(t + 0xc, 0);
+    e.mem.set_u32(t + 0x2c, 0);
+    e.mem.set_u32(t + 0x44, 0);
+    this
+}
+
+// Translated from 00af2e50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00af2e50 - the SEH frame (FS:[0] handler 00f2303e, state -1/0 around the constructor call) is not translated.
+/// The `BSSaveDataSystemUtility` singleton getter (the map gives no name;
+/// its body is the same `_Immortalize` shape as
+/// [`bs_system_utility_q_instance`]): the first call sets bit 0 of the
+/// guard word `011f72e8`, constructs the object at `011f72a0` with
+/// [`fn_00af2ed0`] and registers its destructor stub `00fdc300` with
+/// `_atexit`; every call returns `011f72a0`.
+pub fn bs_save_data_system_utility_instance(e: &mut Engine) -> Ptr {
+    let guard = e.mem.u32(SAVE_DATA_UTILITY_GUARD);
+    if guard & 1 == 0 {
+        e.mem.set_u32(SAVE_DATA_UTILITY_GUARD, guard | 1);
+        fn_00af2ed0(e, Ptr::new(SAVE_DATA_UTILITY));
+        e.call(ATEXIT, &args![Ptr::<()>::new(SAVE_DATA_UTILITY_ATEXIT)]);
+    }
+    Ptr::new(SAVE_DATA_UTILITY)
+}
+
+// Translated from 00af2f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of that object (`__thiscall`, plain `RET`; the map gives
+/// no name; the scalar deleting destructor `00af2fc0` and the `atexit` stub
+/// `00fdc300` call it): stores the vtable `010a4288` again and does nothing
+/// else.
+pub fn fn_00af2f20(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), SAVE_DATA_UTILITY_VTABLE);
+}
+
 // ---- Files ----------------------------------------------------------------------
 
 /// `BSFile` (Xbox PDB, `BSSystem/bsfile_xenon.cpp`, platform): the game's
@@ -226,6 +282,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00401030, operator_delete(Ptr)),
         entry!(0x00af2640, bs_system_utility_q_instance() -> Ptr),
         entry!(0x00af30a0, fn_00af30a0(Ptr) -> Ptr),
+        entry!(0x00af2e50, bs_save_data_system_utility_instance() -> Ptr),
+        entry!(0x00af2ed0, fn_00af2ed0(Ptr) -> Ptr),
+        entry!(0x00af2f20, fn_00af2f20(Ptr)),
         entry!(0x00aa3e40, memory_manager_allocate(Ptr, u32) -> Ptr),
         entry!(0x00aa4060, memory_manager_deallocate(Ptr, Ptr)),
     ]
@@ -1110,6 +1169,54 @@ mod tests {
         assert_eq!(q.addr(), SYSTEM_UTILITY);
         assert_eq!(e.mem.u32(SYSTEM_UTILITY + 0x84), 5);
         assert!(e.call_log.unwrap().iter().all(|c| c.0 != ATEXIT));
+    }
+
+    #[test]
+    fn save_data_utility_is_built_once_and_registered_for_exit() {
+        let mut e = Engine::new();
+        e.mem.map(SAVE_DATA_UTILITY, 0x48);
+        e.mem.map(SAVE_DATA_UTILITY_GUARD, 4);
+        e.mem.write(SAVE_DATA_UTILITY, &[0xaa; 0x48]);
+        e.mem.set_u32(SAVE_DATA_UTILITY_GUARD, 0x10); // other guard bits are kept
+        e.register(ATEXIT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let p: Ptr = e.call_as(0x00af_2e50, &args![]);
+        assert_eq!(p.addr(), SAVE_DATA_UTILITY);
+        assert_eq!(e.mem.u32(SAVE_DATA_UTILITY_GUARD), 0x11);
+        let u = SAVE_DATA_UTILITY;
+        assert_eq!(e.mem.u32(u), SAVE_DATA_UTILITY_VTABLE);
+        assert_eq!(e.mem.u8(u + 4), 0);
+        assert_eq!(e.mem.u32(u + 8), 0);
+        assert_eq!(e.mem.u8(u + 0xc), 0);
+        assert_eq!(e.mem.u32(u + 0x2c), 0);
+        assert_eq!(e.mem.u32(u + 0x44), 0);
+        // Bytes the constructor does not write keep their value.
+        assert_eq!(e.mem.u8(u + 5), 0xaa);
+        assert_eq!(e.mem.u8(u + 0xd), 0xaa);
+        assert_eq!(e.mem.u32(u + 0x30), 0xaaaa_aaaa);
+        let log = e.call_log.clone().unwrap();
+        let exits: Vec<_> = log.iter().filter(|c| c.0 == ATEXIT).collect();
+        assert_eq!(exits.len(), 1);
+        assert_eq!(exits[0].1, vec![SAVE_DATA_UTILITY_ATEXIT]);
+
+        // The second call neither rebuilds nor registers again.
+        e.mem.set_u32(u + 0x44, 5);
+        e.call_log = Some(vec![]);
+        let q: Ptr = e.call_as(0x00af_2e50, &args![]);
+        assert_eq!(q.addr(), SAVE_DATA_UTILITY);
+        assert_eq!(e.mem.u32(u + 0x44), 5);
+        assert!(e.call_log.unwrap().iter().all(|c| c.0 != ATEXIT));
+    }
+
+    #[test]
+    fn save_data_utility_destructor_restores_the_vtable() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x48);
+        e.mem.set_u32(this, 0x1234);
+        e.mem.set_u32(this + 8, 0x77);
+        e.call(0x00af_2f20, &args![this]);
+        assert_eq!(e.mem.u32(this), SAVE_DATA_UTILITY_VTABLE);
+        assert_eq!(e.mem.u32(this + 8), 0x77);
     }
 
     // Import slots of FalloutNV.exe 1.4.0.525 (Ghidra `PTR_<name>_<slot>`).

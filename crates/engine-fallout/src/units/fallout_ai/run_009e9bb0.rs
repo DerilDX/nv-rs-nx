@@ -64,9 +64,50 @@ pub fn fn_009e9d00(e: &mut Engine, this: Ptr, base_argument: u32) -> Ptr {
     this
 }
 
+/// `NiTArray<Actor *, NiTMallocInterface<..>>` vtable (RTTI).
+const VTABLE_TARRAY_ACTOR: u32 = 0x0109_2930;
+/// The array's allocation (`0096afc0`, cdecl: the element count).
+const ALLOCATE_ELEMENTS: u32 = 0x0096_afc0;
+/// The array's free (`004ede70`, cdecl: the block).
+const FREE_ELEMENTS: u32 = 0x004e_de70;
+
+// Translated from 009e9c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<Actor *, NiTMallocInterface<..>>` constructor (class by the vtable's RTTI):
+/// `m_usMaxSize` (+8) = `max_size`, `m_usGrowBy` (+0xe) = `grow_by`, `m_usSize` (+0xa) and
+/// `m_usESize` (+0xc) = 0; `m_pBase` (+4) is `0096afc0(max_size)`, or null when `max_size`
+/// (read back from +8) is 0. Returns `this`.
+pub fn ni_t_array_actor_constructor(e: &mut Engine, this: Ptr, max_size: u16, grow_by: u16) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, VTABLE_TARRAY_ACTOR);
+    e.mem.set_u16(base + 8, max_size);
+    e.mem.set_u16(base + 0xe, grow_by);
+    e.mem.set_u16(base + 0xa, 0);
+    e.mem.set_u16(base + 0xc, 0);
+    let count = u32::from(e.mem.u16(base + 8));
+    if count == 0 {
+        e.mem.set_u32(base + 4, 0);
+    } else {
+        let block = e.call(ALLOCATE_ELEMENTS, &args![count]).u32();
+        e.mem.set_u32(base + 4, block);
+    }
+    this
+}
+
+// Translated from 009e9c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<Actor *, NiTMallocInterface<..>>` destructor (class by the vtable's RTTI; the
+/// decompiler's library match `~basic_streambuf` is a folded body): stores the vtable and
+/// frees `m_pBase` (+4) through `004ede70`.
+pub fn ni_t_array_actor_destructor(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_TARRAY_ACTOR);
+    let data = e.mem.u32(this.addr() + 4);
+    e.call(FREE_ELEMENTS, &args![data]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x009e_9c90, ni_t_array_actor_constructor(Ptr, u16, u16) -> Ptr),
+        entry!(0x009e_9c30, ni_t_array_actor_destructor(Ptr)),
         entry!(0x009e_9d00, fn_009e9d00(Ptr, u32) -> Ptr),
         entry!(0x009e_9c10, fn_009e9c10(Ptr)),
         entry!(0x009e_9bb0, fn_009e9bb0(Ptr, u32, u32) -> Ptr),
@@ -180,5 +221,53 @@ mod physics_work_ahead_tests {
         let this = e.mem.alloc(0xa8);
         e.call(0x009e_9d00, &args![this, 0u32]);
         assert_eq!(e.mem.u32(this + 0x9c), 0x7fc0_0001);
+    }
+}
+
+#[cfg(test)]
+mod b004_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn actor_array_constructor_allocates_unless_the_size_is_zero() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE_ELEMENTS, |_, a| (0x6000 + a[0]).into_ret());
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        let r = e.call(0x009e_9c90, &args![this, 0xaaaa_0005u32, 0xbbbb_0003u32]);
+        assert_eq!(r.u32(), this);
+        assert_eq!(calls_to(&e, ALLOCATE_ELEMENTS), vec![vec![5]]);
+        assert_eq!(e.mem.u32(this), VTABLE_TARRAY_ACTOR);
+        assert_eq!(e.mem.u32(this + 4), 0x6005);
+        assert_eq!(e.mem.u16(this + 8), 5);
+        assert_eq!(e.mem.u16(this + 0xa), 0);
+        assert_eq!(e.mem.u16(this + 0xc), 0);
+        assert_eq!(e.mem.u16(this + 0xe), 3);
+        e.call_log = Some(vec![]);
+        e.call(0x009e_9c90, &args![this, 0u32, 1u32]);
+        assert!(calls_to(&e, ALLOCATE_ELEMENTS).is_empty());
+        assert_eq!(e.mem.u32(this + 4), 0);
+    }
+
+    #[test]
+    fn actor_array_destructor_frees_the_elements() {
+        let mut e = Engine::new();
+        e.register(FREE_ELEMENTS, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 4, 0x7070);
+        e.call_log = Some(vec![]);
+        e.call(0x009e_9c30, &args![this]);
+        assert_eq!(calls_to(&e, FREE_ELEMENTS), vec![vec![0x7070]]);
+        assert_eq!(e.mem.u32(this), VTABLE_TARRAY_ACTOR);
     }
 }

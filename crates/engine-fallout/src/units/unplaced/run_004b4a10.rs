@@ -118,6 +118,191 @@ pub fn fn_004b4e50(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
     this
 }
 
+/// `GetUserNameA` import slot (`advapi32`, stdcall: buffer, address of the size).
+const GET_USER_NAME: u32 = 0x00fd_f014;
+/// The 0x104-byte user-name buffer.
+const USER_NAME: u32 = 0x011c_5fa0;
+/// `Error` (`0040fbe0`, engine map; cdecl, variadic): empty in this build.
+const ERROR: u32 = 0x0040_fbe0;
+/// `"%s"`.
+const PERCENT_S: u32 = 0x0101_9f08;
+/// `"Computer Name: %s"`.
+const COMPUTER_NAME_FORMAT: u32 = 0x0101_ffa8;
+/// `00464f30` (cdecl: a string and 0; its result is formatted as a string).
+const NAME_LOOKUP: u32 = 0x0046_4f30;
+/// `_sprintf` (`00ec623a`, cdecl).
+const SPRINTF: u32 = 0x00ec_623a;
+/// `009d9f40` (thiscall, returns a pointer).
+const OBJECT_GET: u32 = 0x009d_9f40;
+/// `hkpMotion::getMass` (`00c86430`, engine map; thiscall, its result in ST0).
+const MOTION_GET_MASS: u32 = 0x00c8_6430;
+/// `00436aa0` (unit `fallout shared/extradataobjects.cpp` in the engine map; thiscall).
+const CALLEE_00436AA0: u32 = 0x0043_6aa0;
+/// `00537bb0` (unit `fallout shared/tesland.cpp` in the engine map; thiscall).
+const BASE_CONSTRUCTOR_00537BB0: u32 = 0x0053_7bb0;
+/// `00458700` (unit `fallout shared/tes.cpp` in the engine map; thiscall, `RET 8`: an out
+/// block and an index; returns a pointer).
+const ELEMENT_GET: u32 = 0x0045_8700;
+/// `004586d0` (thiscall; its result in ST0).
+const ELEMENT_VALUE: u32 = 0x0045_86d0;
+/// The four floats `004b4f40` copies (0.5, 0.3, 250.0 and 0.95 in the exe's `.rdata`).
+const DEFAULT_30: u32 = 0x0101_6248;
+const DEFAULT_34: u32 = 0x0101_7870;
+const DEFAULT_38: u32 = 0x0101_b2d0;
+const DEFAULT_3C: u32 = 0x0101_ffc0;
+
+// Translated from 004b4a30 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004b4a30 - the /GS stack-cookie check (00ec408c) is not translated
+/// Reports the user and computer: with the size word set to 0x104, `GetUserNameA` into
+/// `011c5fa0`; when that succeeds, `Error("%s", text)`, then `"Computer Name: %s"` with
+/// `00464f30(011c5fa0, 0)` formatted into a 0x108-byte local (`_sprintf`) and given to
+/// `Error`.
+pub fn fn_004b4a30(e: &mut Engine, text: u32) {
+    // The frame: the text at EBP-0x110, the size word at EBP-4.
+    e.with_stack(0x110, |e, frame| {
+        let line = frame.addr();
+        let size = frame.addr() + 0x10c;
+        e.mem.set_u32(size, 0x104);
+        if e.call(GET_USER_NAME, &args![USER_NAME, size]).u32() != 0 {
+            e.call(ERROR, &args![PERCENT_S, text]);
+            let name = e.call(NAME_LOOKUP, &args![USER_NAME, 0u32]).u32();
+            e.call(SPRINTF, &args![line, COMPUTER_NAME_FORMAT, name]);
+            e.call(ERROR, &args![line]);
+        }
+    });
+}
+
+// Translated from 004b4d50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004b4d50 - the /GS stack-cookie check (00ec408c) is not translated
+/// Stores four floats into the 16 bytes at `this` (`MOVSS` loads, `UNPCKLPS` into one
+/// register, `MOVAPS` through an aligned local: the words are copied unchanged). Returns
+/// `this`.
+pub fn fn_004b4d50(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32, w: f32) -> Ptr {
+    for (lane, value) in [x, y, z, w].into_iter().enumerate() {
+        e.mem
+            .set_u32(this.addr().wrapping_add(4 * lane as u32), value.to_bits());
+    }
+    this
+}
+
+// Translated from 004b4d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the four floats at `this` into `out` through `004b4d50` (each pushed with
+/// `FLD`/`FSTP`, so a signalling NaN arrives quiet). Returns `out`.
+pub fn fn_004b4d10(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
+    let lane = |e: &Engine, i: u32| {
+        f32::from_bits(x87_quiet_bits(e.mem.u32(this.addr().wrapping_add(4 * i))))
+    };
+    let (w, z, y, x) = (lane(e, 3), lane(e, 2), lane(e, 1), lane(e, 0));
+    fn_004b4d50(e, out, x, y, z, w);
+    out
+}
+
+// Translated from 004b4db0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004b4db0 - the /GS stack-cookie check (00ec408c) is not translated
+/// For `i` in 0..4: `004586d0` on the pointer `00458700(source, local_i, i)` returns a float
+/// in ST0, stored (`FSTP`) as the `i`th float of `this`; each `local_i` is a 16-byte block of
+/// the aligned frame. Returns `this`.
+pub fn fn_004b4db0(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    // The locals at EBP-0x20, -0x30, -0x40, -0x50 for i = 0..3.
+    e.with_stack(0x50, |e, frame| {
+        for i in 0..4u32 {
+            let local = frame.addr() + 0x30 - 0x10 * i;
+            let element = e.call(ELEMENT_GET, &args![source, local, i]).u32();
+            let value = e.call(ELEMENT_VALUE, &args![element]).f64();
+            e.mem
+                .set_u32(this.addr().wrapping_add(4 * i), x87_store32(value));
+        }
+    });
+    this
+}
+
+// Translated from 004b4ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMotion::getMass` (`00c86430`) on `009d9f40(this)`; its result (ST0) is passed on.
+pub fn fn_004b4ea0(e: &mut Engine, this: Ptr) -> Ret {
+    let object = e.call(OBJECT_GET, &args![this]).u32();
+    e.call(MOTION_GET_MASS, &args![object])
+}
+
+// Translated from 004b4ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00436aa0` on `006815c0(this + 0x10)`; its result is passed on.
+pub fn fn_004b4ee0(e: &mut Engine, this: Ptr) -> Ret {
+    let member = e
+        .call(CALLEE_006815C0, &args![this.addr().wrapping_add(0x10)])
+        .u32();
+    e.call(CALLEE_00436AA0, &args![member])
+}
+
+// Translated from 004b4ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `004b4ee0` on `009d9f40(this)`; its result is passed on.
+pub fn fn_004b4ec0(e: &mut Engine, this: Ptr) -> Ret {
+    let object = e.call(OBJECT_GET, &args![this]).u32();
+    fn_004b4ee0(e, Ptr::new(object))
+}
+
+// Translated from 004b4f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `004b4f20` on `009d9f40(this)`: the pointer `006815c0` gives for its member at +0x10.
+pub fn fn_004b4f00(e: &mut Engine, this: Ptr) -> Ptr {
+    let object = e.call(OBJECT_GET, &args![this]).u32();
+    fn_004b4f20(e, Ptr::new(object))
+}
+
+// Translated from 004b4ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores four floats at `this` (each through `FLD`/`FSTP`, so a signalling NaN is stored
+/// quiet). Returns `this` (`EAX`, which the decompiler drops).
+pub fn fn_004b4ff0(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32, w: f32) -> Ptr {
+    for (lane, value) in [x, y, z, w].into_iter().enumerate() {
+        e.mem.set_u32(
+            this.addr().wrapping_add(4 * lane as u32),
+            x87_quiet_bits(value.to_bits()),
+        );
+    }
+    this
+}
+
+// Translated from 004b4fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the four floats at `this` to 0.0 (`FLDZ` pushed four times, `004b4ff0`). Returns
+/// `004b4ff0`'s result, `this`.
+pub fn fn_004b4fc0(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_004b4ff0(e, this, 0.0, 0.0, 0.0, 0.0)
+}
+
+// Translated from 004b4fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Default constructor of four floats: all 0.0 (`004b4fc0`). Returns `this`.
+pub fn fn_004b4fa0(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_004b4fc0(e, this);
+    this
+}
+
+// Translated from 004b4f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A constructor: the base `00537bb0`, the four-float members at +0x10 and +0x20 zeroed
+/// (`004b4fa0`), and the floats at `01016248`, `01017870`, `0101b2d0` and `0101ffc0`
+/// (0.5, 0.3, 250.0, 0.95) copied through `FLD`/`FSTP` to +0x30, +0x34, +0x38 and +0x3c.
+/// Returns `this`.
+pub fn fn_004b4f40(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(BASE_CONSTRUCTOR_00537BB0, &args![this]);
+    fn_004b4fa0(e, Ptr::new(base.wrapping_add(0x10)));
+    fn_004b4fa0(e, Ptr::new(base.wrapping_add(0x20)));
+    for (offset, constant) in [
+        (0x30u32, DEFAULT_30),
+        (0x34, DEFAULT_34),
+        (0x38, DEFAULT_38),
+        (0x3c, DEFAULT_3C),
+    ] {
+        let bits = x87_quiet_bits(e.mem.u32(constant));
+        e.mem.set_u32(base.wrapping_add(offset), bits);
+    }
+    this
+}
+
+// Translated from 004b5020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `006815c0` on `this` and clears the word at +0. Returns `this`.
+pub fn fn_004b5020(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(CALLEE_006815C0, &args![this]);
+    e.mem.set_u32(this.addr(), 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -126,6 +311,28 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004b_4f20, fn_004b4f20(Ptr) -> Ptr),
         entry!(0x004b_4ad0, fn_004b4ad0(Ptr, Ptr, Ptr)),
         entry!(0x004b_4cf0, fn_004b4cf0(Ptr, u32) -> Ptr),
+        entry!(0x004b_4a30, fn_004b4a30(u32)),
+        entry!(0x004b_4d50, fn_004b4d50(Ptr, f32, f32, f32, f32) -> Ptr),
+        entry!(0x004b_4d10, fn_004b4d10(Ptr, Ptr) -> Ptr),
+        entry!(0x004b_4db0, fn_004b4db0(Ptr, Ptr) -> Ptr),
+        (
+            0x004b_4ea0,
+            (|e: &mut Engine, a: &[u32]| fn_004b4ea0(e, Ptr::new(a[0]))) as AbiFn,
+        ),
+        (
+            0x004b_4ee0,
+            (|e: &mut Engine, a: &[u32]| fn_004b4ee0(e, Ptr::new(a[0]))) as AbiFn,
+        ),
+        (
+            0x004b_4ec0,
+            (|e: &mut Engine, a: &[u32]| fn_004b4ec0(e, Ptr::new(a[0]))) as AbiFn,
+        ),
+        entry!(0x004b_4f00, fn_004b4f00(Ptr) -> Ptr),
+        entry!(0x004b_4ff0, fn_004b4ff0(Ptr, f32, f32, f32, f32) -> Ptr),
+        entry!(0x004b_4fc0, fn_004b4fc0(Ptr) -> Ptr),
+        entry!(0x004b_4fa0, fn_004b4fa0(Ptr) -> Ptr),
+        entry!(0x004b_4f40, fn_004b4f40(Ptr) -> Ptr),
+        entry!(0x004b_5020, fn_004b5020(Ptr) -> Ptr),
     ]
 }
 
@@ -351,5 +558,180 @@ mod physics_work_ahead_tests {
         let this = e.mem.alloc(0x10);
         e.call(0x004b_4e50, &args![this, source]);
         assert_eq!(e.mem.u32(this), 0x7fc0_0123);
+    }
+}
+
+#[cfg(test)]
+mod b004_tests {
+    use super::*;
+
+    fn log_of(e: &mut Engine, top: u32) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != top)
+            .collect()
+    }
+
+    fn words(e: &Engine, p: u32) -> Vec<u32> {
+        (0..4).map(|i| e.mem.u32(p + 4 * i)).collect()
+    }
+
+    #[test]
+    fn user_report_runs_only_when_the_name_is_read() {
+        for ok in [0u32, 1] {
+            let mut e = Engine::new();
+            e.register_double(GET_USER_NAME, move |e, a| {
+                assert_eq!(e.mem.u32(a[1]), 0x104);
+                ok.into_ret()
+            });
+            e.register(ERROR, |_, _| Ret::default());
+            e.register(NAME_LOOKUP, |_, _| 0x7000u32.into_ret());
+            e.register(SPRINTF, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            e.call(0x004b_4a30, &args![0x1234u32]);
+            let log = log_of(&mut e, 0x004b_4a30);
+            assert_eq!(log[0].0, GET_USER_NAME);
+            assert_eq!(log[0].1[0], USER_NAME);
+            if ok == 0 {
+                assert_eq!(log.len(), 1);
+                continue;
+            }
+            let line = log[3].1[0];
+            assert_eq!(
+                log[1..].to_vec(),
+                vec![
+                    (ERROR, vec![PERCENT_S, 0x1234]),
+                    (NAME_LOOKUP, vec![USER_NAME, 0]),
+                    (SPRINTF, vec![line, COMPUTER_NAME_FORMAT, 0x7000]),
+                    (ERROR, vec![line]),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn four_float_stores_copy_raw_or_quiet() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        let r = e.call(0x004b_4d50, &[this, 0x7f80_0001, 2, 3, 4]);
+        assert_eq!(r.u32(), this);
+        assert_eq!(words(&e, this), vec![0x7f80_0001, 2, 3, 4]);
+        let r = e.call(0x004b_4ff0, &[this, 0x7f80_0001, 2, 3, 4]);
+        assert_eq!(r.u32(), this);
+        assert_eq!(words(&e, this), vec![0x7fc0_0001, 2, 3, 4]);
+        let out = e.mem.alloc(0x10);
+        e.mem.set_u32(this, 0x7f80_0005);
+        assert_eq!(e.call(0x004b_4d10, &args![this, out]).u32(), out);
+        assert_eq!(words(&e, out), vec![0x7fc0_0005, 2, 3, 4]);
+        assert_eq!(e.call(0x004b_4fc0, &args![this]).u32(), this);
+        assert_eq!(words(&e, this), vec![0; 4]);
+        e.mem.set_u32(this + 8, 9);
+        assert_eq!(e.call(0x004b_4fa0, &args![this]).u32(), this);
+        assert_eq!(words(&e, this), vec![0; 4]);
+    }
+
+    #[test]
+    fn element_values_fill_the_four_floats() {
+        let mut e = Engine::new();
+        e.register(ELEMENT_GET, |_, a| (0x100 + a[2]).into_ret());
+        e.register(ELEMENT_VALUE, |_, a| Ret {
+            st0: f64::from(a[0] - 0x100) + 0.5,
+            ..Ret::default()
+        });
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004b_4db0, &args![this, 0x9000u32]).u32(), this);
+        let gets: Vec<_> = log_of(&mut e, 0x004b_4db0)
+            .into_iter()
+            .filter(|(a, _)| *a == ELEMENT_GET)
+            .map(|(_, w)| w)
+            .collect();
+        assert_eq!(gets.len(), 4);
+        for (i, words) in gets.iter().enumerate() {
+            assert_eq!(words[0], 0x9000);
+            assert_eq!(words[2], i as u32);
+        }
+        // The four locals are distinct 16-byte blocks, one below the other.
+        assert_eq!(gets[0][1] - gets[1][1], 0x10);
+        let want: Vec<u32> = [0.5f32, 1.5, 2.5, 3.5]
+            .iter()
+            .map(|v| v.to_bits())
+            .collect();
+        assert_eq!(words(&e, this), want);
+    }
+
+    #[test]
+    fn wrappers_pass_the_callee_result_on() {
+        let mut e = Engine::new();
+        e.register(OBJECT_GET, |_, a| (a[0] + 1).into_ret());
+        e.register(MOTION_GET_MASS, |_, a| Ret {
+            eax: a[0],
+            st0: 2.25,
+            ..Ret::default()
+        });
+        e.register(CALLEE_006815C0, |_, a| (a[0] + 2).into_ret());
+        e.register(CALLEE_00436AA0, |_, a| Ret {
+            eax: a[0] * 2,
+            st0: 1.5,
+            ..Ret::default()
+        });
+        let r = e.call(0x004b_4ea0, &args![0x100u32]);
+        assert_eq!((r.eax, r.st0), (0x101, 2.25));
+        let r = e.call(0x004b_4ee0, &args![0x100u32]);
+        assert_eq!((r.eax, r.st0), (0x224, 1.5));
+        let r = e.call(0x004b_4ec0, &args![0x100u32]);
+        assert_eq!((r.eax, r.st0), (0x226, 1.5));
+        assert_eq!(e.call(0x004b_4f00, &args![0x100u32]).u32(), 0x113);
+    }
+
+    #[test]
+    fn constructor_zeroes_the_members_and_copies_the_defaults() {
+        let mut e = Engine::new();
+        for (constant, bits) in [
+            (DEFAULT_30, 0.5f32.to_bits()),
+            (DEFAULT_34, 0.3f32.to_bits()),
+            (DEFAULT_38, 250.0f32.to_bits()),
+            (DEFAULT_3C, 0x7f80_0003),
+        ] {
+            e.map(constant, 4);
+            e.mem.set_u32(constant, bits);
+        }
+        e.register(BASE_CONSTRUCTOR_00537BB0, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(0x40);
+        for i in 0..0x10 {
+            e.mem.set_u32(this + 4 * i, 0xffff_ffff);
+        }
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004b_4f40, &args![this]).u32(), this);
+        assert_eq!(
+            log_of(&mut e, 0x004b_4f40),
+            vec![(BASE_CONSTRUCTOR_00537BB0, vec![this])]
+        );
+        assert_eq!(words(&e, this + 0x10), vec![0; 4]);
+        assert_eq!(words(&e, this + 0x20), vec![0; 4]);
+        assert_eq!(
+            words(&e, this + 0x30),
+            vec![
+                0.5f32.to_bits(),
+                0.3f32.to_bits(),
+                250.0f32.to_bits(),
+                0x7fc0_0003
+            ]
+        );
+        assert_eq!(e.mem.u32(this), 0xffff_ffff);
+    }
+
+    #[test]
+    fn clears_the_first_word_after_the_callee() {
+        let mut e = Engine::new();
+        e.register(CALLEE_006815C0, |e, a| {
+            e.mem.set_u32(a[0], 0x55);
+            a[0].into_ret()
+        });
+        let this = e.mem.alloc(8);
+        assert_eq!(e.call(0x004b_5020, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0);
     }
 }

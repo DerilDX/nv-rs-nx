@@ -1711,9 +1711,52 @@ pub fn fn_004de290(e: &mut Engine, this: Ptr, value: f32) -> Ptr {
     this
 }
 
+/// `SceneGraph::SceneGraph` (engine map, `00878610`): `thiscall`, `RET 0xc` (name, two
+/// flags); 0xc0 bytes.
+const SCENE_GRAPH_CONSTRUCT: u32 = 0x0087_8610;
+/// `"Menu"` (`01021600`) and `"3DMenu"` (`01021608`): the two scene graphs' names.
+const MENU_NAME: u32 = 0x0102_1600;
+const MENU_3D_NAME: u32 = 0x0102_1608;
+/// The smart pointers the two scene graphs are assigned to (`011dee84`, `011deca4`).
+const MENU_SCENE_GRAPH: u32 = 0x011d_ee84;
+const MENU_3D_SCENE_GRAPH: u32 = 0x011d_eca4;
+
+/// A new `SceneGraph` (0xc0 bytes; null when the allocation fails) with `name` and the two
+/// flag words, assigned to the smart pointer at `holder`.
+fn make_scene_graph(e: &mut Engine, holder: u32, name: u32, first: u32, second: u32) {
+    let memory = e.call(NEW_OBJECT, &args![0xc0u32]).u32();
+    let graph = if memory != 0 {
+        e.call(SCENE_GRAPH_CONSTRUCT, &args![memory, name, first, second])
+            .u32()
+    } else {
+        0
+    };
+    e.call(SMART_POINTER_SET, &args![holder, graph]);
+}
+
+// Translated from 004dc5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`renderer.cpp`), no arguments: makes the `"Menu"` scene graph
+/// (`SceneGraph::SceneGraph(name, 1, 0)` on 0xc0 bytes, null when the allocation fails) and
+/// assigns it to the smart pointer at `011dee84`.
+// Translation incomplete: 004dc5c0 - the C++ exception frame (FS:[0] chain, unwind state 0) is not translated.
+pub fn fn_004dc5c0(e: &mut Engine) {
+    make_scene_graph(e, MENU_SCENE_GRAPH, MENU_NAME, 1, 0);
+}
+
+// Translated from 004dc650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`renderer.cpp`), no arguments: makes the `"3DMenu"` scene
+/// graph (`SceneGraph::SceneGraph(name, 0, 0)` on 0xc0 bytes, null when the allocation fails)
+/// and assigns it to the smart pointer at `011deca4`.
+// Translation incomplete: 004dc650 - the C++ exception frame (FS:[0] chain, unwind state 0) is not translated.
+pub fn fn_004dc650(e: &mut Engine) {
+    make_scene_graph(e, MENU_3D_SCENE_GRAPH, MENU_3D_NAME, 0, 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004d_c5c0, fn_004dc5c0()),
+        entry!(0x004d_c650, fn_004dc650()),
         entry!(0x004d_e290, fn_004de290(Ptr, f32) -> Ptr),
         entry!(0x004de2f0, fn_004de2f0(Ptr, u32, u8) -> Ptr),
         entry!(0x004de370, fn_004de370(Ptr, u32, u32) -> Ptr),
@@ -3394,5 +3437,74 @@ mod physics_work_ahead_tests {
     fn at_004de290_leaves_a_null_this_alone() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x004d_e290, &args![0u32, 1.5f32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod b000_tests {
+    use super::*;
+
+    fn rig(allocation_fails: bool) -> Engine {
+        let mut e = Engine::new();
+        e.register_double(NEW_OBJECT, move |e, a| {
+            if allocation_fails {
+                0u32.into_ret()
+            } else {
+                e.mem.alloc(a[0]).into_ret()
+            }
+        });
+        e.register(SCENE_GRAPH_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(SMART_POINTER_SET, |_, _| Ret::default());
+        e
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_004dc5c0_makes_the_menu_scene_graph() {
+        let mut e = rig(false);
+        e.call_log = Some(vec![]);
+        e.call(0x004d_c5c0, &args![]);
+        assert_eq!(calls(&e, NEW_OBJECT), vec![vec![0xc0]]);
+        let graph = calls(&e, SCENE_GRAPH_CONSTRUCT);
+        assert_eq!(&graph[0][1..], &[MENU_NAME, 1, 0]);
+        assert_eq!(
+            calls(&e, SMART_POINTER_SET),
+            vec![vec![MENU_SCENE_GRAPH, graph[0][0]]]
+        );
+    }
+
+    #[test]
+    fn fn_004dc650_makes_the_3d_menu_scene_graph() {
+        let mut e = rig(false);
+        e.call_log = Some(vec![]);
+        e.call(0x004d_c650, &args![]);
+        let graph = calls(&e, SCENE_GRAPH_CONSTRUCT);
+        assert_eq!(&graph[0][1..], &[MENU_3D_NAME, 0, 0]);
+        assert_eq!(
+            calls(&e, SMART_POINTER_SET),
+            vec![vec![MENU_3D_SCENE_GRAPH, graph[0][0]]]
+        );
+    }
+
+    #[test]
+    fn scene_graphs_assign_null_when_the_allocation_fails() {
+        let mut e = rig(true);
+        e.call_log = Some(vec![]);
+        e.call(0x004d_c5c0, &args![]);
+        e.call(0x004d_c650, &args![]);
+        assert!(calls(&e, SCENE_GRAPH_CONSTRUCT).is_empty());
+        assert_eq!(
+            calls(&e, SMART_POINTER_SET),
+            vec![vec![MENU_SCENE_GRAPH, 0], vec![MENU_3D_SCENE_GRAPH, 0]]
+        );
     }
 }
