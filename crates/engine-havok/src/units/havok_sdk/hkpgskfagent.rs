@@ -261,9 +261,99 @@ pub fn hkp_gskf_agent_remove_point(e: &mut Engine, manifold: Ptr, index: u32) {
     e.call(GSK_MANIFOLD_REMOVE_POINT, &args![manifold]);
 }
 
+// Translated from 00dacb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one stack word `id`, `RET 4`; descriptions, not confirmed; the
+/// vtable words `010cebc0` and `010d5250` hold its address and the function Ghidra names `removePoint` jumps to it at `00d337f9`): the object keeps up to `n` 8-byte entries
+/// from `this + 0x34` (`n` is the byte at `+0x32`), each with a 16-bit id at `+2`. Looks for the
+/// entry whose id equals the low 16 bits of `id`; when it finds entry `i` it runs `00dae340` (cdecl)
+/// on `(this + 0x30, i)` and answers what that answers. Otherwise it answers `n` (0 when `n` is
+/// 0).
+pub fn fn_00dacb20(e: &mut Engine, this: Ptr, id: u32) -> u32 {
+    let base = this.addr();
+    let count = u32::from(e.mem.u8(base.wrapping_add(0x32)));
+    if count == 0 {
+        return 0;
+    }
+    let wanted = id as u16;
+    let mut index = 0u32;
+    let mut slot = base.wrapping_add(0x36);
+    loop {
+        if e.mem.u16(slot) == wanted {
+            return e
+                .call(0x00da_e340, &args![base.wrapping_add(0x30), index])
+                .u32();
+        }
+        index += 1;
+        slot = slot.wrapping_add(8);
+        if index >= count {
+            return index;
+        }
+    }
+}
+
+// Translated from 00dacb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one stack word `id`, `RET 4`; descriptions, not confirmed; the
+/// vtable words `010cebc4` and `010d5254` hold its address and the function Ghidra names `commitPotential` jumps to it at `00d33819`): over the same entries as `00dacb20`, looks
+/// for the first whose id is `0xffff` and stores the low 16 bits of `id` there. Answers the index
+/// of that entry, or `n` when none is free (0 when `n` is 0).
+pub fn fn_00dacb60(e: &mut Engine, this: Ptr, id: u32) -> u32 {
+    let base = this.addr();
+    let count = u32::from(e.mem.u8(base.wrapping_add(0x32)));
+    if count == 0 {
+        return 0;
+    }
+    let mut index = 0u32;
+    let mut slot = base.wrapping_add(0x36);
+    loop {
+        if e.mem.u16(slot) == 0xffff {
+            e.mem.set_u16(
+                base.wrapping_add(index.wrapping_mul(8)).wrapping_add(0x36),
+                id as u16,
+            );
+            return index;
+        }
+        index += 1;
+        slot = slot.wrapping_add(8);
+        if index >= count {
+            return index;
+        }
+    }
+}
+
+// Translated from 00dacba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one stack word `id`, `RET 4`; descriptions, not confirmed; the
+/// vtable words `010cebc8` and `010d5258` hold its address and the function Ghidra names `createZombie` jumps to it at `00d33839`): over the same entries as `00dacb20`, looks
+/// for the entry whose id equals the low 16 bits of `id` and clears its two bytes at `+0` and
+/// `+1`. Answers the index of that entry, or `n` when there is none (0 when `n` is 0).
+pub fn fn_00dacba0(e: &mut Engine, this: Ptr, id: u32) -> u32 {
+    let base = this.addr();
+    let count = u32::from(e.mem.u8(base.wrapping_add(0x32)));
+    if count == 0 {
+        return 0;
+    }
+    let wanted = id as u16;
+    let mut index = 0u32;
+    let mut entry = base.wrapping_add(0x34);
+    loop {
+        if e.mem.u16(entry.wrapping_add(2)) == wanted {
+            e.mem.set_u8(entry, 0);
+            e.mem.set_u8(entry.wrapping_add(1), 0);
+            return index;
+        }
+        index += 1;
+        entry = entry.wrapping_add(8);
+        if index >= count {
+            return index;
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00dacb20, fn_00dacb20(Ptr, u32) -> u32),
+        entry!(0x00dacb60, fn_00dacb60(Ptr, u32) -> u32),
+        entry!(0x00dacba0, fn_00dacba0(Ptr, u32) -> u32),
         entry!(0x00da_cbd0, hkp_gskf_agent_construct(Ptr, u32, u32, u32) -> Ptr),
         entry!(0x00da_caf0, hkp_gskf_agent_cleanup(Ptr, u32)),
         entry!(0x00da_cc00, fn_00dacc00(u32, u32, u32, u32) -> u32),
@@ -290,6 +380,91 @@ mod movement_tests {
     use crate::units::havok_sdk::hkpbvagent::test_support::{
         calls, log_double, monitor, new_log, Log,
     };
+
+    /// An object with entries whose ids are `ids` (ids at `+0x36 + 8 * i`, entry bytes `0x55` at
+    /// `+0x34 + 8 * i` and `+0x35 + 8 * i`) and the count byte at `+0x32`.
+    fn object_with_ids_00dacb20(e: &mut Engine, ids: &[u16]) -> u32 {
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u8(object + 0x32, ids.len() as u8);
+        for (index, id) in ids.iter().enumerate() {
+            let at = object + 0x34 + 8 * index as u32;
+            e.mem.set_u8(at, 0x55);
+            e.mem.set_u8(at + 1, 0x55);
+            e.mem.set_u16(at + 2, *id);
+        }
+        object
+    }
+
+    #[test]
+    fn fn_00dacb20_removes_the_entry_with_the_id_through_00dae340() {
+        let mut e = Engine::new();
+        let object = object_with_ids_00dacb20(&mut e, &[10, 20, 30]);
+        e.register(0x00da_e340, |_, a| Ret {
+            eax: a[1] + 100,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x00da_cb20, &args![object, 0x1_0014u32]).u32();
+        assert_eq!(answer, 101);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00da_e340)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x00da_e340, vec![object + 0x30, 1])]);
+    }
+
+    #[test]
+    fn fn_00dacb20_answers_the_count_when_the_id_is_missing() {
+        let mut e = Engine::new();
+        let object = object_with_ids_00dacb20(&mut e, &[10, 20, 30]);
+        assert_eq!(e.call(0x00da_cb20, &args![object, 99u32]).u32(), 3);
+        let empty = object_with_ids_00dacb20(&mut e, &[]);
+        assert_eq!(e.call(0x00da_cb20, &args![empty, 99u32]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00dacb60_stores_the_id_in_the_first_free_entry() {
+        let mut e = Engine::new();
+        let object = object_with_ids_00dacb20(&mut e, &[10, 0xffff, 0xffff]);
+        assert_eq!(e.call(0x00da_cb60, &args![object, 0x7_0042u32]).u32(), 1);
+        assert_eq!(e.mem.u16(object + 0x36 + 8), 0x42);
+        assert_eq!(e.mem.u16(object + 0x36 + 16), 0xffff);
+    }
+
+    #[test]
+    fn fn_00dacb60_answers_the_count_when_nothing_is_free() {
+        let mut e = Engine::new();
+        let object = object_with_ids_00dacb20(&mut e, &[10, 20]);
+        assert_eq!(e.call(0x00da_cb60, &args![object, 42u32]).u32(), 2);
+        assert_eq!(e.mem.u16(object + 0x36), 10);
+        let empty = object_with_ids_00dacb20(&mut e, &[]);
+        assert_eq!(e.call(0x00da_cb60, &args![empty, 42u32]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00dacba0_clears_the_two_bytes_of_the_entry_with_the_id() {
+        let mut e = Engine::new();
+        let object = object_with_ids_00dacb20(&mut e, &[10, 20, 30]);
+        assert_eq!(e.call(0x00da_cba0, &args![object, 30u32]).u32(), 2);
+        assert_eq!(e.mem.u8(object + 0x34 + 16), 0);
+        assert_eq!(e.mem.u8(object + 0x35 + 16), 0);
+        assert_eq!(e.mem.u8(object + 0x34 + 8), 0x55);
+        assert_eq!(e.mem.u16(object + 0x36 + 16), 30);
+    }
+
+    #[test]
+    fn fn_00dacba0_answers_the_count_when_the_id_is_missing() {
+        let mut e = Engine::new();
+        let object = object_with_ids_00dacb20(&mut e, &[10, 20]);
+        assert_eq!(e.call(0x00da_cba0, &args![object, 99u32]).u32(), 2);
+        assert_eq!(e.mem.u8(object + 0x34), 0x55);
+        let empty = object_with_ids_00dacb20(&mut e, &[]);
+        assert_eq!(e.call(0x00da_cba0, &args![empty, 99u32]).u32(), 0);
+    }
 
     /// An engine with the exe's data range and the import page mapped, as the tests run without the exe.
     fn test_engine() -> Engine {

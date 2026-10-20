@@ -6,8 +6,8 @@
 //! same loop for different query shapes) with the set-ups that feed them (`00e5d070`, `00e5d360`,
 //! `00e5d650`, `00e5d710`), and the methods of a shape-collection object (`00e60650` onwards).
 //! The interpreters are transcribed instruction by instruction (`Fpu`, `Flags` and the SSE
-//! models of `run_00d6bf60`); the jump tables of their dispatch lie in the exe's code section,
-//! which the engine does not map, so they are copied into constants.
+//! models of `run_00d6bf60`); the compiler's switch of their dispatch (a byte map of the code byte and a jump table of
+//! 23 cases) is written as two `match`es.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -16,17 +16,6 @@ use crate::units::havok_sdk::run_00d6bf60::{
     subps, unpckhps, unpcklps, xorps,
 };
 use crate::units::havok_sdk::run_00e53090::{time_stamp, Flags, Fpu};
-
-/// The byte map of the interpreters' dispatch (the exe's code section, at `00e5e3b8`,
-/// `00e5eff8`, `00e5fae0` and `00e605d8`: the same 108 bytes): from a code byte up to `0x6b` to
-/// its entry in the 23-entry jump table.
-const MOPP_OPCODE_MAP: [u8; 108] = [
-    0, 1, 1, 1, 1, 2, 3, 4, 22, 5, 6, 7, 22, 22, 22, 22, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 22,
-    22, 22, 10, 10, 10, 11, 11, 11, 12, 12, 12, 13, 13, 13, 22, 22, 22, 22, 14, 14, 14, 14, 14, 14,
-    14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
-    14, 14, 15, 16, 17, 18, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 19, 19, 19, 19, 20, 20,
-    20, 20, 21, 21, 21, 21,
-];
 
 // Translated from 00e5cee0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// An empty function (a single `RET`, no arguments).
@@ -1780,14 +1769,6 @@ pub fn fn_00e5d710(e: &mut Engine, object: Ptr, point: Ptr, third: u32, fourth: 
     })
 }
 
-/// The jump table of the dispatch at `00e5d803` in the exe's code section (the engine does not map
-/// code, so the block addresses are copied here).
-const JUMP_TABLE_00E5D7D0: [u32; 23] = [
-    0x00e5e352, 0x00e5e088, 0x00e5e046, 0x00e5e053, 0x00e5e069, 0x00e5e0da, 0x00e5e11f, 0x00e5e16d,
-    0x00e5d840, 0x00e5d80a, 0x00e5d8ac, 0x00e5d90d, 0x00e5debb, 0x00e5de60, 0x00e5e315, 0x00e5e2c7,
-    0x00e5e2cd, 0x00e5e2dc, 0x00e5e2f4, 0x00e5e1cd, 0x00e5e1dd, 0x00e5e1f6, 0x00e5e261,
-];
-
 #[allow(
     unused_assignments,
     unused_variables,
@@ -1799,8 +1780,8 @@ const JUMP_TABLE_00E5D7D0: [u32; 23] = [
 // Translated from 00e5d7d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// MOPP code interpreter (thiscall, `RET 0xc`: `this` the machine, `sink`, `code` (the address of the
 /// current code byte) and `bounds` (the 32 bytes of query data)): each step dispatches on the code
-/// byte (values up to 0x6b through a byte map and a 23-entry jump table in the exe's data, read
-/// from memory), tests the query against the node's split planes with SSE (`MULPS`, `ADDPS`,
+/// byte (values up to 0x6b through a byte map and a 23-entry jump table written as `match`es
+/// on the code byte and the case), tests the query against the node's split planes with SSE (`MULPS`, `ADDPS`,
 /// `SHUFPS`, `CMPLTPS`, `MOVMSKPS`), and either descends by calling itself with the offset code
 /// pointer, walks on, or reports hits through the machine's virtual methods (`00c85750`, `00c90940`
 /// array growth, `00cb1600`, `00cc00e0`, `00cc01c0` and the `00e65ee0`-family callees). An opcode
@@ -1854,8 +1835,58 @@ pub fn fn_00e5d7d0(e: &mut Engine, this: Ptr, sink: Ptr, code: Ptr, bounds: Ptr)
                         pc = 0x00e5e261;
                         continue;
                     } // 00e5d7f6
-                    ecx = u32::from(MOPP_OPCODE_MAP[eax as usize]); // 00e5d7fc
-                    pc = JUMP_TABLE_00E5D7D0[ecx as usize]; // 00e5d803
+                    ecx = match eax {
+                        0 => 0,
+                        1..=4 => 1,
+                        5 => 2,
+                        6 => 3,
+                        7 => 4,
+                        8 | 12..=15 | 29..=31 | 44..=47 | 84..=95 => 22,
+                        9 => 5,
+                        10 => 6,
+                        11 => 7,
+                        16..=18 => 8,
+                        19..=28 => 9,
+                        32..=34 => 10,
+                        35..=37 => 11,
+                        38..=40 => 12,
+                        41..=43 => 13,
+                        48..=79 => 14,
+                        80 => 15,
+                        81 => 16,
+                        82 => 17,
+                        83 => 18,
+                        96..=99 => 19,
+                        100..=103 => 20,
+                        104..=107 => 21,
+                        _ => unreachable!(),
+                    }; // 00e5d7fc
+                    pc = match ecx {
+                        0 => 0x00e5_e352,
+                        1 => 0x00e5_e088,
+                        2 => 0x00e5_e046,
+                        3 => 0x00e5_e053,
+                        4 => 0x00e5_e069,
+                        5 => 0x00e5_e0da,
+                        6 => 0x00e5_e11f,
+                        7 => 0x00e5_e16d,
+                        8 => 0x00e5_d840,
+                        9 => 0x00e5_d80a,
+                        10 => 0x00e5_d8ac,
+                        11 => 0x00e5_d90d,
+                        12 => 0x00e5_debb,
+                        13 => 0x00e5_de60,
+                        14 => 0x00e5_e315,
+                        15 => 0x00e5_e2c7,
+                        16 => 0x00e5_e2cd,
+                        17 => 0x00e5_e2dc,
+                        18 => 0x00e5_e2f4,
+                        19 => 0x00e5_e1cd,
+                        20 => 0x00e5_e1dd,
+                        21 => 0x00e5_e1f6,
+                        22 => 0x00e5_e261,
+                        _ => unreachable!(),
+                    }; // 00e5d803
                     continue;
                 }
                 0x00e5d80a => {
@@ -3583,14 +3614,6 @@ pub fn fn_00e5d7d0(e: &mut Engine, this: Ptr, sink: Ptr, code: Ptr, bounds: Ptr)
     })
 }
 
-/// The jump table of the dispatch at `00e5e463` in the exe's code section (the engine does not map
-/// code, so the block addresses are copied here).
-const JUMP_TABLE_00E5E430: [u32; 23] = [
-    0x00e5ef92, 0x00e5ecd3, 0x00e5ec91, 0x00e5ec9e, 0x00e5ecb4, 0x00e5ed25, 0x00e5ed6a, 0x00e5edb8,
-    0x00e5e499, 0x00e5e46a, 0x00e5e4f9, 0x00e5e553, 0x00e5eaf6, 0x00e5ea96, 0x00e5ef57, 0x00e5ef09,
-    0x00e5ef0f, 0x00e5ef1e, 0x00e5ef36, 0x00e5ee18, 0x00e5ee28, 0x00e5ee41, 0x00e5eeac,
-];
-
 #[allow(
     unused_assignments,
     unused_variables,
@@ -3602,8 +3625,8 @@ const JUMP_TABLE_00E5E430: [u32; 23] = [
 // Translated from 00e5e430 (decompiled, FalloutNV.exe 1.4.0.525)
 /// MOPP code interpreter (thiscall, `RET 0xc`: `this` the machine, `sink`, `code` (the address of the
 /// current code byte) and `bounds` (the 32 bytes of query data)): each step dispatches on the code
-/// byte (values up to 0x6b through a byte map and a 23-entry jump table in the exe's data, read
-/// from memory), tests the query against the node's split planes with SSE (`MULPS`, `ADDPS`,
+/// byte (values up to 0x6b through a byte map and a 23-entry jump table written as `match`es
+/// on the code byte and the case), tests the query against the node's split planes with SSE (`MULPS`, `ADDPS`,
 /// `SHUFPS`, `CMPLTPS`, `MOVMSKPS`), and either descends by calling itself with the offset code
 /// pointer, walks on, or reports hits through the machine's virtual methods (`00c85750`, `00c90940`
 /// array growth, `00cb1600`, `00cc00e0`, `00cc01c0` and the `00e65ee0`-family callees). An opcode
@@ -3656,8 +3679,58 @@ pub fn fn_00e5e430(e: &mut Engine, this: Ptr, sink: Ptr, code: Ptr, bounds: Ptr)
                         pc = 0x00e5eeac;
                         continue;
                     } // 00e5e456
-                    ecx = u32::from(MOPP_OPCODE_MAP[eax as usize]); // 00e5e45c
-                    pc = JUMP_TABLE_00E5E430[ecx as usize]; // 00e5e463
+                    ecx = match eax {
+                        0 => 0,
+                        1..=4 => 1,
+                        5 => 2,
+                        6 => 3,
+                        7 => 4,
+                        8 | 12..=15 | 29..=31 | 44..=47 | 84..=95 => 22,
+                        9 => 5,
+                        10 => 6,
+                        11 => 7,
+                        16..=18 => 8,
+                        19..=28 => 9,
+                        32..=34 => 10,
+                        35..=37 => 11,
+                        38..=40 => 12,
+                        41..=43 => 13,
+                        48..=79 => 14,
+                        80 => 15,
+                        81 => 16,
+                        82 => 17,
+                        83 => 18,
+                        96..=99 => 19,
+                        100..=103 => 20,
+                        104..=107 => 21,
+                        _ => unreachable!(),
+                    }; // 00e5e45c
+                    pc = match ecx {
+                        0 => 0x00e5_ef92,
+                        1 => 0x00e5_ecd3,
+                        2 => 0x00e5_ec91,
+                        3 => 0x00e5_ec9e,
+                        4 => 0x00e5_ecb4,
+                        5 => 0x00e5_ed25,
+                        6 => 0x00e5_ed6a,
+                        7 => 0x00e5_edb8,
+                        8 => 0x00e5_e499,
+                        9 => 0x00e5_e46a,
+                        10 => 0x00e5_e4f9,
+                        11 => 0x00e5_e553,
+                        12 => 0x00e5_eaf6,
+                        13 => 0x00e5_ea96,
+                        14 => 0x00e5_ef57,
+                        15 => 0x00e5_ef09,
+                        16 => 0x00e5_ef0f,
+                        17 => 0x00e5_ef1e,
+                        18 => 0x00e5_ef36,
+                        19 => 0x00e5_ee18,
+                        20 => 0x00e5_ee28,
+                        21 => 0x00e5_ee41,
+                        22 => 0x00e5_eeac,
+                        _ => unreachable!(),
+                    }; // 00e5e463
                     continue;
                 }
                 0x00e5e46a => {
@@ -5406,14 +5479,6 @@ pub fn fn_00e5e430(e: &mut Engine, this: Ptr, sink: Ptr, code: Ptr, bounds: Ptr)
     })
 }
 
-/// The jump table of the dispatch at `00e5f0a3` in the exe's code section (the engine does not map
-/// code, so the block addresses are copied here).
-const JUMP_TABLE_00E5F070: [u32; 23] = [
-    0x00e5fa79, 0x00e5f7a4, 0x00e5f762, 0x00e5f76f, 0x00e5f785, 0x00e5f7f6, 0x00e5f83b, 0x00e5f889,
-    0x00e5f0dd, 0x00e5f0aa, 0x00e5f145, 0x00e5f1a3, 0x00e5f652, 0x00e5f5f7, 0x00e5fa31, 0x00e5f9e3,
-    0x00e5f9e9, 0x00e5f9f8, 0x00e5fa10, 0x00e5f8e9, 0x00e5f8f9, 0x00e5f912, 0x00e5f97d,
-];
-
 #[allow(
     unused_assignments,
     unused_variables,
@@ -5425,8 +5490,8 @@ const JUMP_TABLE_00E5F070: [u32; 23] = [
 // Translated from 00e5f070 (decompiled, FalloutNV.exe 1.4.0.525)
 /// MOPP code interpreter (thiscall, `RET 0xc`: `this` the machine, `sink`, `code` (the address of the
 /// current code byte) and `bounds` (the 32 bytes of query data)): each step dispatches on the code
-/// byte (values up to 0x6b through a byte map and a 23-entry jump table in the exe's data, read
-/// from memory), tests the query against the node's split planes with SSE (`MULPS`, `ADDPS`,
+/// byte (values up to 0x6b through a byte map and a 23-entry jump table written as `match`es
+/// on the code byte and the case), tests the query against the node's split planes with SSE (`MULPS`, `ADDPS`,
 /// `SHUFPS`, `CMPLTPS`, `MOVMSKPS`), and either descends by calling itself with the offset code
 /// pointer, walks on, or reports hits through the machine's virtual methods (`00c85750`, `00c90940`
 /// array growth, `00cb1600`, `00cc00e0`, `00cc01c0` and the `00e65ee0`-family callees). An opcode
@@ -5480,8 +5545,58 @@ pub fn fn_00e5f070(e: &mut Engine, this: Ptr, sink: Ptr, code: Ptr, bounds: Ptr)
                         pc = 0x00e5f97d;
                         continue;
                     } // 00e5f096
-                    ecx = u32::from(MOPP_OPCODE_MAP[eax as usize]); // 00e5f09c
-                    pc = JUMP_TABLE_00E5F070[ecx as usize]; // 00e5f0a3
+                    ecx = match eax {
+                        0 => 0,
+                        1..=4 => 1,
+                        5 => 2,
+                        6 => 3,
+                        7 => 4,
+                        8 | 12..=15 | 29..=31 | 44..=47 | 84..=95 => 22,
+                        9 => 5,
+                        10 => 6,
+                        11 => 7,
+                        16..=18 => 8,
+                        19..=28 => 9,
+                        32..=34 => 10,
+                        35..=37 => 11,
+                        38..=40 => 12,
+                        41..=43 => 13,
+                        48..=79 => 14,
+                        80 => 15,
+                        81 => 16,
+                        82 => 17,
+                        83 => 18,
+                        96..=99 => 19,
+                        100..=103 => 20,
+                        104..=107 => 21,
+                        _ => unreachable!(),
+                    }; // 00e5f09c
+                    pc = match ecx {
+                        0 => 0x00e5_fa79,
+                        1 => 0x00e5_f7a4,
+                        2 => 0x00e5_f762,
+                        3 => 0x00e5_f76f,
+                        4 => 0x00e5_f785,
+                        5 => 0x00e5_f7f6,
+                        6 => 0x00e5_f83b,
+                        7 => 0x00e5_f889,
+                        8 => 0x00e5_f0dd,
+                        9 => 0x00e5_f0aa,
+                        10 => 0x00e5_f145,
+                        11 => 0x00e5_f1a3,
+                        12 => 0x00e5_f652,
+                        13 => 0x00e5_f5f7,
+                        14 => 0x00e5_fa31,
+                        15 => 0x00e5_f9e3,
+                        16 => 0x00e5_f9e9,
+                        17 => 0x00e5_f9f8,
+                        18 => 0x00e5_fa10,
+                        19 => 0x00e5_f8e9,
+                        20 => 0x00e5_f8f9,
+                        21 => 0x00e5_f912,
+                        22 => 0x00e5_f97d,
+                        _ => unreachable!(),
+                    }; // 00e5f0a3
                     continue;
                 }
                 0x00e5f0aa => {
@@ -7064,14 +7179,6 @@ pub fn fn_00e5f070(e: &mut Engine, this: Ptr, sink: Ptr, code: Ptr, bounds: Ptr)
     })
 }
 
-/// The jump table of the dispatch at `00e5fb7e` in the exe's code section (the engine does not map
-/// code, so the block addresses are copied here).
-const JUMP_TABLE_00E5FB50: [u32; 23] = [
-    0x00e60571, 0x00e6029c, 0x00e6025a, 0x00e60267, 0x00e6027d, 0x00e602ee, 0x00e60333, 0x00e60381,
-    0x00e5fbb8, 0x00e5fb85, 0x00e5fc1c, 0x00e5fc7a, 0x00e6013b, 0x00e600e0, 0x00e60529, 0x00e604db,
-    0x00e604e1, 0x00e604f0, 0x00e60508, 0x00e603e1, 0x00e603f1, 0x00e6040a, 0x00e60475,
-];
-
 #[allow(
     unused_assignments,
     unused_variables,
@@ -7083,8 +7190,8 @@ const JUMP_TABLE_00E5FB50: [u32; 23] = [
 // Translated from 00e5fb50 (decompiled, FalloutNV.exe 1.4.0.525)
 /// MOPP code interpreter (thiscall, `RET 0xc`: `this` the machine, `sink`, `code` (the address of the
 /// current code byte) and `bounds` (the 32 bytes of query data)): each step dispatches on the code
-/// byte (values up to 0x6b through a byte map and a 23-entry jump table in the exe's data, read
-/// from memory), tests the query against the node's split planes with SSE (`MULPS`, `ADDPS`,
+/// byte (values up to 0x6b through a byte map and a 23-entry jump table written as `match`es
+/// on the code byte and the case), tests the query against the node's split planes with SSE (`MULPS`, `ADDPS`,
 /// `SHUFPS`, `CMPLTPS`, `MOVMSKPS`), and either descends by calling itself with the offset code
 /// pointer, walks on, or reports hits through the machine's virtual methods (`00c85750`, `00c90940`
 /// array growth, `00cb1600`, `00cc00e0`, `00cc01c0` and the `00e65ee0`-family callees). An opcode
@@ -7137,8 +7244,58 @@ pub fn fn_00e5fb50(e: &mut Engine, this: Ptr, sink: Ptr, code: Ptr, bounds: Ptr)
                         pc = 0x00e60475;
                         continue;
                     } // 00e5fb71
-                    ecx = u32::from(MOPP_OPCODE_MAP[eax as usize]); // 00e5fb77
-                    pc = JUMP_TABLE_00E5FB50[ecx as usize]; // 00e5fb7e
+                    ecx = match eax {
+                        0 => 0,
+                        1..=4 => 1,
+                        5 => 2,
+                        6 => 3,
+                        7 => 4,
+                        8 | 12..=15 | 29..=31 | 44..=47 | 84..=95 => 22,
+                        9 => 5,
+                        10 => 6,
+                        11 => 7,
+                        16..=18 => 8,
+                        19..=28 => 9,
+                        32..=34 => 10,
+                        35..=37 => 11,
+                        38..=40 => 12,
+                        41..=43 => 13,
+                        48..=79 => 14,
+                        80 => 15,
+                        81 => 16,
+                        82 => 17,
+                        83 => 18,
+                        96..=99 => 19,
+                        100..=103 => 20,
+                        104..=107 => 21,
+                        _ => unreachable!(),
+                    }; // 00e5fb77
+                    pc = match ecx {
+                        0 => 0x00e6_0571,
+                        1 => 0x00e6_029c,
+                        2 => 0x00e6_025a,
+                        3 => 0x00e6_0267,
+                        4 => 0x00e6_027d,
+                        5 => 0x00e6_02ee,
+                        6 => 0x00e6_0333,
+                        7 => 0x00e6_0381,
+                        8 => 0x00e5_fbb8,
+                        9 => 0x00e5_fb85,
+                        10 => 0x00e5_fc1c,
+                        11 => 0x00e5_fc7a,
+                        12 => 0x00e6_013b,
+                        13 => 0x00e6_00e0,
+                        14 => 0x00e6_0529,
+                        15 => 0x00e6_04db,
+                        16 => 0x00e6_04e1,
+                        17 => 0x00e6_04f0,
+                        18 => 0x00e6_0508,
+                        19 => 0x00e6_03e1,
+                        20 => 0x00e6_03f1,
+                        21 => 0x00e6_040a,
+                        22 => 0x00e6_0475,
+                        _ => unreachable!(),
+                    }; // 00e5fb7e
                     continue;
                 }
                 0x00e5fb85 => {

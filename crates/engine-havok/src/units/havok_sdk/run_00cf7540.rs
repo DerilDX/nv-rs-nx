@@ -899,9 +899,57 @@ pub fn fn_00cf86f0(e: &mut Engine, this: Ptr) -> bool {
     second == first
 }
 
+// Translated from 00cf74b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, two words `first` and `second`, each the address of a
+/// record; descriptions, not confirmed): a "less than" test (code at `00cf7b59` stores its
+/// address). Records whose first words are equal compare by the word at `+8`: the answer is 1
+/// when `second`'s is below `first`'s (unsigned). Otherwise they compare by the word at `+0xd4`
+/// of the object each first word points to: 1 when `first`'s is below `second`'s (unsigned).
+/// Answers 1 or 0 (`SBB`/`NEG`).
+pub fn fn_00cf74b0(e: &mut Engine, first: Ptr, second: Ptr) -> u32 {
+    let first_object = e.mem.u32(first.addr());
+    let second_object = e.mem.u32(second.addr());
+    if first_object == second_object {
+        let first_key = e.mem.u32(first.addr().wrapping_add(8));
+        let second_key = e.mem.u32(second.addr().wrapping_add(8));
+        return u32::from(second_key < first_key);
+    }
+    let first_key = e.mem.u32(first_object.wrapping_add(0xd4));
+    let second_key = e.mem.u32(second_object.wrapping_add(0xd4));
+    u32::from(first_key < second_key)
+}
+
+// Translated from 00cf74e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, three words `out`, `first`, `second`; descriptions, not
+/// confirmed): a "less than" test that stores its answer as a byte at `out` (code at `00cf7c5b`
+/// stores its address) and answers `out`. For each record the key is the 16-bit word at `+0x20`
+/// of the object at `+0xcc` of the object the record's word at `+4` points to; the answer is 1
+/// when `first`'s key is below `second`'s (unsigned). Equal keys are decided the same way on the
+/// words at `+8` of the records; equal again is 0.
+pub fn fn_00cf74e0(e: &mut Engine, out: Ptr, first: Ptr, second: Ptr) -> u32 {
+    let key = |e: &Engine, record: u32, offset: u32| -> u32 {
+        let object = e.mem.u32(record.wrapping_add(offset));
+        let group = e.mem.u32(object.wrapping_add(0xcc));
+        u32::from(e.mem.u16(group.wrapping_add(0x20)))
+    };
+    let first_key = key(e, first.addr(), 4);
+    let second_key = key(e, second.addr(), 4);
+    let less = if first_key < second_key {
+        true
+    } else if first_key != second_key {
+        false
+    } else {
+        key(e, first.addr(), 8) < key(e, second.addr(), 8)
+    };
+    e.mem.set_u8(out.addr(), u8::from(less));
+    out.addr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00cf74b0, fn_00cf74b0(Ptr, Ptr) -> u32),
+        entry!(0x00cf74e0, fn_00cf74e0(Ptr, Ptr, Ptr) -> u32),
         entry!(0x00cf_7540, fn_00cf7540(Ptr, u32, u32, u32, u32)),
         entry!(0x00cf_75c0, fn_00cf75c0(Ptr, u32) -> Ptr),
         entry!(0x00cf_75f0, fn_00cf75f0(Ptr)),
@@ -922,6 +970,90 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// A record whose first word is `object` and whose word at `+8` is `key`.
+    fn record_00cf74b0(e: &mut Engine, object: u32, key: u32) -> u32 {
+        let record = e.mem.alloc(0x10);
+        e.mem.set_u32(record, object);
+        e.mem.set_u32(record + 8, key);
+        record
+    }
+
+    #[test]
+    fn fn_00cf74b0_compares_the_second_words_when_the_first_words_match() {
+        let mut e = Engine::new();
+        let shared = e.mem.alloc(0x100);
+        let low = record_00cf74b0(&mut e, shared, 3);
+        let high = record_00cf74b0(&mut e, shared, 5);
+        assert_eq!(e.call(0x00cf_74b0, &args![high, low]).u32(), 1);
+        assert_eq!(e.call(0x00cf_74b0, &args![low, high]).u32(), 0);
+        assert_eq!(e.call(0x00cf_74b0, &args![low, low]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00cf74b0_compares_the_objects_words_when_the_first_words_differ() {
+        let mut e = Engine::new();
+        let small = e.mem.alloc(0x100);
+        let large = e.mem.alloc(0x100);
+        e.mem.set_u32(small + 0xd4, 1);
+        e.mem.set_u32(large + 0xd4, 0x8000_0000);
+        let first = record_00cf74b0(&mut e, small, 9);
+        let second = record_00cf74b0(&mut e, large, 0);
+        assert_eq!(e.call(0x00cf_74b0, &args![first, second]).u32(), 1);
+        assert_eq!(e.call(0x00cf_74b0, &args![second, first]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00cf74b0_treats_equal_object_words_as_not_less() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(0x100);
+        let b = e.mem.alloc(0x100);
+        e.mem.set_u32(a + 0xd4, 7);
+        e.mem.set_u32(b + 0xd4, 7);
+        let first = record_00cf74b0(&mut e, a, 0);
+        let second = record_00cf74b0(&mut e, b, 0);
+        assert_eq!(e.call(0x00cf_74b0, &args![first, second]).u32(), 0);
+    }
+
+    /// A record with two objects (at `+4` and `+8`) whose groups hold the keys `first_key` and
+    /// `second_key` as the 16-bit word at `+0x20`.
+    fn keyed_record_00cf74e0(e: &mut Engine, first_key: u16, second_key: u16) -> u32 {
+        let record = e.mem.alloc(0x10);
+        for (offset, key) in [(4, first_key), (8, second_key)] {
+            let object = e.mem.alloc(0x100);
+            let group = e.mem.alloc(0x40);
+            e.mem.set_u32(object + 0xcc, group);
+            e.mem.set_u16(group + 0x20, key);
+            e.mem.set_u32(record + offset, object);
+        }
+        record
+    }
+
+    #[test]
+    fn fn_00cf74e0_decides_by_the_first_keys() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(8);
+        let low = keyed_record_00cf74e0(&mut e, 1, 9);
+        let high = keyed_record_00cf74e0(&mut e, 2, 0);
+        assert_eq!(e.call(0x00cf_74e0, &args![out, low, high]).u32(), out);
+        assert_eq!(e.mem.u8(out), 1);
+        e.call(0x00cf_74e0, &args![out, high, low]);
+        assert_eq!(e.mem.u8(out), 0);
+    }
+
+    #[test]
+    fn fn_00cf74e0_breaks_a_tie_with_the_second_keys() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(8);
+        let low = keyed_record_00cf74e0(&mut e, 4, 5);
+        let high = keyed_record_00cf74e0(&mut e, 4, 6);
+        e.call(0x00cf_74e0, &args![out, low, high]);
+        assert_eq!(e.mem.u8(out), 1);
+        e.call(0x00cf_74e0, &args![out, high, low]);
+        assert_eq!(e.mem.u8(out), 0);
+        e.call(0x00cf_74e0, &args![out, low, low]);
+        assert_eq!(e.mem.u8(out), 0);
+    }
 
     type Calls = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
 

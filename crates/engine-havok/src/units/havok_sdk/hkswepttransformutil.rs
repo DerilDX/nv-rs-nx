@@ -443,6 +443,128 @@ pub fn hk_swept_transform_util_warp_to_rotation(e: &mut Engine, rotation: Ptr, m
     );
 }
 
+// Translated from 00cf1d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkSweptTransformUtil::freezeMotionState` (Xbox PDB name from the engine map): cdecl, two stack
+/// words (nothing popped): the float `time` and `state`, a motion state (transform: three columns
+/// at +0, +0x10, +0x20 and the translation at +0x30; swept transform: centres of mass at +0x40
+/// and +0x50 whose fourth lanes at +0x4c and +0x5c are the start time and the inverse interval,
+/// rotations at +0x60 and +0x70, the local centre at +0x80). The x87 steps compute in extended
+/// precision and every store to memory is rounded to a float, as the exe does.
+///
+/// `T` is `time`, or the start time at +0x4c when that is not below `time` (an unordered compare
+/// counts as not below). The blend factor is `t = (T - start) * inverse interval`, rounded to a
+/// float. The sum `s` of the two rotations (`+0x70` plus `+0x60`, lane by lane) is scaled by
+/// `g = L * (c_d - ((len2 * c_c) * L) * L)` with `L = c_b - c_a * len2` (each rounded to a float
+/// where the exe stores it; `len2` the squared length of `s`; the doubles `c_a` at `010924a8`,
+/// `c_b` at `0101de30`, `c_c` at `01011588` and `c_d` at `01016ff0`). With `u = 2 * t`: when `t` is
+/// below the float `0.5` at `01016248` the rotation becomes `(1 - u) * (+0x60) + (g * s) * u`,
+/// otherwise `(1 - (u - 1.0)) * (g * s) + (u - 1.0) * (the old +0x70)` (the double 1.0 at
+/// `01012070`), the vector of four 1.0 being `010ec7f0`. It is normalised with the `RSQRTSS`
+/// refinement of `inverse_length` and stored at both +0x60 and +0x70. The centre at +0x40
+/// becomes `(1 - t) * (+0x40) + t * (+0x50)`, with the start time `T` stored at +0x4c; the
+/// centre at +0x50 becomes that same vector with 0.0 at +0x5c. Then `00cb2d90` rebuilds the three
+/// columns of the transform from the quaternion at +0x70, and the translation at +0x30 is the
+/// centre at +0x50 minus the three columns weighted by the first three lanes of +0x80
+/// (`(y * column1 + x * column0) + z * column2`).
+pub fn hk_swept_transform_util_freeze_motion_state(e: &mut Engine, time: f32, state: u32) {
+    use crate::units::havok_sdk::hkpsphereshape::{
+        inverse_length, load_vec, shufps, store_vec, Vec4,
+    };
+
+    // The start time in the float at +0x4c decides what `T` is.
+    let start_bits = e.mem.u32(state + 0x4c);
+    let start = x87_load32(x87_quiet_bits(start_bits));
+    let requested = x87_load32(time.to_bits());
+    let time_value = if start < requested {
+        requested
+    } else {
+        x87_load32(x87_store32(start))
+    };
+    let elapsed = x87_sub(time_value, x87_m32(e.mem.u32(state + 0x4c)));
+    let factor_bits = x87_store32(x87_mul(elapsed, x87_m32(e.mem.u32(state + 0x5c))));
+
+    // The two rotations added, and the squared length of the sum.
+    let old_rotation = load_vec(e, state + 0x70);
+    let first_rotation = load_vec(e, state + 0x60);
+    let sum: Vec4 = std::array::from_fn(|lane| old_rotation[lane] + first_rotation[lane]);
+    let squares: Vec4 = std::array::from_fn(|lane| sum[lane] * sum[lane]);
+    let swapped = shufps(squares, squares, 0x4e);
+    let pairs: Vec4 = std::array::from_fn(|lane| swapped[lane] + squares[lane]);
+    let swapped = shufps(pairs, pairs, 0xb1);
+    let length_squared = swapped[0] + pairs[0];
+    store_vec(e, state + 0x70, sum);
+
+    // The scale of the sum (x87 steps with float stores in between).
+    let constant_a: f64 = e.global(0x0109_24a8);
+    let constant_b: f64 = e.global(0x0101_de30);
+    let constant_c: f64 = e.global(0x0101_1588);
+    let constant_d: f64 = e.global(0x0101_6ff0);
+    let length_loaded = x87_load32(length_squared.to_bits());
+    let guess_bits = x87_store32(x87_sub(constant_b, x87_mul(constant_a, length_loaded)));
+    let half_length = x87_mul(length_loaded, constant_c);
+    let guess = x87_load32(guess_bits);
+    let cubed = x87_mul(x87_mul(half_length, guess), guess);
+    let scale_bits = x87_store32(x87_mul(x87_sub(constant_d, cubed), guess));
+    let scale = f32::from_bits(scale_bits);
+    let scaled: Vec4 = std::array::from_fn(|lane| scale * sum[lane]);
+
+    // The blend of the rotation.
+    let half = x87_load32(e.global::<u32>(0x0101_6248));
+    let factor = x87_load32(factor_bits);
+    store_vec(e, state + 0x70, scaled);
+    let doubled = x87_add(factor, factor);
+    let ones = load_vec(e, 0x010e_c7f0);
+    let blended: Vec4 = if factor < half {
+        let weight = f32::from_bits(x87_store32(doubled));
+        std::array::from_fn(|lane| {
+            (ones[lane] - weight) * first_rotation[lane] + scaled[lane] * weight
+        })
+    } else {
+        let one: f64 = e.global(0x0101_2070);
+        let weight = f32::from_bits(x87_store32(x87_sub(doubled, one)));
+        std::array::from_fn(|lane| {
+            (ones[lane] - weight) * scaled[lane] + weight * old_rotation[lane]
+        })
+    };
+    store_vec(e, state + 0x70, blended);
+
+    // Normalise it and keep it as both rotations.
+    let rotation = load_vec(e, state + 0x70);
+    let squares: Vec4 = std::array::from_fn(|lane| rotation[lane] * rotation[lane]);
+    let swapped = shufps(squares, squares, 0x4e);
+    let pairs: Vec4 = std::array::from_fn(|lane| swapped[lane] + squares[lane]);
+    let swapped = shufps(pairs, pairs, 0xb1);
+    let inverse = inverse_length(e, swapped[0] + pairs[0]);
+    let normalised: Vec4 = std::array::from_fn(|lane| inverse * rotation[lane]);
+    store_vec(e, state + 0x70, normalised);
+    let centre_start = load_vec(e, state + 0x40);
+    store_vec(e, state + 0x60, normalised);
+
+    // The centres of mass.
+    let weight = f32::from_bits(factor_bits);
+    let centre_end = load_vec(e, state + 0x50);
+    let centre: Vec4 = std::array::from_fn(|lane| {
+        (ones[lane] - weight) * centre_start[lane] + weight * centre_end[lane]
+    });
+    store_vec(e, state + 0x40, centre);
+    e.mem.set_u32(state + 0x4c, x87_store32(time_value));
+    store_vec(e, state + 0x50, centre);
+    e.mem.set_u32(state + 0x5c, 0);
+
+    // The transform: columns from the quaternion, then the translation.
+    e.call(0x00cb_2d90, &args![state, state + 0x70]);
+    let local = load_vec(e, state + 0x80);
+    let column0 = load_vec(e, state);
+    let column1 = load_vec(e, state + 0x10);
+    let column2 = load_vec(e, state + 0x20);
+    let end = load_vec(e, state + 0x50);
+    let moved: Vec4 = std::array::from_fn(|lane| {
+        end[lane]
+            - ((local[1] * column1[lane] + local[0] * column0[lane]) + local[2] * column2[lane])
+    });
+    store_vec(e, state + 0x30, moved);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -473,6 +595,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00cf_2160,
             hk_swept_transform_util_warp_to_rotation(Ptr, Ptr)
+        ),
+        entry!(
+            0x00cf_1d50,
+            hk_swept_transform_util_freeze_motion_state(f32, u32)
         ),
     ]
 }
@@ -903,5 +1029,130 @@ mod tests_swept {
         // fourth lane adds 0.
         assert_eq!(load_lanes(&e, state + 0x40), [5.0, 10.0, 15.0, 1.0]);
         assert_eq!(load_lanes(&e, state + 0x50), [9.0, 14.0, 19.0, 0.5]);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn lanes(e: &Engine, at: u32) -> [f32; 4] {
+        std::array::from_fn(|lane| e.mem.f32(at + 4 * lane as u32))
+    }
+
+    fn set_lanes(e: &mut Engine, at: u32, values: [f32; 4]) {
+        for (lane, value) in values.iter().enumerate() {
+            e.mem.set_f32(at + 4 * lane as u32, *value);
+        }
+    }
+
+    /// The constants the function reads: c_a = 0, c_b = 1, c_c = 0.5, c_d = 1.5 (so the scale is
+    /// `1.5 - 0.5 * len2`), the double 1.0, the float 0.5, the vector of ones and the `inverse_length`
+    /// constants 0, 3 and 0.5. `cb2d90` is a double that writes the identity columns and notes the
+    /// quaternion address it was given.
+    fn freeze_engine() -> (Engine, Rc<RefCell<Vec<Vec<u32>>>>) {
+        let mut e = Engine::new();
+        for page in [
+            0x0109_2000,
+            0x0101_d000,
+            0x0101_1000,
+            0x0101_6000,
+            0x0101_2000,
+            0x010e_c000,
+            0x0101_7000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(0x0109_24a8, 0.0f64);
+        e.set_global(0x0101_de30, 1.0f64);
+        e.set_global(0x0101_1588, 0.5f64);
+        e.set_global(0x0101_6ff0, 1.5f64);
+        e.set_global(0x0101_2070, 1.0f64);
+        e.set_global(0x0101_6248, 0.5f32);
+        e.set_global(0x0101_1d78, 0.0f32);
+        e.set_global(0x0101_7718, 3.0f32);
+        for lane in 0..4u32 {
+            e.set_global(0x010e_c7f0 + 4 * lane, 1.0f32);
+        }
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register_double(0x00cb_2d90, move |e, a| {
+            log.borrow_mut().push(a.to_vec());
+            set_lanes(e, a[0], [1.0, 0.0, 0.0, 0.0]);
+            set_lanes(e, a[0] + 0x10, [0.0, 1.0, 0.0, 0.0]);
+            set_lanes(e, a[0] + 0x20, [0.0, 0.0, 1.0, 0.0]);
+            Ret::default()
+        });
+        (e, seen)
+    }
+
+    /// A motion state: start time 1.0 and inverse interval `inverse_interval` in the fourth lanes of
+    /// the two centres of mass, the given rotations, the local centre (10, 20, 30).
+    fn motion_state(
+        e: &mut Engine,
+        inverse_interval: f32,
+        old_rotation: [f32; 4],
+        first_rotation: [f32; 4],
+    ) -> u32 {
+        let state = e.mem.alloc(0x90);
+        set_lanes(e, state + 0x40, [4.0, 0.0, 0.0, 1.0]);
+        set_lanes(e, state + 0x50, [8.0, 0.0, 0.0, inverse_interval]);
+        set_lanes(e, state + 0x60, first_rotation);
+        set_lanes(e, state + 0x70, old_rotation);
+        set_lanes(e, state + 0x80, [10.0, 20.0, 30.0, 0.0]);
+        state
+    }
+
+    fn assert_close(actual: [f32; 4], expected: [f32; 4]) {
+        for lane in 0..4 {
+            assert!(
+                (actual[lane] - expected[lane]).abs() < 1e-5,
+                "{actual:?} against {expected:?}"
+            );
+        }
+    }
+
+    /// Factor 0.25 (below 0.5): the rotations (2,0,0,0) and (-1,0,0,0) add to (1,0,0,0), which is
+    /// scaled by 1 and blended with weight 0.5 against the first rotation into zero.
+    #[test]
+    fn hk_swept_transform_util_freeze_motion_state_blends_below_the_half() {
+        let (mut e, seen) = freeze_engine();
+        let state = motion_state(&mut e, 0.25, [2.0, 0.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0]);
+        e.call(0x00cf_1d50, &args![2.0f32, state]);
+        // The blended rotation is zero, its inverse length is 0 and so the rotations become zero.
+        assert_eq!(lanes(&e, state + 0x60), [0.0; 4]);
+        assert_eq!(lanes(&e, state + 0x70), [0.0; 4]);
+        // The centre: 0.75 * (4,0,0) + 0.25 * (8,0,0) = (5,0,0); time 2.0 and 0.0 in the fourth lanes.
+        assert_eq!(lanes(&e, state + 0x40), [5.0, 0.0, 0.0, 2.0]);
+        assert_eq!(lanes(&e, state + 0x50), [5.0, 0.0, 0.0, 0.0]);
+        // Identity columns: translation = centre - (10, 20, 30).
+        assert_eq!(lanes(&e, state + 0x30), [-5.0, -20.0, -30.0, 0.0]);
+        assert_eq!(*seen.borrow(), vec![vec![state, state + 0x70]]);
+    }
+
+    /// Factor 0.75: the other blend, (1 - 0.5) * (1,0,0,0) + 0.5 * (2,0,0,0) = (1.5,0,0,0), normalised.
+    #[test]
+    fn hk_swept_transform_util_freeze_motion_state_blends_from_the_half_up() {
+        let (mut e, _) = freeze_engine();
+        let state = motion_state(&mut e, 0.75, [2.0, 0.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0]);
+        e.call(0x00cf_1d50, &args![2.0f32, state]);
+        assert_close(lanes(&e, state + 0x60), [1.0, 0.0, 0.0, 0.0]);
+        assert_close(lanes(&e, state + 0x70), [1.0, 0.0, 0.0, 0.0]);
+        // 0.25 * (4,0,0) + 0.75 * (8,0,0) = (7,0,0).
+        assert_eq!(lanes(&e, state + 0x40), [7.0, 0.0, 0.0, 2.0]);
+        assert_eq!(lanes(&e, state + 0x30), [-3.0, -20.0, -30.0, 0.0]);
+    }
+
+    /// A requested time below the start time keeps the start time, and the factor becomes 0.
+    #[test]
+    fn hk_swept_transform_util_freeze_motion_state_keeps_the_later_start_time() {
+        let (mut e, _) = freeze_engine();
+        let state = motion_state(&mut e, 0.5, [1.0, 0.0, 0.0, 0.0], [0.0; 4]);
+        e.call(0x00cf_1d50, &args![0.5f32, state]);
+        // T = 1.0 (the start time), t = 0: the centre keeps its start value and the time stays 1.0.
+        assert_eq!(lanes(&e, state + 0x40), [4.0, 0.0, 0.0, 1.0]);
+        assert_eq!(lanes(&e, state + 0x50), [4.0, 0.0, 0.0, 0.0]);
     }
 }

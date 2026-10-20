@@ -1018,6 +1018,56 @@ pub fn bhk_ni_collision_object_get_r_t_t_i(_e: &mut Engine) -> u32 {
     0x0126_7b70
 }
 
+// Translated from 00c6b670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkNiCollisionObject::UpdateWorldData` (Xbox PDB; the vtable `010c4314` lists this address at
+/// slot `0x90`, where the Xbox PDB has `UpdateWorldData`; Ghidra never created the function and
+/// holds it in the body of `00c65890`, ghidra_gaps.tsv). Thiscall `(this)` with one stack word that
+/// is never read (`RET 4`). Reads the word at `+0x2c0` of the thread block (`e.tls()`; the one
+/// `Synchronize` sets) and works on `m_uFlags`:
+///
+/// - Mode 3: skips straight to the final step.
+/// - Bit 6 (`bReset`) set: unless the mode is 2, calls virtual slots `0xac` and `0xa8` (the Xbox
+///   PDB lists `ClearVelocities` and `NitohkTransform`) and clears bit 6.
+/// - Otherwise, bit 0 (`bActive`) set: asks slot `0xb4` (`QKeyframe`); when it answers true and
+///   the mode (read again) is not 2, calls slot `0xa8`; when it answers false and the mode (read
+///   again) is not 1, calls slot `0xa4` (`hktoNiTransform`).
+/// - Anything that did not return above ends with `00a68bf0` (thiscall) on the scene object
+///   (`m_pkSceneObject`) when it is not null.
+pub fn bhk_ni_collision_object_update_world_data(
+    e: &mut Engine,
+    this: Ptr<BhkNiCollisionObject>,
+    _unused_1: u32,
+) {
+    let thread_word = e.tls() + THREAD_SYNCHRONIZE_ARGUMENT;
+    let mode = e.mem.u32(thread_word);
+    if mode != 3 {
+        let flags = e.get(this, BhkNiCollisionObject::m_uFlags);
+        if flags as u8 & 0x40 != 0 {
+            if mode != 2 {
+                e.vcall(this.addr(), 0xac, &args![]);
+                e.vcall(this.addr(), 0xa8, &args![]);
+                let flags = e.get(this, BhkNiCollisionObject::m_uFlags);
+                e.set(this, BhkNiCollisionObject::m_uFlags, flags & 0xffbf);
+                return;
+            }
+        } else if e.get(this, BhkNiCollisionObject::m_uFlags) as u8 & 1 != 0 {
+            if e.vcall(this.addr(), 0xb4, &args![]).bool() {
+                if e.mem.u32(thread_word) != 2 {
+                    e.vcall(this.addr(), 0xa8, &args![]);
+                    return;
+                }
+            } else if e.mem.u32(thread_word) != 1 {
+                e.vcall(this.addr(), 0xa4, &args![]);
+                return;
+            }
+        }
+    }
+    let scene_object = e.get(this, BhkNiCollisionObject::m_pkSceneObject);
+    if !scene_object.is_null() {
+        e.call(NI_AV_OBJECT_PREPARE_UPDATE, &args![scene_object]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1100,6 +1150,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00c6c430,
             bhk_ni_collision_object_add_viewer_strings(Ptr<BhkNiCollisionObject>, Ptr)
+        ),
+        entry!(
+            0x00c6_b670,
+            bhk_ni_collision_object_update_world_data(Ptr<BhkNiCollisionObject>, u32)
         ),
     ]
 }
@@ -2163,5 +2217,91 @@ mod tests {
     fn bhk_ni_collision_object_get_r_t_t_i_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c6_b940, &args![]).u32(), 0x0126_7b70);
+    }
+}
+
+#[cfg(test)]
+mod a05_tests {
+    use super::*;
+
+    /// Calls slot-by-slot: returns the addresses called, in order, of the slots and of `00a68bf0`.
+    fn update_world_data_calls(
+        flags: u16,
+        mode: u32,
+        keyframe: u32,
+        scene_object: u32,
+    ) -> (Vec<u32>, u16) {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x14);
+        let table = e.mem.alloc(0x100);
+        for slot in [0xa4u32, 0xa8, 0xac, 0xb4] {
+            e.mem.set_u32(table + slot, 0x7000_0000 + slot);
+            e.register(0x7000_0000 + slot, |_, _| Ret::default());
+        }
+        e.register_double(0x7000_00b4, move |_, _| Ret {
+            eax: keyframe,
+            ..Ret::default()
+        });
+        e.register(NI_AV_OBJECT_PREPARE_UPDATE, |_, _| Ret::default());
+        e.mem.set_u32(this, table);
+        e.mem.set_u32(this + 8, scene_object);
+        e.mem.set_u16(this + 0xc, flags);
+        let word = e.tls() + THREAD_SYNCHRONIZE_ARGUMENT;
+        e.mem.set_u32(word, mode);
+        e.call_log = Some(vec![]);
+        e.call(0x00c6_b670, &args![this, 0u32]);
+        let called = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .skip(1)
+            .map(|(address, _)| address)
+            .collect();
+        (called, e.mem.u16(this + 0xc))
+    }
+
+    const PREPARE: u32 = NI_AV_OBJECT_PREPARE_UPDATE;
+
+    #[test]
+    fn update_world_data_with_the_reset_flag_clears_it_after_the_velocity_and_transform_slots() {
+        let (called, flags) = update_world_data_calls(0x0041, 1, 0, 0x5000);
+        assert_eq!(called, vec![0x7000_00ac, 0x7000_00a8]);
+        assert_eq!(flags, 0x0001);
+    }
+
+    #[test]
+    fn update_world_data_with_the_reset_flag_in_mode_2_or_3_only_prepares_the_scene_object() {
+        for mode in [2, 3] {
+            let (called, flags) = update_world_data_calls(0x0041, mode, 0, 0x5000);
+            assert_eq!(called, vec![PREPARE]);
+            assert_eq!(flags, 0x0041);
+        }
+    }
+
+    #[test]
+    fn update_world_data_for_an_active_keyframed_object_calls_slot_a8_unless_mode_2() {
+        let (called, _) = update_world_data_calls(0x0001, 1, 1, 0x5000);
+        assert_eq!(called, vec![0x7000_00b4, 0x7000_00a8]);
+        let (called, _) = update_world_data_calls(0x0001, 2, 1, 0x5000);
+        assert_eq!(called, vec![0x7000_00b4, PREPARE]);
+        let (called, _) = update_world_data_calls(0x0001, 3, 1, 0x5000);
+        assert_eq!(called, vec![PREPARE]);
+    }
+
+    #[test]
+    fn update_world_data_for_an_active_free_object_calls_slot_a4_unless_mode_1() {
+        let (called, _) = update_world_data_calls(0x0001, 0, 0, 0x5000);
+        assert_eq!(called, vec![0x7000_00b4, 0x7000_00a4]);
+        let (called, _) = update_world_data_calls(0x0001, 1, 0, 0x5000);
+        assert_eq!(called, vec![0x7000_00b4, PREPARE]);
+    }
+
+    #[test]
+    fn update_world_data_for_an_inactive_object_only_prepares_a_scene_object() {
+        let (called, _) = update_world_data_calls(0x0004, 0, 0, 0x5000);
+        assert_eq!(called, vec![PREPARE]);
+        let (called, _) = update_world_data_calls(0x0004, 0, 0, 0);
+        assert!(called.is_empty());
     }
 }

@@ -784,6 +784,21 @@ pub fn hkp_world_callback_util_fire_contact_process(
     );
 }
 
+// Translated from 00d01850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpWorldCallbackUtil::fireContactPointAdded` (Xbox PDB name from the engine map): cdecl, two stack
+/// words (nothing popped): `world` and `event`. Clears the word at +0xc of `event`, then runs the
+/// shared loop of the `fire...` functions over the world's array at +0x1a0 (the contact listeners):
+/// slot `0x10` of every non-null listener, last to first, with `event`, between the profiling
+/// records `010cca44` and the end record, and finally the removal of the null entries.
+pub fn hkp_world_callback_util_fire_contact_point_added(
+    e: &mut Engine,
+    world: Ptr<HkpWorld>,
+    event: u32,
+) {
+    e.mem.set_u32(event + 0xc, 0);
+    fire_listeners(e, world, 0x1a0, 0x010c_ca44, 0x10, event);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -894,6 +909,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00d019b0,
             hkp_world_callback_util_fire_contact_process(Ptr<HkpWorld>, Ptr)
+        ),
+        entry!(
+            0x00d0_1850,
+            hkp_world_callback_util_fire_contact_point_added(Ptr<HkpWorld>, u32)
         ),
     ]
 }
@@ -1812,5 +1831,67 @@ mod havok_fire_tests {
         let flushes = flushed(&e);
         assert_eq!(flushes.len(), 1);
         assert_eq!(flushes[0].0, FLUSH_PENDING_BODY_OPERATIONS);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use crate::units::havok_sdk::hkpworld::profiling_support::{labels, profiling_engine};
+
+    /// A listener whose slot 0x10 (the contact callback) is a double that logs (listener, event).
+    #[test]
+    fn hkp_world_callback_util_fire_contact_point_added_calls_slot_0x10_of_each_listener() {
+        let (mut e, stream, area) = profiling_engine(8);
+        let table = e.mem.alloc(0x20);
+        e.mem.set_u32(table + 0x10, 0x0900_0010);
+        let make = |e: &mut Engine| {
+            let object = e.mem.alloc(8);
+            e.mem.set_u32(object, table);
+            object
+        };
+        let first = make(&mut e);
+        let last = make(&mut e);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register_double(0x0900_0010, move |_, a| {
+            log.borrow_mut().push((a[0], a[1]));
+            Ret::default()
+        });
+        let world = e.mem.alloc(0x200);
+        let data = e.mem.alloc(16);
+        for (i, listener) in [first, 0, last].iter().enumerate() {
+            e.mem.set_u32(data + 4 * i as u32, *listener);
+        }
+        e.mem.set_u32(world + 0x1a0, data);
+        e.mem.set_i32(world + 0x1a4, 3);
+        let event = e.mem.alloc(0x20);
+        e.mem.set_u32(event + 0xc, 0x99);
+        e.call(0x00d0_1850, &args![world, event]);
+        assert_eq!(e.mem.u32(event + 0xc), 0);
+        // Last to first; the null entry is skipped and then removed.
+        assert_eq!(*seen.borrow(), vec![(last, event), (first, event)]);
+        assert_eq!(e.mem.i32(world + 0x1a4), 2);
+        assert_eq!(e.mem.u32(data), first);
+        assert_eq!(e.mem.u32(data + 4), last);
+        assert_eq!(
+            labels(&e, stream, area),
+            vec![0x010c_ca44, 0x010c_41f8, 0x010c_ca44, 0x010c_41f8]
+        );
+    }
+
+    /// With no listeners only the event word is cleared.
+    #[test]
+    fn hkp_world_callback_util_fire_contact_point_added_with_no_listeners_clears_the_event_word() {
+        let (mut e, stream, area) = profiling_engine(4);
+        let world = e.mem.alloc(0x200);
+        let event = e.mem.alloc(0x20);
+        e.mem.set_u32(event + 0xc, 0x99);
+        e.call(0x00d0_1850, &args![world, event]);
+        assert_eq!(e.mem.u32(event + 0xc), 0);
+        assert!(labels(&e, stream, area).is_empty());
     }
 }

@@ -30,11 +30,24 @@ pub fn fn_00dfbdf0(e: &mut Engine, object: Ptr, extra: u32) {
     }
 }
 
+// Translated from 00dfbdd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns what it returns (`EAX`). Ghidra made no function here; the address is an immediate operand at 00fc1a69.
+pub fn fn_00dfbdd0(e: &mut Engine, object: u32) -> u32 {
+    e.vcall(object, 0, &args![0u32]).u32()
+}
+// Translated from 00dfbdb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a lone `RET`, so it reads nothing and does nothing. Ghidra made no function here; the address is stored in the data word at 011ba504.
+pub fn fn_00dfbdb0(_e: &mut Engine) {}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00dfbe20, fn_00dfbe20() -> u32),
         entry!(0x00df_bdf0, fn_00dfbdf0(Ptr, u32)),
+        entry!(0x00df_bdd0, fn_00dfbdd0(u32) -> u32),
+        entry!(0x00df_bdb0, fn_00dfbdb0()),
     ]
 }
 
@@ -117,5 +130,40 @@ mod tests_a05 {
         });
         e.call(0x00df_bdf0, &args![object, 7u32]);
         assert_eq!(e.mem.u32(object), 0x010d_f34c);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The virtual function in slot 0 gets the object and the word 0; its answer comes back.
+    #[test]
+    fn fn_00dfbdd0_calls_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(vtable, 0x0900_0002);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register_double(0x0900_0002, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            Ret {
+                eax: 0x77,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(e.call(0x00df_bdd0, &args![object]).u32(), 0x77);
+        assert_eq!(*seen.borrow(), vec![vec![object, 0]]);
+    }
+    #[test]
+    fn fn_00dfbdb0_does_nothing() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00df_bdb0, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

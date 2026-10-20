@@ -218,6 +218,19 @@ pub fn add_references(e: &mut Engine, objects: Ptr, count: i32, stride: u32) {
     }
 }
 
+// Translated from 00c903e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: cdecl, no stack words. Allocates 0x30 bytes through the memory
+/// router's allocator (`00c85750`; virtual function at +4 of the object at router + 0x10), stores
+/// the size as a 16-bit word at +4 and ends with a jump to the constructor `00c90830` (`this` in
+/// `ECX`, no stack words), whose answer it returns. Ghidra made no function here; the address is stored in the data word at 011b0cfc.
+pub fn fn_00c903e0(e: &mut Engine) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let block = e.vcall(allocator, 4, &args![0x30u32]).u32();
+    e.mem.set_u16(block + 4, 0x30);
+    e.call(0x00c9_0830, &args![block]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -231,6 +244,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c9_0360, calc_content_statistics(Ptr, Ptr, Ptr)),
         entry!(0x00c9_0410, set_lock_mode(u32)),
         entry!(0x00c9_0670, add_references(Ptr, i32, u32)),
+        entry!(0x00c9_03e0, fn_00c903e0() -> u32),
     ]
 }
 
@@ -524,5 +538,62 @@ mod tests {
         e.call(0x00c9_0360, &args![0x10u32, 0x20u32, 0u32]);
         e.call(0x00c9_0360, &args![0x10u32, 0x20u32, SKIPPED_CLASS]);
         assert_eq!(*seen.borrow(), vec![vec![0x10, with, 0x20]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The slot of the allocator's vtable (offset 4) that allocates, as a test double.
+    const ALLOCATE_SLOT_DOUBLE: u32 = 0x0900_0001;
+
+    /// A memory router (`00c85750`) whose allocator allocates through a double that logs the
+    /// size it was asked for and answers a zeroed block.
+    fn allocator_engine() -> (Engine, Rc<RefCell<Vec<u32>>>) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, ALLOCATE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&sizes);
+        e.register_double(ALLOCATE_SLOT_DOUBLE, move |e, a| {
+            log.borrow_mut().push(a[1]);
+            Ret {
+                eax: e.mem.alloc(a[1]),
+                ..Ret::default()
+            }
+        });
+        (e, sizes)
+    }
+
+    /// The constructor sees the block with its size stored and its answer is returned.
+    #[test]
+    fn fn_00c903e0_allocates_and_hands_the_block_to_the_constructor() {
+        let (mut e, sizes) = allocator_engine();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register_double(0x00c9_0830, move |e, a| {
+            log.borrow_mut().push((a.to_vec(), e.mem.u16(a[0] + 4)));
+            Ret {
+                eax: 0x1234,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(e.call(0x00c9_03e0, &args![]).u32(), 0x1234);
+        assert_eq!(*sizes.borrow(), vec![0x30]);
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0.len(), 1);
+        assert_eq!(seen[0].1, 0x30);
     }
 }

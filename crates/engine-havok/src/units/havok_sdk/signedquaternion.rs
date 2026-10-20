@@ -539,6 +539,36 @@ pub fn compute_packed_nurbs_offsets(
         .wrapping_add(base)
 }
 
+// Translated from 00e52f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (address held in the static data word at 011be4ac): reads no argument and only returns; how many words its callers push is not confirmed.
+pub fn fn_00e52f10(_e: &mut Engine) {}
+
+// Translated from 00e52f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (address held in the static data word at 011be4b0): reads no argument and only returns; how many words its callers push is not confirmed.
+pub fn fn_00e52f20(_e: &mut Engine) {}
+
+// Translated from 00e52f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (address held in the static data word at 011be4a4): reads no argument and only returns; how many words its callers push is not confirmed.
+pub fn fn_00e52f30(_e: &mut Engine) {}
+
+// Translated from 00e52860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, two words, `source` and `out`; descriptions, not confirmed; the address is in the function table at 011be490): copies the four floats at `source` to `out`, one after the other through the x87 stack (`FLD`/`FSTP`), so a signalling NaN comes out quiet.
+pub fn fn_00e52860(e: &mut Engine, source: Ptr, out: Ptr) {
+    for lane in 0..4u32 {
+        let bits = x87_quiet_bits(e.mem.u32(source.addr() + 4 * lane));
+        e.mem.set_u32(out.addr() + 4 * lane, bits);
+    }
+}
+
+// Translated from 00e52ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, two words, `source` and `out`; descriptions, not confirmed; the address is in the function table at 011be490): the same copy as [`fn_00e52860`].
+pub fn fn_00e52ef0(e: &mut Engine, source: Ptr, out: Ptr) {
+    for lane in 0..4u32 {
+        let bits = x87_quiet_bits(e.mem.u32(source.addr() + 4 * lane));
+        e.mem.set_u32(out.addr() + 4 * lane, bits);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -551,6 +581,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e52c30, fn_00e52c30(Ptr, Ptr)),
         entry!(0x00e52d90, fn_00e52d90(Ptr, Ptr)),
         entry!(0x00e52fa0, compute_packed_nurbs_offsets(u32, Ptr, u32, u32) -> u32),
+        entry!(0x00e52f10, fn_00e52f10()),
+        entry!(0x00e52f20, fn_00e52f20()),
+        entry!(0x00e52f30, fn_00e52f30()),
+        entry!(0x00e52860, fn_00e52860(Ptr, Ptr)),
+        entry!(0x00e52ef0, fn_00e52ef0(Ptr, Ptr)),
     ]
 }
 
@@ -934,5 +969,50 @@ mod tests {
                 .u32(),
             0
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_a07_gap {
+    use super::*;
+
+    #[test]
+    fn fn_00e52f10_only_returns() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e5_2f10, &args![]).u32(), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00e52f20_only_returns() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e5_2f20, &args![]).u32(), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00e52f30_only_returns() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e5_2f30, &args![]).u32(), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_float_copies_quiet_a_signalling_nan() {
+        for function in [0x00e5_2860u32, 0x00e5_2ef0] {
+            let mut e = Engine::new();
+            let source = e.mem.alloc(0x10);
+            let out = e.mem.alloc(0x10);
+            let words = [0x3f80_0000u32, 0x7f80_0001, 0xbf00_0000, 0x7fc0_0000];
+            for (lane, word) in words.into_iter().enumerate() {
+                e.mem.set_u32(source + 4 * lane as u32, word);
+            }
+            e.call(function, &args![source, out]);
+            let copied = [0u32, 1, 2, 3].map(|lane| e.mem.u32(out + 4 * lane));
+            assert_eq!(copied, [0x3f80_0000, 0x7fc0_0001, 0xbf00_0000, 0x7fc0_0000]);
+        }
     }
 }

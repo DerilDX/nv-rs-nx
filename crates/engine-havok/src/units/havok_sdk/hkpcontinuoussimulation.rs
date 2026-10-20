@@ -1408,8 +1408,10 @@ pub fn hkp_continuous_simulation_reset_collision_information_for_entities(
 /// virtual slot `0x18` is called with the entry's two collidables, the input
 /// and the output. The compiler's stack probe (`00ec8660`, 0x3094 bytes) is
 /// not modelled.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_continuous_simulation_process_agent_nn_entries(
     e: &mut Engine,
+    _this: u32,
     entries: u32,
     count: i32,
     input: u32,
@@ -3944,9 +3946,99 @@ pub fn hkp_continuous_simulation_scalar_deleting_destructor(
     }
     this
 }
+
+// Translated from 00d0bc60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, three words `out`, `first`, `second`; descriptions, not
+/// confirmed): a "less than" test stored as a byte at `out` (code in
+/// `hkLs_toiActivateEntitiesAndCheckConstraints` stores its address at `00d0e986`) and answered as
+/// `out`. The byte is 1 when the word at `+0xd4` of `first` is below that of `second`
+/// (unsigned).
+pub fn fn_00d0bc60(e: &mut Engine, out: Ptr, first: Ptr, second: Ptr) -> u32 {
+    let first_key = e.mem.u32(first.addr().wrapping_add(0xd4));
+    let second_key = e.mem.u32(second.addr().wrapping_add(0xd4));
+    e.mem.set_u8(out.addr(), u8::from(first_key < second_key));
+    out.addr()
+}
+
+// Translated from 00d0bc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, three words `out`, `first`, `second`; descriptions, not
+/// confirmed): a "less than" test stored as a byte at `out` (the code at `00d0e963` stores its
+/// address) and answered as `out`. Each argument's word at `+0x30` points to a list whose byte
+/// at `+0x1a` picks one of the pointers from `+4`; the key is the word at `+0xd4` of that
+/// object. The byte is 1 when `first`'s key is below `second`'s (unsigned); equal keys are
+/// decided by comparing the two `+0x30` pointers (unsigned); a larger key is 0.
+pub fn fn_00d0bc80(e: &mut Engine, out: Ptr, first: Ptr, second: Ptr) -> u32 {
+    let key = |e: &Engine, list: u32| -> u32 {
+        let index = u32::from(e.mem.u8(list.wrapping_add(0x1a)));
+        let object = e
+            .mem
+            .u32(list.wrapping_add(index.wrapping_mul(4)).wrapping_add(4));
+        e.mem.u32(object.wrapping_add(0xd4))
+    };
+    let first_list = e.mem.u32(first.addr().wrapping_add(0x30));
+    let second_list = e.mem.u32(second.addr().wrapping_add(0x30));
+    let less = if key(e, first_list) < key(e, second_list) {
+        true
+    } else if key(e, first_list) == key(e, second_list) {
+        first_list < second_list
+    } else {
+        false
+    };
+    e.mem.set_u8(out.addr(), u8::from(less));
+    out.addr()
+}
+
+// Translated from 00d0daa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, three stack words `first`, `second`, `third`,
+/// `RET 0xc`; descriptions, not confirmed; the code at `00d0f2ea` stores its address): sets
+/// up and runs one pair. The float at `0104da48` goes to `third + 0x3030`, `third + 0x3080`
+/// becomes 0 and the word at `third` points at `third + 0x10`. The signed byte at `first + 0xc`
+/// (times 0x40) plus the word at `second` plus `0x1c20` goes to `second + 0x60`, and the word
+/// at its `+0x10` to `second + 0x14`. Then `00cfedd0` runs with `(first, second, third, [first +
+/// 8])` (cdecl). Unless the word at `01269200` is 1: when the word at `third` no longer points
+/// at `third + 0x10`, the object at `[first + 8]` is asked through its slot `0x18` with
+/// `([first + 0x10], [first + 0x14], second, third)`; and when the float at `third + 0x3030` is
+/// not equal to the double at `0104e138` (a NaN is not equal either) `00d0d150` runs on `this`
+/// with `(third, first)`.
+pub fn fn_00d0daa0(e: &mut Engine, this: Ptr, first: Ptr, second: Ptr, third: Ptr) {
+    let (first, second, third) = (first.addr(), second.addr(), third.addr());
+    let start = x87_quiet_bits(e.global::<u32>(0x0104_da48));
+    e.mem.set_u32(third.wrapping_add(0x3030), start);
+    e.mem.set_u32(third.wrapping_add(0x3080), 0);
+    let list = third.wrapping_add(0x10);
+    e.mem.set_u32(third, list);
+    let offset = (i32::from(e.mem.i8(first.wrapping_add(0xc))) << 6) as u32;
+    let base = e.mem.u32(second);
+    let record = offset.wrapping_add(base).wrapping_add(0x1c20);
+    e.mem.set_u32(second.wrapping_add(0x60), record);
+    let word = e.mem.u32(record.wrapping_add(0x10));
+    e.mem.set_u32(second.wrapping_add(0x14), word);
+    let owner = e.mem.u32(first.wrapping_add(8));
+    e.call(0x00cf_edd0, &args![first, second, third, owner]);
+    if e.global::<u32>(0x0126_9200) != 1 {
+        if e.mem.u32(third) != list {
+            let object = e.mem.u32(first.wrapping_add(8));
+            let second_word = e.mem.u32(first.wrapping_add(0x14));
+            let first_word = e.mem.u32(first.wrapping_add(0x10));
+            e.vcall(object, 0x18, &args![first_word, second_word, second, third]);
+        }
+        let value = x87_load32(e.mem.u32(third.wrapping_add(0x3030)));
+        let limit: f64 = e.global(0x0104_e138);
+        // `FCOMP` then `TEST AH,0x44` / `JNP`: the call is skipped only when the two are equal;
+        // for a NaN `!=` is true, as the flags say.
+        if value != limit {
+            e.call(0x00d0_d150, &args![this, third, first]);
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d0bc60, fn_00d0bc60(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x00d0bc80, fn_00d0bc80(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x00d0daa0, fn_00d0daa0(Ptr, Ptr, Ptr, Ptr)),
+
         entry!(0x00d0bc20, fn_00d0bc20(u32, u32, u32) -> u32),
         entry!(
             0x00d0bc50,
@@ -4021,7 +4113,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d0c9c0,
-            hkp_continuous_simulation_process_agent_nn_entries(u32, i32, u32, u32, u32)
+            hkp_continuous_simulation_process_agent_nn_entries(u32, u32, i32, u32, u32, u32)
         ),
         entry!(
             0x00d0cb00,
@@ -4161,6 +4253,183 @@ mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+
+    #[test]
+    fn fn_00d0bc60_stores_whether_the_first_key_is_below_the_second() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(8);
+        let low = e.mem.alloc(0x100);
+        let high = e.mem.alloc(0x100);
+        e.mem.set_u32(low + 0xd4, 2);
+        e.mem.set_u32(high + 0xd4, 0xffff_fff0);
+        assert_eq!(e.call(0x00d0_bc60, &args![out, low, high]).u32(), out);
+        assert_eq!(e.mem.u8(out), 1);
+        e.call(0x00d0_bc60, &args![out, high, low]);
+        assert_eq!(e.mem.u8(out), 0);
+        e.call(0x00d0_bc60, &args![out, low, low]);
+        assert_eq!(e.mem.u8(out), 0);
+    }
+
+    /// An argument for `00d0bc80`: its word at `+0x30` is a list whose byte at `+0x1a` picks the
+    /// second pointer from `+4`, an object with the key `key` at `+0xd4`. Returns (argument, list).
+    fn listed_00d0bc80(e: &mut Engine, key: u32) -> (u32, u32) {
+        let argument = e.mem.alloc(0x40);
+        let list = e.mem.alloc(0x40);
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u32(object + 0xd4, key);
+        e.mem.set_u8(list + 0x1a, 1);
+        e.mem.set_u32(list + 0x8, object);
+        e.mem.set_u32(argument + 0x30, list);
+        (argument, list)
+    }
+
+    #[test]
+    fn fn_00d0bc80_orders_by_the_key_of_the_picked_object() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(8);
+        let (low, _) = listed_00d0bc80(&mut e, 1);
+        let (high, _) = listed_00d0bc80(&mut e, 9);
+        assert_eq!(e.call(0x00d0_bc80, &args![out, low, high]).u32(), out);
+        assert_eq!(e.mem.u8(out), 1);
+        e.call(0x00d0_bc80, &args![out, high, low]);
+        assert_eq!(e.mem.u8(out), 0);
+    }
+
+    #[test]
+    fn fn_00d0bc80_breaks_a_tie_with_the_list_addresses() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(8);
+        let (first, first_list) = listed_00d0bc80(&mut e, 5);
+        let (second, second_list) = listed_00d0bc80(&mut e, 5);
+        assert!(first_list < second_list);
+        e.call(0x00d0_bc80, &args![out, first, second]);
+        assert_eq!(e.mem.u8(out), 1);
+        e.call(0x00d0_bc80, &args![out, second, first]);
+        assert_eq!(e.mem.u8(out), 0);
+        e.call(0x00d0_bc80, &args![out, first, first]);
+        assert_eq!(e.mem.u8(out), 0);
+    }
+
+    /// Everything `00d0daa0` reads: the float and double constants, the flag word, `first` (signed
+    /// byte 2 at `+0xc`, an owner object at `+8` with a logging vtable slot `0x18`), `second`
+    /// (a base pointer at `+0`) and `third` (0x3100 bytes).
+    struct Pair00d0daa0 {
+        e: Engine,
+        this: u32,
+        first: u32,
+        second: u32,
+        third: u32,
+        owner: u32,
+    }
+
+    fn pair_00d0daa0(float: f32, flag: u32) -> Pair00d0daa0 {
+        let mut e = Engine::new();
+        e.map(0x0104_d000, 0x2000);
+        e.map(0x0126_9000, 0x1000);
+        e.mem.set_f32(0x0104_da48, float);
+        e.mem.set_f64(0x0104_e138, 0.0);
+        e.mem.set_u32(0x0126_9200, flag);
+        let this = e.mem.alloc(0x20);
+        let first = e.mem.alloc(0x40);
+        let second = e.mem.alloc(0x80);
+        let third = e.mem.alloc(0x3100);
+        let base = e.mem.alloc(0x2000);
+        e.mem.set_u32(second, base);
+        e.mem.set_u8(first + 0xc, 2);
+        e.mem.set_u32(base + 0x80 + 0x1c20 + 0x10, 0xabcd);
+        let owner = e.mem.alloc(8);
+        e.put_vtable(0x0900_0000, &[0, 0, 0, 0, 0, 0, 0x0900_0118]);
+        e.mem.set_u32(owner, 0x0900_0000);
+        e.mem.set_u32(first + 8, owner);
+        e.mem.set_u32(first + 0x10, 0x11);
+        e.mem.set_u32(first + 0x14, 0x22);
+        e.register(0x0900_0118, |_, _| Ret::default());
+        e.register(0x00cf_edd0, |_, _| Ret::default());
+        e.register(0x00d0_d150, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        Pair00d0daa0 {
+            e,
+            this,
+            first,
+            second,
+            third,
+            owner,
+        }
+    }
+
+    fn logged_00d0daa0(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(called, _)| *called == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00d0daa0_sets_up_the_pair_and_runs_the_helper() {
+        let mut p = pair_00d0daa0(1.5, 0);
+        let (this, first, second, third) = (p.this, p.first, p.second, p.third);
+        p.e.call(0x00d0_daa0, &args![this, first, second, third]);
+        let base = p.e.mem.u32(second);
+        assert_eq!(p.e.mem.f32(third + 0x3030), 1.5);
+        assert_eq!(p.e.mem.u32(third + 0x3080), 0);
+        assert_eq!(p.e.mem.u32(third), third + 0x10);
+        assert_eq!(p.e.mem.u32(second + 0x60), base + 0x80 + 0x1c20);
+        assert_eq!(p.e.mem.u32(second + 0x14), 0xabcd);
+        assert_eq!(
+            logged_00d0daa0(&p.e, 0x00cf_edd0),
+            vec![vec![first, second, third, p.owner]]
+        );
+        // The list word still points at its own storage, so the owner is not asked; 1.5 is not
+        // the compared double 0.0, so the follow-up helper runs.
+        assert!(logged_00d0daa0(&p.e, 0x0900_0118).is_empty());
+        assert_eq!(
+            logged_00d0daa0(&p.e, 0x00d0_d150),
+            vec![vec![this, third, first]]
+        );
+    }
+
+    #[test]
+    fn fn_00d0daa0_skips_the_helper_when_the_float_equals_the_double() {
+        let mut p = pair_00d0daa0(0.0, 0);
+        let (this, first, second, third) = (p.this, p.first, p.second, p.third);
+        p.e.call(0x00d0_daa0, &args![this, first, second, third]);
+        assert!(logged_00d0daa0(&p.e, 0x00d0_d150).is_empty());
+    }
+
+    #[test]
+    fn fn_00d0daa0_asks_the_owner_when_the_list_word_moved() {
+        let mut p = pair_00d0daa0(0.0, 0);
+        let (this, first, second, third) = (p.this, p.first, p.second, p.third);
+        // The first helper leaves the list word pointing elsewhere.
+        p.e.register_double(0x00cf_edd0, move |e, _| {
+            e.mem.set_u32(third, 0x5555);
+            Ret::default()
+        });
+        p.e.call(0x00d0_daa0, &args![this, first, second, third]);
+        assert_eq!(
+            logged_00d0daa0(&p.e, 0x0900_0118),
+            vec![vec![p.owner, 0x11, 0x22, second, third]]
+        );
+    }
+
+    #[test]
+    fn fn_00d0daa0_stops_after_the_first_helper_when_the_flag_word_is_one() {
+        let mut p = pair_00d0daa0(1.5, 1);
+        let (this, first, second, third) = (p.this, p.first, p.second, p.third);
+        p.e.register_double(0x00cf_edd0, move |e, _| {
+            e.mem.set_u32(third, 0x5555);
+            Ret::default()
+        });
+        p.e.call(0x00d0_daa0, &args![this, first, second, third]);
+        assert!(logged_00d0daa0(&p.e, 0x0900_0118).is_empty());
+        assert!(logged_00d0daa0(&p.e, 0x00d0_d150).is_empty());
+    }
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     type Calls = Vec<(u32, Vec<u32>)>;
     type Seen = Rc<RefCell<Vec<Vec<u32>>>>;
@@ -5218,7 +5487,10 @@ mod tests {
         });
         let entries = word_array(&mut e, &[entry_a, entry_b], 2);
         let list = e.mem.u32(entries);
-        e.call(0x00d0_c9c0, &args![list, 2i32, input, 0x9999u32, 0u32]);
+        e.call(
+            0x00d0_c9c0,
+            &args![VCALL_THIS, list, 2i32, input, 0x9999u32, 0u32],
+        );
         let processed = processed.borrow().clone();
         assert_eq!(processed.len(), 2);
         let (first_args, quality_info, creation, owner, time, pointer, output) =
@@ -5249,7 +5521,10 @@ mod tests {
         assert_eq!(e.mem.u32(STREAM_RECORDS), PROFILE_TT_NARROW_PHASE_TOI);
         assert_eq!(e.mem.u32(STREAM_RECORDS + 0xc), PROFILE_END);
         // With the time-of-impact quality flag the block at 0x1de0 is used.
-        e.call(0x00d0_c9c0, &args![list, 1i32, input, 0x9999u32, 1u32]);
+        e.call(
+            0x00d0_c9c0,
+            &args![VCALL_THIS, list, 1i32, input, 0x9999u32, 1u32],
+        );
         assert_eq!(e.mem.u32(input + 0x60), dispatcher + 0x1de0);
     }
 

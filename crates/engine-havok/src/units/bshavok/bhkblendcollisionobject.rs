@@ -1129,6 +1129,45 @@ pub fn bhk_blend_collision_object_hkto_ni_transform(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 00c81b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (the class is unconfirmed): `this` in `ECX`, no stack words. Counts
+/// the word at `+0x28` down; while it is still positive that is all. Otherwise it is reset to 0
+/// and, when the object at `+0x10` exists and its kind is 8 or 0x1d, the virtual function at +0x9c
+/// of that object is called with the word at `+0x24` (when it is not null). The kind is the low
+/// seven bits of the word at `+0x1c` of the block `0x10` bytes into the object the owner's word at
+/// `+8` points to (0 when that word is 0). Ghidra made no function here; the address is reached
+/// by a jump at 00c662ef.
+pub fn fn_00c81b40(e: &mut Engine, this: u32) {
+    let count = (e.mem.u32(this + 0x28) as i32).wrapping_sub(1);
+    e.mem.set_u32(this + 0x28, count as u32);
+    if count > 0 {
+        return;
+    }
+    let owner = e.mem.u32(this + 0x10);
+    e.mem.set_u32(this + 0x28, 0);
+    if owner == 0 {
+        return;
+    }
+    let inner = e.mem.u32(owner + 8);
+    let kind = if inner != 0 {
+        // `ADD EDX, 0x10` followed by `JZ`: a sum that wraps to zero counts as no object.
+        let block = inner.wrapping_add(0x10);
+        if block != 0 {
+            e.mem.u32(block.wrapping_add(0x1c))
+        } else {
+            0
+        }
+    } else {
+        0
+    } & 0x7f;
+    if kind == 8 || kind == 0x1d {
+        let target = e.mem.u32(this + 0x24);
+        if target != 0 {
+            e.vcall(owner, 0x9c, &args![target]);
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1177,6 +1216,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00c825b0,
             bhk_blend_collision_object_add_viewer_strings(Ptr, Ptr)
         ),
+        entry!(0x00c8_1b40, fn_00c81b40(u32)),
     ]
 }
 
@@ -2543,5 +2583,95 @@ mod tests {
         s.e.set_global(RECIPROCAL_SOURCE, 0.0f32.to_bits());
         s.e.call(0x00c81e30, &args![s.this]);
         assert_eq!(calls(&s.e, UPDATE_FROM_BLEND)[0][3], 1.0f32.to_bits());
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type VirtualCalls = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// An object with counter `counter`, owner at +0x10 (its virtual function at +0x9c is a double
+    /// that logs its words), target `target` at +0x24 and an inner object of kind word `kind`.
+    fn blend_object(
+        e: &mut Engine,
+        counter: u32,
+        kind: u32,
+        target: u32,
+    ) -> (u32, u32, VirtualCalls) {
+        let this = e.mem.alloc(0x40);
+        let owner = e.mem.alloc(0x40);
+        let vtable = e.mem.alloc(0xc0);
+        let inner = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0x9c, 0x0900_0003);
+        e.mem.set_u32(owner, vtable);
+        e.mem.set_u32(owner + 8, inner);
+        e.mem.set_u32(inner + 0x2c, kind);
+        e.mem.set_u32(this + 0x10, owner);
+        e.mem.set_u32(this + 0x24, target);
+        e.mem.set_u32(this + 0x28, counter);
+        let log: VirtualCalls = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&log);
+        e.register_double(0x0900_0003, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        (this, owner, log)
+    }
+
+    /// A counter that is still positive after the decrement changes nothing else.
+    #[test]
+    fn fn_00c81b40_only_counts_down_while_positive() {
+        let mut e = Engine::new();
+        let (this, _, log) = blend_object(&mut e, 3, 8, 0x55);
+        e.call(0x00c8_1b40, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x28), 2);
+        assert!(log.borrow().is_empty());
+    }
+
+    /// At zero the counter stays 0 and kinds 8 and 0x1d (high bit ignored) call the owner.
+    #[test]
+    fn fn_00c81b40_calls_the_owner_for_kinds_8_and_1d() {
+        for kind in [8, 0x1d, 0x88, 0x9d] {
+            let mut e = Engine::new();
+            let (this, owner, log) = blend_object(&mut e, 1, kind, 0x55);
+            e.call(0x00c8_1b40, &args![this]);
+            assert_eq!(e.mem.u32(this + 0x28), 0);
+            assert_eq!(*log.borrow(), vec![vec![owner, 0x55]]);
+        }
+        // A counter that was already 0 goes negative first, which is not positive either.
+        let mut e = Engine::new();
+        let (this, owner, log) = blend_object(&mut e, 0, 8, 0x66);
+        e.call(0x00c8_1b40, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x28), 0);
+        assert_eq!(*log.borrow(), vec![vec![owner, 0x66]]);
+    }
+
+    /// Other kinds, a null target, a null owner and a null inner object call nothing.
+    #[test]
+    fn fn_00c81b40_calls_nothing_for_other_cases() {
+        let mut e = Engine::new();
+        let (this, _, log) = blend_object(&mut e, 1, 7, 0x55);
+        e.call(0x00c8_1b40, &args![this]);
+        assert!(log.borrow().is_empty());
+
+        let (this, _, log) = blend_object(&mut e, 1, 8, 0);
+        e.call(0x00c8_1b40, &args![this]);
+        assert!(log.borrow().is_empty());
+
+        let (this, owner, log) = blend_object(&mut e, 1, 8, 0x55);
+        e.mem.set_u32(owner + 8, 0);
+        e.call(0x00c8_1b40, &args![this]);
+        assert!(log.borrow().is_empty());
+
+        let (this, _, log) = blend_object(&mut e, 5, 8, 0x55);
+        e.mem.set_u32(this + 0x28, 1);
+        e.mem.set_u32(this + 0x10, 0);
+        e.call(0x00c8_1b40, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x28), 0);
+        assert!(log.borrow().is_empty());
     }
 }

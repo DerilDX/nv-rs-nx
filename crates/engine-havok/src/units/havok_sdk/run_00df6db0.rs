@@ -144,12 +144,28 @@ pub fn fn_00df6e00(e: &mut Engine, a1: Ptr, a2: Ptr, a3: Ptr, count: i32) {
     })
 }
 
+// Translated from 00df6f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (a job function: `imm 00da3447` in the gap list): cdecl, two stack words
+/// (nothing popped): `owner` and `job`. Appends the timer record `010db978`, calls `00df6e00` with
+/// (`job`, the words at `job + 0x18`, `+0x28` and `+0x2c`), appends the timer record `010c41f8` and
+/// returns the answer of `00d04e80` called on `owner` with (`job`, `job`, 0). Ghidra made no function here; the address is an immediate operand at 00da3447.
+pub fn fn_00df6f80(e: &mut Engine, owner: u32, job: u32) -> u32 {
+    crate::units::havok_sdk::hkpworld::profile_record(e, 0x010d_b978);
+    let first = e.mem.u32(job + 0x18);
+    let second = e.mem.u32(job + 0x28);
+    let third = e.mem.u32(job + 0x2c);
+    e.call(0x00df_6e00, &args![job, first, second, third]);
+    crate::units::havok_sdk::hkpworld::profile_record(e, 0x010c_41f8);
+    e.call(0x00d0_4e80, &args![owner, job, job, 0u32]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00df_6db0, fn_00df6db0(Ptr, u32) -> u32),
         entry!(0x00df_6dc0, fn_00df6dc0(Ptr, u32) -> u32),
         entry!(0x00df_6e00, fn_00df6e00(Ptr, Ptr, Ptr, i32)),
+        entry!(0x00df_6f80, fn_00df6f80(u32, u32) -> u32),
     ]
 }
 
@@ -399,5 +415,35 @@ mod contact_tests {
         }
         assert_eq!(e.call(0x00df_6dc0, &args![0x3000u32, 1u32]).u32(), 0x99);
         assert_eq!(*log.borrow(), vec![vec![0x3000 - 8, 1]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use crate::units::havok_sdk::hkpworld::profiling_support::{labels, profiling_engine};
+    #[test]
+    fn fn_00df6f80_wraps_the_worker_call_in_timer_records() {
+        let (mut e, stream, area) = profiling_engine(2);
+        let job = e.mem.alloc(0x40);
+        e.mem.set_u32(job + 0x18, 0x11);
+        e.mem.set_u32(job + 0x28, 0x22);
+        e.mem.set_u32(job + 0x2c, 0x33);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register_double(0x00df_6e00, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.register_double(0x00d0_4e80, |_, a| Ret {
+            eax: a[0] + 1,
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x00df_6f80, &args![0x4000u32, job]).u32(), 0x4001);
+        assert_eq!(*seen.borrow(), vec![vec![job, 0x11, 0x22, 0x33]]);
+        assert_eq!(labels(&e, stream, area), vec![0x010d_b978, 0x010c_41f8]);
     }
 }

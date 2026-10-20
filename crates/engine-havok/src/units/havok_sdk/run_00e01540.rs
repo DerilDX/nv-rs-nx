@@ -83,6 +83,99 @@ pub fn fn_00e016e0(e: &mut Engine, object: Ptr, extra: u32) {
     }
 }
 
+// Translated from 00e01510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc63d9). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00e01510(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00e01530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc63cf). Cdecl `(object)`: does nothing for a
+/// null `object`; otherwise stores the vtable word `0x010e_9300` (RTTI `hkxVertexVectorDataChannel`) at `+0`.
+pub fn fn_00e01530(e: &mut Engine, object: Ptr) {
+    if !object.is_null() {
+        e.mem.set_u32(object.addr(), 0x010e_9300);
+    }
+}
+
+// Translated from 00e01550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc6449). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00e01550(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00e01570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc643f). Cdecl `(object)`: does nothing for a
+/// null `object`; otherwise stores the vtable word `0x010e_9358` (RTTI `hkxVertexSelectionChannel`) at `+0`.
+pub fn fn_00e01570(e: &mut Engine, object: Ptr) {
+    if !object.is_null() {
+        e.mem.set_u32(object.addr(), 0x010e_9358);
+    }
+}
+
+// Translated from 00e01590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc64b9). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00e01590(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00e015b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc64af). Cdecl `(object)`: does nothing for a
+/// null `object`; otherwise stores the vtable word `0x010e_93ac` (RTTI `hkxVertexIntDataChannel`) at `+0`.
+pub fn fn_00e015b0(e: &mut Engine, object: Ptr) {
+    if !object.is_null() {
+        e.mem.set_u32(object.addr(), 0x010e_93ac);
+    }
+}
+
+// Translated from 00e01640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc6549). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00e01640(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00e01660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc653f). Cdecl `(object)`: does nothing for a
+/// null `object`; otherwise stores the vtable word `0x010e_943c` (RTTI `hkxVertexFloatDataChannel`) at `+0`.
+pub fn fn_00e01660(e: &mut Engine, object: Ptr) {
+    if !object.is_null() {
+        e.mem.set_u32(object.addr(), 0x010e_943c);
+    }
+}
+
+// Translated from 00e01680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc65b9). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00e01680(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00e016a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc65af). Cdecl `(object)`: does nothing for a
+/// null `object`; otherwise stores the vtable word `0x010e_9494` (RTTI `hkxTriangleSelectionChannel`) at `+0`.
+pub fn fn_00e016a0(e: &mut Engine, object: Ptr) {
+    if !object.is_null() {
+        e.mem.set_u32(object.addr(), 0x010e_9494);
+    }
+}
+
+// Translated from 00e016c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc6629). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00e016c0(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -94,6 +187,17 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e01710, fn_00e01710() -> u32),
         entry!(0x00e0_15d0, deleting_destructor_00e015d0(Ptr, u8) -> Ptr),
         entry!(0x00e0_16e0, fn_00e016e0(Ptr, u32)),
+        entry!(0x00e0_1510, fn_00e01510(Ptr) -> u32),
+        entry!(0x00e0_1530, fn_00e01530(Ptr)),
+        entry!(0x00e0_1550, fn_00e01550(Ptr) -> u32),
+        entry!(0x00e0_1570, fn_00e01570(Ptr)),
+        entry!(0x00e0_1590, fn_00e01590(Ptr) -> u32),
+        entry!(0x00e0_15b0, fn_00e015b0(Ptr)),
+        entry!(0x00e0_1640, fn_00e01640(Ptr) -> u32),
+        entry!(0x00e0_1660, fn_00e01660(Ptr)),
+        entry!(0x00e0_1680, fn_00e01680(Ptr) -> u32),
+        entry!(0x00e0_16a0, fn_00e016a0(Ptr)),
+        entry!(0x00e0_16c0, fn_00e016c0(Ptr) -> u32),
     ]
 }
 
@@ -256,4 +360,79 @@ mod tests_a05 {
             vec![vec![object + 0x18, 4], vec![object + 0x1c, 4]]
         );
     }
+}
+
+#[cfg(test)]
+mod a05_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type CallLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// A double at `address` that records the argument words of each call and answers `answer`.
+    fn recording_double(e: &mut Engine, address: u32, answer: u32) -> CallLog {
+        let log: CallLog = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&log);
+        e.register_double(address, move |_, a| {
+            seen.borrow_mut().push(a.to_vec());
+            Ret {
+                eax: answer,
+                ..Ret::default()
+            }
+        });
+        log
+    }
+
+    /// `function(object)` calls slot 0 of the object's vtable with `(object, 0)` and answers
+    /// what the slot answers.
+    fn check_cleanup(function: u32) {
+        let mut e = Engine::new();
+        let log = recording_double(&mut e, 0x7000_0000, 0x1234_5678);
+        let table = e.mem.alloc(0x10);
+        e.mem.set_u32(table, 0x7000_0000);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, table);
+        assert_eq!(e.call(function, &args![object]).u32(), 0x1234_5678);
+        assert_eq!(*log.borrow(), vec![vec![object, 0]]);
+    }
+
+    macro_rules! cleanup_test {
+        ($name:ident, $function:expr) => {
+            #[test]
+            fn $name() {
+                check_cleanup($function);
+            }
+        };
+    }
+
+    /// `function(object)` stores `vtable` at the start of a non-null object and leaves a null one.
+    fn check_vtable(function: u32, vtable: u32) {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.call(function, &args![object]);
+        assert_eq!(e.mem.u32(object), vtable);
+        e.call(function, &args![0u32]);
+    }
+
+    macro_rules! vtable_test {
+        ($name:ident, $function:expr, $vtable:expr) => {
+            #[test]
+            fn $name() {
+                check_vtable($function, $vtable);
+            }
+        };
+    }
+
+    cleanup_test!(fn_00e01510_calls_virtual_slot_0_with_zero, 0x00e0_1510);
+    cleanup_test!(fn_00e01550_calls_virtual_slot_0_with_zero, 0x00e0_1550);
+    cleanup_test!(fn_00e01590_calls_virtual_slot_0_with_zero, 0x00e0_1590);
+    cleanup_test!(fn_00e01640_calls_virtual_slot_0_with_zero, 0x00e0_1640);
+    cleanup_test!(fn_00e01680_calls_virtual_slot_0_with_zero, 0x00e0_1680);
+    cleanup_test!(fn_00e016c0_calls_virtual_slot_0_with_zero, 0x00e0_16c0);
+    vtable_test!(fn_00e01530_stores_the_vtable_word, 0x00e0_1530, 0x010e_9300);
+    vtable_test!(fn_00e01570_stores_the_vtable_word, 0x00e0_1570, 0x010e_9358);
+    vtable_test!(fn_00e015b0_stores_the_vtable_word, 0x00e0_15b0, 0x010e_93ac);
+    vtable_test!(fn_00e01660_stores_the_vtable_word, 0x00e0_1660, 0x010e_943c);
+    vtable_test!(fn_00e016a0_stores_the_vtable_word, 0x00e0_16a0, 0x010e_9494);
 }

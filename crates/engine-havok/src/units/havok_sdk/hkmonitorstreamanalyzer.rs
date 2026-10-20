@@ -3701,9 +3701,27 @@ pub fn hk_monitor_stream_analyzer_write_statistics_details(
     });
 }
 
+// Translated from 00e0bf30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one stack word `extra`, `RET 4`; a call at `00dfdecd`
+/// reaches it): runs `00cb0a70` on the member at `this + 8` (`thiscall`, one stack word,
+/// `extra`) and answers `this`.
+pub fn fn_00e0bf30(e: &mut Engine, this: Ptr, extra: u32) -> Ptr {
+    e.call(0x00cb_0a70, &args![this.addr().wrapping_add(8), extra]);
+    this
+}
+
+// Translated from 00e0f700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one stack word the function never reads, `RET 4`; a
+/// call at `00dfdefd` reaches it): answers `this`.
+pub fn fn_00e0f700(_e: &mut Engine, this: Ptr, _unused_1: u32) -> Ptr {
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e0bf30, fn_00e0bf30(Ptr, u32) -> Ptr),
+        entry!(0x00e0f700, fn_00e0f700(Ptr, u32) -> Ptr),
         entry!(0x00e0bf20, hk_monitor_stream_string_map_string_map(Ptr) -> Ptr),
         entry!(0x00e0bfe0, print_single_node_values(u32, f32, Ptr)),
         entry!(0x00e0c150, save_to_tga(u32, u32, u32, u32) -> bool),
@@ -3804,6 +3822,33 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    #[test]
+    fn fn_00e0bf30_runs_00cb0a70_on_the_member_and_answers_this() {
+        let mut e = Engine::new();
+        e.register(0x00cb_0a70, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x00e0_bf30, &args![0x1000u32, 0x55u32]).u32();
+        assert_eq!(answer, 0x1000);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00cb_0a70)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x00cb_0a70, vec![0x1008, 0x55])]);
+    }
+
+    #[test]
+    fn fn_00e0f700_answers_this() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00e0_f700, &args![0x1000u32, 7u32]).u32(), 0x1000);
+    }
 
     const ALLOCATE: u32 = 0x4500_0100;
     const FREE_BLOCK: u32 = 0x4500_0101;

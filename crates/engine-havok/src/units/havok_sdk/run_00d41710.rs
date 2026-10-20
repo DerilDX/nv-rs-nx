@@ -91,12 +91,41 @@ pub fn fn_00d417f0(e: &mut Engine, _unused_1: u32, object: u32, value: u32) -> u
     }
 }
 
+// Translated from 00d41830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: three stack words (cdecl, nothing popped): `_unused_0`, `record` and
+/// `id`. The record's byte at +0xe is a count of 8-byte entries that start at +0x10; the first
+/// entry whose 16-bit word at +2 equals the low 16 bits of `id` gets its bytes at +0 and +1 set to 0.
+/// Answers (in `EAX`) the index of that entry, the count when none matches, 0 when the count is 0.
+/// Ghidra made no function here; the address is an immediate operand at 00d4176e.
+pub fn fn_00d41830(e: &mut Engine, _unused_0: u32, record: u32, id: u32) -> u32 {
+    let count = u32::from(e.mem.u8(record + 0xe));
+    if count == 0 {
+        return 0;
+    }
+    let id = id as u16;
+    let mut index = 0u32;
+    let mut entry = record + 0x10;
+    loop {
+        if e.mem.u16(entry + 2) == id {
+            e.mem.set_u8(entry, 0);
+            e.mem.set_u8(entry + 1, 0);
+            return index;
+        }
+        index += 1;
+        entry += 8;
+        if index >= count {
+            return index;
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d4_1710, fn_00d41710(Ptr)),
         entry!(0x00d4_17b0, fn_00d417b0(u32, u32, u32) -> u32),
         entry!(0x00d4_17f0, fn_00d417f0(u32, u32, u32) -> u32),
+        entry!(0x00d4_1830, fn_00d41830(u32, u32, u32) -> u32),
     ]
 }
 
@@ -190,5 +219,49 @@ mod havok_a04_tests {
         assert_eq!(e.call(0x00d4_17f0, &args![0u32, object, 1u32]).u32(), 3);
         e.mem.set_u8(object + 0xe, 0);
         assert_eq!(e.call(0x00d4_17f0, &args![0u32, object, 1u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    /// A record with `count` entries whose ids (word at +2) are `ids` and whose bytes at +0/+1 are 0xaa.
+    fn record_with(e: &mut Engine, ids: &[u16]) -> u32 {
+        let record = e.mem.alloc(0x40);
+        e.mem.set_u8(record + 0xe, ids.len() as u8);
+        for (i, id) in ids.iter().enumerate() {
+            let entry = record + 0x10 + 8 * i as u32;
+            e.mem.set_u8(entry, 0xaa);
+            e.mem.set_u8(entry + 1, 0xaa);
+            e.mem.set_u16(entry + 2, *id);
+        }
+        record
+    }
+
+    #[test]
+    fn fn_00d41830_clears_the_first_entry_with_the_id() {
+        let mut e = Engine::new();
+        let record = record_with(&mut e, &[5, 7, 7]);
+        // Only the low 16 bits of the word are compared.
+        assert_eq!(
+            e.call(0x00d4_1830, &args![0u32, record, 0x1_0007u32]).u32(),
+            1
+        );
+        assert_eq!(e.mem.u8(record + 0x18), 0);
+        assert_eq!(e.mem.u8(record + 0x19), 0);
+        assert_eq!(e.mem.u8(record + 0x10), 0xaa);
+        assert_eq!(e.mem.u8(record + 0x20), 0xaa);
+    }
+
+    #[test]
+    fn fn_00d41830_answers_the_count_when_nothing_matches() {
+        let mut e = Engine::new();
+        let record = record_with(&mut e, &[5, 7]);
+        assert_eq!(e.call(0x00d4_1830, &args![0u32, record, 9u32]).u32(), 2);
+        assert_eq!(e.mem.u8(record + 0x10), 0xaa);
+        assert_eq!(e.mem.u8(record + 0x18), 0xaa);
+        let empty = record_with(&mut e, &[]);
+        assert_eq!(e.call(0x00d4_1830, &args![0u32, empty, 9u32]).u32(), 0);
     }
 }

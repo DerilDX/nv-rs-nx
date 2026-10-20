@@ -322,6 +322,13 @@ fn collide_vertices(e: &mut Engine, pair: u32, data: u32, entries: u32, collecto
     }
 }
 
+// Translated from 00d418b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: four stack words (cdecl, nothing popped), passed on in the same
+/// order to `00d41860`, whose answer (`EAX`) it returns. Ghidra made no function here; the address is an immediate operand at 00d41776.
+pub fn fn_00d418b0(e: &mut Engine, a: u32, b: u32, c: u32, d: u32) -> u32 {
+    e.call(0x00d4_1860, &args![a, b, c, d]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -341,6 +348,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00d4_1a30,
             hkp_pred_gsk_agent3_process(Ptr, Ptr, Ptr, Ptr, Ptr) -> u32
         ),
+        entry!(0x00d4_18b0, fn_00d418b0(u32, u32, u32, u32) -> u32),
     ]
 }
 
@@ -902,5 +910,26 @@ mod tests {
         let lane = w.e.mem.u32(w.out + 0xc);
         assert_eq!(lane & 0x7fc0_0000, 0x7fc0_0000);
         assert_eq!(load_vec(&w.e, w.out)[0], 1.0);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_00d418b0_forwards_its_words_in_order() {
+        let mut e = Engine::new();
+        e.register_double(0x00d4_1860, |_, a| {
+            assert_eq!(a, [1, 2, 3, 4]);
+            Ret {
+                eax: 0x99,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(
+            e.call(0x00d4_18b0, &args![1u32, 2u32, 3u32, 4u32]).u32(),
+            0x99
+        );
     }
 }

@@ -863,15 +863,11 @@ pub fn fn_0062f310(e: &mut Engine, value: u32) {
     e.set_global(WATER_GLOBAL_011C7A3C, value);
 }
 
-/// The model types `0062f320` accepts (its jump table at `0062f3a8`, byte
-/// index table at `0062f3b0`).
-const RIGID_MODEL_TYPES: [u32; 9] = [4, 5, 6, 8, 10, 12, 13, 14, 29];
-
 // Translated from 0062f320 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Vtable slot 0x24 (the Xbox PDB's `bhkEntityListener::GetRB` slot): the
 /// object of `entity` from the map at `012681c0` (`00653270`), unless its
-/// state (`00517630`) is 5 or its model type is not one of
-/// [`RIGID_MODEL_TYPES`]; else 0.
+/// state (`00517630`) is 5 or its model type is not one the compiler's switch accepts (the
+/// types 4, 5, 6, 8, 10, 12, 13, 14 and 29); else 0.
 pub fn fn_0062f320(e: &mut Engine, _this: Ptr<TESWaterListener>, entity: u32) -> u32 {
     let body = e.call(BODY_OBJECT, &args![entity]).u32();
     let object = e.call(0x0065_3270, &args![0x0126_81c0u32, body]).u32();
@@ -881,7 +877,7 @@ pub fn fn_0062f320(e: &mut Engine, _this: Ptr<TESWaterListener>, entity: u32) ->
     e.with_stack(4, |e, local| {
         let model = e.call(0x0043_b4f0, &args![object, local]).u32();
         let kind = e.call(0x0043_b4d0, &args![model]).u32();
-        if RIGID_MODEL_TYPES.contains(&kind) {
+        if matches!(kind, 4..=6 | 8 | 10 | 12..=14 | 29) {
             object
         } else {
             0

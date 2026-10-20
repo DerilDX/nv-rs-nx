@@ -85,11 +85,161 @@ pub fn fn_00d923b0(e: &mut Engine, dispatcher: u32) -> u32 {
     })
 }
 
+// Translated from 00d921e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00d923ff). A function of
+/// the table `00d923b0` registers with `00cfbd60`, cdecl with at least four stack words
+/// `(_unused_0, holder, _unused_2, argument)`: `holder` is the address of a pointer to an object;
+/// calls that object's virtual slot `0x1c` with `argument` and answers the result.
+pub fn fn_00d921e0(
+    e: &mut Engine,
+    _unused_0: u32,
+    holder: Ptr,
+    _unused_2: u32,
+    argument: u32,
+) -> u32 {
+    let object = e.mem.u32(holder.addr());
+    e.vcall(object, 0x1c, &args![argument]).u32()
+}
+
+// Translated from 00d92200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00d92407). A function of
+/// the table `00d923b0` registers with `00cfbd60`, cdecl with at least seven stack words
+/// `(_unused_0, holder, first, second, third, _unused_5, fourth)`: `holder` is the address of a
+/// pointer to an object; calls that object's virtual slot `0x20` with `(first, second, third,
+/// fourth)` and answers the result.
+pub fn fn_00d92200(
+    e: &mut Engine,
+    _unused_0: u32,
+    holder: Ptr,
+    first: u32,
+    second: u32,
+    third: u32,
+    _unused_5: u32,
+    fourth: u32,
+) -> u32 {
+    let object = e.mem.u32(holder.addr());
+    e.vcall(object, 0x20, &args![first, second, third, fourth])
+        .u32()
+}
+
+// Translated from 00d92230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00d9240f). A function of
+/// the table `00d923b0` registers with `00cfbd60`, cdecl with at least four stack words
+/// `(_unused_0, holder, _unused_2, target)`: `holder` is the address of a pointer to an object.
+/// Calls virtual slot `0xc` of `target` with `(0x010d3db0, that object, 0)` (the first word is the
+/// address of the string `"ChildAgent2"`) and answers the result.
+pub fn fn_00d92230(
+    e: &mut Engine,
+    _unused_0: u32,
+    holder: Ptr,
+    _unused_2: u32,
+    target: Ptr,
+) -> u32 {
+    let object = e.mem.u32(holder.addr());
+    e.vcall(target.addr(), 0xc, &args![0x010d_3db0u32, object, 0u32])
+        .u32()
+}
+
+// Translated from 00d92250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00d92417). A function of
+/// the table `00d923b0` registers with `00cfbd60`, cdecl with at least three stack words
+/// `(_unused_0, holder, argument)`: `holder` is the address of a pointer to an object; calls that
+/// object's virtual slot `0x24` with `argument` and answers the result.
+pub fn fn_00d92250(e: &mut Engine, _unused_0: u32, holder: Ptr, argument: u32) -> u32 {
+    let object = e.mem.u32(holder.addr());
+    e.vcall(object, 0x24, &args![argument]).u32()
+}
+
+// Translated from 00d92270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00d9241f). A function of
+/// the table `00d923b0` registers with `00cfbd60`, cdecl with at least five stack words
+/// `(_unused_0, holder, first, second, third)`: `holder` is the address of a pointer to an object.
+/// Calls that object's virtual slot `0x28` with `(first, second, third)` and answers the result;
+/// `first` and `second` are floats that go through a `FLD`/`FSTP` copy, which quiets a signalling
+/// NaN.
+pub fn fn_00d92270(
+    e: &mut Engine,
+    _unused_0: u32,
+    holder: Ptr,
+    first: f32,
+    second: f32,
+    third: u32,
+) -> u32 {
+    let object = e.mem.u32(holder.addr());
+    e.vcall(
+        object,
+        0x28,
+        &args![x87_quiet(first), x87_quiet(second), third],
+    )
+    .u32()
+}
+
+// Translated from 00d922a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00d923e7). A function of
+/// the table `00d923b0` registers with `00cfbd60`, cdecl with at least three stack words
+/// `(_unused_0, holder, argument)`: `holder` is the address of a pointer to an object; calls that
+/// object's virtual slot `0x2c` with `argument` and answers the result.
+pub fn fn_00d922a0(e: &mut Engine, _unused_0: u32, holder: Ptr, argument: u32) -> u32 {
+    let object = e.mem.u32(holder.addr());
+    e.vcall(object, 0x2c, &args![argument]).u32()
+}
+
+// Translated from 00d922c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00d923d7). A function of
+/// the table `00d923b0` registers with `00cfbd60`, cdecl with at least three stack words
+/// `(_unused_0, holder, argument)`: `holder` is the address of a pointer to an object; calls that
+/// object's virtual slot `0x30` with `argument` and answers the result.
+pub fn fn_00d922c0(e: &mut Engine, _unused_0: u32, holder: Ptr, argument: u32) -> u32 {
+    let object = e.mem.u32(holder.addr());
+    e.vcall(object, 0x30, &args![argument]).u32()
+}
+
+// Translated from 00d922e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00d923df). A function of
+/// the table `00d923b0` registers with `00cfbd60`, cdecl with at least three stack words
+/// `(_unused_0, holder, argument)`: `holder` is the address of a pointer to an object; calls that
+/// object's virtual slot `0x34` with `argument` and answers the result.
+pub fn fn_00d922e0(e: &mut Engine, _unused_0: u32, holder: Ptr, argument: u32) -> u32 {
+    let object = e.mem.u32(holder.addr());
+    e.vcall(object, 0x34, &args![argument]).u32()
+}
+
+// Translated from 00d92380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00d923f7). The last
+/// function of the table `00d923b0` registers with `00cfbd60`, cdecl with five stack words
+/// `(input, _unused_1, agent_data, _unused_3, argument)`. Calls virtual slot `0x18` of the object
+/// stored at `agent_data` with `(input[0], input[1], input[3], argument)` (the words at `+0`,
+/// `+4` and `+0xc` of `input`) and answers `agent_data + 0x10`.
+pub fn fn_00d92380(
+    e: &mut Engine,
+    input: Ptr,
+    _unused_1: u32,
+    agent_data: Ptr,
+    _unused_3: u32,
+    argument: u32,
+) -> u32 {
+    let object = e.mem.u32(agent_data.addr());
+    let first = e.mem.u32(input.addr().wrapping_add(0xc));
+    let second = e.mem.u32(input.addr().wrapping_add(4));
+    let third = e.mem.u32(input.addr());
+    e.vcall(object, 0x18, &args![third, second, first, argument]);
+    agent_data.addr().wrapping_add(0x10)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d9_2300, fn_00d92300(u32, u32, u32) -> u32),
         entry!(0x00d9_23b0, fn_00d923b0(u32) -> u32),
+        entry!(0x00d9_21e0, fn_00d921e0(u32, Ptr, u32, u32) -> u32),
+        entry!(0x00d9_2200, fn_00d92200(u32, Ptr, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00d9_2230, fn_00d92230(u32, Ptr, u32, Ptr) -> u32),
+        entry!(0x00d9_2250, fn_00d92250(u32, Ptr, u32) -> u32),
+        entry!(0x00d9_2270, fn_00d92270(u32, Ptr, f32, f32, u32) -> u32),
+        entry!(0x00d9_22a0, fn_00d922a0(u32, Ptr, u32) -> u32),
+        entry!(0x00d9_22c0, fn_00d922c0(u32, Ptr, u32) -> u32),
+        entry!(0x00d9_22e0, fn_00d922e0(u32, Ptr, u32) -> u32),
+        entry!(0x00d9_2380, fn_00d92380(Ptr, u32, Ptr, u32, u32) -> u32),
     ]
 }
 
@@ -206,5 +356,157 @@ mod a09_tests {
         assert_eq!(words[11], 0x00d9_2380);
         assert_eq!(words[12] & 0xff, 1);
         assert_eq!((*byte_one, *byte_two), (0, 0));
+    }
+}
+
+#[cfg(test)]
+mod a05_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type CallLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// A double at `address` that records the argument words of each call and answers `answer`.
+    fn recording_double(e: &mut Engine, address: u32, answer: u32) -> CallLog {
+        let log: CallLog = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&log);
+        e.register_double(address, move |_, a| {
+            seen.borrow_mut().push(a.to_vec());
+            Ret {
+                eax: answer,
+                ..Ret::default()
+            }
+        });
+        log
+    }
+
+    /// An object whose vtable (zeroed, 0x100 bytes) holds `0x7000_0000 + slot` in each of `slots`.
+    fn object_with_slots(e: &mut Engine, slots: &[u32]) -> u32 {
+        let table = e.mem.alloc(0x100);
+        for slot in slots {
+            e.mem.set_u32(table + slot, 0x7000_0000 + slot);
+        }
+        let object = e.mem.alloc(0x20);
+        e.mem.set_u32(object, table);
+        object
+    }
+
+    /// `(holder, object)`: a word holding the address of `object_with_slots(slots)`.
+    fn held_object(e: &mut Engine, slots: &[u32]) -> (u32, u32) {
+        let object = object_with_slots(e, slots);
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, object);
+        (holder, object)
+    }
+
+    #[test]
+    fn fn_00d921e0_calls_slot_1c_of_the_held_object() {
+        let mut e = Engine::new();
+        let (holder, object) = held_object(&mut e, &[0x1c]);
+        let log = recording_double(&mut e, 0x7000_001c, 0x1111);
+        assert_eq!(
+            e.call(0x00d9_21e0, &args![0u32, holder, 0u32, 7u32]).u32(),
+            0x1111
+        );
+        assert_eq!(*log.borrow(), vec![vec![object, 7]]);
+    }
+
+    #[test]
+    fn fn_00d92200_calls_slot_20_of_the_held_object_skipping_the_sixth_word() {
+        let mut e = Engine::new();
+        let (holder, object) = held_object(&mut e, &[0x20]);
+        let log = recording_double(&mut e, 0x7000_0020, 0x2222);
+        let words = args![0xa0u32, holder, 3u32, 4u32, 5u32, 0xa5u32, 7u32];
+        assert_eq!(e.call(0x00d9_2200, &words).u32(), 0x2222);
+        assert_eq!(*log.borrow(), vec![vec![object, 3, 4, 5, 7]]);
+    }
+
+    #[test]
+    fn fn_00d92230_calls_slot_c_of_the_target_with_the_name_and_the_held_object() {
+        let mut e = Engine::new();
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, 0x5555);
+        let target = object_with_slots(&mut e, &[0xc]);
+        let log = recording_double(&mut e, 0x7000_000c, 0x3333);
+        let words = args![0u32, holder, 0u32, target];
+        assert_eq!(e.call(0x00d9_2230, &words).u32(), 0x3333);
+        assert_eq!(*log.borrow(), vec![vec![target, 0x010d_3db0, 0x5555, 0]]);
+    }
+
+    #[test]
+    fn fn_00d92250_calls_slot_24_of_the_held_object() {
+        let mut e = Engine::new();
+        let (holder, object) = held_object(&mut e, &[0x24]);
+        let log = recording_double(&mut e, 0x7000_0024, 0x4444);
+        assert_eq!(
+            e.call(0x00d9_2250, &args![0u32, holder, 9u32]).u32(),
+            0x4444
+        );
+        assert_eq!(*log.borrow(), vec![vec![object, 9]]);
+    }
+
+    #[test]
+    fn fn_00d92270_passes_the_two_floats_quieted_and_the_word() {
+        let mut e = Engine::new();
+        let (holder, object) = held_object(&mut e, &[0x28]);
+        let log = recording_double(&mut e, 0x7000_0028, 0x5555);
+        let signalling = f32::from_bits(0x7f80_0001);
+        let words = args![0u32, holder, 1.5f32, signalling, 9u32];
+        assert_eq!(e.call(0x00d9_2270, &words).u32(), 0x5555);
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![object, 1.5f32.to_bits(), 0x7fc0_0001, 9]]
+        );
+    }
+
+    #[test]
+    fn fn_00d922a0_calls_slot_2c_of_the_held_object() {
+        let mut e = Engine::new();
+        let (holder, object) = held_object(&mut e, &[0x2c]);
+        let log = recording_double(&mut e, 0x7000_002c, 0x6666);
+        assert_eq!(
+            e.call(0x00d9_22a0, &args![0u32, holder, 9u32]).u32(),
+            0x6666
+        );
+        assert_eq!(*log.borrow(), vec![vec![object, 9]]);
+    }
+
+    #[test]
+    fn fn_00d922c0_calls_slot_30_of_the_held_object() {
+        let mut e = Engine::new();
+        let (holder, object) = held_object(&mut e, &[0x30]);
+        let log = recording_double(&mut e, 0x7000_0030, 0x7777);
+        assert_eq!(
+            e.call(0x00d9_22c0, &args![0u32, holder, 9u32]).u32(),
+            0x7777
+        );
+        assert_eq!(*log.borrow(), vec![vec![object, 9]]);
+    }
+
+    #[test]
+    fn fn_00d922e0_calls_slot_34_of_the_held_object() {
+        let mut e = Engine::new();
+        let (holder, object) = held_object(&mut e, &[0x34]);
+        let log = recording_double(&mut e, 0x7000_0034, 0x8888);
+        assert_eq!(
+            e.call(0x00d9_22e0, &args![0u32, holder, 9u32]).u32(),
+            0x8888
+        );
+        assert_eq!(*log.borrow(), vec![vec![object, 9]]);
+    }
+
+    #[test]
+    fn fn_00d92380_calls_slot_18_of_the_agent_object_and_answers_the_data_plus_16() {
+        let mut e = Engine::new();
+        let (agent_data, object) = held_object(&mut e, &[0x18]);
+        let log = recording_double(&mut e, 0x7000_0018, 0);
+        let input = e.mem.alloc(0x14);
+        e.mem.set_u32(input, 0x11);
+        e.mem.set_u32(input + 4, 0x22);
+        e.mem.set_u32(input + 0xc, 0x33);
+        let words = args![input, 0u32, agent_data, 0u32, 0x44u32];
+        assert_eq!(e.call(0x00d9_2380, &words).u32(), agent_data + 0x10);
+        assert_eq!(*log.borrow(), vec![vec![object, 0x11, 0x22, 0x33, 0x44]]);
     }
 }

@@ -251,11 +251,6 @@ const MODE_BIT_800: u32 = 0x800;
 /// `TESForm::iFormFlags` bit tested by `00885a30`.
 const FORM_FLAG_20000000: u32 = 0x2000_0000;
 
-/// The compiler's byte table for the switch at `00884a2b` (`00884a88`), by
-/// `kind - 0xe3`: `0` is the case that answers true (kinds `0xe3`, `0xe5`
-/// and `0xf1` to `0xf4`), `1` carries on.
-const ANIMATION_KIND_TABLE: [u8; 18] = [0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0];
-
 layout! {
     /// `BaseProcess` (Xbox PDB), size 0x30.
     pub struct BaseProcess: 0x30 {
@@ -403,9 +398,6 @@ const CONTROLLER_PUSH_DOWN: u32 = 0x0101_712c;
 const CONTROLLER_PUSH_UP: u32 = 0x0102_caf8;
 const MENU_ID_0X3F0: u32 = 0x3f0;
 const ANIMATION_SIZE: u32 = 0x13c;
-/// The compiler's byte table at `00888950` for the switch in `008885e0`
-/// (kind `3` to `10`): `0` is the case that rescales the actor.
-const SCALE_CASE_TABLE: [u8; 8] = [0, 1, 0, 1, 1, 0, 1, 0];
 /// Speed formulas (`cdecl`).
 const SPEED_FORMULA_00647F50: u32 = 0x0064_7f50;
 const SPEED_FORMULA_00647F90: u32 = 0x0064_7f90;
@@ -782,9 +774,9 @@ pub fn fn_008849c0(e: &mut Engine, this: Ptr<Actor>) -> bool {
         let step = e.call(ANIMATION_STEP, &args![entry]).u32();
         let kind = e.call(ANIMATION_KIND, &args![step]).u32();
         let index = kind.wrapping_sub(0xe3);
-        // The compiler's switch: the byte table maps the kind to case 0
-        // (answer true) or case 1 (carry on), compared as unsigned.
-        if index <= 0x11 && ANIMATION_KIND_TABLE[index as usize] == 0 {
+        // The compiler's switch (`00884a2b`) on `kind - 0xe3` (`0..=0x11`, an unsigned compare):
+        // kinds `0xe3`, `0xe5` and `0xf1` to `0xf4` answer true, the others carry on.
+        if matches!(index, 0 | 2 | 14..=17) {
             return true;
         }
     }
@@ -3049,9 +3041,9 @@ pub fn actor_update_animation_movement(
         );
         let kind = e.vcall(this.addr(), VSLOT_KIND_0X214, &args![]).u32();
         let index = kind.wrapping_sub(3);
-        // The compiler's byte table (`00888950`) maps kinds 3, 5, 8 and 10
-        // to the case that rescales the actor; the others leave.
-        if index <= 7 && SCALE_CASE_TABLE[index as usize] == 0 {
+        // The compiler's switch on the kind less 3 (`0..=7`): kinds 3, 5, 8 and 10 rescale the
+        // actor; the others leave.
+        if matches!(index, 0 | 2 | 5 | 7) {
             let player_animation = e.call(PLAYER_GET_ANIMATION, &args![player, 1u32]).u32();
             if animation.addr() != player_animation {
                 let mut vector = [

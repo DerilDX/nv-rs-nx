@@ -107,7 +107,8 @@ fn replace_registry(e: &mut Engine, global: u32, registry: u32) {
 /// `type_info` in the type info registry (global `01269b18`, slot `0xc`) and, when the class's
 /// `getNumInterfaces` (`00d46de0`) is above 0 (signed), `(type_info word +0xc, class)` in the
 /// vtable class registry (global `01269b10`, slot `0xc`).
-pub fn hk_builtin_type_registry_add_type(e: &mut Engine, type_info: u32, class: u32) {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn hk_builtin_type_registry_add_type(e: &mut Engine, _this: u32, type_info: u32, class: u32) {
     let class_names = e.mem.u32(CLASS_NAME_REGISTRY);
     let name = e.call(CLASS_GET_NAME, &args![class]).u32();
     e.vcall(class_names, 0x1c, &args![class, name]);
@@ -537,10 +538,31 @@ pub fn hk_dynamic_class_name_registry_merge_ov2(e: &mut Engine, this: Ptr, other
     });
 }
 
+// Translated from 00d47820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: cdecl, no stack words. Answers null unless the three words at
+/// `01269b10`, `01269b14` and `01269b18` are all non-zero. Then it allocates 8 bytes through the
+/// memory router's allocator (`00c85750`; virtual function at +4 of the object at router + 0x10),
+/// stores the size as a 16-bit word at +4 and ends with a jump to the constructor `00d478c0`
+/// (`this` in `ECX`, no stack words; it stores the count 1 at +6 and a vtable word), whose answer
+/// it returns. Ghidra made no function here; the address is stored in the data word at 011b4df8.
+pub fn fn_00d47820(e: &mut Engine) -> u32 {
+    if e.mem.u32(0x0126_9b10) == 0 || e.mem.u32(0x0126_9b14) == 0 || e.mem.u32(0x0126_9b18) == 0 {
+        return 0;
+    }
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let block = e.vcall(allocator, 4, &args![8u32]).u32();
+    e.mem.set_u16(block + 4, 8);
+    e.call(0x00d4_78c0, &args![block]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00d4_77c0, hk_builtin_type_registry_add_type(u32, u32)),
+        entry!(
+            0x00d4_77c0,
+            hk_builtin_type_registry_add_type(u32, u32, u32)
+        ),
         entry!(0x00d4_7860, hk_default_builtin_type_registry_init()),
         entry!(0x00d4_78c0, construct_00d478c0(Ptr) -> Ptr),
         entry!(
@@ -584,12 +606,16 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00d4_7eb0,
             hk_dynamic_class_name_registry_merge_ov2(Ptr, u32)
         ),
+        entry!(0x00d4_7820, fn_00d47820() -> u32),
     ]
 }
 
 #[cfg(test)]
 mod translated_tests {
     use super::*;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     /// Doubles used behind the registries' virtual slots.
     const DOUBLE_A: u32 = 0x0900_0a01;
@@ -685,14 +711,14 @@ mod translated_tests {
         answer(&mut e, CLASS_GET_NUM_INTERFACES, 2);
         let type_info = e.mem.alloc(0x20);
         e.mem.set_u32(type_info + 0xc, 0x5555);
-        e.call(0x00d4_77c0, &args![type_info, 0x6000u32]);
+        e.call(0x00d4_77c0, &args![VCALL_THIS, type_info, 0x6000u32]);
         assert_eq!(calls_to(&e, DOUBLE_A), vec![vec![names, 0x6000, 0x7000]]);
         assert_eq!(calls_to(&e, DOUBLE_B), vec![vec![type_infos, type_info]]);
         assert_eq!(calls_to(&e, DOUBLE_C), vec![vec![vtables, 0x5555, 0x6000]]);
         // No interfaces, or a negative count (signed compare): no vtable registration.
         for count in [0, 0xffff_ffff] {
             answer(&mut e, CLASS_GET_NUM_INTERFACES, count);
-            e.call(0x00d4_77c0, &args![type_info, 0x6000u32]);
+            e.call(0x00d4_77c0, &args![VCALL_THIS, type_info, 0x6000u32]);
             assert_eq!(calls_to(&e, DOUBLE_C).len(), 1);
         }
     }
@@ -1180,5 +1206,79 @@ mod translated_tests {
         });
         e.call(0x00d4_7eb0, &args![this, other]);
         assert_eq!(calls_to(&e, DOUBLE_A).len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The slot of the allocator's vtable (offset 4) that allocates, as a test double.
+    const ALLOCATE_SLOT_DOUBLE: u32 = 0x0900_0001;
+
+    /// A memory router (`00c85750`) whose allocator allocates through a double that logs the
+    /// size it was asked for and answers a zeroed block.
+    fn allocator_engine() -> (Engine, Rc<RefCell<Vec<u32>>>) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, ALLOCATE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&sizes);
+        e.register_double(ALLOCATE_SLOT_DOUBLE, move |e, a| {
+            log.borrow_mut().push(a[1]);
+            Ret {
+                eax: e.mem.alloc(a[1]),
+                ..Ret::default()
+            }
+        });
+        (e, sizes)
+    }
+
+    /// Any of the three words being zero gives null without allocating.
+    #[test]
+    fn fn_00d47820_needs_all_three_words() {
+        for missing in 0..3u32 {
+            let (mut e, sizes) = allocator_engine();
+            e.map(0x0126_9000, 0x1000);
+            for word in 0..3u32 {
+                e.set_global(0x0126_9b10 + 4 * word, u32::from(word != missing));
+            }
+            assert_eq!(e.call(0x00d4_7820, &args![]).u32(), 0);
+            assert!(sizes.borrow().is_empty());
+        }
+    }
+
+    /// With the three words set it allocates 8 bytes and returns the constructor's answer.
+    #[test]
+    fn fn_00d47820_allocates_and_calls_the_constructor() {
+        let (mut e, sizes) = allocator_engine();
+        e.map(0x0126_9000, 0x1000);
+        for word in 0..3u32 {
+            e.set_global(0x0126_9b10 + 4 * word, 1u32);
+        }
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register_double(0x00d4_78c0, move |e, a| {
+            log.borrow_mut().push((a.to_vec(), e.mem.u16(a[0] + 4)));
+            Ret {
+                eax: 0x4321,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(e.call(0x00d4_7820, &args![]).u32(), 0x4321);
+        assert_eq!(*sizes.borrow(), vec![8]);
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].1, 8);
     }
 }

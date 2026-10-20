@@ -44,9 +44,17 @@ pub fn fn_006e3ab0(e: &mut Engine, this: Ptr) {
     e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
 }
 
+// Translated from 006e2b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`pathingrequest.cpp`). `thiscall`, `RET 4`: stores the byte
+/// argument at `+0x98` of `this`.
+pub fn fn_006e2b50(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr().wrapping_add(0x98), value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x006e_2b50, fn_006e2b50(Ptr, u8)),
         entry!(0x006e_25e0, pathing_request_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x006e_3a50, fn_006e3a50(Ptr, u32) -> Ptr),
         entry!(0x006e_3ab0, fn_006e3ab0(Ptr)),
@@ -111,5 +119,22 @@ mod array_destructor_tests {
     #[test]
     fn fn_006e3ab0_sets_the_vtable_then_releases_the_buffer() {
         check_array_destructor(0x006e_3ab0, ARRAY_VTABLE_0106D218, ARRAY_RELEASE_008454F0);
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    #[test]
+    fn at_006e2b50_stores_the_byte_at_offset_0x98() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xa0);
+        e.mem.set_u32(this + 0x98, 0x1122_3344);
+        e.call(0x006e_2b50, &args![this, 0xa5u8]);
+        // Only the low byte changes.
+        assert_eq!(e.mem.u32(this + 0x98), 0x1122_33a5);
+        e.call(0x006e_2b50, &args![this, 0u8]);
+        assert_eq!(e.mem.u32(this + 0x98), 0x1122_3300);
     }
 }

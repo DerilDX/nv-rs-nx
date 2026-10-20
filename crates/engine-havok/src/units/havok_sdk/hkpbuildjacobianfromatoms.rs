@@ -1646,9 +1646,30 @@ pub fn build_jacobian_from_center_of_mass_changer_modifier(
     });
 }
 
+/// The table of floats (`010c7948`) indexed by the byte at `atom + 3`: the scale of the error
+/// term of the linear-limit records.
+const ATOM_SCALE_TABLE: u32 = 0x010c_7948;
+
+// Translated from 00d6ced0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Three linear-limit records for an atom (no engine-map name; `atom` is passed in EAX, the info
+/// block in EDI, and the stack words are `a`, `b` (the points are the vectors at their +0x30) and the cursor). The body is
+/// the same code as `fn_00d6c630` (which has no atom: its limit and scale are stack words):
+/// here the limit is the float at `atom + 4` (loaded through the x87 stack, so a signalling NaN
+/// comes out quiet) and the scale the float of the table at `010c7948` indexed by the byte at
+/// `atom + 3`; the step is `(1 / weight) * scale`, so the translation of that function does the
+/// rest.
+pub fn fn_00d6ced0(e: &mut Engine, atom: Ptr, info: Ptr, a: Ptr, b: Ptr, cursor: Ptr) {
+    let limit = x87_quiet(e.mem.f32(atom.addr() + 4));
+    let kind = u32::from(e.mem.u8(atom.addr() + 3));
+    let scale = e.mem.f32(ATOM_SCALE_TABLE + kind * 4);
+    let (a, b) = (Ptr::new(a.addr() + 0x30), Ptr::new(b.addr() + 0x30));
+    fn_00d6c630(e, info, a, b, cursor, limit, scale);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d6_ced0, fn_00d6ced0(Ptr, Ptr, Ptr, Ptr, Ptr)),
         entry!(
             0x00d6_c5a0,
             build_jacobian_from_viscous_surface_modifier(Ptr, Ptr, Ptr)
@@ -3240,5 +3261,106 @@ mod continuation_tests {
         assert_eq!(records[0][3..], [(-1.0f32).to_bits(), (-4.0f32).to_bits()]);
         assert_eq!(records[1][..3], [inverses[0][0], inverses[1][0], cursor]);
         assert_eq!(records[1][3..], [1.0f32.to_bits(), 4.0f32.to_bits()]);
+    }
+}
+
+#[cfg(test)]
+mod atom_limit_tests {
+    use super::*;
+
+    /// An engine with the image constants and the callees of the linear-limit builders doubled.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.set_global(EPSILON, 1.1920929e-7f64);
+        e.set_global(MAX_FLOAT, f64::from(f32::MAX));
+        for (i, axis) in [
+            [1.0f32, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (lane, value) in axis.into_iter().enumerate() {
+                e.mem
+                    .set_f32(AXIS_TABLE + 16 * i as u32 + 4 * lane as u32, value);
+            }
+        }
+        // `004b4ab0` gives the angular term (1, 0, 0, 0) for both bodies.
+        e.register(ROTATE_ANGULAR, |e, a| {
+            for (lane, value) in [1.0f32, 0.0, 0.0, 0.0].into_iter().enumerate() {
+                e.mem.set_f32(a[0] + 4 * lane as u32, value);
+            }
+            Ret::default()
+        });
+        e
+    }
+
+    struct Scene {
+        atom: u32,
+        info: u32,
+        a: u32,
+        b: u32,
+        cursor: u32,
+        records: u32,
+    }
+
+    fn scene(e: &mut Engine, limit: f32, kind: u8) -> Scene {
+        let atom = e.mem.alloc(0x10);
+        e.mem.set_u8(atom + 3, kind);
+        e.mem.set_f32(atom + 4, limit);
+        e.mem.set_f32(ATOM_SCALE_TABLE + 4 * u32::from(kind), 0.25);
+        let (body_a, body_b) = (e.mem.alloc(0x100), e.mem.alloc(0x100));
+        let info = e.mem.alloc(0x80);
+        e.mem.set_f32(info + 0x20, 2.0);
+        e.mem.set_f32(info + 0x24, 1.0);
+        e.mem.set_u32(info + 0x30, body_a);
+        e.mem.set_u32(info + 0x34, body_b);
+        // Body A's centre of mass is one above the origin; body B's is at the point b.
+        e.mem.set_f32(body_a + 0x44, 1.0);
+        e.mem.set_f32(body_b + 0x40, 1.0);
+        let (a, b) = (e.mem.alloc(0x40), e.mem.alloc(0x40));
+        e.mem.set_f32(b + 0x30, 1.0);
+        let records = e.mem.alloc(0x200);
+        let cursor = e.mem.alloc(8);
+        e.mem.set_u32(cursor, records);
+        Scene {
+            atom,
+            info,
+            a,
+            b,
+            cursor,
+            records,
+        }
+    }
+
+    #[test]
+    fn the_atom_supplies_the_limit_and_the_scale_of_three_records() {
+        let mut e = engine();
+        // Body A's centre of mass is at (0, 1, 0) (the odd offset above), so `ra` = (0, -1, 0).
+        let s = scene(&mut e, f32::MAX, 3);
+        e.call(0x00d6_ced0, &args![s.atom, s.info, s.a, s.b, s.cursor]);
+        // Three records of 0x30 bytes; the limit is FLT_MAX, so the tag is 5.
+        assert_eq!(e.mem.u32(s.cursor), s.records + 0x90);
+        for record in 0..3 {
+            assert_eq!(e.mem.u8(s.records + 0x30 * record), 5);
+        }
+        // error = (b - a) - h * (ra x w) with ra x w = (0, 0, 1), h = scale / weight = 0.125:
+        // z component -0.125, times the weight 2 = -0.25 = -(table scale).
+        assert_eq!(e.mem.f32(s.records + 0x60 + 0xc), -0.25);
+        // The x component of the error is b - a = 1, times 2.
+        assert_eq!(e.mem.f32(s.records + 0xc), 2.0);
+    }
+
+    #[test]
+    fn a_finite_limit_is_stored_in_each_record_with_tag_six() {
+        let mut e = engine();
+        let s = scene(&mut e, 12.5, 0);
+        e.call(0x00d6_ced0, &args![s.atom, s.info, s.a, s.b, s.cursor]);
+        for record in 0..3 {
+            assert_eq!(e.mem.u8(s.records + 0x30 * record), 6);
+            assert_eq!(e.mem.f32(s.records + 0x30 * record + 0x2c), 12.5);
+        }
     }
 }

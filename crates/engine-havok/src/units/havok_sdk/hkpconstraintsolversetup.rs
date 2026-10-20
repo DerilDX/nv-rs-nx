@@ -504,9 +504,407 @@ fn buffer_size_of(e: &mut Engine, state: Ptr) -> u32 {
     })
 }
 
+/// `hkSolveConstraints` (`00d8d030`, cdecl: the step info, the schema stream start, the
+/// accumulator buffer, the end of the first-pass array; answers 1 when it ran), and
+/// `hkSolverExport::hkExportImpulsesAndRhs` (`00df0680`, cdecl: the step info, the array end, the
+/// schema stream start, the buffer), `hkpWorldCallbackUtil::fireContactImpulseLimitBreached`
+/// (`00d01700`, cdecl: the world, the first schema's data, the breaching float).
+const SOLVE_CONSTRAINTS: u32 = 0x00d8_d030;
+const EXPORT_IMPULSES_AND_RHS: u32 = 0x00df_0680;
+const FIRE_IMPULSE_LIMIT_BREACHED: u32 = 0x00d0_1700;
+/// The float added to the first word of a schema stream header when the stream continues in
+/// another block (the double `010c9300`, 2^-23).
+const CHAIN_EPSILON: u32 = 0x010c_9300;
+/// Profiling labels `"MiNumJacobians"` and `"MiNumEntities"` (records of a label and a `float`).
+const LABEL_NUM_JACOBIANS: u32 = 0x010d_3d70;
+const LABEL_NUM_ENTITIES: u32 = 0x010d_3d60;
+
+/// Appends a record of a label and a `float` to the thread's record stream while the cursor
+/// (`+4`) is below the limit (`+0xC`); the record is 8 bytes.
+fn profile_value_record(e: &mut Engine, label: u32, value: i32) {
+    use crate::units::havok_sdk::hkpsphereshape::{PROFILE_SLOT, TLS_GET_VALUE};
+    let slot: u32 = e.global(PROFILE_SLOT);
+    let stream = e.call(TLS_GET_VALUE, &args![slot]).u32();
+    let cursor = e.mem.u32(stream + 4);
+    if cursor < e.mem.u32(stream + 0xc) {
+        e.mem.set_u32(cursor, label);
+        e.mem.set_f32(cursor + 4, value as f32);
+        e.mem.set_u32(stream + 4, cursor + 8);
+    }
+}
+
+/// The state of the schema stream the jacobian builders of `solve` write: the cell holding the
+/// write cursor (passed to the builders by pointer), the limit at which the stream continues in
+/// another block, that block and the base of the accumulators, and the builder context.
+struct SchemaStream {
+    cell: u32,
+    limit: u32,
+    chained: u32,
+    base: u32,
+    context: u32,
+}
+
+/// Fills the context for the constraint record `record` (0x30 bytes: the constraint at `+0`,
+/// the entities at `+4` and `+8`, the atoms at `+0xc`, their size at `+0x10`, a word at
+/// `+0x1c`) and builds its jacobian into the stream. When the write cursor has reached the
+/// limit the stream header there is closed (the float at `+0` gets the float `2^-23` added and
+/// its low byte 2, the distance to the chained block goes to `+4`), the limit is made
+/// unreachable and the cursor moves to the chained block.
+fn build_record_jacobian(e: &mut Engine, stream: &mut SchemaStream, record: u32) {
+    let cursor = e.mem.u32(stream.cell);
+    if cursor >= stream.limit {
+        let header = x87_load32(e.mem.u32(cursor));
+        let distance = stream.chained.wrapping_sub(cursor);
+        let epsilon = e.mem.f64(CHAIN_EPSILON);
+        e.mem.set_u32(cursor + 4, distance);
+        stream.limit = 0xffff_ffff;
+        let bits = x87_store32(x87_add(header, epsilon));
+        e.mem.set_u32(cursor, bits);
+        e.mem.set_u8(cursor, 2);
+        e.mem.set_u32(stream.cell, stream.chained);
+    }
+    let context = stream.context;
+    let first = e.mem.u32(record + 4);
+    let second = e.mem.u32(record + 8);
+    let first_offset = e.mem.u32(first + 0xa4);
+    let second_offset = e.mem.u32(second + 0xa4);
+    e.mem
+        .set_u32(context + 0x30, first_offset.wrapping_add(stream.base));
+    e.mem
+        .set_u32(context + 0x34, second_offset.wrapping_add(stream.base));
+    e.mem.set_u32(context + 0x38, first.wrapping_add(0xf0));
+    e.mem.set_u32(context + 0x3c, second.wrapping_add(0xf0));
+    let constraint = e.mem.u32(record);
+    e.mem.set_u32(context + 0x60, constraint);
+    let word = e.mem.u32(record + 0x1c);
+    e.mem.set_u32(context + 0x64, word);
+    e.mem.set_u32(context + 0x6c, (first_offset >> 7) & 0xffff);
+    e.mem.set_u32(context + 0x70, (second_offset >> 7) & 0xffff);
+    let word = e.mem.u32(context + 0x64);
+    e.mem.set_u32(context + 0x74, word);
+    let atoms = e.mem.u32(record + 0xc);
+    let size = u32::from(e.mem.u16(record + 0x10));
+    if e.mem.u16(atoms) == 0x16 {
+        e.call(
+            BUILD_CONTACT_JACOBIAN,
+            &args![atoms, context, 1u32, stream.cell],
+        );
+    } else {
+        e.call(
+            BUILD_ATOM_JACOBIAN,
+            &args![atoms, size, context, stream.cell],
+        );
+    }
+}
+
+// Translated from 00d88b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpConstraintSolverSetup::solve` (Ghidra name), cdecl `(motion_solver, step_info, context,
+/// info, buffer, buffer_size, entities, count)`, answers what `hkRigidMotionUtilApplyAccumulators`
+/// answers (0 if the solver did not run). `info` holds the sizes (`+8`, `+0xc`), the number of
+/// jacobians (`+0x10`), the number of lanes (`+0x14`) and the world (`+0x18`).
+///
+/// The work buffer is laid out as the accumulators (0x80 bytes per entity and a header, `count *
+/// 0x80 + 0x90`), the schema stream (`info + 0xc`, plus a header of 0x10) and the lanes
+/// (`(info[0x14] * 4 + 0x17) & !0xf` bytes). It is the caller's `buffer` when given, otherwise a
+/// block the allocator at `[router + 0x18]` grants (virtual slot `0xc`, with the wanted size in
+/// a cell that comes back with the granted one). When the pieces do not fit, the lanes come from
+/// the router's stack (the cursor at `[router]`, rounded up to 0x80), or the stream and lanes
+/// from a block of the allocator at `[router + 0xc]` (slot 4), the stream being chained over to
+/// it at the point where the buffer ends; and when not even the accumulators fit, a block of
+/// everything is taken from that allocator and the layout starts over.
+///
+/// Then the first accumulator is emptied, each entity gets the accumulator offset `i * 0x80 +
+/// 0x80` (written only when different), `hkRigidMotionUtilApplyForcesAndBuildAccumulators`
+/// (`00d29830`) builds the accumulators and the byte 3 closes them, and the floats of the lanes
+/// are cleared. The constraints of every entity (record array at `entity + 0xac`, count at
+/// `+0xb0`, 0x30 bytes each) are walked: those with a bit of `0xd` in their flags byte `+0x12`
+/// set up the context for their data's callbacks (`fireCallbacks` for `9`, virtual slot `0x38` for
+/// `4`), and those whose class byte `+0x13` is below 4 get their jacobian built
+/// (`build_record_jacobian`) while the others are deferred to a list that is built afterwards.
+/// A zero ends the stream, the list is freed when it left the stack storage, and `hkSolveConstraints`
+/// runs. The profile records `MiNumJacobians` and `MiNumEntities` are written. When the solver
+/// ran, the impulses are exported, the accumulators applied, the entities' AABBs recalculated
+/// and, when the first word of the stream (the breaching float) is non-zero, the limit breach
+/// is announced. The blocks taken from the allocators are given back. (The exe also issues cache
+/// prefetches of the constraint data; they have no effect and are left out.)
+pub fn hkp_constraint_solver_setup_solve(
+    e: &mut Engine,
+    motion_solver: u32,
+    step_info: u32,
+    context: Ptr,
+    info: Ptr,
+    buffer: u32,
+    buffer_size: u32,
+    entities: Ptr,
+    count: i32,
+) -> u32 {
+    let (context, info, entities) = (context.addr(), info.addr(), entities.addr());
+    let count_words = count as u32;
+    let reserve = e.mem.u32(info + 0xc).wrapping_add(0x10);
+    let lanes = e.mem.u32(info + 0x14).wrapping_mul(4).wrapping_add(0x17) & 0xffff_fff0;
+    let accumulator_bytes = count_words.wrapping_mul(0x80).wrapping_add(0x90);
+    let wanted = lanes.wrapping_add(reserve).wrapping_add(accumulator_bytes);
+    let mut extra_size = 0u32;
+    let mut extra_block = 0u32;
+    let mut chained = 0u32;
+    let mut result = 0u32;
+    let mut main_size = wanted;
+    let main_block;
+    let mut base;
+    let mut end;
+    if buffer == 0 {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x18);
+        let (block, granted) = e.with_stack(0x10, |e, cell| {
+            e.mem.set_u32(cell.addr(), wanted);
+            let block = e.vcall(allocator, 0xc, &args![cell]).u32();
+            (block, e.mem.u32(cell.addr()))
+        });
+        base = block;
+        main_size = granted;
+        main_block = base;
+        end = base.wrapping_add(main_size);
+    } else {
+        main_block = 0;
+        base = buffer;
+        end = buffer.wrapping_add(buffer_size);
+    }
+    let mut limit;
+    let mut chain_start;
+    let mut reserve_end;
+    loop {
+        chain_start = base.wrapping_add(accumulator_bytes);
+        reserve_end = chain_start.wrapping_add(reserve);
+        limit = reserve_end;
+        let mut fits = true;
+        while reserve_end.wrapping_add(lanes) > end {
+            if chain_start >= end {
+                fits = false;
+                break;
+            }
+            let stream_room = e.mem.u32(info + 8).wrapping_add(0x10);
+            if limit < end {
+                let router = e.call(MEMORY_ROUTER, &args![]).u32();
+                let cursor = e.mem.u32(router);
+                let rounded = lanes.wrapping_add(0x7f) & 0xffff_ff80;
+                e.mem.set_u32(router, rounded.wrapping_add(cursor));
+                extra_block = cursor;
+                reserve_end = cursor;
+                end = cursor.wrapping_add(lanes);
+            } else {
+                let tail = end.wrapping_sub(stream_room);
+                let shortfall = tail.wrapping_sub(chain_start) as i32;
+                let kept = shortfall.max(0) as u32;
+                let stream_bytes = e
+                    .mem
+                    .u32(info + 0xc)
+                    .wrapping_sub(kept)
+                    .wrapping_add(stream_room);
+                extra_size = stream_bytes.wrapping_add(lanes);
+                let router = e.call(MEMORY_ROUTER, &args![]).u32();
+                let allocator = e.mem.u32(router + 0xc);
+                let block = e.vcall(allocator, 4, &args![extra_size]).u32();
+                extra_block = block;
+                end = extra_size.wrapping_add(block);
+                if shortfall >= 0 {
+                    chained = block;
+                    limit = tail;
+                    reserve_end = block.wrapping_add(stream_bytes);
+                } else {
+                    chain_start = block;
+                    reserve_end = e.mem.u32(info + 0xc).wrapping_add(block).wrapping_add(0x10);
+                    limit = reserve_end;
+                    chained = 0;
+                }
+            }
+        }
+        if fits {
+            break;
+        }
+        extra_size = reserve_end.wrapping_add(lanes).wrapping_sub(main_block);
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0xc);
+        let block = e.vcall(allocator, 4, &args![extra_size]).u32();
+        extra_block = block;
+        base = block;
+        end = extra_size.wrapping_add(block);
+    }
+    write_empty_accumulator(e, base);
+    for (index, offset) in (0..count).zip((0x80u32..).step_by(0x80)) {
+        let entity = e.mem.u32(entities + 4 * index as u32);
+        if e.mem.u32(entity + 0xa4) != offset {
+            e.mem.set_u32(entity + 0xa4, offset);
+        }
+    }
+    let accumulators_end = e
+        .call(
+            APPLY_FORCES_AND_BUILD,
+            &args![
+                motion_solver,
+                entities,
+                count,
+                0xe0u32,
+                base.wrapping_add(0x80)
+            ],
+        )
+        .u32();
+    e.mem.set_u8(accumulators_end, 3);
+    for index in 0..e.mem.i32(info + 0x14) {
+        e.mem.set_u32(reserve_end + 4 * index as u32, 0);
+    }
+    let mut stream = SchemaStream {
+        cell: 0,
+        limit,
+        chained,
+        base,
+        context,
+    };
+    e.with_stack(0x440, |e, frame| {
+        let cell = frame.addr();
+        let array = cell + 0x10;
+        let storage = cell + 0x20;
+        stream.cell = cell;
+        e.mem.set_u32(cell, chain_start);
+        e.mem.set_u32(array, storage);
+        e.mem.set_u32(array + 4, 0);
+        e.mem.set_u32(array + 8, 0x8000_0100);
+        let entities_end = entities.wrapping_add(count_words.wrapping_mul(4));
+        let mut walk = entities;
+        while walk < entities_end {
+            let entity = e.mem.u32(walk);
+            let first = e.mem.u32(entity + 0xac);
+            let last = first.wrapping_add(u32::from(e.mem.u16(entity + 0xb0)).wrapping_mul(0x30));
+            let mut record = first;
+            while record < last {
+                let flags = e.mem.u8(record + 0x12);
+                if flags & 0xd != 0 {
+                    let constraint = e.mem.u32(record);
+                    e.mem.set_u32(context + 0x60, constraint);
+                    let word = e.mem.u32(record + 0x1c);
+                    e.mem.set_u32(context + 0x64, word);
+                    let constraint = e.mem.u32(record);
+                    let first_entity = e.mem.u32(constraint + 0x14);
+                    let second_entity = e.mem.u32(constraint + 0x18);
+                    let first_offset = e.mem.u32(first_entity + 0xa4);
+                    e.mem
+                        .set_u32(context + 0x30, first_offset.wrapping_add(base));
+                    let second_offset = e.mem.u32(second_entity + 0xa4);
+                    e.mem
+                        .set_u32(context + 0x34, second_offset.wrapping_add(base));
+                    let word = e.mem.u32(first_entity + 0x18);
+                    e.mem.set_u32(context + 0x38, word);
+                    let word = e.mem.u32(second_entity + 0x18);
+                    e.mem.set_u32(context + 0x3c, word);
+                    if flags & 9 != 0 {
+                        let constraint = e.mem.u32(record);
+                        let data = e.mem.u32(constraint + 0xc);
+                        let data_word = e.mem.u32(data + 0x28);
+                        e.call(FIRE_CALLBACKS, &args![data, context, data_word, 2u32]);
+                    }
+                    if flags & 4 != 0 {
+                        let constraint = e.mem.u32(record);
+                        let data = e.mem.u32(constraint + 0xc);
+                        e.vcall(data, 0x38, &args![context]);
+                    }
+                }
+                if e.mem.u8(record + 0x13) < 4 {
+                    build_record_jacobian(e, &mut stream, record);
+                } else {
+                    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+                    let size = e.mem.u32(array + 4);
+                    if size == e.mem.u32(array + 8) & 0x3fff_ffff {
+                        let allocator = e.mem.u32(router + 0x10);
+                        e.call(GROW_ARRAY, &args![allocator, array, 4u32]);
+                    }
+                    let size = e.mem.u32(array + 4);
+                    let data = e.mem.u32(array);
+                    e.mem
+                        .set_u32(data.wrapping_add(size.wrapping_mul(4)), record);
+                    e.mem.set_u32(array + 4, size.wrapping_add(1));
+                }
+                record = record.wrapping_add(0x30);
+            }
+            walk = walk.wrapping_add(4);
+        }
+        let mut index = 0u32;
+        while (index as i32) < e.mem.i32(array + 4) {
+            let data = e.mem.u32(array);
+            let record = e.mem.u32(data.wrapping_add(index.wrapping_mul(4)));
+            build_record_jacobian(e, &mut stream, record);
+            index += 1;
+        }
+        let end_cursor = e.mem.u32(cell);
+        e.mem.set_u32(end_cursor, 0);
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x10);
+        let flags = e.mem.u32(array + 8);
+        e.mem.set_u32(array + 4, 0);
+        if (flags as i32) >= 0 {
+            let data = e.mem.u32(array);
+            let bytes = (flags & 0x3fff_ffff).wrapping_mul(4);
+            e.vcall(allocator, 0x10, &args![data, bytes]);
+        }
+    });
+    let solved = e
+        .call(
+            SOLVE_CONSTRAINTS,
+            &args![step_info, chain_start, base, reserve_end],
+        )
+        .u32();
+    let jacobians = e.mem.i32(info + 0x10);
+    profile_value_record(e, LABEL_NUM_JACOBIANS, jacobians);
+    profile_value_record(e, LABEL_NUM_ENTITIES, count);
+    if solved == 1 {
+        e.call(
+            EXPORT_IMPULSES_AND_RHS,
+            &args![step_info, reserve_end, chain_start, base],
+        );
+        result = e
+            .call(
+                APPLY_ACCUMULATORS,
+                &args![
+                    step_info,
+                    motion_solver,
+                    base.wrapping_add(0x80),
+                    entities,
+                    count,
+                    0xe0u32
+                ],
+            )
+            .u32();
+        let first_entity = e.mem.u32(entities);
+        let owner = e.mem.u32(first_entity + 8);
+        let manager = e.mem.u32(owner + 0x78);
+        e.call(BATCH_RECALC_AABB, &args![manager, entities, count]);
+        let breach = e.mem.u32(chain_start);
+        if breach != 0 {
+            let world = e.mem.u32(info + 0x18);
+            e.call(
+                FIRE_IMPULSE_LIMIT_BREACHED,
+                &args![world, chain_start.wrapping_add(0x10), breach],
+            );
+        }
+    }
+    if extra_block != 0 {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0xc);
+        e.vcall(allocator, 8, &args![extra_block, extra_size]);
+    }
+    if main_block != 0 {
+        let router = e.call(MEMORY_ROUTER, &args![]).u32();
+        let allocator = e.mem.u32(router + 0x18);
+        e.vcall(allocator, 0x10, &args![main_block, main_size]);
+    }
+    result
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00d8_8b50,
+            hkp_constraint_solver_setup_solve(u32, u32, Ptr, Ptr, u32, u32, Ptr, i32) -> u32
+        ),
         entry!(0x00d8_8300, shutdown_solver()),
         entry!(0x00d8_8310, buffer_has_room(Ptr, Ptr, u32, u32) -> Ptr),
         entry!(0x00d8_8340, sub_solve(Ptr, u32)),
@@ -1261,5 +1659,577 @@ mod havok_a03_tests {
         assert_eq!(e.call(0x00d8_89f0, &args![state]).u32(), 0x3f0);
         assert_eq!(e.call(0x00d8_8aa0, &args![state]).u32(), 0x3f0);
         assert_eq!(calls_to(&e, MEMORY_ROUTER).len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod solve_tests {
+    use super::*;
+    use crate::units::havok_sdk::hkpsphereshape::{PROFILE_SLOT, TLS_GET_VALUE};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    type Seen = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    const STEP_INFO: u32 = 0x5151;
+    const MOTION_SOLVER: u32 = 0x4242;
+    const ALLOCATE_BLOCK: u32 = 0x0900_0004;
+    const FREE_BLOCK: u32 = 0x0900_0008;
+    const GRANT_BLOCK: u32 = 0x0900_000c;
+    const FREE_ARRAY: u32 = 0x0900_0010;
+    const DATA_SLOT: u32 = 0x0900_0038;
+
+    struct Rig {
+        e: Engine,
+        seen: Seen,
+        stream: u32,
+        context: u32,
+        info: u32,
+        entities: u32,
+        accumulators: u32,
+        router: u32,
+        solved: Rc<Cell<u32>>,
+        advance: Rc<Cell<u32>>,
+        grant: Rc<Cell<u32>>,
+        stream_events: Rc<RefCell<Vec<u32>>>,
+    }
+
+    /// Adds a logging double over `address` that answers `eax`.
+    fn recorder(e: &mut Engine, seen: &Seen, address: u32, eax: u32) {
+        let log = Rc::clone(seen);
+        e.register_double(address, move |_, a| {
+            log.borrow_mut().push((address, a.to_vec()));
+            Ret {
+                eax,
+                ..Ret::default()
+            }
+        });
+    }
+
+    fn calls(seen: &Seen, address: u32) -> Vec<Vec<u32>> {
+        seen.borrow()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// Two entities, each with the constraint records `(class byte, flags byte, is a contact)`
+    /// of its list.
+    fn rig(records: [&[(u8, u8, bool)]; 2]) -> Rig {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.map(0x00fd_f000, 0x1000);
+        let seen: Seen = Rc::default();
+        // The profile stream, with room for two value records.
+        let stream = e.mem.alloc(0x40);
+        e.mem.set_u32(stream + 4, stream + 0x20);
+        e.mem.set_u32(stream + 0xc, stream + 0x30);
+        e.set_global(PROFILE_SLOT, 3u32);
+        e.register_double(TLS_GET_VALUE, move |_, _| Ret {
+            eax: stream,
+            ..Ret::default()
+        });
+        e.set_global(CHAIN_EPSILON, 0u32);
+        e.mem
+            .set_f64(CHAIN_EPSILON, f64::from(1.0f32 / 8_388_608.0));
+        // The router with its four allocators (cursor at +0, the heap at +0x10, the others at
+        // +0xc and +0x18).
+        let router = e.mem.alloc(0x40);
+        let cursor_block = e.mem.alloc(0x400);
+        e.mem.set_u32(router, cursor_block);
+        let table = e.mem.alloc(0x40);
+        for (slot, double) in [
+            (4, ALLOCATE_BLOCK),
+            (8, FREE_BLOCK),
+            (0xc, GRANT_BLOCK),
+            (0x10, FREE_ARRAY),
+        ] {
+            e.mem.set_u32(table + slot, double);
+        }
+        for offset in [0x10, 0xc, 0x18] {
+            let allocator = e.mem.alloc(0x10);
+            e.mem.set_u32(allocator, table);
+            e.mem.set_u32(router + offset, allocator);
+        }
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let log = Rc::clone(&seen);
+        e.register_double(ALLOCATE_BLOCK, move |e, a| {
+            log.borrow_mut().push((ALLOCATE_BLOCK, a.to_vec()));
+            Ret {
+                eax: e.mem.alloc(a[1] + 0x100),
+                ..Ret::default()
+            }
+        });
+        let grant = Rc::new(Cell::new(0u32));
+        let granted = Rc::clone(&grant);
+        let log = Rc::clone(&seen);
+        e.register_double(GRANT_BLOCK, move |e, a| {
+            log.borrow_mut()
+                .push((GRANT_BLOCK, vec![a[0], e.mem.u32(a[1])]));
+            if granted.get() != 0 {
+                e.mem.set_u32(a[1], granted.get());
+            }
+            Ret {
+                eax: e.mem.alloc(e.mem.u32(a[1]) + 0x100),
+                ..Ret::default()
+            }
+        });
+        recorder(&mut e, &seen, FREE_BLOCK, 0);
+        recorder(&mut e, &seen, FREE_ARRAY, 0);
+        recorder(&mut e, &seen, GROW_ARRAY, 0);
+        recorder(&mut e, &seen, DATA_SLOT, 0);
+        recorder(&mut e, &seen, FIRE_CALLBACKS, 0);
+        recorder(&mut e, &seen, BATCH_RECALC_AABB, 0);
+        recorder(&mut e, &seen, EXPORT_IMPULSES_AND_RHS, 0);
+        recorder(&mut e, &seen, FIRE_IMPULSE_LIMIT_BREACHED, 0);
+        let accumulators = e.mem.alloc(0x10);
+        let log = Rc::clone(&seen);
+        e.register_double(APPLY_FORCES_AND_BUILD, move |e, a| {
+            log.borrow_mut().push((APPLY_FORCES_AND_BUILD, a.to_vec()));
+            // The accumulators end 0x80 per entity after the first one.
+            let end = a[4] + 0x80;
+            e.mem.set_u32(accumulators, end);
+            Ret {
+                eax: end,
+                ..Ret::default()
+            }
+        });
+        recorder(&mut e, &seen, APPLY_ACCUMULATORS, 0x55);
+        let solved = Rc::new(Cell::new(1u32));
+        let verdict = Rc::clone(&solved);
+        let log = Rc::clone(&seen);
+        e.register_double(SOLVE_CONSTRAINTS, move |e, a| {
+            log.borrow_mut().push((SOLVE_CONSTRAINTS, a.to_vec()));
+            // The stream's first word: 1.0f on the solving run, a limit breach.
+            if verdict.get() == 1 {
+                e.mem.set_f32(a[1], 4.0);
+            }
+            Ret {
+                eax: verdict.get(),
+                ..Ret::default()
+            }
+        });
+        let advance = Rc::new(Cell::new(0x10u32));
+        let stream_events = Rc::new(RefCell::new(Vec::new()));
+        for address in [BUILD_CONTACT_JACOBIAN, BUILD_ATOM_JACOBIAN] {
+            let log = Rc::clone(&seen);
+            let step = Rc::clone(&advance);
+            let events = Rc::clone(&stream_events);
+            e.register_double(address, move |e, a| {
+                log.borrow_mut().push((address, a.to_vec()));
+                let cell = a[3];
+                let cursor = e.mem.u32(cell);
+                events.borrow_mut().push(cursor);
+                e.mem.set_u32(cursor + 8, address);
+                e.mem.set_u32(cell, cursor + step.get());
+                Ret::default()
+            });
+        }
+        // The context, the info record and the entities.
+        let context = e.mem.alloc(0x100);
+        let info = e.mem.alloc(0x40);
+        e.mem.set_u32(info + 8, 0x100);
+        e.mem.set_u32(info + 0xc, 0x200);
+        e.mem.set_u32(info + 0x10, 7);
+        e.mem.set_u32(info + 0x14, 4);
+        e.mem.set_u32(info + 0x18, 0x1234);
+        let manager = e.mem.alloc(0x10);
+        let owner = e.mem.alloc(0x100);
+        e.mem.set_u32(owner + 0x78, manager);
+        let array = e.mem.alloc(8);
+        let entity_blocks = [0, 1].map(|_| {
+            let entity = e.mem.alloc(0x100);
+            e.mem.set_u32(entity + 8, owner);
+            e.mem.set_u32(entity + 0x18, 0x7000 + entity);
+            e.mem.set_u32(entity + 0xa4, 0xffff);
+            entity
+        });
+        e.mem.set_u32(array, entity_blocks[0]);
+        e.mem.set_u32(array + 4, entity_blocks[1]);
+        let data_table = e.mem.alloc(0x80);
+        e.mem.set_u32(data_table + 0x38, DATA_SLOT);
+        for (index, list) in records.iter().enumerate() {
+            let entity = entity_blocks[index];
+            let other = entity_blocks[1 - index];
+            let block = e.mem.alloc(0x30 * list.len().max(1) as u32);
+            for (n, (class, flags, contact)) in list.iter().enumerate() {
+                let record = block + 0x30 * n as u32;
+                let constraint = e.mem.alloc(0x40);
+                e.mem.set_u32(constraint + 0x14, entity);
+                e.mem.set_u32(constraint + 0x18, other);
+                let data = e.mem.alloc(0x40);
+                e.mem.set_u32(data, data_table);
+                e.mem.set_u32(data + 0x28, 0x2800 + record);
+                e.mem.set_u32(constraint + 0xc, data);
+                let atoms = e.mem.alloc(0x20);
+                e.mem.set_u16(atoms, if *contact { 0x16 } else { 0x20 });
+                e.mem.set_u32(record, constraint);
+                e.mem.set_u32(record + 4, entity);
+                e.mem.set_u32(record + 8, other);
+                e.mem.set_u32(record + 0xc, atoms);
+                e.mem.set_u16(record + 0x10, 0x40 + n as u16);
+                e.mem.set_u8(record + 0x12, *flags);
+                e.mem.set_u8(record + 0x13, *class);
+                e.mem.set_u32(record + 0x1c, 0x9000 + record);
+            }
+            e.mem.set_u32(entity + 0xac, block);
+            e.mem.set_u16(entity + 0xb0, list.len() as u16);
+        }
+        Rig {
+            e,
+            seen,
+            stream,
+            context,
+            info,
+            entities: array,
+            accumulators,
+            router,
+            solved,
+            advance,
+            grant,
+            stream_events,
+        }
+    }
+
+    fn run(r: &mut Rig, buffer: u32, size: u32) -> u32 {
+        r.e.call(
+            0x00d8_8b50,
+            &args![
+                MOTION_SOLVER,
+                STEP_INFO,
+                r.context,
+                r.info,
+                buffer,
+                size,
+                r.entities,
+                2u32
+            ],
+        )
+        .u32()
+    }
+
+    #[test]
+    fn a_caller_buffer_is_laid_out_and_the_jacobians_built_in_order() {
+        let mut r = rig([&[(0, 0, true), (5, 0, false)], &[(1, 0, false)]]);
+        let buffer = r.e.mem.alloc(0x1000);
+        assert_eq!(run(&mut r, buffer, 0x1000), 0x55);
+        // Accumulators first (count 2: 0x190 bytes), then the stream, then the lanes.
+        let chain_start = buffer + 0x190;
+        let reserve_end = chain_start + 0x210;
+        let solves = calls(&r.seen, SOLVE_CONSTRAINTS);
+        assert_eq!(
+            solves,
+            vec![vec![STEP_INFO, chain_start, buffer, reserve_end]]
+        );
+        assert_eq!(
+            calls(&r.seen, APPLY_FORCES_AND_BUILD),
+            vec![vec![MOTION_SOLVER, r.entities, 2, 0xe0, buffer + 0x80]]
+        );
+        // The first accumulator is empty and the closing byte 3 follows the built ones.
+        assert_eq!(r.e.mem.u8(buffer), 1);
+        let built = r.e.mem.u32(r.accumulators);
+        assert_eq!(r.e.mem.u8(built), 3);
+        // Each entity got its accumulator offset.
+        let first = r.e.mem.u32(r.entities);
+        let second = r.e.mem.u32(r.entities + 4);
+        assert_eq!(
+            (r.e.mem.u32(first + 0xa4), r.e.mem.u32(second + 0xa4)),
+            (0x80, 0x100)
+        );
+        // The contact record of the first entity and the non-contact one (class 5, deferred
+        // behind the second entity's record): the stream cursor advances by 0x10 each.
+        let order: Vec<u32> = r
+            .seen
+            .borrow()
+            .iter()
+            .filter(|(a, _)| *a == BUILD_CONTACT_JACOBIAN || *a == BUILD_ATOM_JACOBIAN)
+            .map(|(a, _)| *a)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                BUILD_CONTACT_JACOBIAN,
+                BUILD_ATOM_JACOBIAN,
+                BUILD_ATOM_JACOBIAN
+            ]
+        );
+        assert_eq!(
+            *r.stream_events.borrow(),
+            vec![chain_start, chain_start + 0x10, chain_start + 0x20]
+        );
+        // A zero ends the stream.
+        assert_eq!(r.e.mem.u32(chain_start + 0x30), 0);
+        // The contact builder gets the atoms, the context, the flag 1 and the cursor cell.
+        let contact = &calls(&r.seen, BUILD_CONTACT_JACOBIAN)[0];
+        assert_eq!(contact[1], r.context);
+        assert_eq!(contact[2], 1);
+        // The last record built is the deferred class-5 one of the second entity... of the
+        // first entity: the context holds the accumulators of the entities, 0x80 and 0x100
+        // from the buffer, and their words at +0xf0.
+        assert_eq!(r.e.mem.u32(r.context + 0x30), buffer + 0x80);
+        assert_eq!(r.e.mem.u32(r.context + 0x34), buffer + 0x100);
+        assert_eq!(r.e.mem.u32(r.context + 0x38), first + 0xf0);
+        assert_eq!(r.e.mem.u32(r.context + 0x3c), second + 0xf0);
+        assert_eq!(
+            (r.e.mem.u32(r.context + 0x6c), r.e.mem.u32(r.context + 0x70)),
+            (1, 2)
+        );
+        let word = r.e.mem.u32(r.context + 0x64);
+        assert_eq!(r.e.mem.u32(r.context + 0x74), word);
+    }
+
+    #[test]
+    fn the_deferred_records_are_built_after_all_the_entities() {
+        let mut r = rig([&[(5, 0, false)], &[(0, 0, true)]]);
+        let buffer = r.e.mem.alloc(0x1000);
+        run(&mut r, buffer, 0x1000);
+        let first = &calls(&r.seen, BUILD_CONTACT_JACOBIAN);
+        let second = &calls(&r.seen, BUILD_ATOM_JACOBIAN);
+        assert_eq!((first.len(), second.len()), (1, 1));
+        let events = r.stream_events.borrow();
+        assert_eq!(events.len(), 2);
+        // The contact record of the second entity went first even though the deferred
+        // record belongs to the first entity.
+        assert_eq!(events[0] + 0x10, events[1]);
+        assert_eq!(r.e.mem.u32(events[0] + 8), BUILD_CONTACT_JACOBIAN);
+        assert_eq!(r.e.mem.u32(events[1] + 8), BUILD_ATOM_JACOBIAN);
+        // The deferred array lives in the stack storage: nothing to free, nothing to grow.
+        assert!(calls(&r.seen, GROW_ARRAY).is_empty());
+        assert!(calls(&r.seen, FREE_ARRAY).is_empty());
+        // The atom builder gets the atoms, their size, the context and the cursor cell.
+        let atoms = &second[0];
+        assert_eq!(atoms[1], 0x40);
+        assert_eq!(atoms[2], r.context);
+    }
+
+    #[test]
+    fn the_flags_of_a_record_run_the_data_callbacks() {
+        let mut r = rig([&[(0, 0xd, true)], &[(0, 0x4, true)]]);
+        // The context words the slot sees when it is called.
+        let contexts: Rc<RefCell<Vec<Vec<u32>>>> = Rc::default();
+        let kept = Rc::clone(&contexts);
+        r.e.register_double(DATA_SLOT, move |e, a| {
+            kept.borrow_mut().push(
+                (0x30..0x40)
+                    .step_by(4)
+                    .map(|at| e.mem.u32(a[1] + at))
+                    .collect(),
+            );
+            Ret::default()
+        });
+        let buffer = r.e.mem.alloc(0x1000);
+        run(&mut r, buffer, 0x1000);
+        let callbacks = calls(&r.seen, FIRE_CALLBACKS);
+        // Only the first record has a bit of 9: `fireCallbacks(data, context, data word, 2)`.
+        assert_eq!(callbacks.len(), 1);
+        assert_eq!(callbacks[0][1], r.context);
+        assert_eq!(callbacks[0][3], 2);
+        // Both have the bit 4: the data's virtual slot 0x38 with the context.
+        let contexts = contexts.borrow();
+        assert_eq!(contexts.len(), 2);
+        // The context for the callbacks takes the accumulators of the constraint's two
+        // entities (the buffer plus the entities' offsets 0x80 and 0x100) and their words at
+        // +0x18.
+        let first = r.e.mem.u32(r.entities);
+        let second = r.e.mem.u32(r.entities + 4);
+        assert_eq!(
+            contexts[0],
+            vec![
+                buffer + 0x80,
+                buffer + 0x100,
+                0x7000 + first,
+                0x7000 + second
+            ]
+        );
+        assert_eq!(
+            contexts[1],
+            vec![
+                buffer + 0x100,
+                buffer + 0x80,
+                0x7000 + second,
+                0x7000 + first
+            ]
+        );
+    }
+
+    #[test]
+    fn a_solver_that_did_not_run_answers_zero_and_exports_nothing() {
+        let mut r = rig([&[(0, 0, true)], &[]]);
+        r.solved.set(0);
+        let buffer = r.e.mem.alloc(0x1000);
+        assert_eq!(run(&mut r, buffer, 0x1000), 0);
+        assert!(calls(&r.seen, EXPORT_IMPULSES_AND_RHS).is_empty());
+        assert!(calls(&r.seen, APPLY_ACCUMULATORS).is_empty());
+        assert!(calls(&r.seen, BATCH_RECALC_AABB).is_empty());
+        assert!(calls(&r.seen, FIRE_IMPULSE_LIMIT_BREACHED).is_empty());
+    }
+
+    #[test]
+    fn a_solved_step_exports_applies_recalculates_and_reports_a_breach() {
+        let mut r = rig([&[(0, 0, true)], &[]]);
+        let buffer = r.e.mem.alloc(0x1000);
+        assert_eq!(run(&mut r, buffer, 0x1000), 0x55);
+        let chain_start = buffer + 0x190;
+        let reserve_end = chain_start + 0x210;
+        assert_eq!(
+            calls(&r.seen, EXPORT_IMPULSES_AND_RHS),
+            vec![vec![STEP_INFO, reserve_end, chain_start, buffer]]
+        );
+        assert_eq!(
+            calls(&r.seen, APPLY_ACCUMULATORS),
+            vec![vec![
+                STEP_INFO,
+                MOTION_SOLVER,
+                buffer + 0x80,
+                r.entities,
+                2,
+                0xe0
+            ]]
+        );
+        let owner_manager = {
+            let first = r.e.mem.u32(r.entities);
+            let owner = r.e.mem.u32(first + 8);
+            r.e.mem.u32(owner + 0x78)
+        };
+        assert_eq!(
+            calls(&r.seen, BATCH_RECALC_AABB),
+            vec![vec![owner_manager, r.entities, 2]]
+        );
+        // The solver double left 4.0 in the first word of the stream: the breach is reported
+        // with the world of the info record.
+        assert_eq!(
+            calls(&r.seen, FIRE_IMPULSE_LIMIT_BREACHED),
+            vec![vec![0x1234, chain_start + 0x10, 4.0f32.to_bits()]]
+        );
+        // The two profile records: the number of jacobians (7) and of entities (2).
+        let record = r.stream + 0x20;
+        assert_eq!(r.e.mem.u32(record), LABEL_NUM_JACOBIANS);
+        assert_eq!(r.e.mem.f32(record + 4), 7.0);
+        assert_eq!(r.e.mem.u32(record + 8), LABEL_NUM_ENTITIES);
+        assert_eq!(r.e.mem.f32(record + 12), 2.0);
+        assert_eq!(r.e.mem.u32(r.stream + 4), record + 16);
+    }
+
+    #[test]
+    fn the_lanes_come_from_the_router_stack_when_only_they_do_not_fit() {
+        let mut r = rig([&[(0, 0, true)], &[]]);
+        let buffer = r.e.mem.alloc(0x1000);
+        let cursor = r.e.mem.u32(r.router);
+        // The stream fits (reserve end 0x3a0) but the lanes (0x20 more) do not.
+        run(&mut r, buffer, 0x3b0);
+        assert!(calls(&r.seen, ALLOCATE_BLOCK).is_empty());
+        // The cursor moved by the lanes rounded up to 0x80, and the block is freed through the
+        // allocator at +0xc with the size 0.
+        assert_eq!(r.e.mem.u32(r.router), cursor + 0x80);
+        assert_eq!(
+            calls(&r.seen, FREE_BLOCK),
+            vec![vec![r.e.mem.u32(r.router + 0xc), cursor, 0]]
+        );
+        let solves = calls(&r.seen, SOLVE_CONSTRAINTS);
+        assert_eq!(solves[0][2], buffer);
+        assert_eq!(solves[0][3], cursor);
+    }
+
+    #[test]
+    fn a_stream_that_does_not_fit_is_chained_into_a_block() {
+        let mut r = rig([&[(0, 0, true), (0, 0, true)], &[(0, 0, true), (0, 0, true)]]);
+        r.advance.set(0x60);
+        let buffer = r.e.mem.alloc(0x1000);
+        run(&mut r, buffer, 0x190 + 0x200);
+        // The stream starts in the buffer (0x190 in) and goes on in a block of 0x240 bytes.
+        let blocks = calls(&r.seen, ALLOCATE_BLOCK);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0][1], 0x240);
+        let events = r.stream_events.borrow().clone();
+        assert_eq!(events.len(), 4);
+        let chain_start = buffer + 0x190;
+        assert_eq!(
+            events[..3],
+            [chain_start, chain_start + 0x60, chain_start + 0xc0]
+        );
+        // The fourth record found the cursor past the limit: the header there was closed and
+        // the stream went on in the block.
+        let header = chain_start + 0x120;
+        let block = events[3];
+        assert_eq!(r.e.mem.u8(header), 2);
+        assert_eq!(r.e.mem.u32(header + 4), block.wrapping_sub(header));
+        // The block is given back with its size.
+        let freed = calls(&r.seen, FREE_BLOCK);
+        assert_eq!(freed.len(), 1);
+        assert_eq!(freed[0][2], 0x240);
+    }
+
+    #[test]
+    fn a_stream_with_no_room_at_all_starts_in_a_new_block() {
+        let mut r = rig([&[(0, 0, true)], &[]]);
+        let buffer = r.e.mem.alloc(0x1000);
+        // Only 0x10 bytes of the stream fit after the accumulators.
+        run(&mut r, buffer, 0x190 + 0x10);
+        let blocks = calls(&r.seen, ALLOCATE_BLOCK);
+        assert_eq!(blocks.len(), 1);
+        // The stream room (0x200) and the room before it (0x110), and the lanes.
+        assert_eq!(blocks[0][1], 0x200 + 0x110 + 0x20);
+        let events = r.stream_events.borrow().clone();
+        assert_ne!(events[0], buffer + 0x190);
+    }
+
+    #[test]
+    fn a_buffer_that_cannot_hold_the_accumulators_is_replaced() {
+        let mut r = rig([&[(0, 0, true)], &[]]);
+        r.grant.set(0x100);
+        run(&mut r, 0, 0);
+        // The allocator at +0x18 is asked for everything (0x3c0), grants 0x100, and the layout
+        // starts over in a block of 0x3c0 bytes.
+        assert_eq!(calls(&r.seen, GRANT_BLOCK).len(), 1);
+        assert_eq!(calls(&r.seen, GRANT_BLOCK)[0][1], 0x3c0);
+        let blocks = calls(&r.seen, ALLOCATE_BLOCK);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0][1], 0x3c0);
+        // Both blocks are given back: the new one through +0xc (slot 8) and the granted one
+        // through +0x18 (slot 0x10).
+        let freed = calls(&r.seen, FREE_BLOCK);
+        assert_eq!(freed.len(), 1);
+        assert_eq!(freed[0][2], 0x3c0);
+        let arrays = calls(&r.seen, FREE_ARRAY);
+        assert_eq!(arrays.len(), 1);
+        assert_eq!(arrays[0][2], 0x100);
+    }
+
+    #[test]
+    fn a_full_list_of_deferred_records_grows_the_array_and_frees_it() {
+        let list: Vec<(u8, u8, bool)> = vec![(5, 0, false); 0x101];
+        let mut r = rig([&list, &[]]);
+        // The growth call makes room for twice as many records in a new block.
+        let log = Rc::clone(&r.seen);
+        r.e.register_double(GROW_ARRAY, move |e, a| {
+            log.borrow_mut().push((GROW_ARRAY, a.to_vec()));
+            let (data, size, capacity) =
+                (e.mem.u32(a[1]), e.mem.u32(a[1] + 4), e.mem.u32(a[1] + 8));
+            let doubled = (capacity & 0x3fff_ffff) * 2;
+            let block = e.mem.alloc(doubled * 4);
+            for word in 0..size {
+                let value = e.mem.u32(data + 4 * word);
+                e.mem.set_u32(block + 4 * word, value);
+            }
+            e.mem.set_u32(a[1], block);
+            e.mem.set_u32(a[1] + 8, doubled);
+            Ret::default()
+        });
+        // The builders leave the stream cursor alone: only the list matters here.
+        r.advance.set(0);
+        let buffer = r.e.mem.alloc(0x4000);
+        run(&mut r, buffer, 0x4000);
+        let growth = calls(&r.seen, GROW_ARRAY);
+        assert_eq!(growth.len(), 1);
+        assert_eq!(growth[0][2], 4);
+        assert_eq!(calls(&r.seen, BUILD_ATOM_JACOBIAN).len(), 0x101);
+        // The grown array is no longer the stack storage: it is given back with its size.
+        let freed = calls(&r.seen, FREE_ARRAY);
+        assert_eq!(freed.len(), 1);
+        assert_eq!(freed[0][2], 0x200 * 4);
     }
 }

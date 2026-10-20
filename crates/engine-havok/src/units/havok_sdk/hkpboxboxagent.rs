@@ -188,8 +188,10 @@ pub fn hkp_box_box_agent_static_get_closest_points(
 // Translated from 00d406a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpBoxBoxAgent::getClosestPoints` (engine map): passes its four words on to
 /// `staticGetClosestPoints`.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_box_box_agent_get_closest_points(
     e: &mut Engine,
+    _this: u32,
     body_a: u32,
     body_b: u32,
     input: u32,
@@ -238,14 +240,57 @@ pub fn hkp_box_box_agent_static_get_penetrations(
 // Translated from 00d408c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpBoxBoxAgent::getPenetrations` (engine map): passes its four words on to
 /// `staticGetPenetrations`.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_box_box_agent_get_penetrations(
     e: &mut Engine,
+    _this: u32,
     body_a: u32,
     body_b: u32,
     input: u32,
     collector: u32,
 ) {
     hkp_box_box_agent_static_get_penetrations(e, body_a, body_b, input, collector);
+}
+
+// Translated from 00d401d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (an agent creation function of this unit, cdecl, four stack words,
+/// nothing popped): `body_a`, `body_b`, `input` and `manager`. Multiplies the float at +0x2c of the
+/// shape of `body_a` by the double at `010cf200` and stores it as a float, then does the same with
+/// the shape of `body_b` (the x87 steps: `FLD` / `FMUL` / `FSTP` / `FLD`). Only when each of the two
+/// is above the float at `input + 8` (an unordered compare counts as above) it allocates 0x50
+/// bytes through the memory router's allocator (`00c85750`; virtual function at +4 of the object
+/// at router + 0x10), stores the size as a 16-bit word at +4, the count 1 at +6, `manager` at +8
+/// and the vtable word `010cf1c4` at +0, runs the constructor `00db0920` on the block + 0x10 and
+/// returns the block. Otherwise it returns what `00dacc00` answers for the same four words. The exe
+/// also stores the first float over the stack word of `input`; nothing reads it. Ghidra made no function here; the address is an immediate operand at 00d408e6.
+pub fn fn_00d401d0(e: &mut Engine, body_a: u32, body_b: u32, input: u32, manager: u32) -> u32 {
+    let tolerance = x87_load32(e.mem.u32(input + 8));
+    let scale: f64 = e.global(0x010c_f200);
+    let shape_a = e.mem.u32(body_a);
+    let radius_a = x87_load32(e.mem.u32(shape_a + 0x2c));
+    let first = x87_store32(x87_mul(radius_a, scale));
+    if x87_load32(first) <= tolerance {
+        return e
+            .call(0x00da_cc00, &args![body_a, body_b, input, manager])
+            .u32();
+    }
+    let shape_b = e.mem.u32(body_b);
+    let radius_b = x87_load32(e.mem.u32(shape_b + 0x2c));
+    let second = x87_store32(x87_mul(scale, radius_b));
+    if x87_load32(second) <= tolerance {
+        return e
+            .call(0x00da_cc00, &args![body_a, body_b, input, manager])
+            .u32();
+    }
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let block = e.vcall(allocator, 4, &args![0x50u32]).u32();
+    e.mem.set_u16(block + 4, 0x50);
+    e.mem.set_u16(block + 6, 1);
+    e.mem.set_u32(block + 8, manager);
+    e.mem.set_u32(block, 0x010c_f1c4);
+    e.call(0x00db_0920, &args![block + 0x10]);
+    block
 }
 
 /// This unit's translated functions, by exe address.
@@ -262,7 +307,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d4_06a0,
-            hkp_box_box_agent_get_closest_points(u32, u32, u32, u32)
+            hkp_box_box_agent_get_closest_points(u32, u32, u32, u32, u32)
         ),
         entry!(
             0x00d4_06c0,
@@ -270,8 +315,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d4_08c0,
-            hkp_box_box_agent_get_penetrations(u32, u32, u32, u32)
+            hkp_box_box_agent_get_penetrations(u32, u32, u32, u32, u32)
         ),
+        entry!(0x00d4_01d0, fn_00d401d0(u32, u32, u32, u32) -> u32),
     ]
 }
 
@@ -281,6 +327,9 @@ mod movement_tests {
     use crate::units::havok_sdk::hkpsphereshape::{PROFILE_SLOT, TLS_GET_VALUE};
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
 
@@ -476,7 +525,10 @@ mod movement_tests {
         let (mut e, log, stream) = setup();
         let (body_a, body_b, input, collector) = scene(&mut e, &log);
         log_callees(&mut e, &log, &[CALCULATE_CLOSEST_POINT]);
-        e.call(0x00d4_06a0, &args![body_a, body_b, input, collector]);
+        e.call(
+            0x00d4_06a0,
+            &args![VCALL_THIS, body_a, body_b, input, collector],
+        );
         assert!(calls_to(&log, COLLECTOR_SLOT).is_empty());
         assert_eq!(calls_to(&log, CALCULATE_CLOSEST_POINT).len(), 1);
         assert_eq!(labels(&e, stream), vec![PROFILE_BEGIN, PROFILE_END]);
@@ -495,7 +547,10 @@ mod movement_tests {
             *sink.borrow_mut() = snapshot(e, a[0]);
             Ret::default()
         });
-        e.call(0x00d4_08c0, &args![body_a, body_b, input, collector]);
+        e.call(
+            0x00d4_08c0,
+            &args![VCALL_THIS, body_a, body_b, input, collector],
+        );
         let words = record.borrow();
         check_query(&words, body_a, body_b);
         assert_eq!(words[2..5], [0, 0, 0]);
@@ -542,5 +597,127 @@ mod movement_tests {
         assert_eq!(words[2..5], [input, 0xabcd, 0x4444]);
         assert_eq!(calls_to(&log, CALC_MANIFOLD)[0][1], agent + 0x10);
         assert_eq!(labels(&e, stream), vec![PROFILE_BEGIN, PROFILE_END]);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The slot of the allocator's vtable (offset 4) that allocates, as a test double.
+    const ALLOCATE_SLOT_DOUBLE: u32 = 0x0900_0001;
+
+    /// A memory router (`00c85750`) whose allocator allocates through a double that logs the
+    /// size it was asked for and answers a zeroed block.
+    fn allocator_engine() -> (Engine, Rc<RefCell<Vec<u32>>>) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, ALLOCATE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&sizes);
+        e.register_double(ALLOCATE_SLOT_DOUBLE, move |e, a| {
+            log.borrow_mut().push(a[1]);
+            Ret {
+                eax: e.mem.alloc(a[1]),
+                ..Ret::default()
+            }
+        });
+        (e, sizes)
+    }
+
+    /// A collidable whose shape holds the float `radius` at +0x2c.
+    fn body_with_radius(e: &mut Engine, radius: f32) -> u32 {
+        let body = e.mem.alloc(0x10);
+        let shape = e.mem.alloc(0x40);
+        e.mem.set_u32(body, shape);
+        e.mem.set_f32(shape + 0x2c, radius);
+        body
+    }
+
+    /// The input holds the tolerance float at +8; the scale constant is 2.0.
+    fn box_engine(
+        tolerance: f32,
+    ) -> (
+        Engine,
+        u32,
+        Rc<RefCell<Vec<Vec<u32>>>>,
+        Rc<RefCell<Vec<u32>>>,
+    ) {
+        let (mut e, sizes) = allocator_engine();
+        e.map(0x010c_f000, 0x1000);
+        e.set_global(0x010c_f200, 2.0f64);
+        let input = e.mem.alloc(0x20);
+        e.mem.set_f32(input + 8, tolerance);
+        let fallback = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&fallback);
+        e.register_double(0x00da_cc00, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            Ret {
+                eax: 0x4242,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00db_0920, |_, _| Ret::default());
+        (e, input, fallback, sizes)
+    }
+
+    /// Both scaled radii above the tolerance build the 0x50-byte agent.
+    #[test]
+    fn fn_00d401d0_builds_the_agent_when_both_scaled_radii_exceed_the_tolerance() {
+        let (mut e, input, fallback, sizes) = box_engine(1.0);
+        let a = body_with_radius(&mut e, 0.75);
+        let b = body_with_radius(&mut e, 2.0);
+        let block = e.call(0x00d4_01d0, &args![a, b, input, 0x7777u32]).u32();
+        assert!(fallback.borrow().is_empty());
+        assert_eq!(*sizes.borrow(), vec![0x50]);
+        assert_eq!(e.mem.u16(block + 4), 0x50);
+        assert_eq!(e.mem.u16(block + 6), 1);
+        assert_eq!(e.mem.u32(block + 8), 0x7777);
+        assert_eq!(e.mem.u32(block), 0x010c_f1c4);
+    }
+
+    /// A first product at or below the tolerance (1.0 * 2.0 = 2.0 against 2.0) uses the other function.
+    #[test]
+    fn fn_00d401d0_falls_back_when_the_first_product_is_not_above_the_tolerance() {
+        let (mut e, input, fallback, sizes) = box_engine(2.0);
+        let a = body_with_radius(&mut e, 1.0);
+        let b = body_with_radius(&mut e, 5.0);
+        assert_eq!(
+            e.call(0x00d4_01d0, &args![a, b, input, 0x7777u32]).u32(),
+            0x4242
+        );
+        assert_eq!(*fallback.borrow(), vec![vec![a, b, input, 0x7777]]);
+        assert!(sizes.borrow().is_empty());
+    }
+
+    /// The second product decides too; a NaN radius is unordered, which is not "at or below".
+    #[test]
+    fn fn_00d401d0_checks_the_second_shape_and_treats_nan_as_above() {
+        let (mut e, input, fallback, _) = box_engine(2.0);
+        let a = body_with_radius(&mut e, 3.0);
+        let b = body_with_radius(&mut e, 1.0);
+        assert_eq!(
+            e.call(0x00d4_01d0, &args![a, b, input, 0x7777u32]).u32(),
+            0x4242
+        );
+        assert_eq!(fallback.borrow().len(), 1);
+
+        let (mut e, input, fallback, sizes) = box_engine(2.0);
+        let a = body_with_radius(&mut e, f32::NAN);
+        let b = body_with_radius(&mut e, f32::NAN);
+        let block = e.call(0x00d4_01d0, &args![a, b, input, 0x7777u32]).u32();
+        assert!(fallback.borrow().is_empty());
+        assert_eq!(*sizes.borrow(), vec![0x50]);
+        assert_eq!(e.mem.u32(block), 0x010c_f1c4);
     }
 }

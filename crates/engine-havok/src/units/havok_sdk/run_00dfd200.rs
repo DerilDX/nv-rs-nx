@@ -107,6 +107,162 @@ pub fn fn_00dfd7d0(e: &mut Engine, object: Ptr, extra: u32) {
     }
 }
 
+// Translated from 00dfd1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpListShapeChildInfo` (the record at `011bb49c` of the data table, name pointer `010e2430`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00dfd1a0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00dfd220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpConvexVerticesShapeFourVectors` (the record at `011bb4dc` of the data table, name pointer `010e2588`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00dfd220(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00dfd340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpCompressedMeshShapeChunk` (the record at `011bb52c` of the data table, name pointer `010e2948`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00dfd340(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00dfd360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpCompressedMeshShapeChunk` (the record at `011bb52c` of the data table, name pointer `010e2948`). Loads the object into `ECX` and jumps to `00dfd380` (thiscall, no stack words), so this is that function run on the object.
+pub fn fn_00dfd360(e: &mut Engine, object: Ptr) {
+    fn_00dfd380(e, object);
+}
+
+// Translated from 00dfd2b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpCompressedMeshShapeBigTriangle` (the record at `011bb544` of the data table, name pointer `010e2964`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00dfd2b0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00dfd350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpCompressedMeshShapeConvexPiece` (the record at `011bb55c` of the data table, name pointer `010e2988`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00dfd350(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00dfd370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpCompressedMeshShapeConvexPiece` (the record at `011bb55c` of the data table, name pointer `010e2988`). Loads the object into `ECX` and jumps to `00dfd440` (thiscall, no stack words), so this is that function run on the object.
+pub fn fn_00dfd370(e: &mut Engine, object: Ptr) {
+    fn_00dfd440(e, object);
+}
+
+// Translated from 00dfd1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpListShape` (the record at `0126c140`, name pointer `010e2448`, that the static initializer `00fc2fd0` fills). When `object` is not null, runs `00cf56f0` (thiscall, one stack word, `RET 4`) with `this` = the object and the second stack word `finishing`; a null object does nothing.
+pub fn fn_00dfd1e0(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x00cf_56f0, &args![object.addr(), finishing]);
+    }
+}
+
+// Translated from 00dfd1c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpListShape` (the record at `0126c140`, name pointer `010e2448`, that the static initializer `00fc2fd0` fills). Calls the object's virtual function in vtable slot `0` (`this` = the object) with the one stack word `0`. There is no null test: the object's vtable is read at once. The slot has the shape of a scalar deleting destructor called with flag 0 (unconfirmed).
+pub fn fn_00dfd1c0(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00dfd260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpConvexVerticesShape` (the record at `0126c1b8`, name pointer `010e25ac`, that the static initializer `00fc3070` fills). When `object` is not null, runs `00d59830` (thiscall, one stack word, `RET 4`) with `this` = the object and the second stack word `finishing`; a null object does nothing.
+pub fn fn_00dfd260(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x00d5_9830, &args![object.addr(), finishing]);
+    }
+}
+
+// Translated from 00dfd240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpConvexVerticesShape` (the record at `0126c1b8`, name pointer `010e25ac`, that the static initializer `00fc3070` fills). Calls the object's virtual function in vtable slot `0` (`this` = the object) with the one stack word `0`. There is no null test: the object's vtable is read at once. The slot has the shape of a scalar deleting destructor called with flag 0 (unconfirmed).
+pub fn fn_00dfd240(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00dfd300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpCompressedMeshShape` (the record at `0126c290`, name pointer `010e2a20`, that the static initializer `00fc31a0` fills). When `object` is not null, runs `00e3dbd0` (thiscall, one stack word, `RET 4`) with `this` = the object and the second stack word `finishing`; a null object does nothing.
+pub fn fn_00dfd300(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x00e3_dbd0, &args![object.addr(), finishing]);
+    }
+}
+
+// Translated from 00dfd2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpCompressedMeshShape` (the record at `0126c290`, name pointer `010e2a20`, that the static initializer `00fc31a0` fills). Calls the object's virtual function in vtable slot `0` (`this` = the object) with the one stack word `0`. There is no null test: the object's vtable is read at once. The slot has the shape of a scalar deleting destructor called with flag 0 (unconfirmed).
+pub fn fn_00dfd2e0(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00dfd4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpCdBody` (the record at `011bb82c` of the data table, name pointer `010e2aa8`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00dfd4d0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00dfd510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpBroadPhaseHandle` (the record at `011bb85c` of the data table, name pointer `010e2acc`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00dfd510(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00dfd4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpBroadPhaseHandle` (the record at `011bb85c` of the data table, name pointer `010e2acc`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00dfd4f0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00dfd520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpAgent1nSector` (the record at `011bb898` of the data table, name pointer `010e2b80`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00dfd520(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00dfd530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpAgent1nSector` (the record at `011bb898` of the data table, name pointer `010e2b80`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00dfd530(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00dfd550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkxVertexDescriptionElementDecl` (the record at `011bb8d8` of the data table, name pointer `010e2dc4`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00dfd550(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00dfd570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkxVertexDescription` (the record at `011bb8f0` of the data table, name pointer `010e2de4`). When `object` is not null, runs `00e3df50` (thiscall, one stack word, `RET 4`) with `this` = the object and the second stack word `finishing`; a null object does nothing.
+pub fn fn_00dfd570(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x00e3_df50, &args![object.addr(), finishing]);
+    }
+}
+
+// Translated from 00dfd5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkxVertexDescription` (the record at `011bb8f0` of the data table, name pointer `010e2de4`). Releases the `hkArray`-shaped triple (data, size, capacity word) at the start of the object, 12-byte elements: the size is cleared, the data goes back through the memory router's allocator (slot `0x10`, `capacity * 12` bytes) unless the capacity word is negative, then data is cleared and the capacity word becomes `0x80000000`.
+pub fn fn_00dfd5a0(e: &mut Engine, object: Ptr) {
+    release_array(e, object.addr(), 12);
+}
+
+// Translated from 00dfd600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkxVertexBuffer` (the record at `0126c3f8`, name pointer `010e2fec`, that the static initializer `00fc3350` fills). When `object` is not null, runs `00e3e380` (thiscall, one stack word, `RET 4`) with `this` = the object and the second stack word `finishing`; a null object does nothing.
+pub fn fn_00dfd600(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x00e3_e380, &args![object.addr(), finishing]);
+    }
+}
+
+// Translated from 00dfd620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkxVertexBuffer` (the record at `0126c3f8`, name pointer `010e2fec`, that the static initializer `00fc3350` fills). Calls the object's virtual function in vtable slot `0` (`this` = the object) with the one stack word `0`. There is no null test: the object's vtable is read at once. The slot has the shape of a scalar deleting destructor called with flag 0 (unconfirmed).
+pub fn fn_00dfd620(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00dfd660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkxVertexBufferVertexData` (the record at `011bb9bc` of the data table, name pointer `010e2fd0`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00dfd660(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00dfd670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkxVertexBufferVertexData` (the record at `011bb9bc` of the data table, name pointer `010e2fd0`). Loads the object into `ECX` and jumps to `00dfd680` (thiscall, no stack words), so this is that function run on the object.
+pub fn fn_00dfd670(e: &mut Engine, object: Ptr) {
+    fn_00dfd680(e, object);
+}
+
+// Translated from 00dfd770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkxNodeAnnotationData` (the record at `011bba5c` of the data table, name pointer `010e3128`). When `object` is not null, runs `00cb0a70` (an `hkStringPtr` function, thiscall, one stack word, `RET 4`) on `object + 4` with the second stack word `finishing`; a null object does nothing.
+pub fn fn_00dfd770(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x00cb_0a70, &args![object.addr() + 4, finishing]);
+    }
+}
+
+// Translated from 00dfd7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkxNodeAnnotationData` (the record at `011bba5c` of the data table, name pointer `010e3128`). Adds 4 to the object and jumps to `00cb0c00` (`hkStringPtr::~hkStringPtr` in the engine map; thiscall, no stack words), so that function runs on `object + 4`.
+pub fn fn_00dfd7c0(e: &mut Engine, object: Ptr) {
+    e.call(0x00cb_0c00, &args![object.addr().wrapping_add(4)]);
+}
+
+// Translated from 00dfd7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkxNode` (the record at `0126c470`, name pointer `010e3140`, that the static initializer `00fc33f0` fills). Calls the object's virtual function in vtable slot `0` (`this` = the object) with the one stack word `0`. There is no null test: the object's vtable is read at once. The slot has the shape of a scalar deleting destructor called with flag 0 (unconfirmed).
+pub fn fn_00dfd7a0(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -119,6 +275,34 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00df_d440, fn_00dfd440(Ptr)),
         entry!(0x00df_d680, fn_00dfd680(Ptr)),
         entry!(0x00df_d7d0, fn_00dfd7d0(Ptr, u32)),
+        entry!(0x00df_d1a0, fn_00dfd1a0(Ptr)),
+        entry!(0x00df_d220, fn_00dfd220(Ptr)),
+        entry!(0x00df_d340, fn_00dfd340(Ptr, u32)),
+        entry!(0x00df_d360, fn_00dfd360(Ptr)),
+        entry!(0x00df_d2b0, fn_00dfd2b0(Ptr)),
+        entry!(0x00df_d350, fn_00dfd350(Ptr, u32)),
+        entry!(0x00df_d370, fn_00dfd370(Ptr)),
+        entry!(0x00df_d1e0, fn_00dfd1e0(Ptr, u32)),
+        entry!(0x00df_d1c0, fn_00dfd1c0(Ptr)),
+        entry!(0x00df_d260, fn_00dfd260(Ptr, u32)),
+        entry!(0x00df_d240, fn_00dfd240(Ptr)),
+        entry!(0x00df_d300, fn_00dfd300(Ptr, u32)),
+        entry!(0x00df_d2e0, fn_00dfd2e0(Ptr)),
+        entry!(0x00df_d4d0, fn_00dfd4d0(Ptr)),
+        entry!(0x00df_d510, fn_00dfd510(Ptr, u32)),
+        entry!(0x00df_d4f0, fn_00dfd4f0(Ptr)),
+        entry!(0x00df_d520, fn_00dfd520(Ptr, u32)),
+        entry!(0x00df_d530, fn_00dfd530(Ptr)),
+        entry!(0x00df_d550, fn_00dfd550(Ptr)),
+        entry!(0x00df_d570, fn_00dfd570(Ptr, u32)),
+        entry!(0x00df_d5a0, fn_00dfd5a0(Ptr)),
+        entry!(0x00df_d600, fn_00dfd600(Ptr, u32)),
+        entry!(0x00df_d620, fn_00dfd620(Ptr)),
+        entry!(0x00df_d660, fn_00dfd660(Ptr, u32)),
+        entry!(0x00df_d670, fn_00dfd670(Ptr)),
+        entry!(0x00df_d770, fn_00dfd770(Ptr, u32)),
+        entry!(0x00df_d7c0, fn_00dfd7c0(Ptr)),
+        entry!(0x00df_d7a0, fn_00dfd7a0(Ptr)),
     ]
 }
 
@@ -435,4 +619,297 @@ mod tests_a05 {
             vec![vec![object + 0x14, 4], vec![object + 0x40, 4]]
         );
     }
+}
+
+#[cfg(test)]
+mod tests_a03_type_info {
+    use crate::prelude::*;
+
+    /// Calls `function` with an object holding a pattern (and, for two words, a finishing word):
+    /// nothing else is called and the object is unchanged.
+    fn check_nothing(function: u32, words: usize) {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x40);
+        for i in 0..16 {
+            e.mem.set_u32(object + 4 * i, 0x1000_0000 + i);
+        }
+        e.call_log = Some(vec![]);
+        if words == 2 {
+            e.call(function, &args![object, 1u32]);
+        } else {
+            e.call(function, &args![object]);
+        }
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.len(), 1);
+        for i in 0..16 {
+            assert_eq!(e.mem.u32(object + 4 * i), 0x1000_0000 + i);
+        }
+    }
+
+    macro_rules! nothing_test {
+        ($name:ident, $function:expr, $words:expr) => {
+            #[test]
+            fn $name() {
+                check_nothing($function, $words);
+            }
+        };
+    }
+
+    const SLOT_ZERO_TARGET: u32 = 0x0900_0021;
+
+    /// The object's vtable slot 0 is a double: it must run once with `this` = the object and the
+    /// word 0.
+    fn check_virtual_call(function: u32) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable, SLOT_ZERO_TARGET);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.register(SLOT_ZERO_TARGET, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(function, &args![object]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == SLOT_ZERO_TARGET).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![object, 0]);
+    }
+
+    macro_rules! virtual_call_test {
+        ($name:ident, $function:expr) => {
+            #[test]
+            fn $name() {
+                check_virtual_call($function);
+            }
+        };
+    }
+
+    /// A non-null object: the callee double runs once with `this` = the object and the finishing
+    /// word; a null object calls nothing.
+    fn check_calls(function: u32, callee: u32) {
+        let mut e = Engine::new();
+        e.register(callee, |_, _| Ret::default());
+        let object = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(function, &args![0u32, 0x55u32]);
+        e.call(function, &args![object, 0x66u32]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == callee).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![object, 0x66]);
+    }
+
+    macro_rules! calls_test {
+        ($name:ident, $function:expr, $callee:expr) => {
+            #[test]
+            fn $name() {
+                check_calls($function, $callee);
+            }
+        };
+    }
+
+    const FREE_SLOT_TARGET: u32 = 0x0900_0031;
+
+    /// A memory router (`00c85750`) whose allocator has a double in slot 0x10; returns the engine
+    /// and the allocator object.
+    fn engine_with_allocator() -> (Engine, u32) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x10, FREE_SLOT_TARGET);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register(FREE_SLOT_TARGET, |_, _| Ret::default());
+        (e, allocator)
+    }
+
+    /// Every array of the jump target (offset, element size) is owned, with its own data word and
+    /// capacity: each is released in order, `capacity * element size` bytes, and cleared.
+    fn check_jump(function: u32, arrays: &[(u32, u32)]) {
+        let (mut e, allocator) = engine_with_allocator();
+        let object = e.mem.alloc(0x50);
+        let mut expected = Vec::new();
+        for (i, (offset, size)) in arrays.iter().enumerate() {
+            let data = 0xe0 + i as u32;
+            let capacity = 3 + i as u32;
+            e.mem.set_u32(object + offset, data);
+            e.mem.set_u32(object + offset + 4, 2);
+            e.mem.set_u32(object + offset + 8, capacity);
+            expected.push(vec![allocator, data, capacity * size]);
+        }
+        e.call_log = Some(vec![]);
+        e.call(function, &args![object]);
+        let log = e.call_log.take().unwrap();
+        let frees: Vec<_> = log
+            .iter()
+            .filter(|(a, _)| *a == FREE_SLOT_TARGET)
+            .map(|(_, words)| words.clone())
+            .collect();
+        assert_eq!(frees, expected);
+        for (offset, _) in arrays {
+            assert_eq!(e.mem.u32(object + offset), 0);
+            assert_eq!(e.mem.u32(object + offset + 4), 0);
+            assert_eq!(e.mem.u32(object + offset + 8), 0x8000_0000);
+        }
+    }
+
+    macro_rules! jump_test {
+        ($name:ident, $function:expr, $arrays:expr) => {
+            #[test]
+            fn $name() {
+                check_jump($function, $arrays);
+            }
+        };
+    }
+
+    /// `00cb0a70` runs on `object + 4` with the finishing word; a null object calls nothing.
+    fn check_annotation_finish(function: u32) {
+        let mut e = Engine::new();
+        e.register(0x00cb_0a70, |_, _| Ret::default());
+        let object = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(function, &args![0u32, 3u32]);
+        e.call(function, &args![object, 3u32]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == 0x00cb_0a70).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![object + 4, 3]);
+    }
+
+    macro_rules! annotation_finish_test {
+        ($name:ident, $function:expr) => {
+            #[test]
+            fn $name() {
+                check_annotation_finish($function);
+            }
+        };
+    }
+
+    /// `00cb0c00` runs on `object + 4`.
+    fn check_annotation_cleanup(function: u32) {
+        let mut e = Engine::new();
+        e.register(0x00cb_0c00, |_, _| Ret::default());
+        let object = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(function, &args![object]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == 0x00cb_0c00).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![object + 4]);
+    }
+
+    macro_rules! annotation_cleanup_test {
+        ($name:ident, $function:expr) => {
+            #[test]
+            fn $name() {
+                check_annotation_cleanup($function);
+            }
+        };
+    }
+
+    /// The array at the start of the object is released with 12-byte elements, only when it owns
+    /// its storage.
+    fn check_array(function: u32) {
+        let (mut e, allocator) = engine_with_allocator();
+        let owned = e.mem.alloc(0x10);
+        e.mem.set_u32(owned, 0xd1);
+        e.mem.set_u32(owned + 4, 3);
+        e.mem.set_u32(owned + 8, 5);
+        let borrowed = e.mem.alloc(0x10);
+        e.mem.set_u32(borrowed, 0xd2);
+        e.mem.set_u32(borrowed + 4, 3);
+        e.mem.set_u32(borrowed + 8, 0x8000_0005);
+        e.call_log = Some(vec![]);
+        e.call(function, &args![owned]);
+        e.call(function, &args![borrowed]);
+        let log = e.call_log.take().unwrap();
+        let frees: Vec<_> = log.iter().filter(|(a, _)| *a == FREE_SLOT_TARGET).collect();
+        assert_eq!(frees.len(), 1);
+        assert_eq!(frees[0].1, vec![allocator, 0xd1, 60]);
+        for array in [owned, borrowed] {
+            assert_eq!(e.mem.u32(array), 0);
+            assert_eq!(e.mem.u32(array + 4), 0);
+            assert_eq!(e.mem.u32(array + 8), 0x8000_0000);
+        }
+    }
+
+    macro_rules! array_test {
+        ($name:ident, $function:expr) => {
+            #[test]
+            fn $name() {
+                check_array($function);
+            }
+        };
+    }
+
+    nothing_test!(fn_00dfd1a0_does_nothing, 0x00df_d1a0, 1);
+    nothing_test!(fn_00dfd220_does_nothing, 0x00df_d220, 1);
+    nothing_test!(fn_00dfd340_does_nothing, 0x00df_d340, 2);
+    jump_test!(
+        fn_00dfd360_releases_the_arrays_of_its_target,
+        0x00df_d360,
+        &[(0x34, 2), (0x28, 2), (0x1c, 2), (0x10, 2)]
+    );
+    nothing_test!(fn_00dfd2b0_does_nothing, 0x00df_d2b0, 1);
+    nothing_test!(fn_00dfd350_does_nothing, 0x00df_d350, 2);
+    jump_test!(
+        fn_00dfd370_releases_the_arrays_of_its_target,
+        0x00df_d370,
+        &[(0x28, 2), (0x1c, 1), (0x10, 2)]
+    );
+    calls_test!(
+        fn_00dfd1e0_runs_its_callee_on_a_non_null_object,
+        0x00df_d1e0,
+        0x00cf_56f0
+    );
+    virtual_call_test!(fn_00dfd1c0_calls_vtable_slot_0_with_flag_0, 0x00df_d1c0);
+    calls_test!(
+        fn_00dfd260_runs_its_callee_on_a_non_null_object,
+        0x00df_d260,
+        0x00d5_9830
+    );
+    virtual_call_test!(fn_00dfd240_calls_vtable_slot_0_with_flag_0, 0x00df_d240);
+    calls_test!(
+        fn_00dfd300_runs_its_callee_on_a_non_null_object,
+        0x00df_d300,
+        0x00e3_dbd0
+    );
+    virtual_call_test!(fn_00dfd2e0_calls_vtable_slot_0_with_flag_0, 0x00df_d2e0);
+    nothing_test!(fn_00dfd4d0_does_nothing, 0x00df_d4d0, 1);
+    nothing_test!(fn_00dfd510_does_nothing, 0x00df_d510, 2);
+    nothing_test!(fn_00dfd4f0_does_nothing, 0x00df_d4f0, 1);
+    nothing_test!(fn_00dfd520_does_nothing, 0x00df_d520, 2);
+    nothing_test!(fn_00dfd530_does_nothing, 0x00df_d530, 1);
+    nothing_test!(fn_00dfd550_does_nothing, 0x00df_d550, 1);
+    calls_test!(
+        fn_00dfd570_runs_its_callee_on_a_non_null_object,
+        0x00df_d570,
+        0x00e3_df50
+    );
+    array_test!(
+        fn_00dfd5a0_releases_the_array_of_12_byte_elements,
+        0x00df_d5a0
+    );
+    calls_test!(
+        fn_00dfd600_runs_its_callee_on_a_non_null_object,
+        0x00df_d600,
+        0x00e3_e380
+    );
+    virtual_call_test!(fn_00dfd620_calls_vtable_slot_0_with_flag_0, 0x00df_d620);
+    nothing_test!(fn_00dfd660_does_nothing, 0x00df_d660, 2);
+    jump_test!(
+        fn_00dfd670_releases_the_arrays_of_its_target,
+        0x00df_d670,
+        &[(0x30, 1), (0x24, 2), (0x18, 4), (0x0c, 4), (0, 16)]
+    );
+    annotation_finish_test!(fn_00dfd770_runs_the_string_function_at_plus_4, 0x00df_d770);
+    annotation_cleanup_test!(
+        fn_00dfd7c0_runs_the_string_destructor_at_plus_4,
+        0x00df_d7c0
+    );
+    virtual_call_test!(fn_00dfd7a0_calls_vtable_slot_0_with_flag_0, 0x00df_d7a0);
 }

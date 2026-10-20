@@ -40,9 +40,34 @@ pub fn fn_004012a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `004019a0` (the engine map calls it `WaitForSingleObjectEx`, which its body is not): `cdecl`,
+/// one stack word; pushes it and calls the import `InterlockedDecrement` (slot `00fdf1c4`), and
+/// returns the decremented value.
+const INTERLOCKED_DECREMENT_THUNK: u32 = 0x0040_19a0;
+/// Vtable slot +4 of the object (byte offset), called with no arguments.
+const SLOT_FOUR: u32 = 0x04;
+
+// Translated from 00401970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the decompiler's `WaitForSingleObjectEx` is `004019a0`'s wrong
+/// name). `__fastcall`: decrements the 32-bit counter at `+4` of `this` (the reference count of
+/// an `NiRefObject`-shaped object) through `004019a0` and, when the result is zero, calls virtual
+/// slot +4 of `this`.
+pub fn fn_00401970(e: &mut Engine, this: Ptr) {
+    let remaining = e
+        .call(
+            INTERLOCKED_DECREMENT_THUNK,
+            &args![this.addr().wrapping_add(4)],
+        )
+        .u32();
+    if remaining == 0 {
+        e.vcall(this.addr(), SLOT_FOUR, &args![]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0040_1970, fn_00401970(Ptr)),
         entry!(0x00401500, fn_00401500() -> u8),
         entry!(0x00401660, fn_00401660(Ptr<TESFile>) -> u32),
         entry!(0x00401680, fn_00401680(Ptr<TESFile>) -> bool),
@@ -97,6 +122,43 @@ mod tests {
                 expected.push((0x0040_1030, vec![this.addr()]));
             }
             assert_eq!(calls, expected);
+        }
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    #[test]
+    fn at_00401970_calls_slot_4_only_when_the_decrement_reaches_zero() {
+        for (remaining, released) in [(0u32, true), (1, false), (7, false)] {
+            let mut e = Engine::new();
+            e.call_log = Some(vec![]);
+            let object = e.mem.alloc(8);
+            let table = 0x0f00_4100;
+            e.put_vtable(table, &[0, 0x0f00_5000]);
+            e.mem.set_u32(object, table);
+            e.register_double(0x0040_19a0, move |_, _| remaining.into_ret());
+            e.register(0x0f00_5000, |_, _| Ret::default());
+            e.call(0x0040_1970, &args![object]);
+            let log = e.call_log.take().unwrap();
+            let decrements: Vec<&Vec<u32>> = log
+                .iter()
+                .filter(|c| c.0 == 0x0040_19a0)
+                .map(|c| &c.1)
+                .collect();
+            assert_eq!(decrements, vec![&vec![object + 4]]);
+            let releases: Vec<&Vec<u32>> = log
+                .iter()
+                .filter(|c| c.0 == 0x0f00_5000)
+                .map(|c| &c.1)
+                .collect();
+            if released {
+                assert_eq!(releases, vec![&vec![object]]);
+            } else {
+                assert!(releases.is_empty());
+            }
         }
     }
 }

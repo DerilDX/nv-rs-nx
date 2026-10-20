@@ -83,6 +83,11 @@ impl Engine {
                 panic!("{addr:08x} is registered twice");
             }
         }
+        // A new main thread: its block's control word reads as the default
+        // until set, and the FPU register the x87 helpers read starts there
+        // too (a test that ran earlier on this host thread may have left
+        // another word in it).
+        crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
         Engine {
             mem: Mem::new(),
             funcs,

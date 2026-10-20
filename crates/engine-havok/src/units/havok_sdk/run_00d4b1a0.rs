@@ -534,6 +534,116 @@ pub fn fn_00d4bbb0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00d4b150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011b5178). A bare `RET`: it reads no stack
+/// word and leaves no result.
+pub fn fn_00d4b150(_e: &mut Engine) {}
+
+// Translated from 00d4b170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fbee3f). Cdecl `(object, flag)`: does nothing
+/// for a null `object`; otherwise calls `00d4a170` (thiscall on `object` with `flag` as its one stack word).
+pub fn fn_00d4b170(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        e.call(0x00d4_a170, &args![object, flag]);
+    }
+}
+
+// Translated from 00d4b190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fbee49). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00d4b190(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00d4b1d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fbeeaf). Cdecl `(object, flag)`: does nothing
+/// for a null `object`; otherwise calls `00d49c40` (thiscall on `object` with `flag` as its one stack word).
+pub fn fn_00d4b1d0(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        e.call(0x00d4_9c40, &args![object, flag]);
+    }
+}
+
+// Translated from 00d4b1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fbeeb9). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00d4b1f0(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00d4b230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fbef2f). Cdecl `(object, flag)`: does nothing
+/// for a null `object`; otherwise calls `00d4a180` (thiscall on `object` with `flag` as its one stack word).
+pub fn fn_00d4b230(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        e.call(0x00d4_a180, &args![object, flag]);
+    }
+}
+
+// Translated from 00d4b250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fbef39). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00d4b250(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00d4b290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011b5210). A bare `RET`: it reads no stack
+/// word and leaves no result.
+pub fn fn_00d4b290(_e: &mut Engine) {}
+
+// Translated from 00d4b2b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011b5228). A bare `RET`: it reads no stack
+/// word and leaves no result.
+pub fn fn_00d4b2b0(_e: &mut Engine) {}
+
+// Translated from 00d4b2d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011b523c). Cdecl `(object, flag)`: does nothing
+/// for a null `object`; otherwise calls `00d56470` (thiscall on `object` with `flag` as its one stack word).
+pub fn fn_00d4b2d0(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        e.call(0x00d5_6470, &args![object, flag]);
+    }
+}
+
+// Translated from 00d4b300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fbf08f). Cdecl `(object, flag)`: does nothing
+/// for a null `object`; otherwise calls `00d56f10` (thiscall on `object` with `flag` as its one stack word).
+pub fn fn_00d4b300(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        e.call(0x00d5_6f10, &args![object, flag]);
+    }
+}
+
+// Translated from 00d4b320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fbf099). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00d4b320(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00d4b360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011b520c). A bare `RET`: it reads no stack
+/// word and leaves no result.
+pub fn fn_00d4b360(_e: &mut Engine) {}
+
+// Translated from 00d4b370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011b5224). A bare `RET`: it reads no stack
+/// word and leaves no result.
+pub fn fn_00d4b370(_e: &mut Engine) {}
+
+// Translated from 00d4b380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011b5240). Cdecl
+/// `(object)`: loads `ECX` from its one stack word and tail-jumps to `00d56800` (thiscall, no
+/// stack words), so it answers that function's result.
+pub fn fn_00d4b380(e: &mut Engine, object: Ptr) -> u32 {
+    e.call(0x00d5_6800, &args![object]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -548,6 +658,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d4_ba30, fn_00d4ba30(Ptr, u32) -> Ptr),
         entry!(0x00d4_bab0, fn_00d4bab0(Ptr, Ptr) -> Ptr),
         entry!(0x00d4_bbb0, fn_00d4bbb0(Ptr) -> Ptr),
+        entry!(0x00d4_b150, fn_00d4b150()),
+        entry!(0x00d4_b170, fn_00d4b170(Ptr, u32)),
+        entry!(0x00d4_b190, fn_00d4b190(Ptr) -> u32),
+        entry!(0x00d4_b1d0, fn_00d4b1d0(Ptr, u32)),
+        entry!(0x00d4_b1f0, fn_00d4b1f0(Ptr) -> u32),
+        entry!(0x00d4_b230, fn_00d4b230(Ptr, u32)),
+        entry!(0x00d4_b250, fn_00d4b250(Ptr) -> u32),
+        entry!(0x00d4_b290, fn_00d4b290()),
+        entry!(0x00d4_b2b0, fn_00d4b2b0()),
+        entry!(0x00d4_b2d0, fn_00d4b2d0(Ptr, u32)),
+        entry!(0x00d4_b300, fn_00d4b300(Ptr, u32)),
+        entry!(0x00d4_b320, fn_00d4b320(Ptr) -> u32),
+        entry!(0x00d4_b360, fn_00d4b360()),
+        entry!(0x00d4_b370, fn_00d4b370()),
+        entry!(0x00d4_b380, fn_00d4b380(Ptr) -> u32),
     ]
 }
 
@@ -1159,5 +1284,131 @@ mod havok_a04_tests {
         let data = e.mem.u32(this + 0x40);
         let copy: Vec<u16> = (0..3).map(|index| e.mem.u16(data + index * 2)).collect();
         assert_eq!(copy, vec![0x40, 0x41, 0x42]);
+    }
+}
+
+#[cfg(test)]
+mod a05_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type CallLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// A double at `address` that records the argument words of each call and answers `answer`.
+    fn recording_double(e: &mut Engine, address: u32, answer: u32) -> CallLog {
+        let log: CallLog = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&log);
+        e.register_double(address, move |_, a| {
+            seen.borrow_mut().push(a.to_vec());
+            Ret {
+                eax: answer,
+                ..Ret::default()
+            }
+        });
+        log
+    }
+
+    /// A bare `RET` function runs, answers nothing and calls nothing.
+    fn check_ret(function: u32) {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(function, &args![]), Ret::default());
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    macro_rules! ret_test {
+        ($name:ident, $function:expr) => {
+            #[test]
+            fn $name() {
+                check_ret($function);
+            }
+        };
+    }
+
+    /// `function(object, flag)` calls `callee(object, flag)` for a non-null object and nothing for
+    /// a null one.
+    fn check_finish(function: u32, callee: u32) {
+        let mut e = Engine::new();
+        let log = recording_double(&mut e, callee, 0);
+        e.call(function, &args![0u32, 1u32]);
+        assert!(log.borrow().is_empty());
+        e.call(function, &args![0x4000u32, 1u32]);
+        e.call(function, &args![0x4000u32, 0u32]);
+        assert_eq!(*log.borrow(), vec![vec![0x4000, 1], vec![0x4000, 0]]);
+    }
+
+    macro_rules! finish_test {
+        ($name:ident, $function:expr, $callee:expr) => {
+            #[test]
+            fn $name() {
+                check_finish($function, $callee);
+            }
+        };
+    }
+
+    /// `function(object)` calls slot 0 of the object's vtable with `(object, 0)` and answers
+    /// what the slot answers.
+    fn check_cleanup(function: u32) {
+        let mut e = Engine::new();
+        let log = recording_double(&mut e, 0x7000_0000, 0x1234_5678);
+        let table = e.mem.alloc(0x10);
+        e.mem.set_u32(table, 0x7000_0000);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, table);
+        assert_eq!(e.call(function, &args![object]).u32(), 0x1234_5678);
+        assert_eq!(*log.borrow(), vec![vec![object, 0]]);
+    }
+
+    macro_rules! cleanup_test {
+        ($name:ident, $function:expr) => {
+            #[test]
+            fn $name() {
+                check_cleanup($function);
+            }
+        };
+    }
+
+    ret_test!(fn_00d4b150_does_nothing, 0x00d4_b150);
+    ret_test!(fn_00d4b290_does_nothing, 0x00d4_b290);
+    ret_test!(fn_00d4b2b0_does_nothing, 0x00d4_b2b0);
+    ret_test!(fn_00d4b360_does_nothing, 0x00d4_b360);
+    ret_test!(fn_00d4b370_does_nothing, 0x00d4_b370);
+    finish_test!(
+        fn_00d4b170_calls_00d4a170_for_a_non_null_object,
+        0x00d4_b170,
+        0x00d4_a170
+    );
+    finish_test!(
+        fn_00d4b1d0_calls_00d49c40_for_a_non_null_object,
+        0x00d4_b1d0,
+        0x00d4_9c40
+    );
+    finish_test!(
+        fn_00d4b230_calls_00d4a180_for_a_non_null_object,
+        0x00d4_b230,
+        0x00d4_a180
+    );
+    finish_test!(
+        fn_00d4b2d0_calls_00d56470_for_a_non_null_object,
+        0x00d4_b2d0,
+        0x00d5_6470
+    );
+    finish_test!(
+        fn_00d4b300_calls_00d56f10_for_a_non_null_object,
+        0x00d4_b300,
+        0x00d5_6f10
+    );
+    cleanup_test!(fn_00d4b190_calls_virtual_slot_0_with_zero, 0x00d4_b190);
+    cleanup_test!(fn_00d4b1f0_calls_virtual_slot_0_with_zero, 0x00d4_b1f0);
+    cleanup_test!(fn_00d4b250_calls_virtual_slot_0_with_zero, 0x00d4_b250);
+    cleanup_test!(fn_00d4b320_calls_virtual_slot_0_with_zero, 0x00d4_b320);
+
+    #[test]
+    fn fn_00d4b380_hands_the_object_to_00d56800_and_answers_its_result() {
+        let mut e = Engine::new();
+        let log = recording_double(&mut e, 0x00d5_6800, 0x66);
+        assert_eq!(e.call(0x00d4_b380, &args![0x4000u32]).u32(), 0x66);
+        assert_eq!(*log.borrow(), vec![vec![0x4000]]);
     }
 }

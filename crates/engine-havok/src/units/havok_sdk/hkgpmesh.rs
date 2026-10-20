@@ -7899,7 +7899,14 @@ const SMALLEST_FLOAT: u32 = 0x0104_e148;
 /// GSK object at `+0x90` and asks it for the closest point (`00e4c730`, out vector at `+0x70`). The
 /// result is lane 3 of that vector, or the float at `0104e148` when the query found no
 /// closest point (a non-zero return).
-pub fn convex_overlap_impl_distance(e: &mut Engine, first: u32, second: u32, flag: u8) -> f32 {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn convex_overlap_impl_distance(
+    e: &mut Engine,
+    _this: u32,
+    first: u32,
+    second: u32,
+    flag: u8,
+) -> f32 {
     let count = e.mem.u32(OVERLAP_QUERY_COUNTER).wrapping_add(1);
     e.mem.set_u32(OVERLAP_QUERY_COUNTER, count);
     e.with_stack(0xb0, |e, frame| {
@@ -13548,6 +13555,19 @@ pub fn mesh_fill_holes(e: &mut Engine, this: Ptr, config: Ptr) {
         array_free_storage(e, allocator, directions, 16);
     });
 }
+// Translated from 00e247a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: `this` in `ECX`, no stack words. Clears the byte at +0, points the
+/// word at +4 at the storage that begins at `this + 0x10`, zeroes the word at +8 and sets the
+/// word at +0xc to `0x80000004` (a count of 0 and a capacity of 4 over storage the object itself
+/// holds: the top bit marks it as not owned). Returns `this`. Ghidra made no function here; the address is pushed at 00e280fd.
+pub fn fn_00e247a0(e: &mut Engine, this: u32) -> u32 {
+    e.mem.set_u8(this, 0);
+    e.mem.set_u32(this + 4, this + 0x10);
+    e.mem.set_u32(this + 8, 0);
+    e.mem.set_u32(this + 0xc, 0x8000_0004);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -13724,7 +13744,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e1_9d60, mesh_clip_triangles(Ptr, u32, Ptr, u32, f32) -> u8),
         entry!(0x00e1_ab00, mesh_fix_t_junctions(Ptr, f32, u8)),
         entry!(0x00e1_aec0, mesh_split_parts(Ptr, u32, u32)),
-        entry!(0x00e2_2de0, convex_overlap_impl_distance(u32, u32, u8) -> f32),
+        entry!(0x00e2_2de0, convex_overlap_impl_distance(u32, u32, u32, u8) -> f32),
         entry!(0x00e2_3bb0, fn_00e23bb0(Ptr) -> bool),
         entry!(0x00e2_4200, fn_00e24200(Ptr, Ptr, i32, i32)),
         entry!(0x00e2_3df0, fn_00e23df0(Ptr, Ptr, u32, u32, u32) -> Ptr),
@@ -13753,6 +13773,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e1_de00, mesh_cut_and_cap(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00e1_f360, mesh_cut_and_cap_ov2(Ptr, Ptr, Ptr, Ptr, f32, f32) -> Ptr),
         entry!(0x00e1_f4e0, mesh_fill_holes(Ptr, Ptr)),
+        entry!(0x00e2_47a0, fn_00e247a0(u32) -> u32),
     ]
 }
 
@@ -13761,6 +13782,9 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     const FREE_SLOT_DOUBLE: u32 = 0x0900_0011;
 
@@ -19566,7 +19590,9 @@ mod tests {
                 ..Ret::default()
             }
         });
-        let got = e.call(0x00e2_2de0, &args![0x1111u32, 0x2222u32, 0u8]).f32();
+        let got = e
+            .call(0x00e2_2de0, &args![VCALL_THIS, 0x1111u32, 0x2222u32, 0u8])
+            .f32();
         assert_eq!(got, 3.5);
         assert_eq!(e.mem.u32(OVERLAP_QUERY_COUNTER), 1);
         assert_eq!(
@@ -19588,7 +19614,9 @@ mod tests {
         );
         // A non-zero flag clears the word at `+0x18`; a failed query gives the smallest float.
         found.set(1);
-        let got = e.call(0x00e2_2de0, &args![0x1111u32, 0x2222u32, 1u8]).f32();
+        let got = e
+            .call(0x00e2_2de0, &args![VCALL_THIS, 0x1111u32, 0x2222u32, 1u8])
+            .f32();
         assert_eq!(got, -1.0e30);
         assert_eq!(seen.borrow()[1][6], 0);
         assert_eq!(e.mem.u32(OVERLAP_QUERY_COUNTER), 2);
@@ -21547,5 +21575,25 @@ mod tests {
         e.call(0x00e1_f4e0, &args![mesh, config]);
         assert_eq!(triangle_list(&e, mesh).len(), 3);
         assert_eq!(reports.borrow().len(), 9);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_00e247a0_sets_up_an_array_over_its_own_storage() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x40);
+        e.mem.write(this, &[0x55; 0x40]);
+        assert_eq!(e.call(0x00e2_47a0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u8(this), 0);
+        assert_eq!(e.mem.u32(this + 4), this + 0x10);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 0x8000_0004);
+        // Everything else is left alone.
+        assert_eq!(e.mem.u8(this + 1), 0x55);
+        assert_eq!(e.mem.u32(this + 0x10), 0x5555_5555);
     }
 }

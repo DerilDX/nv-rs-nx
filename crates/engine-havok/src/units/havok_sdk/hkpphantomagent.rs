@@ -44,10 +44,12 @@ pub fn hkp_phantom_agent_cleanup(e: &mut Engine, this: Ptr, _unused: u32) {
 }
 
 // Translated from 00d42700 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkpPhantomAgent::processCollision` (engine map): four stack words (a static function, no
-/// `this`); the body is empty.
+/// `hkpPhantomAgent::processCollision` (engine map): four stack words after `this` (a virtual
+/// method); the body is empty.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_phantom_agent_process_collision(
     _e: &mut Engine,
+    _this: u32,
     _unused_1: u32,
     _unused_2: u32,
     _unused_3: u32,
@@ -56,11 +58,13 @@ pub fn hkp_phantom_agent_process_collision(
 }
 
 // Translated from 00d42710 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkpPhantomAgent::getPenetrations` (engine map): four stack words (a static function, no
-/// `this`): `a`, `b`, a word that is not read, and the collector. Calls the collector's virtual
+/// `hkpPhantomAgent::getPenetrations` (engine map): four stack words after `this` (a virtual
+/// method): `a`, `b`, a word that is not read, and the collector. Calls the collector's virtual
 /// function at offset 4 with `(a, b)`.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_phantom_agent_get_penetrations(
     e: &mut Engine,
+    _this: u32,
     a: u32,
     b: u32,
     _unused: u32,
@@ -70,10 +74,12 @@ pub fn hkp_phantom_agent_get_penetrations(
 }
 
 // Translated from 00d42750 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkpPhantomAgent::getClosestPoints` (engine map): four stack words (a static function, no
-/// `this`); the body is empty.
+/// `hkpPhantomAgent::getClosestPoints` (engine map): four stack words after `this` (a virtual
+/// method); the body is empty.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_phantom_agent_get_closest_points(
     _e: &mut Engine,
+    _this: u32,
     _unused_1: u32,
     _unused_2: u32,
     _unused_3: u32,
@@ -81,21 +87,53 @@ pub fn hkp_phantom_agent_get_closest_points(
 ) {
 }
 
+// Translated from 00d42730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `_unused_2`, `collector`;
+/// the roles are descriptions, not confirmed): entry `+4` of the 0x14-byte agent record
+/// `00d42960` registers (the static `getPenetrations` of the phantom pair). Hands the first two
+/// words to the object `collector` through its virtual function at vtable offset 4
+/// (`thiscall`, two stack words) and answers what it answers.
+pub fn fn_00d42730(
+    e: &mut Engine,
+    body_a: u32,
+    body_b: u32,
+    _unused_2: u32,
+    collector: Ptr,
+) -> u32 {
+    e.vcall(collector.addr(), 4, &args![body_a, body_b]).u32()
+}
+
+// Translated from 00d42760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl; entry `+8` of the 0x14-byte agent record `00d42960`
+/// registers, the static `getClosestPoints` slot): a bare `RET`, no instruction reads a stack
+/// word. Declared with the four words the sibling statics of that slot take (`00d42730` here,
+/// `hkpBoxBoxAgent::staticGetClosestPoints` elsewhere), none of them read. It does nothing.
+pub fn fn_00d42760(
+    _e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+) {
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d42730, fn_00d42730(u32, u32, u32, Ptr) -> u32),
+        entry!(0x00d42760, fn_00d42760(u32, u32, u32, u32)),
         entry!(0x00d426b0, hkp_phantom_agent_cleanup(Ptr, u32)),
         entry!(
             0x00d42700,
-            hkp_phantom_agent_process_collision(u32, u32, u32, u32)
+            hkp_phantom_agent_process_collision(u32, u32, u32, u32, u32)
         ),
         entry!(
             0x00d42710,
-            hkp_phantom_agent_get_penetrations(u32, u32, u32, u32)
+            hkp_phantom_agent_get_penetrations(u32, u32, u32, u32, u32)
         ),
         entry!(
             0x00d42750,
-            hkp_phantom_agent_get_closest_points(u32, u32, u32, u32)
+            hkp_phantom_agent_get_closest_points(u32, u32, u32, u32, u32)
         ),
         entry!(
             0x00d42770,
@@ -107,6 +145,43 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fn_00d42730_hands_the_first_two_words_to_the_collectors_slot_one() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0900_0000, &[0, 0x0900_0100]);
+        let collector = e.mem.alloc(8);
+        e.mem.set_u32(collector, 0x0900_0000);
+        e.register(0x0900_0100, |_, a| Ret {
+            eax: a[0].wrapping_add(a[1]).wrapping_add(a[2]),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e
+            .call(0x00d4_2730, &args![10u32, 20u32, 30u32, collector])
+            .u32();
+        assert_eq!(answer, collector + 30);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x0900_0100)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x0900_0100, vec![collector, 10, 20])]);
+    }
+
+    #[test]
+    fn fn_00d42760_does_nothing() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00d4_2760, &args![1u32, 2u32, 3u32, 4u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     type Log = Vec<(u32, Vec<u32>)>;
 
@@ -204,7 +279,10 @@ mod tests {
         e.mem.set_u32(vtable + 4, ADD_PAIR);
         e.register(ADD_PAIR, |_, _| Ret::default());
         e.call_log = Some(vec![]);
-        e.call(0x00d4_2710, &args![0x11u32, 0x22u32, 0x33u32, collector]);
+        e.call(
+            0x00d4_2710,
+            &args![VCALL_THIS, 0x11u32, 0x22u32, 0x33u32, collector],
+        );
         let log: Log = e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, ADD_PAIR),
@@ -217,8 +295,8 @@ mod tests {
     fn process_collision_and_get_closest_points_do_nothing() {
         let mut e = Engine::new();
         e.call_log = Some(vec![]);
-        e.call(0x00d4_2700, &args![1u32, 2u32, 3u32, 4u32]);
-        e.call(0x00d4_2750, &args![1u32, 2u32, 3u32, 4u32]);
+        e.call(0x00d4_2700, &args![VCALL_THIS, 1u32, 2u32, 3u32, 4u32]);
+        e.call(0x00d4_2750, &args![VCALL_THIS, 1u32, 2u32, 3u32, 4u32]);
         assert_eq!(e.call_log.take().unwrap().len(), 2);
     }
 }

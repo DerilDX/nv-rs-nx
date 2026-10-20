@@ -9,21 +9,29 @@
 //! `crates/` and `viewer/` for executable addresses. Each function gets one
 //! status:
 //!
-//! - `translated`: an address in it is cited on a translation marker line
-//!   (ADR-0003: `Translated from <addr>` or `(decompiled, FalloutNV.exe ...)`;
-//!   when the marker line itself holds no address, the line above counts).
+//! - `translated`: an address in it is cited on a translation marker line in
+//!   an engine crate (`crates/engine`, `crates/engine-*`; ADR-0003:
+//!   `Translated from <addr>` or `(decompiled, FalloutNV.exe ...)`; when the
+//!   marker line itself holds no address, the line above counts). A marker
+//!   elsewhere (the older viewer crates `crates/world`, `crates/physics`, ...)
+//!   does not count: the engine still has to translate that function, so it
+//!   is `traced`. This is the rule of the task queue ([`Func::in_engine`]).
 //! - `static init (table)`: a static initializer, or an `atexit` destructor,
 //!   run from a generated table (`crates/engine-core/data/static_initializers.tsv`,
 //!   `crates/engine-core/data/atexit_destructors.tsv`; research/initgen): engine
 //!   coverage, but not a hand translation.
-//! - `traced`: an address in it is cited anywhere else in Rust.
+//! - `traced`: an address in it is cited anywhere else in Rust, including a
+//!   translation marker outside the engine crates (the viewer describes it,
+//!   the engine still needs it).
 //! - `platform` / `library`: the platform layer stands in for it (operating
 //!   system glue, the Direct3D 9 / D3DX libraries, Xbox system services), or
 //!   it is compiler or runtime-library code (`base_status`). The game's
 //!   renderer is game code (ADR-0007).
 //! - `open`: none of the above.
 //!
-//! Functions the map placed in a subsystem but in no unit get one from
+//! Functions Ghidra never created join the map from
+//! `research/engine-map/ghidra_gaps.tsv` (`add_gaps`). Functions the map
+//! placed in a subsystem but in no unit get one from
 //! `research/engine-map/unit_overrides.tsv` (an RTTI vtable slot of a class
 //! whose unit is known) or else a run unit (`run_units`).
 //!
@@ -245,14 +253,22 @@ impl Func {
         }
     }
 
+    /// Whether a translation marker sits in an engine crate. A marker only in
+    /// another crate (the older viewer crates) does not count as a translation.
+    fn translated_in_engine(&self) -> bool {
+        self.translated.iter().any(|l| in_engine_crate(l))
+    }
+
     fn status(&self) -> &'static str {
-        if !self.translated.is_empty() {
+        if self.translated_in_engine() {
             "translated"
         } else if !self.table.is_empty() {
             TABLE
         } else if !self.replaced.is_empty() {
             "platform"
-        } else if !self.traced.is_empty() {
+        } else if !self.traced.is_empty() || !self.translated.is_empty() {
+            // A translation marker outside the engine crates only describes
+            // the function: `traced`, the engine still needs it.
             "traced"
         } else {
             self.base()
@@ -423,6 +439,13 @@ fn load_map(path: &Path) -> Result<(Vec<Func>, Vec<String>), String> {
         });
     }
     funcs.sort_by_key(|f| f.addr);
+    match fs::read_to_string(path.with_file_name(GAPS)) {
+        Ok(t) => {
+            add_gaps(&mut funcs, &t)?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("{GAPS}: {e}")),
+    }
     match fs::read_to_string(path.with_file_name(OVERRIDES)) {
         Ok(t) => {
             apply_overrides(&mut funcs, &t)?;
@@ -432,6 +455,69 @@ fn load_map(path: &Path) -> Result<(Vec<Func>, Vec<String>), String> {
     }
     run_units(&mut funcs);
     Ok((funcs, header))
+}
+
+/// Functions the exe runs that Ghidra never created, so the map has no row
+/// for them (`research/engine-map/ghidra_gaps.tsv`, next to `engine_map.tsv`):
+/// code reached only from data (vtables, tables, `hkSingletonInitNode`
+/// records, the `__cinit` table), from pointer immediates or from calls and
+/// tail jumps in other such code. Columns: address, size, unit, subsystem,
+/// evidence; the unit and subsystem come from the neighbouring functions of
+/// the map (empty when they differ). Such a function joins the map with
+/// `placed` = `gap`.
+const GAPS: &str = "ghidra_gaps.tsv";
+
+/// Adds every row of [`GAPS`] to `funcs` (kept sorted). A row at or inside a
+/// function of the map, or repeated, is an error.
+fn add_gaps(funcs: &mut Vec<Func>, text: &str) -> Result<usize, String> {
+    let mut add = Vec::new();
+    for line in text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty() && !l.starts_with("address\t"))
+    {
+        let f: Vec<&str> = line.split('\t').collect();
+        let (Some(a), Some(size), Some(unit), Some(sub)) =
+            (f.first(), f.get(1), f.get(2), f.get(3))
+        else {
+            return Err(format!("{GAPS}: bad row {line:?}"));
+        };
+        let addr = u32::from_str_radix(a, 16).map_err(|e| format!("{GAPS}: {line:?}: {e}"))?;
+        let size: u32 = size.parse().map_err(|e| format!("{GAPS}: {line:?}: {e}"))?;
+        let k = funcs.partition_point(|f| f.addr <= addr);
+        if let Some(f) = k.checked_sub(1).map(|k| &funcs[k]) {
+            if addr < f.addr + f.size.max(1) {
+                return Err(format!(
+                    "{GAPS}: {a} lies in the map's function {:08x}",
+                    f.addr
+                ));
+            }
+        }
+        add.push(Func {
+            addr,
+            size,
+            name: String::new(),
+            tier: String::new(),
+            unit: unit.to_string(),
+            subsystem: if sub.is_empty() {
+                "(unplaced)".to_string()
+            } else {
+                sub.to_string()
+            },
+            placed: "gap".into(),
+            translated: BTreeSet::new(),
+            table: BTreeSet::new(),
+            replaced: BTreeSet::new(),
+            traced: BTreeSet::new(),
+            incomplete: BTreeSet::new(),
+        });
+    }
+    let n = add.len();
+    funcs.append(&mut add);
+    funcs.sort_by_key(|f| f.addr);
+    if let Some(w) = funcs.windows(2).find(|w| w[0].addr == w[1].addr) {
+        return Err(format!("{GAPS}: {:08x} is listed twice", w[0].addr));
+    }
+    Ok(n)
 }
 
 /// Unit placements applied on top of the map (`research/engine-map/
@@ -484,9 +570,18 @@ fn apply_overrides(funcs: &mut [Func], text: &str) -> Result<usize, String> {
 /// `<subsystem>/run_<first address>`, so they have a file and an owner
 /// like the others. Library subsystems are left alone; a run in a platform
 /// subsystem keeps that subsystem's status (except [`GAME_FUNCS`]).
+///
+/// [`GAPS`] functions (`placed` = `gap`) do not change the map's runs, so
+/// existing unit files keep their names: one without a unit joins the run
+/// of the map function before it, else the run of the map function after
+/// it (same subsystem), else a run of its own with the gap functions next
+/// to it.
 fn run_units(funcs: &mut [Func]) {
     let mut current: Option<(String, String)> = None;
     for f in funcs.iter_mut() {
+        if f.placed == "gap" {
+            continue;
+        }
         if !f.unit.is_empty() || base_status(&f.subsystem) == "library" {
             current = None;
             continue;
@@ -499,6 +594,35 @@ fn run_units(funcs: &mut [Func]) {
                 f.unit = unit;
             }
         }
+    }
+    let run_of = |f: &Func, sub: &str| {
+        (f.placed != "gap" && f.unit.starts_with(&format!("{sub}/run_"))).then(|| f.unit.clone())
+    };
+    let mut own: Option<(String, String)> = None;
+    for i in 0..funcs.len() {
+        let f = &funcs[i];
+        if f.placed != "gap" {
+            own = None;
+            continue;
+        }
+        if !f.unit.is_empty() || base_status(&f.subsystem) == "library" {
+            continue;
+        }
+        let sub = f.subsystem.clone();
+        let before = funcs[..i].iter().rev().find(|g| g.placed != "gap");
+        let after = funcs[i + 1..].iter().find(|g| g.placed != "gap");
+        let unit = before
+            .and_then(|g| run_of(g, &sub))
+            .or_else(|| after.and_then(|g| run_of(g, &sub)))
+            .unwrap_or_else(|| match &own {
+                Some((s, u)) if *s == sub => u.clone(),
+                _ => {
+                    let u = format!("{sub}/run_{:08x}", funcs[i].addr);
+                    own = Some((sub.clone(), u.clone()));
+                    u
+                }
+            });
+        funcs[i].unit = unit;
     }
 }
 
@@ -569,12 +693,14 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
     let _ = writeln!(
         s,
         "| Status | Meaning |\n| --- | --- |\n\
-         | translated | cited on a translation marker (ADR-0003) in Rust |\n\
+         | translated | cited on a translation marker (ADR-0003) in an engine crate \
+         (`crates/engine*`) |\n\
          | static init (table) | a static initializer or an `atexit` destructor run \
          from a generated table (`crates/engine-core/data/static_initializers.tsv`, \
          `crates/engine-core/data/atexit_destructors.tsv`; research/initgen), not a hand \
          translation |\n\
-         | traced | cited elsewhere in Rust |\n\
+         | traced | cited elsewhere in Rust, including a translation marker outside the \
+         engine crates (the viewer describes it, the engine still needs it) |\n\
          | platform | the platform layer stands in for it: OS glue, the Direct3D 9 / D3DX \
          libraries, Xbox system services (the renderer is game code, ADR-0007) |\n\
          | library | compiler-generated code, C/C++ runtime, zlib |\n\
@@ -594,7 +720,8 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
     let partials: Vec<_> = funcs.iter().filter(|f| f.partial_in_engine()).collect();
     let _ = writeln!(
         s,
-        "\nTranslation totals count markers, not complete behavior. **{}** engine functions\n\
+        "\nTranslation totals count engine-crate markers, not complete behavior; a marker \
+         outside the engine crates counts as `traced`. **{}** engine functions\n\
          have explicit incomplete markers and remain `partial` in the task queue.\n",
         partials.len()
     );
@@ -1122,7 +1249,11 @@ mod tests {
         f.incomplete.insert("crates/engine/src/ai.rs:2".into());
         assert!(!f.in_engine());
         assert_eq!(f.queue_status(), "partial");
-        assert_eq!(f.status(), "translated", "totals still count markers");
+        // The engine marker still counts in the totals even with a gap in the
+        // same crate: `partial` is a task-queue state, the ledger counts
+        // engine markers, not complete behavior. (The marker above is in
+        // `crates/engine`; one only in `crates/world` would be `traced`.)
+        assert_eq!(f.status(), "translated", "totals still count engine markers");
         let report = render(&[f], &[], 0, 1);
         assert!(report.contains("**1** engine functions"));
         assert!(report.contains("| `008c94e0` |"));
@@ -1132,6 +1263,30 @@ mod tests {
         assert_eq!(f.queue_status(), "partial", "a gap needs no fake body");
         f.incomplete.clear();
         assert_eq!(f.queue_status(), "open");
+    }
+
+    #[test]
+    fn only_engine_markers_count_as_translated() {
+        // A marker only in an older viewer crate describes the function but
+        // the engine does not have it: traced, and still not done in the queue.
+        let mut f = func(0x008c_94e0, "fallout/ai");
+        f.translated.insert("crates/world/src/ai.rs:1".into());
+        assert_eq!(f.status(), "traced");
+        assert!(!f.in_engine());
+        assert_eq!(f.queue_status(), "traced");
+        // An engine marker makes it translated, whatever else cites it.
+        f.translated
+            .insert("crates/engine-fallout/src/ai.rs:1".into());
+        assert_eq!(f.status(), "translated");
+        assert_eq!(f.queue_status(), "done");
+        // Old-crate marker plus an old-crate trace: still traced.
+        let mut g = func(0x008c_9500, "fallout/ai");
+        g.traced.insert("viewer/src/x.rs:1".into());
+        g.translated.insert("crates/physics/src/y.rs:1".into());
+        assert_eq!(g.status(), "traced");
+        // The generated table keeps its own status.
+        g.table.insert(format!("{INITIALIZER_TABLE}:2"));
+        assert_eq!(g.status(), TABLE);
     }
 
     fn func(addr: u32, subsystem: &str) -> Func {
@@ -1245,6 +1400,79 @@ mod tests {
         assert_eq!(funcs[2].unit, "X/y.cpp");
         run_units(&mut funcs);
         assert_eq!(funcs[0].unit, "NiXenonRenderer/run_00e75000");
+    }
+
+    #[test]
+    fn gaps_join_the_map_as_open_functions_of_their_units() {
+        let mut funcs = vec![
+            func(0x00a8_9c70, "NiMain"),
+            func(0x00a8_a620, "NiMain"),
+            func(0x00db_83c0, "Havok SDK"),
+        ];
+        funcs[2].unit = "Havok SDK/hkversionpatchmanager.cpp".into();
+        let text = "# comment\naddress\tsize\tunit\tsubsystem\tevidence\n\
+                    00a89cc0\t1343\t\tNiMain\tpush 00a8a609\n\
+                    00db8540\t157\tHavok SDK/hkversionpatchmanager.cpp\tHavok SDK\tjmp 00dba1fc\n\
+                    00fbd610\t23\t\t\trdata 01010648\n";
+        assert_eq!(add_gaps(&mut funcs, text), Ok(3));
+        let addrs: Vec<u32> = funcs.iter().map(|f| f.addr).collect();
+        assert_eq!(
+            addrs,
+            [
+                0x00a8_9c70,
+                0x00a8_9cc0,
+                0x00a8_a620,
+                0x00db_83c0,
+                0x00db_8540,
+                0x00fb_d610
+            ]
+        );
+        assert_eq!(funcs[1].size, 1343);
+        assert_eq!(funcs[1].placed, "gap");
+        assert_eq!(funcs[4].unit, "Havok SDK/hkversionpatchmanager.cpp");
+        assert_eq!(funcs[4].status(), "open");
+        assert_eq!(funcs[5].subsystem, "(unplaced)");
+        run_units(&mut funcs);
+        assert_eq!(funcs[1].unit, "NiMain/run_00a89c70");
+        assert_eq!(funcs[2].unit, "NiMain/run_00a89c70");
+        // A row inside a function of the map, or repeated, is an error.
+        assert!(add_gaps(&mut funcs, "00db83c4\t4\t\tHavok SDK\te\n").is_err());
+        assert!(add_gaps(&mut funcs, "00a89cc0\t4\t\tNiMain\te\n").is_err());
+        assert!(add_gaps(&mut funcs, "00a89cc0\n").is_err());
+    }
+
+    #[test]
+    fn gaps_leave_the_runs_of_the_map_unchanged() {
+        let mut funcs = vec![
+            func(0x00a2_bd00, "NiMain"),
+            func(0x00a2_bdb0, "NiAnimation"),
+            func(0x00a2_bde0, "NiAnimation"),
+            func(0x00a2_be00, "NiAnimation"),
+            func(0x00a2_be60, "NiAnimation"),
+            func(0x00a2_bf00, "Havok SDK"),
+            func(0x00a2_bf20, "Havok SDK"),
+        ];
+        funcs[0].unit = "NiMain/nimain.cpp".into();
+        for i in [1, 3, 6] {
+            funcs[i].placed = "gap".into();
+        }
+        funcs[5].unit = "Havok SDK/hkbase.cpp".into();
+        run_units(&mut funcs);
+        let units: Vec<&str> = funcs.iter().map(|f| f.unit.as_str()).collect();
+        assert_eq!(
+            units,
+            [
+                "NiMain/nimain.cpp",
+                // No run before it: the run after it.
+                "NiAnimation/run_00a2bde0",
+                "NiAnimation/run_00a2bde0",
+                "NiAnimation/run_00a2bde0",
+                "NiAnimation/run_00a2bde0",
+                "Havok SDK/hkbase.cpp",
+                // No run on either side: its own.
+                "Havok SDK/run_00a2bf20",
+            ]
+        );
     }
 
     #[test]

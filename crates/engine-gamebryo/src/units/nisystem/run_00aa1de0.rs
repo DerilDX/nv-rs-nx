@@ -5,6 +5,40 @@
 use crate::prelude::*;
 use crate::units::nimain::nistream::NiBinaryStream;
 
+/// The word of the thread's TLS block (`*(*(FS:[0x2c]) + _tls_index * 4)`) at `+0x2b4`
+/// that `fn_00aa20b0` sets to 0xf while it runs.
+const TLS_MODE: u32 = 0x2b4;
+/// The holder object pointer (`011f6118`) the allocator set-up `00aa2020` resolves.
+const HOLDER: u32 = 0x011f_6118;
+/// Byte `011f610d`: 1 when `fn_00aa20b0` built the holder itself.
+const HOLDER_CREATED: u32 = 0x011f_610d;
+/// Byte `011f610c`: set to 1 when `fn_00aa20b0` has run to its end.
+const STARTUP_FINISHED: u32 = 0x011f_610c;
+/// The function stored by `fn_00aa2060` (`011f6110`), run once by `fn_00aa20b0`.
+const START_HOOK: u32 = 0x011f_6110;
+/// The second word stored by `fn_00aa2060` (`011f6114`).
+const START_HOOK_DATA: u32 = 0x011f_6114;
+/// Number of entries registered with `fn_00aa2080` (`011f6108`).
+const STARTUP_COUNT: u32 = 0x011f_6108;
+/// The registered functions (`011f60c8`).
+const STARTUP_FUNCTIONS: u32 = 0x011f_60c8;
+/// The registered second words (`011f6088`).
+const STARTUP_SECOND_WORDS: u32 = 0x011f_6088;
+/// Byte `011f6229`: set once `fn_00aa3050` has begun.
+const START_UP_DONE: u32 = 0x011f_6229;
+/// The memory manager singleton (`011f6238`), the `this` of `00aa3e40`.
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+/// `00aa3e40` (`thiscall`, one stack word): the memory manager's allocate.
+const ALLOCATE: u32 = 0x00aa_3e40;
+/// `00aa2200` (`thiscall`, no stack word): constructs the 8-byte holder in the block.
+const CONSTRUCT_HOLDER: u32 = 0x00aa_2200;
+/// `00aa2020`: the allocator initialization.
+const ALLOCATOR_INITIALIZE: u32 = 0x00aa_2020;
+/// `00aa1920`: allocates 8 bytes and stores the result at `011f6078`.
+const TIMER_INITIALIZE: u32 = 0x00aa_1920;
+/// `00aa7eb0` (Ghidra name `OEI::IO::initialize`).
+const OEI_IO_INITIALIZE: u32 = 0x00aa_7eb0;
+
 /// Calls the stream's function pointer at `member` (`m_pfnRead` +8 or
 /// `m_pfnWrite` +0xc) once as the game does:
 /// `function(stream, buffer, 1, &count, 1)` with `count` a local set to 1 first.
@@ -93,6 +127,133 @@ pub fn fn_00aa1fd0(e: &mut Engine, stream: Ptr<NiBinaryStream>, text: Ptr) -> i3
     })
 }
 
+// Translated from 00aa2060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, two words): stores `function` at `011f6110` and
+/// `data` at `011f6114`. `fn_00aa20b0` calls the function stored at `011f6110`, without
+/// arguments, right after the allocator set-up; `NiMainSDM`'s constructor `00a8a5f0`
+/// stores its initializer `00a89cc0` here. Returns `function` (the exe leaves it in
+/// `EAX`).
+pub fn fn_00aa2060(e: &mut Engine, function: u32, data: u32) -> u32 {
+    e.mem.set_u32(START_HOOK, function);
+    e.mem.set_u32(START_HOOK_DATA, data);
+    function
+}
+
+// Translated from 00aa2080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, two words): adds `function` and `second` to the
+/// two parallel tables at `011f60c8` and `011f6088` (entry number `011f6108`, which it
+/// increments). When `fn_00aa20b0` has already finished (`011f610c` set) the exe jumps to
+/// `function`, which then runs with this function's two argument words and its own
+/// return address, so it is called with `function` and `second` and its result is
+/// returned; otherwise it returns the new entry count (the exe's `EAX`).
+pub fn fn_00aa2080(e: &mut Engine, function: u32, second: u32) -> u32 {
+    let count = e.mem.u32(STARTUP_COUNT);
+    e.mem.set_u32(
+        STARTUP_FUNCTIONS.wrapping_add(count.wrapping_mul(4)),
+        function,
+    );
+    e.mem.set_u32(
+        STARTUP_SECOND_WORDS.wrapping_add(count.wrapping_mul(4)),
+        second,
+    );
+    let count = count.wrapping_add(1);
+    let finished = e.mem.u8(STARTUP_FINISHED);
+    e.mem.set_u32(STARTUP_COUNT, count);
+    if finished != 0 {
+        return e.call(function, &args![function, second]).u32();
+    }
+    count
+}
+
+// Translated from 00aa3050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, no arguments): once only (`011f6229` set to 1
+/// first), runs `00aa2020` (allocator initialization), `00aa1920` (builds an 8-byte
+/// object and stores its address at `011f6078`), then jumps to `00aa7eb0` (Ghidra name
+/// `OEI::IO::initialize`). Later calls only return.
+pub fn fn_00aa3050(e: &mut Engine) {
+    if e.mem.u8(START_UP_DONE) != 0 {
+        return;
+    }
+    e.mem.set_u8(START_UP_DONE, 1);
+    e.call(ALLOCATOR_INITIALIZE, &args![]);
+    e.call(TIMER_INITIALIZE, &args![]);
+    e.call(OEI_IO_INITIALIZE, &args![]);
+}
+
+// Translated from 00aa20b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the game's `main` runs it at `0086a9f8`; called `NiInit`
+/// by the task, not confirmed by a symbol; `cdecl`, one word): the Gamebryo start-up.
+/// Saves the word at `+0x2b4` of the thread's TLS block and sets it to 0xf for the
+/// duration. Chooses the holder at `011f6118`: with `holder` null and no holder yet, it
+/// allocates 8 bytes from the memory manager (`011f6238`, `00aa3e40`) and constructs
+/// them with `00aa2200` (a failed allocation leaves null), marking `011f610d` as 1; when
+/// the global already holds one it is kept, else `holder` is used, and `011f610d` is 0.
+/// Then runs `fn_00aa3050`, the hook stored at `011f6110` (if any, no arguments), and every
+/// registered function of `011f60c8` in order (the count at `011f6108` is read again after
+/// each), restores the TLS word, and sets `011f610c` to 1.
+pub fn fn_00aa20b0(e: &mut Engine, holder: u32) {
+    let mode = e.tls().wrapping_add(TLS_MODE);
+    let saved = e.mem.u32(mode);
+    let existing = e.mem.u32(HOLDER);
+    e.mem.set_u32(mode, 0xf);
+    let chosen = if holder == 0 && existing == 0 {
+        let block = e.call(ALLOCATE, &args![MEMORY_MANAGER, 8u32]).u32();
+        let built = if block == 0 {
+            0
+        } else {
+            e.call(CONSTRUCT_HOLDER, &args![block]).u32()
+        };
+        e.mem.set_u8(HOLDER_CREATED, 1);
+        built
+    } else {
+        e.mem.set_u8(HOLDER_CREATED, 0);
+        if existing != 0 {
+            existing
+        } else {
+            holder
+        }
+    };
+    e.mem.set_u32(HOLDER, chosen);
+    fn_00aa3050(e);
+    let hook = e.mem.u32(START_HOOK);
+    if hook != 0 {
+        e.call(hook, &args![]);
+    }
+    let mut index = 0u32;
+    if e.mem.u32(STARTUP_COUNT) != 0 {
+        loop {
+            let function = e
+                .mem
+                .u32(STARTUP_FUNCTIONS.wrapping_add(index.wrapping_mul(4)));
+            e.call(function, &args![]);
+            index = index.wrapping_add(1);
+            if index >= e.mem.u32(STARTUP_COUNT) {
+                break;
+            }
+        }
+    }
+    e.mem.set_u32(mode, saved);
+    e.mem.set_u8(STARTUP_FINISHED, 1);
+}
+
+// Translated from 00aa2200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack word; run by `fn_00aa20b0` on the 8-byte
+/// block it allocates for the holder): allocates 4 bytes from the memory manager
+/// (`00aa3e40`); when that succeeds it stores the vtable `010a24fc` in them and their
+/// address at `this`, otherwise null at `this`; the byte at `this + 4` is set to 1 either
+/// way. Returns `this`.
+pub fn fn_00aa2200(e: &mut Engine, this: Ptr) -> Ptr {
+    let block = e.call(ALLOCATE, &args![MEMORY_MANAGER, 4u32]).u32();
+    if block != 0 {
+        e.mem.set_u32(block, 0x010a_24fc);
+        e.mem.set_u32(this.addr(), block);
+    } else {
+        e.mem.set_u32(this.addr(), 0);
+    }
+    e.mem.set_u8(this.addr() + 4, 1);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -101,6 +262,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_00aa1f10(Ptr<NiBinaryStream>, Ptr, u32) -> i32
         ),
         entry!(0x00aa_1fd0, fn_00aa1fd0(Ptr<NiBinaryStream>, Ptr) -> i32),
+        entry!(0x00aa_2060, fn_00aa2060(u32, u32) -> u32),
+        entry!(0x00aa_2080, fn_00aa2080(u32, u32) -> u32),
+        entry!(0x00aa_20b0, fn_00aa20b0(u32)),
+        entry!(0x00aa_3050, fn_00aa3050()),
+        entry!(0x00aa_2200, fn_00aa2200(Ptr) -> Ptr),
     ]
 }
 
@@ -225,5 +391,223 @@ mod tests {
         let text = e.mem.alloc(8);
         assert_eq!(e.call(0x00aa_1fd0, &args![stream, text]).i32(), 0);
         assert!(sink.borrow().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Order = Rc<RefCell<Vec<u32>>>;
+
+    fn tls_mode(e: &mut Engine) -> u32 {
+        let at = e.tls() + TLS_MODE;
+        e.mem.u32(at)
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_6000, 0x1000);
+        e
+    }
+
+    /// Doubles for the callees of `fn_00aa3050` that record the order they run in.
+    fn double_startup_callees(e: &mut Engine) -> Order {
+        let order: Order = Rc::default();
+        for address in [ALLOCATOR_INITIALIZE, TIMER_INITIALIZE, OEI_IO_INITIALIZE] {
+            let log = order.clone();
+            e.register_double(address, move |_, _| {
+                log.borrow_mut().push(address);
+                Ret::default()
+            });
+        }
+        order
+    }
+
+    #[test]
+    fn hook_registration_stores_both_words_and_returns_the_function() {
+        let mut e = engine();
+        assert_eq!(
+            e.call(0x00aa_2060, &args![0xa89cc0u32, 0xa8a280u32]).u32(),
+            0xa89cc0
+        );
+        assert_eq!(e.mem.u32(START_HOOK), 0xa89cc0);
+        assert_eq!(e.mem.u32(START_HOOK_DATA), 0xa8a280);
+    }
+
+    #[test]
+    fn registration_before_the_end_of_start_up_only_adds_the_entry() {
+        let mut e = engine();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00aa_2080, &args![0x1111u32, 0x2222u32]).u32(), 1);
+        assert_eq!(e.call(0x00aa_2080, &args![0x3333u32, 0x4444u32]).u32(), 2);
+        assert_eq!(e.mem.u32(STARTUP_COUNT), 2);
+        assert_eq!(e.mem.u32(STARTUP_FUNCTIONS), 0x1111);
+        assert_eq!(e.mem.u32(STARTUP_FUNCTIONS + 4), 0x3333);
+        assert_eq!(e.mem.u32(STARTUP_SECOND_WORDS), 0x2222);
+        assert_eq!(e.mem.u32(STARTUP_SECOND_WORDS + 4), 0x4444);
+        assert_eq!(e.call_log.as_ref().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn registration_after_the_end_of_start_up_runs_the_function_at_once() {
+        let mut e = engine();
+        e.mem.set_u8(STARTUP_FINISHED, 1);
+        e.register(0x1111, |_, a| (a[0] + a[1]).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00aa_2080, &args![0x1111u32, 0x2222u32]).u32(),
+            0x3333
+        );
+        assert_eq!(e.mem.u32(STARTUP_COUNT), 1);
+        let calls: Vec<_> = e
+            .call_log
+            .clone()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a == 0x1111)
+            .collect();
+        assert_eq!(calls, vec![(0x1111, vec![0x1111, 0x2222])]);
+    }
+
+    #[test]
+    fn start_up_helper_runs_its_three_steps_once() {
+        let mut e = engine();
+        let order = double_startup_callees(&mut e);
+        e.call(0x00aa_3050, &args![]);
+        assert_eq!(e.mem.u8(START_UP_DONE), 1);
+        assert_eq!(
+            *order.borrow(),
+            vec![ALLOCATOR_INITIALIZE, TIMER_INITIALIZE, OEI_IO_INITIALIZE]
+        );
+        e.call(0x00aa_3050, &args![]);
+        assert_eq!(order.borrow().len(), 3);
+    }
+
+    /// `fn_00aa20b0` with the allocation callees doubled, plus a hook and two registered
+    /// functions that record the TLS word they run under.
+    fn init_fixture(allocation: u32) -> (Engine, Order) {
+        let mut e = engine();
+        let order = double_startup_callees(&mut e);
+        e.register_double(ALLOCATE, move |_, a| {
+            assert_eq!(a, &[MEMORY_MANAGER, 8]);
+            allocation.into_ret()
+        });
+        e.register(CONSTRUCT_HOLDER, |_, a| a[0].into_ret());
+        let at = e.tls() + TLS_MODE;
+        e.mem.set_u32(at, 0x55);
+        for address in [0x2000u32, 0x2100, 0x2200] {
+            let log = order.clone();
+            e.register_double(address, move |e, a| {
+                assert!(a.is_empty());
+                assert_eq!(tls_mode(e), 0xf);
+                log.borrow_mut().push(address);
+                Ret::default()
+            });
+        }
+        (e, order)
+    }
+
+    #[test]
+    fn init_builds_the_holder_when_none_is_given_or_held() {
+        let (mut e, order) = init_fixture(0x7000);
+        e.mem.set_u32(START_HOOK, 0x2000);
+        e.call(0x00aa_2080, &args![0x2100u32, 0]);
+        e.call(0x00aa_2080, &args![0x2200u32, 0]);
+        e.call(0x00aa_20b0, &args![0u32]);
+        assert_eq!(e.mem.u32(HOLDER), 0x7000);
+        assert_eq!(e.mem.u8(HOLDER_CREATED), 1);
+        assert_eq!(e.mem.u8(STARTUP_FINISHED), 1);
+        assert_eq!(tls_mode(&mut e), 0x55);
+        assert_eq!(
+            *order.borrow(),
+            vec![
+                ALLOCATOR_INITIALIZE,
+                TIMER_INITIALIZE,
+                OEI_IO_INITIALIZE,
+                0x2000,
+                0x2100,
+                0x2200
+            ]
+        );
+    }
+
+    #[test]
+    fn init_leaves_a_null_holder_when_the_allocation_fails() {
+        let (mut e, _) = init_fixture(0);
+        e.mem.set_u32(HOLDER, 0);
+        e.call(0x00aa_20b0, &args![0u32]);
+        assert_eq!(e.mem.u32(HOLDER), 0);
+        assert_eq!(e.mem.u8(HOLDER_CREATED), 1);
+    }
+
+    #[test]
+    fn init_uses_the_given_holder_unless_one_is_already_held() {
+        let (mut e, _) = init_fixture(0x7000);
+        e.mem.set_u8(HOLDER_CREATED, 1);
+        e.call(0x00aa_20b0, &args![0x8000u32]);
+        assert_eq!(e.mem.u32(HOLDER), 0x8000);
+        assert_eq!(e.mem.u8(HOLDER_CREATED), 0);
+        e.call(0x00aa_20b0, &args![0x9000u32]);
+        assert_eq!(e.mem.u32(HOLDER), 0x8000);
+        e.mem.set_u8(HOLDER_CREATED, 1);
+        e.call(0x00aa_20b0, &args![0u32]);
+        assert_eq!(e.mem.u32(HOLDER), 0x8000);
+        assert_eq!(e.mem.u8(HOLDER_CREATED), 0);
+    }
+
+    #[test]
+    fn init_runs_functions_registered_while_it_runs() {
+        let (mut e, order) = init_fixture(0x7000);
+        e.mem.set_u32(HOLDER, 0x1234);
+        e.call(0x00aa_2080, &args![0x2000u32, 0]);
+        let log = order.clone();
+        e.register_double(0x2000, move |e, _| {
+            log.borrow_mut().push(0x2000);
+            e.call(0x00aa_2080, &args![0x2100u32, 0]);
+            Ret::default()
+        });
+        e.call(0x00aa_20b0, &args![0u32]);
+        assert_eq!(e.mem.u32(STARTUP_COUNT), 2);
+        let ran: Vec<u32> = order
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|a| (0x2000..0x3000).contains(a))
+            .collect();
+        assert_eq!(ran, vec![0x2000, 0x2100]);
+    }
+}
+
+#[cfg(test)]
+mod holder_tests {
+    use super::*;
+
+    #[test]
+    fn holder_takes_a_four_byte_block_with_the_vtable() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(8);
+        let block = e.mem.alloc(4);
+        e.register_double(ALLOCATE, move |_, a| {
+            assert_eq!(a, &[MEMORY_MANAGER, 4]);
+            block.into_ret()
+        });
+        assert_eq!(e.call(0x00aa_2200, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), block);
+        assert_eq!(e.mem.u8(this + 4), 1);
+        assert_eq!(e.mem.u32(block), 0x010a_24fc);
+    }
+
+    #[test]
+    fn holder_keeps_null_when_the_allocation_fails() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this, 0x1234);
+        e.register(ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00aa_2200, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u8(this + 4), 1);
     }
 }

@@ -27,9 +27,48 @@ pub fn fn_005f0c40(e: &mut Engine, this: Ptr) -> bool {
     e.call(TEST_FLAGS, &args![flags_object, FLAG_MASK]).bool()
 }
 
+/// The form type byte `TESActorBase::IsImmobile` accepts.
+const IMMOBILE_TYPE: u32 = 0x2b;
+/// The mask `TESActorBase::IsImmobile` tests.
+const IMMOBILE_FLAG_MASK: u32 = 0x0080_0000;
+/// The type byte `TESActorBase::GetSex` accepts.
+const SEX_TYPE: u32 = 0x2a;
+/// The mask `TESActorBase::GetSex` tests.
+const SEX_FLAG_MASK: u32 = 1;
+
+// Translated from 005f0c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESActorBase::IsImmobile` (Xbox PDB): `__fastcall`. False unless `00401170(this)` returns
+/// `0x2b`; then whether `00461580` on `this + 0x30` with mask `0x800000` is true.
+pub fn tes_actor_base_is_immobile(e: &mut Engine, this: Ptr) -> bool {
+    if e.call(GET_TYPE_BYTE, &args![this]).u32() != IMMOBILE_TYPE {
+        return false;
+    }
+    let flags_object = this.addr().wrapping_add(FLAGS_OBJECT_OFFSET);
+    e.call(TEST_FLAGS, &args![flags_object, IMMOBILE_FLAG_MASK])
+        .bool()
+}
+
+// Translated from 005f0cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESActorBase::GetSex` (Xbox PDB): `__fastcall`. `-1` unless `00401170(this)` returns
+/// `0x2a`; then `1` when `00461580` on `this + 0x30` with mask `1` is true, else `0`.
+pub fn tes_actor_base_get_sex(e: &mut Engine, this: Ptr) -> i32 {
+    if e.call(GET_TYPE_BYTE, &args![this]).u32() != SEX_TYPE {
+        return -1;
+    }
+    let flags_object = this.addr().wrapping_add(FLAGS_OBJECT_OFFSET);
+    i32::from(
+        e.call(TEST_FLAGS, &args![flags_object, SEX_FLAG_MASK])
+            .bool(),
+    )
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x005f0c40, fn_005f0c40(Ptr) -> bool)]
+    vec![
+        entry!(0x005f_0c80, tes_actor_base_is_immobile(Ptr) -> bool),
+        entry!(0x005f_0cc0, tes_actor_base_get_sex(Ptr) -> i32),
+        entry!(0x005f0c40, fn_005f0c40(Ptr) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -68,5 +107,53 @@ mod tests {
         assert_eq!(test.1, vec![0x1030, 0x20]);
         let mut e = engine(0x2b, false);
         assert!(!e.call(0x005f_0c40, &args![Ptr::<()>::new(0x1000)]).bool());
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn rig(kind: u32, flag_set: bool) -> Engine {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.register_double(GET_TYPE_BYTE, move |_, _| kind.into_ret());
+        e.register_double(TEST_FLAGS, move |_, _| u32::from(flag_set).into_ret());
+        e
+    }
+
+    #[test]
+    fn at_005f0c80_is_immobile_only_for_type_0x2b_with_the_flag() {
+        let mut e = rig(0x2b, true);
+        assert!(e.call(0x005f_0c80, &args![0x4000u32]).bool());
+        assert_eq!(calls(&e, TEST_FLAGS), vec![vec![0x4030, 0x0080_0000]]);
+        let mut e = rig(0x2b, false);
+        assert!(!e.call(0x005f_0c80, &args![0x4000u32]).bool());
+        let mut e = rig(0x2a, true);
+        assert!(!e.call(0x005f_0c80, &args![0x4000u32]).bool());
+        assert!(calls(&e, TEST_FLAGS).is_empty());
+    }
+
+    #[test]
+    fn at_005f0cc0_answers_the_sex_for_type_0x2a_and_minus_one_otherwise() {
+        let mut e = rig(0x2a, true);
+        assert_eq!(e.call(0x005f_0cc0, &args![0x4000u32]).i32(), 1);
+        assert_eq!(calls(&e, TEST_FLAGS), vec![vec![0x4030, 1]]);
+        let mut e = rig(0x2a, false);
+        assert_eq!(e.call(0x005f_0cc0, &args![0x4000u32]).i32(), 0);
+        let mut e = rig(0x2b, true);
+        assert_eq!(e.call(0x005f_0cc0, &args![0x4000u32]).i32(), -1);
+        assert_eq!(e.call(0x005f_0cc0, &args![0x4000u32]).u32(), 0xffff_ffff);
+        assert!(calls(&e, TEST_FLAGS).is_empty());
     }
 }

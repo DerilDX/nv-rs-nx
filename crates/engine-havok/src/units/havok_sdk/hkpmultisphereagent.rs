@@ -804,9 +804,46 @@ pub fn hkp_symmetric_agent_multi_sphere_linear_cast(
     });
 }
 
+/// Allocates `size` bytes the way the agent create functions do: the thread's memory router
+/// (`00c85750`) has the allocator at `+0x10`; its virtual slot `4` hands out the block, whose
+/// size goes into the 16-bit word at `+4`.
+fn allocate_agent_block(e: &mut Engine, size: u32) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router.wrapping_add(0x10));
+    let block = e.vcall(allocator, 4, &args![size]).u32();
+    e.mem.set_u16(block.wrapping_add(4), size as u16);
+    block
+}
+
+// Translated from 00d44cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `first`, `second`, `third`, `fourth`): a create
+/// function of a collision agent (code at `00d44d9d` stores its address in a collision-agent record).
+/// Allocates 0x38 bytes (`allocate_agent_block`) and runs the constructor `00d44b00` (`thiscall`,
+/// `RET 0x10`) on the block with the four words; answers what the constructor answers.
+pub fn fn_00d44cc0(e: &mut Engine, first: u32, second: u32, third: u32, fourth: u32) -> u32 {
+    let block = allocate_agent_block(e, 0x38);
+    e.call(0x00d4_4b00, &args![block, first, second, third, fourth])
+        .u32()
+}
+
+// Translated from 00d44d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `first`, `second`, `third`, `fourth`): the
+/// create function of the flipped agent (code at `00d44d63` stores its address in a
+/// collision-agent record). Allocates 0x38 bytes (`allocate_agent_block`), runs the constructor `00d44b00` on the
+/// block with the first two words swapped (`second`, `first`, `third`, `fourth`), then stores the
+/// vtable word 0x010c_f390 in the block's first word. Answers the block.
+pub fn fn_00d44d00(e: &mut Engine, first: u32, second: u32, third: u32, fourth: u32) -> u32 {
+    let block = allocate_agent_block(e, 0x38);
+    e.call(0x00d4_4b00, &args![block, second, first, third, fourth]);
+    e.mem.set_u32(block, 0x010c_f390);
+    block
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d44cc0, fn_00d44cc0(u32, u32, u32, u32) -> u32),
+        entry!(0x00d44d00, fn_00d44d00(u32, u32, u32, u32) -> u32),
         entry!(0x00d443a0, hkp_multi_sphere_agent_cleanup(Ptr, u32)),
         entry!(
             0x00d443e0,
@@ -865,6 +902,81 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The memory router (`00c85750`) answers an object whose `+0x10` is an allocator; the
+    /// allocator's slot 4 hands out `block` and records the size it was asked for.
+    fn engine_with_allocator(block: u32) -> (Engine, std::rc::Rc<std::cell::RefCell<Vec<u32>>>) {
+        let mut e = Engine::new();
+        let sizes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = std::rc::Rc::clone(&sizes);
+        e.put_vtable(0x0900_0000, &[0, 0x0900_0100]);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, 0x0900_0000);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register_double(0x0900_0100, move |_, a| {
+            seen.borrow_mut().push(a[1]);
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        (e, sizes)
+    }
+
+    /// The argument lists of the logged calls to `address`.
+    fn seen_calls(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(called, _)| *called == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00d44cc0_allocates_the_block_and_runs_the_constructor() {
+        let (mut e, sizes) = engine_with_allocator(0x0800_0000);
+        e.map(0x0800_0000, 0x100);
+        e.register(0x00d4_4b00, |_, a| Ret {
+            eax: a[0].wrapping_add(1),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x00d4_4cc0, &args![1u32, 2u32, 3u32, 4u32]).u32();
+        assert_eq!(answer, 0x0800_0001);
+        assert_eq!(*sizes.borrow(), vec![0x38]);
+        assert_eq!(e.mem.u16(0x0800_0004), 0x38);
+        assert_eq!(
+            seen_calls(&e, 0x00d4_4b00),
+            vec![vec![0x0800_0000, 1, 2, 3, 4]]
+        );
+    }
+
+    #[test]
+    fn fn_00d44d00_swaps_the_first_two_words_and_sets_the_vtable() {
+        let (mut e, sizes) = engine_with_allocator(0x0800_0000);
+        e.map(0x0800_0000, 0x100);
+        e.register(0x00d4_4b00, |_, a| Ret {
+            eax: a[0].wrapping_add(1),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x00d4_4d00, &args![1u32, 2u32, 3u32, 4u32]).u32();
+        assert_eq!(answer, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x38]);
+        assert_eq!(e.mem.u16(0x0800_0004), 0x38);
+        assert_eq!(e.mem.u32(0x0800_0000), 0x010c_f390);
+        assert_eq!(
+            seen_calls(&e, 0x00d4_4b00),
+            vec![vec![0x0800_0000, 2, 1, 3, 4]]
+        );
+    }
 
     type Log = Vec<(u32, Vec<u32>)>;
 

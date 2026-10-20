@@ -888,9 +888,41 @@ pub fn hk_algorithm_quick_sort_recursive_hk1_axis_sweep_aabb_int_hk_algorithm_le
     }
 }
 
+// Translated from 00d34d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, three words `_unused_0`, `first`, `second`; descriptions,
+/// not confirmed; the code at `00d362a0` stores its address): hands its last two words to
+/// `00da3510` (cdecl, two words) and answers what that answers.
+pub fn fn_00d34d60(e: &mut Engine, _unused_0: u32, first: u32, second: u32) -> u32 {
+    e.call(0x00da_3510, &args![first, second]).u32()
+}
+
+// Translated from 00d34d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, five words `_unused_0`, `first`, `second`, `third`,
+/// `fourth`; `second` and `third` are floats; descriptions, not confirmed; the code at
+/// `00d362a7` stores its address): hands `first`, the two floats (each through `FLD`/`FSTP`, a
+/// signalling NaN quieted) and `fourth` to `00da35f0` (cdecl, four words) and answers what that
+/// answers.
+pub fn fn_00d34d80(
+    e: &mut Engine,
+    _unused_0: u32,
+    first: u32,
+    second: f32,
+    third: f32,
+    fourth: u32,
+) -> u32 {
+    e.call(
+        0x00da_35f0,
+        &args![first, x87_quiet(second), x87_quiet(third), fourth],
+    )
+    .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d34d60, fn_00d34d60(u32, u32, u32) -> u32),
+        entry!(0x00d34d80, fn_00d34d80(u32, u32, f32, f32, u32) -> u32),
+
         entry!(
             0x00d3_4d30,
             hkp_collection_collection_agent3_calc_statistics(u32, u32, u32, Ptr)
@@ -924,6 +956,54 @@ mod tests {
     };
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+
+    #[test]
+    fn fn_00d34d60_hands_its_last_two_words_to_00da3510() {
+        let mut e = Engine::new();
+        e.register(0x00da_3510, |_, a| Ret {
+            eax: a[0] + a[1],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x00d3_4d60, &args![1u32, 2u32, 3u32]).u32();
+        assert_eq!(answer, 5);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00da_3510)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x00da_3510, vec![2, 3])]);
+    }
+
+    #[test]
+    fn fn_00d34d80_hands_the_floats_through_the_x87_stack() {
+        let mut e = Engine::new();
+        e.register(0x00da_35f0, |_, a| Ret {
+            eax: a.len() as u32,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let signalling = f32::from_bits(0x7fa0_0001);
+        let answer = e
+            .call(0x00d3_4d80, &args![1u32, 2u32, signalling, 2.5f32, 5u32])
+            .u32();
+        assert_eq!(answer, 4);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00da_35f0)
+            .cloned()
+            .collect();
+        assert_eq!(
+            seen,
+            vec![(0x00da_35f0, vec![2, 0x7fe0_0001, 2.5f32.to_bits(), 5])]
+        );
+    }
 
     const COLLECTOR: u32 = 0x0900_0000;
     const FIRST: u32 = 0x0910_0000;

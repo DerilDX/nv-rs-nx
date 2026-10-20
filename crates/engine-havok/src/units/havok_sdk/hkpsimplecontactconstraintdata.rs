@@ -294,9 +294,105 @@ pub fn hkp_dynamics_cp_id_mgr_new_id(e: &mut Engine, this: Ptr, value: u8) -> i3
     size.wrapping_sub(1) as i32
 }
 
+/// `hkpSimpleContactConstraintAtomUtil::expandOne` (`00d92690`, cdecl `(atom, flag byte pointer)`,
+/// answers the atom, possibly moved; the flag byte is set when it was), `hkpConstraintOwner::
+/// addConstraintInfo` (`00cb74d0`, `this` = the owner, `(constraint, info)`) and
+/// `hkpWorldConstraintUtil::updateFatherOfMovedAtom` (`00d275a0`, cdecl `(constraint, old atom,
+/// new atom, size)`).
+const EXPAND_ONE: u32 = 0x00d9_2690;
+const OWNER_ADD_CONSTRAINT_INFO: u32 = 0x00cb_74d0;
+const UPDATE_FATHER_OF_MOVED_ATOM: u32 = 0x00d2_75a0;
+
+// Translated from 00d92df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSimpleContactConstraintData::allocateContactPoint` (Xbox PDB), thiscall with three stack
+/// words `(owner, point out, properties out)`: sets bit 2 of the atom flags at +0x10 of the atom
+/// at `this + 0x28`, makes room for one more contact point there (`expandOne`), clears the new
+/// point properties' first two words and sets their flag byte at +0xf to 1 (3 when there is an
+/// earlier point whose flag byte has bit 1 clear and whose byte at +0xe is 0), stores the
+/// addresses of the new contact point (atom + 0x30 + 0x20 * index) and of its properties in the
+/// two outputs, tells the owner the constraint grew (`addConstraintInfo`, four words: the
+/// bytes of the larger runtime block, the size delta of the atom and two counters, derived from
+/// the old count), fixes up the constraint when the atom moved and returns the id
+/// (`hkpDynamicsCpIdMgr::newId` of the id manager at `this + 0xc`).
+pub fn hkp_simple_contact_constraint_data_allocate_contact_point(
+    e: &mut Engine,
+    this: Ptr,
+    owner: Ptr,
+    point_out: Ptr,
+    properties_out: Ptr,
+) -> i32 {
+    let data = this.addr();
+    let atom = e.mem.u32(data + 0x28);
+    let flags = e.mem.u16(atom + 0x10);
+    e.mem.set_u16(atom + 0x10, flags | 4);
+    let count = u32::from(e.mem.u16(atom + 4));
+    let old_atom = e.mem.u32(data + 0x28);
+    let moved = e.mem.alloc(4);
+    let new_atom = e.call(EXPAND_ONE, &args![old_atom, moved]).u32();
+    e.mem.set_u32(data + 0x28, new_atom);
+    let stride = u32::from(e.mem.u8(new_atom + 0xa));
+    let points = (u32::from(e.mem.u16(new_atom + 6)) << 5).wrapping_add(new_atom);
+    let properties = stride
+        .wrapping_mul(count)
+        .wrapping_add(points)
+        .wrapping_add(0x30);
+    let point = (count << 5).wrapping_add(new_atom).wrapping_add(0x30);
+    let previous = properties.wrapping_sub(stride);
+    e.mem.set_u32(properties, 0);
+    e.mem.set_u32(properties + 4, 0);
+    e.mem.set_u8(properties + 0xf, 1);
+    if (count as i32) > 0 && e.mem.u8(previous + 0xf) & 2 == 0 && e.mem.u8(previous + 0xe) == 0 {
+        e.mem.set_u8(properties + 0xf, 3);
+    }
+    e.mem.set_u32(point_out.addr(), point);
+    e.mem.set_u32(properties_out.addr(), properties);
+    let next = count.wrapping_add(1);
+    let odd = next & 1;
+    let mut info = [
+        (((next as i32) >> 1) as u32)
+            .wrapping_mul(0x70)
+            .wrapping_add(odd * 0x30)
+            .wrapping_add(0xa0),
+        0,
+        0,
+        0,
+    ];
+    if count == 1 {
+        info[1] = 0x20;
+        info[2] = 1;
+        info[3] = 1;
+    }
+    info[2] += 1;
+    info[1] += if odd != 0 { 0x30 } else { 0x40 };
+    info[3] += 1;
+    let info_at = e.mem.alloc(0x10);
+    for (i, word) in info.into_iter().enumerate() {
+        e.mem.set_u32(info_at + 4 * i as u32, word);
+    }
+    let constraint = e.mem.u32(data + 0x24);
+    e.call(
+        OWNER_ADD_CONSTRAINT_INFO,
+        &args![owner, constraint, info_at],
+    );
+    e.mem.free(info_at);
+    if e.mem.u8(moved) != 0 {
+        let size = u32::from(e.mem.u16(new_atom + 2));
+        let current = e.mem.u32(data + 0x28);
+        e.call(
+            UPDATE_FATHER_OF_MOVED_ATOM,
+            &args![constraint, old_atom, current, size],
+        );
+        e.mem
+            .set_u32(data + 0x2c, u32::from(e.mem.u16(new_atom + 2)));
+    }
+    e.mem.free(moved);
+    hkp_dynamics_cp_id_mgr_new_id(e, Ptr::new(data + 0xc), count as u8)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d9_2df0, hkp_simple_contact_constraint_data_allocate_contact_point(Ptr, Ptr, Ptr, Ptr) -> i32),
         entry!(
             0x00d9_27b0,
             hkp_simple_contact_constraint_data_get_constraint_info(Ptr, Ptr)
@@ -607,5 +703,129 @@ mod tests {
         // An empty table appends too.
         e.mem.set_u32(this + 4, 0);
         assert_eq!(e.call(0x00d9_3140, &args![this, 2u32]).i32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod allocate_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Seen = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// A data object with an atom holding `count` contact points (points area of four, stride
+    /// 0x10), an id table with a free entry at the end and a recording `expandOne` that leaves
+    /// the atom where it is.
+    fn scene(count: u16) -> (Engine, Seen, u32, u32) {
+        let mut e = Engine::new();
+        let seen: Seen = Rc::new(RefCell::new(Vec::new()));
+        let data = e.mem.alloc(0x40);
+        let atom = e.mem.alloc(0x400);
+        e.mem.set_u16(atom + 2, 0x300);
+        e.mem.set_u16(atom + 4, count);
+        e.mem.set_u16(atom + 6, 4);
+        e.mem.set_u8(atom + 0xa, 0x10);
+        e.mem.set_u32(data + 0x28, atom);
+        e.mem.set_u32(data + 0x24, 0x7777);
+        let table = e.mem.alloc(8);
+        e.mem.set_u8(table, 0);
+        e.mem.set_u8(table + 1, 0xff);
+        e.mem.set_u32(data + 0xc, table);
+        e.mem.set_u32(data + 0x10, 2);
+        e.mem.set_u32(data + 0x14, 8);
+        let log = Rc::clone(&seen);
+        e.register_double(EXPAND_ONE, move |_, a| {
+            log.borrow_mut().push((EXPAND_ONE, a.to_vec()));
+            a[0].into_ret()
+        });
+        for address in [OWNER_ADD_CONSTRAINT_INFO, UPDATE_FATHER_OF_MOVED_ATOM] {
+            let log = Rc::clone(&seen);
+            e.register_double(address, move |e, a| {
+                let mut words = a.to_vec();
+                if address == OWNER_ADD_CONSTRAINT_INFO {
+                    words.extend((0..4).map(|i| e.mem.u32(a[2] + 4 * i)));
+                }
+                log.borrow_mut().push((address, words));
+                Ret::default()
+            });
+        }
+        (e, seen, data, atom)
+    }
+
+    fn calls(seen: &Seen, address: u32) -> Vec<Vec<u32>> {
+        seen.borrow()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_first_point_gets_properties_and_a_runtime_size_of_one_point() {
+        let (mut e, seen, data, atom) = scene(0);
+        let outputs = e.mem.alloc(8);
+        let id = e
+            .call(0x00d9_2df0, &args![data, 0x5000u32, outputs, outputs + 4])
+            .i32();
+        // The free entry at the end of the id table is taken; the id is its index.
+        assert_eq!(id, 1);
+        let point = e.mem.u32(outputs);
+        let properties = e.mem.u32(outputs + 4);
+        assert_eq!(point, atom + 0x30);
+        assert_eq!(properties, atom + 0x30 + 0x80);
+        assert_eq!(e.mem.u8(properties + 0xf), 1);
+        assert_eq!(e.mem.u16(atom + 0x10) & 4, 4);
+        // One point: (1 >> 1) * 0x70 + 0xa0 + 0x30, then 0x30 for the odd point and 1, 1.
+        let call = &calls(&seen, OWNER_ADD_CONSTRAINT_INFO)[0];
+        assert_eq!(call[..2], [0x5000, 0x7777]);
+        assert_eq!(call[3..], [0xd0, 0x30, 1, 1]);
+        assert!(calls(&seen, UPDATE_FATHER_OF_MOVED_ATOM).is_empty());
+    }
+
+    #[test]
+    fn a_later_point_is_chained_to_the_previous_one() {
+        let (mut e, seen, data, atom) = scene(1);
+        let outputs = e.mem.alloc(8);
+        // The previous point's flags: bit 1 clear and byte 0xe zero: the new one gets 3.
+        e.mem.set_u8(atom + 0x30 + 0x80 + 0xf, 0);
+        e.mem.set_u8(atom + 0x30 + 0x80 + 0xe, 0);
+        e.call(0x00d9_2df0, &args![data, 0x5000u32, outputs, outputs + 4]);
+        let properties = e.mem.u32(outputs + 4);
+        assert_eq!(properties, atom + 0x30 + 0x80 + 0x10);
+        assert_eq!(e.mem.u8(properties + 0xf), 3);
+        assert_eq!(e.mem.u32(outputs), atom + 0x30 + 0x20);
+        // Two points after this one: (2 >> 1) * 0x70 + 0xa0, the first point's extra 0x20.
+        let info = &calls(&seen, OWNER_ADD_CONSTRAINT_INFO)[0][3..];
+        assert_eq!(info, [0x70 + 0xa0, 0x20 + 0x40, 2, 2]);
+        // A previous point with bit 1 set keeps flag 1.
+        let (mut e, _, data, atom) = scene(1);
+        e.mem.set_u8(atom + 0x30 + 0x80 + 0xf, 2);
+        let outputs = e.mem.alloc(8);
+        e.call(0x00d9_2df0, &args![data, 0x5000u32, outputs, outputs + 4]);
+        assert_eq!(e.mem.u8(e.mem.u32(outputs + 4) + 0xf), 1);
+    }
+
+    #[test]
+    fn a_moved_atom_is_reported_to_the_constraint() {
+        let (mut e, seen, data, atom) = scene(0);
+        let moved = e.mem.alloc(0x400);
+        e.mem.set_u16(moved + 2, 0x321);
+        e.mem.set_u16(moved + 6, 4);
+        e.mem.set_u8(moved + 0xa, 0x10);
+        let log = Rc::clone(&seen);
+        e.register_double(EXPAND_ONE, move |e, a| {
+            log.borrow_mut().push((EXPAND_ONE, a.to_vec()));
+            e.mem.set_u8(a[1], 1);
+            moved.into_ret()
+        });
+        let outputs = e.mem.alloc(8);
+        e.call(0x00d9_2df0, &args![data, 0x5000u32, outputs, outputs + 4]);
+        assert_eq!(e.mem.u32(data + 0x28), moved);
+        assert_eq!(
+            calls(&seen, UPDATE_FATHER_OF_MOVED_ATOM),
+            vec![vec![0x7777, atom, moved, 0x321]]
+        );
+        assert_eq!(e.mem.u32(data + 0x2c), 0x321);
     }
 }

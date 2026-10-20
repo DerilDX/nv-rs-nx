@@ -668,6 +668,176 @@ pub fn process(e: &mut Engine, pair: Ptr, input: u32, agent: Ptr, query: Ptr, co
     })
 }
 
+/// `hkAgent1nMachine_InvalidateTim` (Ghidra's name; `00da3510`, cdecl: the track, one word).
+const INVALIDATE_TIM: u32 = 0x00da_3510;
+/// `hkAgent1nMachine_WarpTime` (Ghidra's name; `00da35f0`, cdecl: the track, two floats as
+/// stack words, one word).
+const WARP_TIME: u32 = 0x00da_35f0;
+/// `hkPredGskAgent3::create` (Ghidra's name; `00d418d0`, cdecl: three words, answers a pointer).
+const PREDICATE_CREATE: u32 = 0x00d4_18d0;
+/// `00d418b0` (Ghidra made no function of it; cdecl, four words, which it hands unchanged to
+/// [`PREDICATE_CLEANUP`]).
+const PREDICATE_DESTROY: u32 = 0x00d4_18b0;
+/// The predicate agent's functions for the agent table's slots `0xc`, `0x10` and `0x14`
+/// (`00d417b0`, `00d417f0`, `00d41830`; cdecl, three words: the first never read, the entry, a
+/// 16-bit id; `00d41830` has no Ghidra function).
+const PREDICATE_SLOT_0C: u32 = 0x00d4_17b0;
+const PREDICATE_SLOT_10: u32 = 0x00d4_17f0;
+const PREDICATE_SLOT_14: u32 = 0x00d4_1830;
+/// `hkPredGskAgent3::sepNormal` (Ghidra's name; `00d41930`, cdecl, four words).
+const PREDICATE_SEP_NORMAL: u32 = 0x00d4_1930;
+/// The 16 bytes (`MOVAPS`) that slot `0x28` copies to its answer buffer when the agent has
+/// been cleaned up, and the float it stores over the last four bytes is [`NO_HIT_TIME`].
+const NO_HIT_ANSWER: u32 = 0x0126_8370;
+
+// Translated from 00d32b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Agent function slot `0x20` (name unknown): cdecl with three stack words, the first unused.
+/// Unless bit 5 of the entry's byte at `+0xb` is set, hands the entry's track (`entry + 0x10`)
+/// and the third word to `hkAgent1nMachine_InvalidateTim` (`00da3510`). Answers what `EAX` holds
+/// at the end: the entry when the bit was set, otherwise the callee's answer.
+pub fn fn_00d32b20(e: &mut Engine, _unused_0: u32, entry: Ptr, word_3: u32) -> u32 {
+    if e.mem.u8(entry.addr() + 0xb) & 0x20 != 0 {
+        return entry.addr();
+    }
+    e.call(INVALIDATE_TIM, &args![entry.addr() + 0x10, word_3])
+        .u32()
+}
+
+// Translated from 00d32b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Agent function slot `0x24` (name unknown): cdecl with five stack words, the first unused.
+/// Unless bit 5 of the entry's byte at `+0xb` is set, passes the entry's track, the two float
+/// words (copied through the x87 stack, so a signalling NaN comes out quiet) and the fifth word
+/// to `hkAgent1nMachine_WarpTime` (`00da35f0`). Answers what `EAX` holds at the end: the entry
+/// when the bit was set, otherwise the callee's answer.
+pub fn fn_00d32b40(
+    e: &mut Engine,
+    _unused_0: u32,
+    entry: Ptr,
+    time_1: u32,
+    time_2: u32,
+    word_5: u32,
+) -> u32 {
+    if e.mem.u8(entry.addr() + 0xb) & 0x20 != 0 {
+        return entry.addr();
+    }
+    let first = x87_quiet_bits(time_1);
+    let second = x87_quiet_bits(time_2);
+    e.call(
+        WARP_TIME,
+        &args![entry.addr() + 0x10, first, second, word_5],
+    )
+    .u32()
+}
+
+// Translated from 00d32b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Agent function slot `0` (the create function; name unknown): cdecl with three stack words,
+/// `input`, `word_2` and `entry`. Has `hkPredGskAgent3::create` (`00d418d0`) work on all three,
+/// then sets bit 5 and clears bit 6 of the entry's byte at `+0xb` (read after the call, which
+/// changes that byte too). Answers what the callee answers.
+pub fn fn_00d32b70(e: &mut Engine, input: u32, word_2: u32, entry: Ptr) -> u32 {
+    let result = e
+        .call(PREDICATE_CREATE, &args![input, word_2, entry.addr()])
+        .u32();
+    let flags = e.mem.u8(entry.addr() + 0xb);
+    e.mem.set_u8(entry.addr() + 0xb, (flags & 0xbf) | 0x20);
+    result
+}
+
+// Translated from 00d32ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Agent function slot `4` (name unknown): cdecl with five stack words, the first unused by
+/// the second branch. When bit 5 of the entry's byte at `+0xb` is set, jumps to `00d418b0` with
+/// the first four words. Otherwise calls `hkAgent1nMachine_Destroy` (`00da42b0`, cdecl: the
+/// machine, the dispatcher, the pair's object, the context's owner) with the entry's track
+/// (`entry + 0x10`), the fifth word, the third and the fourth. Answers what the callee answers.
+pub fn fn_00d32ba0(
+    e: &mut Engine,
+    word_1: u32,
+    entry: Ptr,
+    word_3: u32,
+    word_4: u32,
+    word_5: u32,
+) -> u32 {
+    if e.mem.u8(entry.addr() + 0xb) & 0x20 != 0 {
+        return e
+            .call(
+                PREDICATE_DESTROY,
+                &args![word_1, entry.addr(), word_3, word_4],
+            )
+            .u32();
+    }
+    e.call(
+        DESTROY_MACHINE,
+        &args![entry.addr() + 0x10, word_5, word_3, word_4],
+    )
+    .u32()
+}
+
+// Translated from 00d32bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Agent function slot `8` (name unknown): cdecl with four stack words, all handed on by a
+/// jump to `hkPredGskAgent3::cleanup` (`00d41860`); answers what that answers.
+pub fn fn_00d32bd0(e: &mut Engine, word_1: u32, word_2: u32, word_3: u32, word_4: u32) -> u32 {
+    e.call(PREDICATE_CLEANUP, &args![word_1, word_2, word_3, word_4])
+        .u32()
+}
+
+// Translated from 00d32be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Agent function slot `0xc` (name unknown): cdecl with three stack words, the first and the
+/// third handed on. When bit 5 of the entry's byte at `+0xb` is set, jumps to `00d417b0` with
+/// the three words and answers what it answers; otherwise answers the entry (the value `EAX`
+/// holds).
+pub fn fn_00d32be0(e: &mut Engine, word_1: u32, entry: Ptr, word_3: u32) -> u32 {
+    if e.mem.u8(entry.addr() + 0xb) & 0x20 == 0 {
+        return entry.addr();
+    }
+    e.call(PREDICATE_SLOT_0C, &args![word_1, entry.addr(), word_3])
+        .u32()
+}
+
+// Translated from 00d32c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Agent function slot `0x10` (name unknown): as [`fn_00d32be0`] with the jump to `00d417f0`.
+pub fn fn_00d32c00(e: &mut Engine, word_1: u32, entry: Ptr, word_3: u32) -> u32 {
+    if e.mem.u8(entry.addr() + 0xb) & 0x20 == 0 {
+        return entry.addr();
+    }
+    e.call(PREDICATE_SLOT_10, &args![word_1, entry.addr(), word_3])
+        .u32()
+}
+
+// Translated from 00d32c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Agent function slot `0x14` (name unknown): as [`fn_00d32be0`] with the jump to `00d41830`.
+pub fn fn_00d32c20(e: &mut Engine, word_1: u32, entry: Ptr, word_3: u32) -> u32 {
+    if e.mem.u8(entry.addr() + 0xb) & 0x20 == 0 {
+        return entry.addr();
+    }
+    e.call(PREDICATE_SLOT_14, &args![word_1, entry.addr(), word_3])
+        .u32()
+}
+
+// Translated from 00d32ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Agent function slot `0x28` (name unknown): cdecl with four stack words. When bit 5 of the
+/// byte at `+0xb` of the entry (the third word) is set, jumps to `hkPredGskAgent3::sepNormal`
+/// (`00d41930`) with the four words and answers what it answers. Otherwise fills the answer
+/// buffer (the fourth word): 16 bytes copied from `0126_8370`, then the float at `010ceb6c`
+/// (copied through the x87 stack, so a signalling NaN comes out quiet) over its last four
+/// bytes; answers the buffer's address.
+pub fn fn_00d32ca0(e: &mut Engine, word_1: u32, word_2: u32, entry: Ptr, answer: Ptr) -> u32 {
+    if e.mem.u8(entry.addr() + 0xb) & 0x20 != 0 {
+        return e
+            .call(
+                PREDICATE_SEP_NORMAL,
+                &args![word_1, word_2, entry.addr(), answer.addr()],
+            )
+            .u32();
+    }
+    let time = x87_quiet_bits(e.mem.u32(NO_HIT_TIME));
+    for lane in 0..4u32 {
+        let word = e.mem.u32(NO_HIT_ANSWER + 4 * lane);
+        e.mem.set_u32(answer.addr() + 4 * lane, word);
+    }
+    e.mem.set_u32(answer.addr() + 0xc, time);
+    answer.addr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -696,6 +866,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00d3_34c0,
             add_toi(Ptr, Ptr, Ptr, u32, u32, u32, u32, Ptr, u32, u32) -> u32
         ),
+        entry!(0x00d32b20, fn_00d32b20(u32, Ptr, u32) -> u32),
+        entry!(0x00d32b40, fn_00d32b40(u32, Ptr, u32, u32, u32) -> u32),
+        entry!(0x00d32b70, fn_00d32b70(u32, u32, Ptr) -> u32),
+        entry!(0x00d32ba0, fn_00d32ba0(u32, Ptr, u32, u32, u32) -> u32),
+        entry!(0x00d32bd0, fn_00d32bd0(u32, u32, u32, u32) -> u32),
+        entry!(0x00d32be0, fn_00d32be0(u32, Ptr, u32) -> u32),
+        entry!(0x00d32c00, fn_00d32c00(u32, Ptr, u32) -> u32),
+        entry!(0x00d32c20, fn_00d32c20(u32, Ptr, u32) -> u32),
+        entry!(0x00d32ca0, fn_00d32ca0(u32, u32, Ptr, Ptr) -> u32),
     ]
 }
 
@@ -1569,5 +1748,182 @@ mod havok_a03_tests {
         r.e.mem.set_u32(r.context + 0x3080, 0);
         r.run();
         assert_eq!(r.e.mem.u32(r.buffer), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_a07_gap {
+    use super::*;
+
+    /// The argument words of every call to `address` in the engine's call log (which is taken).
+    fn calls_to(e: &mut Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(called, _)| *called == address)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    /// A block standing for an agent entry whose byte at `+0xb` is `flags`.
+    fn entry_with(e: &mut Engine, flags: u8) -> u32 {
+        let entry = e.mem.alloc(0x40);
+        e.mem.set_u8(entry + 0xb, flags);
+        entry
+    }
+
+    /// A double over `address` that answers `eax`.
+    fn answering(e: &mut Engine, address: u32) {
+        e.register(address, |_, _| Ret {
+            eax: 0x99,
+            ..Ret::default()
+        });
+    }
+
+    #[test]
+    fn fn_00d32b20_hands_the_track_to_the_invalidate_unless_the_entry_is_cleaned_up() {
+        let mut e = Engine::new();
+        answering(&mut e, INVALIDATE_TIM);
+        let cleaned = entry_with(&mut e, 0x20);
+        let live = entry_with(&mut e, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00d3_2b20, &args![1u32, cleaned, 5u32]).u32(),
+            cleaned
+        );
+        assert_eq!(e.call(0x00d3_2b20, &args![1u32, live, 5u32]).u32(), 0x99);
+        assert_eq!(calls_to(&mut e, INVALIDATE_TIM), vec![vec![live + 0x10, 5]]);
+    }
+
+    #[test]
+    fn fn_00d32b40_passes_the_floats_through_the_x87_stack() {
+        let mut e = Engine::new();
+        answering(&mut e, WARP_TIME);
+        let cleaned = entry_with(&mut e, 0x20);
+        let live = entry_with(&mut e, 0);
+        e.call_log = Some(vec![]);
+        let args_for = |entry: u32| args![1u32, entry, 0x7f80_0001u32, 0x3fc0_0000u32, 9u32];
+        assert_eq!(e.call(0x00d3_2b40, &args_for(cleaned)).u32(), cleaned);
+        assert_eq!(e.call(0x00d3_2b40, &args_for(live)).u32(), 0x99);
+        // The signalling NaN comes out quiet; the other float is unchanged.
+        assert_eq!(
+            calls_to(&mut e, WARP_TIME),
+            vec![vec![live + 0x10, 0x7fc0_0001, 0x3fc0_0000, 9]]
+        );
+    }
+
+    #[test]
+    fn fn_00d32b70_creates_then_marks_the_entry() {
+        let mut e = Engine::new();
+        // The callee changes the entry's byte after it was handed over; the marking reads it
+        // after the call.
+        e.register_double(PREDICATE_CREATE, |e, a| {
+            e.mem.set_u8(a[2] + 0xb, 0xd0);
+            Ret {
+                eax: 0x99,
+                ..Ret::default()
+            }
+        });
+        let entry = entry_with(&mut e, 0x40);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00d3_2b70, &args![3u32, 4u32, entry]).u32(), 0x99);
+        assert_eq!(calls_to(&mut e, PREDICATE_CREATE), vec![vec![3, 4, entry]]);
+        // (0xd0 & 0xbf) | 0x20
+        assert_eq!(e.mem.u8(entry + 0xb), 0xb0);
+    }
+
+    #[test]
+    fn fn_00d32ba0_destroys_the_machine_or_jumps_to_the_predicate_function() {
+        let mut e = Engine::new();
+        answering(&mut e, PREDICATE_DESTROY);
+        answering(&mut e, DESTROY_MACHINE);
+        let cleaned = entry_with(&mut e, 0x20);
+        let live = entry_with(&mut e, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00d3_2ba0, &args![1u32, cleaned, 3u32, 4u32, 5u32])
+                .u32(),
+            0x99
+        );
+        assert_eq!(
+            e.call(0x00d3_2ba0, &args![1u32, live, 3u32, 4u32, 5u32])
+                .u32(),
+            0x99
+        );
+        let log = e.call_log.take().unwrap();
+        let only = |address: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|(called, _)| *called == address)
+                .map(|(_, words)| words.clone())
+                .collect()
+        };
+        assert_eq!(only(PREDICATE_DESTROY), vec![vec![1, cleaned, 3, 4]]);
+        assert_eq!(only(DESTROY_MACHINE), vec![vec![live + 0x10, 5, 3, 4]]);
+    }
+
+    #[test]
+    fn fn_00d32bd0_jumps_to_the_predicate_cleanup() {
+        let mut e = Engine::new();
+        answering(&mut e, PREDICATE_CLEANUP);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00d3_2bd0, &args![1u32, 2u32, 3u32, 4u32]).u32(),
+            0x99
+        );
+        assert_eq!(calls_to(&mut e, PREDICATE_CLEANUP), vec![vec![1, 2, 3, 4]]);
+    }
+
+    #[test]
+    fn the_slot_0c_10_and_14_functions_jump_only_for_a_cleaned_up_entry() {
+        let mut e = Engine::new();
+        let cleaned = entry_with(&mut e, 0x20);
+        let live = entry_with(&mut e, 0);
+        for (function, target) in [
+            (0x00d3_2be0u32, PREDICATE_SLOT_0C),
+            (0x00d3_2c00, PREDICATE_SLOT_10),
+            (0x00d3_2c20, PREDICATE_SLOT_14),
+        ] {
+            answering(&mut e, target);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(function, &args![1u32, cleaned, 3u32]).u32(), 0x99);
+            assert_eq!(e.call(function, &args![1u32, live, 3u32]).u32(), live);
+            assert_eq!(calls_to(&mut e, target), vec![vec![1, cleaned, 3]]);
+        }
+    }
+
+    #[test]
+    fn fn_00d32ca0_fills_the_answer_buffer_or_jumps_to_the_separating_normal() {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        for lane in 0..4u32 {
+            e.mem
+                .set_u32(NO_HIT_ANSWER + 4 * lane, 0x1111_1111 * (lane + 1));
+        }
+        e.mem.set_u32(NO_HIT_TIME, 0x7f80_0001);
+        answering(&mut e, PREDICATE_SEP_NORMAL);
+        let cleaned = entry_with(&mut e, 0x20);
+        let live = entry_with(&mut e, 0);
+        let answer = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00d3_2ca0, &args![1u32, 2u32, cleaned, answer])
+                .u32(),
+            0x99
+        );
+        assert_eq!(
+            calls_to(&mut e, PREDICATE_SEP_NORMAL),
+            vec![vec![1, 2, cleaned, answer]]
+        );
+        assert_eq!(e.mem.u32(answer), 0);
+        assert_eq!(
+            e.call(0x00d3_2ca0, &args![1u32, 2u32, live, answer]).u32(),
+            answer
+        );
+        assert_eq!(e.mem.u32(answer), 0x1111_1111);
+        assert_eq!(e.mem.u32(answer + 4), 0x2222_2222);
+        assert_eq!(e.mem.u32(answer + 8), 0x3333_3333);
+        // The fourth word is overwritten by the float copied through the x87 stack (quiet NaN).
+        assert_eq!(e.mem.u32(answer + 0xc), 0x7fc0_0001);
     }
 }

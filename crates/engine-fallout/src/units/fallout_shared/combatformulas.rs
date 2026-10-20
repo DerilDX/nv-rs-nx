@@ -1685,24 +1685,19 @@ pub fn combat_formulas_get_body_part_condition(
 
 // Translated from 00646880 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: the arm condition for the weapon type `kind` (`eType`): for types
-/// 1, 3 and 4 the condition of limb `0x1c`, for types 0, 2 and 5 to 9 the mean of limbs `0x1b`
-/// and `0x1c`, 1.0 for any other type (both through `GetBodyPartCondition`, not keeping the
-/// value).
+/// 0, 2 and 5 to 9 the mean of limbs `0x1b` and `0x1c`, for every other type (1, 3 and 4, and
+/// those past 9, compared as unsigned) the condition of limb `0x1c` (both through
+/// `GetBodyPartCondition`, not keeping the value). The exe's `1.0` initial value is never read.
 pub fn fn_00646880(e: &mut Engine, owner: Ptr, kind: i32) -> f32 {
-    let mut condition = 1.0f32;
-    // The byte table at 006468fc (0 = both arms, 1 = one) and the two cases at 006468a8/d9.
-    const ARM_CASES: [u8; 10] = [0, 1, 0, 1, 1, 0, 0, 0, 0, 0];
-    if (kind as u32) <= 9 {
-        if ARM_CASES[kind as usize] == 0 {
+    match kind as u32 {
+        0 | 2 | 5..=9 => {
             let first = combat_formulas_get_body_part_condition(e, owner, 0x1b, false);
             let second = combat_formulas_get_body_part_condition(e, owner, 0x1c, false);
             let two: f64 = e.global(TWO_DOUBLE);
-            condition = ((second as f64 + first as f64) / two) as f32;
-        } else {
-            condition = combat_formulas_get_body_part_condition(e, owner, 0x1c, false);
+            ((second as f64 + first as f64) / two) as f32
         }
+        _ => combat_formulas_get_body_part_condition(e, owner, 0x1c, false),
     }
-    condition
 }
 
 // Translated from 00646910 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3431,6 +3426,20 @@ mod tests {
         assert_eq!(call(&mut e, 0x1c, false), 0.0);
         assert_eq!(call(&mut e, 0x18, true), 1.0, "outside 0x19..=0x1f");
         assert_eq!(call(&mut e, 0x20, false), 1.0);
+    }
+
+    #[test]
+    fn weapon_types_past_the_table_use_the_one_arm_block() {
+        let mut e = engine();
+        let owner = object_with_vtable(&mut e, 0);
+        // the right arm (0x1c) broken, the left one (0x1b) fine
+        set_owner_values(&mut e, &[(0x1b, 80.0), (0x1c, 0.0)]);
+        let call = |e: &mut Engine, kind: i32| e.call(0x0064_6880, &args![owner, kind]).f32();
+        assert_eq!(call(&mut e, 0), 0.5, "both arms");
+        assert_eq!(call(&mut e, 1), 0.0, "one arm: the right one");
+        // The exe's `JA` takes every type past 9 (and the negative ones) to the one-arm block.
+        assert_eq!(call(&mut e, 10), 0.0);
+        assert_eq!(call(&mut e, -1), 0.0);
     }
 
     #[test]

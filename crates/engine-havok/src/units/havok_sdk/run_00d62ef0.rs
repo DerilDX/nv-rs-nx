@@ -64,9 +64,50 @@ pub fn fn_00d62fe0(e: &mut Engine, this: Ptr) -> u32 {
     e.call(WORLD_VIEWER_DESTRUCT, &args![this]).u32()
 }
 
+/// Allocates `size` bytes the way the create functions do: the thread's memory router (`00c85750`)
+/// has the allocator at `+0x10`; its virtual slot `4` hands out the block, whose size goes into
+/// the 16-bit word at `+4`.
+fn allocate_agent_block(e: &mut Engine, size: u32) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router.wrapping_add(0x10));
+    let block = e.vcall(allocator, 4, &args![size]).u32();
+    e.mem.set_u16(block.wrapping_add(4), size as u16);
+    block
+}
+
+// Translated from 00d62f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, one word `contexts`; code in a viewer registration function stores its
+/// address at `00d63006`): the create function of the snapshot viewer with the flag byte 0.
+/// Allocates 0x2c bytes (`allocate_agent_block`), runs the constructor `00d62ef0` on the block
+/// with `contexts` and the flag 0 and answers the constructed viewer plus 8 (the sub-object at
+/// `+8`), or 0 when the constructor answers null.
+pub fn fn_00d62f20(e: &mut Engine, contexts: Ptr) -> u32 {
+    let block = allocate_agent_block(e, 0x2c);
+    let viewer = fn_00d62ef0(e, Ptr::new(block), contexts, 0);
+    if viewer.is_null() {
+        return 0;
+    }
+    viewer.addr().wrapping_add(8)
+}
+
+// Translated from 00d62f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, one word `contexts`; code in a viewer registration function stores its
+/// address at `00d6301b`): the create function of the snapshot viewer with the flag byte 1, as
+/// `00d62f20` otherwise.
+pub fn fn_00d62f60(e: &mut Engine, contexts: Ptr) -> u32 {
+    let block = allocate_agent_block(e, 0x2c);
+    let viewer = fn_00d62ef0(e, Ptr::new(block), contexts, 1);
+    if viewer.is_null() {
+        return 0;
+    }
+    viewer.addr().wrapping_add(8)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d62f20, fn_00d62f20(Ptr) -> u32),
+        entry!(0x00d62f60, fn_00d62f60(Ptr) -> u32),
         entry!(0x00d6_2ef0, fn_00d62ef0(Ptr, Ptr, u8) -> Ptr),
         entry!(0x00d6_2fa0, fn_00d62fa0(Ptr)),
         entry!(0x00d6_2fe0, fn_00d62fe0(Ptr) -> u32),
@@ -78,6 +119,74 @@ mod snapshot_viewer_tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The memory router (`00c85750`) answers an object whose `+0x10` is an allocator; the
+    /// allocator's slot 4 hands out `block` and records the size it was asked for.
+    fn install_allocator(e: &mut Engine, block: u32) -> Rc<RefCell<Vec<u32>>> {
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&sizes);
+        e.map(block, 0x100);
+        e.put_vtable(0x0950_0000, &[0, 0x0950_0100]);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, 0x0950_0000);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register_double(0x0950_0100, move |_, a| {
+            seen.borrow_mut().push(a[1]);
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        sizes
+    }
+
+    #[test]
+    fn fn_00d62f20_makes_a_viewer_with_the_flag_cleared() {
+        let mut e = Engine::new();
+        let log: Log = Rc::default();
+        record(&mut e, &log, WORLD_VIEWER_CONSTRUCT, 0);
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        e.mem.set_u8(0x0800_0028, 0x7f);
+        let viewer = e.call(0x00d6_2f20, &args![0x1234u32]).u32();
+        assert_eq!(viewer, 0x0800_0008);
+        assert_eq!(*sizes.borrow(), vec![0x2c]);
+        assert_eq!(e.mem.u16(0x0800_0004), 0x2c);
+        assert_eq!(e.mem.u32(0x0800_0000), VTABLE_VIEWER);
+        assert_eq!(e.mem.u8(0x0800_0028), 0);
+        assert_eq!(
+            *log.borrow(),
+            vec![(WORLD_VIEWER_CONSTRUCT, vec![0x0800_0000, 0x1234])]
+        );
+    }
+
+    #[test]
+    fn fn_00d62f60_makes_a_viewer_with_the_flag_set() {
+        let mut e = Engine::new();
+        let log: Log = Rc::default();
+        record(&mut e, &log, WORLD_VIEWER_CONSTRUCT, 0);
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        let viewer = e.call(0x00d6_2f60, &args![0x1234u32]).u32();
+        assert_eq!(viewer, 0x0800_0008);
+        assert_eq!(*sizes.borrow(), vec![0x2c]);
+        assert_eq!(e.mem.u8(0x0800_0028), 1);
+        assert_eq!(e.mem.u32(0x0800_0020), VTABLE_FILTER);
+    }
+
+    #[test]
+    fn fn_00d62f20_answers_zero_when_the_allocator_gives_no_block() {
+        let mut e = Engine::new();
+        let log: Log = Rc::default();
+        record(&mut e, &log, WORLD_VIEWER_CONSTRUCT, 0);
+        install_allocator(&mut e, 0);
+        e.map(0, 0x100);
+        // The constructor still answers `this`, the null block, so the answer is 0.
+        assert_eq!(e.call(0x00d6_2f20, &args![0x1234u32]).u32(), 0);
+    }
 
     type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
 

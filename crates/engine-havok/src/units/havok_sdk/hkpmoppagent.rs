@@ -201,8 +201,10 @@ pub fn fn_00d2f380(e: &mut Engine, this: Ptr) {
 // Translated from 00d2f3d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpSymmetricAgentLinearCast<hkpMoppAgent>::updateShapeCollectionFilter` (Xbox PDB), `RET
 /// 0x10`: `hkpBvTreeAgent::updateShapeCollectionFilter` with the first two words swapped.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_symmetric_agent_linear_cast_mopp_agent_update_shape_collection_filter(
     e: &mut Engine,
+    _this: u32,
     first: u32,
     second: u32,
     third: u32,
@@ -215,7 +217,8 @@ pub fn hkp_symmetric_agent_linear_cast_mopp_agent_update_shape_collection_filter
 /// A penetration query through a small collector (the engine map has no name), `RET 0x10`
 /// with four words: builds a collector on the stack (vtable `010ce81c`, flag byte 0, the
 /// fourth word at `+8`) and calls `00d315f0(second, first, third, collector)`.
-pub fn fn_00d2f3f0(e: &mut Engine, first: u32, second: u32, third: u32, fourth: u32) {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn fn_00d2f3f0(e: &mut Engine, _this: u32, first: u32, second: u32, third: u32, fourth: u32) {
     e.with_stack(0xc, |e, collector| {
         let at = collector.addr();
         e.mem.set_u32(at + 8, fourth);
@@ -239,8 +242,10 @@ pub fn fn_00d2f3f0(e: &mut Engine, first: u32, second: u32, third: u32, fourth: 
 /// `+0x3049` are exchanged, the 16-bit entry at `+0x3040` is exchanged with the entry
 /// `a + b - 1` of that array (`a`, `b` the bytes before the exchange), and when the two bytes
 /// `AND` to 2 the entries at `+0x3042` and `+0x3044` are exchanged.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_symmetric_agent_linear_cast_mopp_agent_process_collision(
     e: &mut Engine,
+    _this: u32,
     body_a: u32,
     body_b: u32,
     input: u32,
@@ -294,6 +299,33 @@ pub fn hkp_symmetric_agent_linear_cast_mopp_agent_process_collision(
     }
 }
 
+// Translated from 00d2f240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (an agent creation function of this unit, cdecl, four stack words,
+/// nothing popped): `body_a`, `body_b`, `_unused_2` and `manager`. Compares the signed word at
+/// +0x24 of the object at +0x14 of the shape of each collidable (the word at +0 of the body).
+/// Allocates 0x40 bytes through the memory router's allocator (`00c85750`; virtual function at +4
+/// of the object at router + 0x10), stores the size as a 16-bit word at +4 and runs the constructor
+/// `00d2f220` on it with `manager`. When the first value is below the second it returns what the
+/// constructor answers; otherwise it also stores the vtable word `010ce96c` at +0 and returns the
+/// block. Ghidra made no function here; the address is an immediate operand at 00d2dcf7.
+pub fn fn_00d2f240(e: &mut Engine, body_a: u32, body_b: u32, _unused_2: u32, manager: u32) -> u32 {
+    let shape_a = e.mem.u32(body_a);
+    let first = e.mem.u32(shape_a + 0x14);
+    let shape_b = e.mem.u32(body_b);
+    let second = e.mem.u32(shape_b + 0x14);
+    let first_below = e.mem.i32(first + 0x24) < e.mem.i32(second + 0x24);
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let block = e.vcall(allocator, 4, &args![0x40u32]).u32();
+    e.mem.set_u16(block + 4, 0x40);
+    let built = e.call(0x00d2_f220, &args![block, manager]).u32();
+    if first_below {
+        return built;
+    }
+    e.mem.set_u32(block, 0x010c_e96c);
+    block
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -308,14 +340,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00d2_f3d0,
             hkp_symmetric_agent_linear_cast_mopp_agent_update_shape_collection_filter(
-                u32, u32, u32, u32
+                u32, u32, u32, u32, u32
             )
         ),
-        entry!(0x00d2_f3f0, fn_00d2f3f0(u32, u32, u32, u32)),
+        entry!(0x00d2_f3f0, fn_00d2f3f0(u32, u32, u32, u32, u32)),
         entry!(
             0x00d3_1610,
-            hkp_symmetric_agent_linear_cast_mopp_agent_process_collision(u32, u32, u32, Ptr)
+            hkp_symmetric_agent_linear_cast_mopp_agent_process_collision(u32, u32, u32, u32, Ptr)
         ),
+        entry!(0x00d2_f240, fn_00d2f240(u32, u32, u32, u32) -> u32),
     ]
 }
 
@@ -389,6 +422,9 @@ mod a06_tests {
     use crate::units::havok_sdk::run_00cf5070::{PROFILE_SLOT, TLS_GET_VALUE};
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     type Log = Rc<RefCell<Vec<Vec<u32>>>>;
 
@@ -589,7 +625,7 @@ mod a06_tests {
         let mut e = engine();
         let log: Log = Rc::default();
         log_double(&mut e, BV_TREE_UPDATE_FILTER, &log, 1);
-        e.call(0x00d2f3d0, &args![1u32, 2u32, 3u32, 4u32]);
+        e.call(0x00d2f3d0, &args![VCALL_THIS, 1u32, 2u32, 3u32, 4u32]);
         assert_eq!(*log.borrow(), vec![vec![1, 2, 1, 3, 4]]);
     }
 
@@ -609,7 +645,7 @@ mod a06_tests {
             ]);
             Ret::default()
         });
-        e.call(0x00d2f3f0, &args![1u32, 2u32, 3u32, 0x44u32]);
+        e.call(0x00d2f3f0, &args![VCALL_THIS, 1u32, 2u32, 3u32, 0x44u32]);
         assert_eq!(
             *log.borrow(),
             vec![vec![2, 1, 3, VTABLE_COLLECTOR, 0, 0x44]]
@@ -664,7 +700,10 @@ mod a06_tests {
     #[test]
     fn process_collision_turns_the_new_contact_points_around() {
         let (mut e, output, points, log) = process_rig(0.25, 0.25, (2, 2));
-        e.call(0x00d31610, &args![0xaau32, 0xbbu32, 0xccu32, output]);
+        e.call(
+            0x00d31610,
+            &args![VCALL_THIS, 0xaau32, 0xbbu32, 0xccu32, output],
+        );
         // The base runs with the bodies swapped.
         assert_eq!(*log.borrow(), vec![vec![0xbb, 0xaa, 0xcc, output]]);
         assert_eq!(e.mem.u32(output), points + 0x60);
@@ -682,7 +721,7 @@ mod a06_tests {
     #[test]
     fn a_changed_time_negates_the_vector_and_swaps_the_slots() {
         let (mut e, output, _points, _log) = process_rig(0.25, 0.5, (2, 2));
-        e.call(0x00d31610, &args![0u32, 0u32, 0u32, output]);
+        e.call(0x00d31610, &args![VCALL_THIS, 0u32, 0u32, 0u32, output]);
         assert_eq!(lanes(&e, output + 0x3020), [-1.0, -2.0, -3.0, 4.0]);
         assert_eq!(e.mem.u8(output + 0x304a), 0x21);
         assert_eq!(e.mem.u8(output + 0x3048), 2);
@@ -697,7 +736,7 @@ mod a06_tests {
     #[test]
     fn a_nan_time_counts_as_changed_and_other_byte_pairs_skip_the_last_exchange() {
         let (mut e, output, _points, _log) = process_rig(0.25, f32::NAN, (1, 2));
-        e.call(0x00d31610, &args![0u32, 0u32, 0u32, output]);
+        e.call(0x00d31610, &args![VCALL_THIS, 0u32, 0u32, 0u32, output]);
         // The bytes are exchanged: 2, 1; entry 0 swaps with entry 1 + 2 - 1 = 2.
         assert_eq!(e.mem.u8(output + 0x3048), 2);
         assert_eq!(e.mem.u8(output + 0x3049), 1);
@@ -705,5 +744,103 @@ mod a06_tests {
         assert_eq!(e.mem.u16(output + 0x3044), 0x1111);
         // 2 AND 1 is not 2.
         assert_eq!(e.mem.u16(output + 0x3042), 0x2222);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The slot of the allocator's vtable (offset 4) that allocates, as a test double.
+    const ALLOCATE_SLOT_DOUBLE: u32 = 0x0900_0001;
+
+    /// A memory router (`00c85750`) whose allocator allocates through a double that logs the
+    /// size it was asked for and answers a zeroed block.
+    fn allocator_engine() -> (Engine, Rc<RefCell<Vec<u32>>>) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, ALLOCATE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&sizes);
+        e.register_double(ALLOCATE_SLOT_DOUBLE, move |e, a| {
+            log.borrow_mut().push(a[1]);
+            Ret {
+                eax: e.mem.alloc(a[1]),
+                ..Ret::default()
+            }
+        });
+        (e, sizes)
+    }
+
+    /// A collidable whose shape's object at +0x14 holds `key` at +0x24.
+    fn body_with_key(e: &mut Engine, key: i32) -> u32 {
+        let body = e.mem.alloc(0x10);
+        let shape = e.mem.alloc(0x40);
+        let code = e.mem.alloc(0x40);
+        e.mem.set_u32(body, shape);
+        e.mem.set_u32(shape + 0x14, code);
+        e.mem.set_i32(code + 0x24, key);
+        body
+    }
+
+    /// The constructor sees the block and the manager; with the first key below the second its answer
+    /// comes back and the vtable word is not touched.
+    #[test]
+    fn fn_00d2f240_keeps_the_constructors_answer_when_the_first_key_is_lower() {
+        let (mut e, sizes) = allocator_engine();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register_double(0x00d2_f220, move |e, a| {
+            log.borrow_mut().push((a.to_vec(), e.mem.u16(a[0] + 4)));
+            e.mem.set_u32(a[0], 0x1111);
+            Ret {
+                eax: 0xabcd,
+                ..Ret::default()
+            }
+        });
+        let first = body_with_key(&mut e, -5);
+        let second = body_with_key(&mut e, 3);
+        let result = e
+            .call(0x00d2_f240, &args![first, second, 0u32, 0x7777u32])
+            .u32();
+        assert_eq!(result, 0xabcd);
+        assert_eq!(*sizes.borrow(), vec![0x40]);
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0[1], 0x7777);
+        assert_eq!(seen[0].1, 0x40);
+        assert_eq!(e.mem.u32(seen[0].0[0]), 0x1111);
+    }
+
+    /// An equal or higher first key stores the second vtable word and returns the block.
+    #[test]
+    fn fn_00d2f240_swaps_the_vtable_when_the_first_key_is_not_lower() {
+        for (a, b) in [(3, 3), (4, 3), (0, -1)] {
+            let (mut e, _) = allocator_engine();
+            e.register_double(0x00d2_f220, |e, a| {
+                e.mem.set_u32(a[0], 0x1111);
+                Ret {
+                    eax: 0xabcd,
+                    ..Ret::default()
+                }
+            });
+            let first = body_with_key(&mut e, a);
+            let second = body_with_key(&mut e, b);
+            let result = e
+                .call(0x00d2_f240, &args![first, second, 0u32, 0x7777u32])
+                .u32();
+            assert_ne!(result, 0xabcd);
+            assert_eq!(e.mem.u32(result), 0x010c_e96c);
+        }
     }
 }

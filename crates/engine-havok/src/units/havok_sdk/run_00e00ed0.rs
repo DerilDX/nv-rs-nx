@@ -64,6 +64,145 @@ pub fn fn_00e00fb0(e: &mut Engine, this: Ptr, mode: u32) -> Ptr {
     this
 }
 
+// Translated from 00e00e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc5f59). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00e00e70(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00e00e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc5f4f). Cdecl
+/// `(object, flag)`: does nothing for a null `object`. Otherwise it writes the object's
+/// constructor chain: vtable word `0x010305a8` (RTTI `hkpShape`) at `+0` and, when `flag` is not 0,
+/// `0` at `+0xc`; `0x010c6fd0` (RTTI `hkpSingleShapeContainer`) at `+0x14`; vtable word
+/// `0x010d0e5c` (RTTI `hkpConvexTranslateShape`) at `+0`; and the word `0xb` at `+0xc`.
+pub fn fn_00e00e90(e: &mut Engine, object: Ptr, flag: u32) {
+    if object.is_null() {
+        return;
+    }
+    let me = object.addr();
+    e.mem.set_u32(me, 0x0103_05a8);
+    if flag != 0 {
+        e.mem.set_u32(me.wrapping_add(0xc), 0);
+    }
+    e.mem.set_u32(me.wrapping_add(0x14), 0x010c_6fd0);
+    e.mem.set_u32(me, 0x010d_0e5c);
+    e.mem.set_u32(me.wrapping_add(0xc), 0xb);
+}
+
+// Translated from 00e00ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc5fc9). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00e00ee0(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00e00f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc5fbf). Cdecl
+/// `(object, flag)`: does nothing for a null `object`. Otherwise it writes the object's
+/// constructor chain: vtable word `0x010305a8` (RTTI `hkpShape`) at `+0` and, when `flag` is not 0,
+/// `0` at `+0xc`; `0x010c6fd0` (RTTI `hkpSingleShapeContainer`) at `+0x14`; vtable word
+/// `0x010d102c` (RTTI `hkpConvexTransformShape`) at `+0`; and the word `0xc` at `+0xc`.
+pub fn fn_00e00f00(e: &mut Engine, object: Ptr, flag: u32) {
+    if object.is_null() {
+        return;
+    }
+    let me = object.addr();
+    e.mem.set_u32(me, 0x0103_05a8);
+    if flag != 0 {
+        e.mem.set_u32(me.wrapping_add(0xc), 0);
+    }
+    e.mem.set_u32(me.wrapping_add(0x14), 0x010c_6fd0);
+    e.mem.set_u32(me, 0x010d_102c);
+    e.mem.set_u32(me.wrapping_add(0xc), 0xc);
+}
+
+// Translated from 00e00f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc6039). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00e00f50(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00e00f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc602f). Cdecl `(object, flag)`: does nothing
+/// for a null `object`; otherwise calls `00e00fb0` (thiscall on `object` with `flag` as its one stack word).
+pub fn fn_00e00f70(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        e.call(0x00e0_0fb0, &args![object, flag]);
+    }
+}
+
+// Translated from 00e01050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc60a9). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00e01050(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00e01070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc609f). Cdecl
+/// `(object, flag)`: does nothing for a null `object`. Otherwise it writes the object's
+/// constructor chain: vtable word `0x010305a8` (RTTI `hkpShape`) at `+0` and, when `flag` is not 0,
+/// `0` at `+0xc`; `0x010c6fb0` (RTTI `hkpShapeContainer`) at `+0x14`; vtable word `0x010d10c4`
+/// (RTTI `hkpConvexListShape`) at `+0`; `0x010d10a4` (the same class's second vtable) at `+0x14`;
+/// and the word `0x16` at `+0xc`.
+pub fn fn_00e01070(e: &mut Engine, object: Ptr, flag: u32) {
+    if object.is_null() {
+        return;
+    }
+    let me = object.addr();
+    e.mem.set_u32(me, 0x0103_05a8);
+    if flag != 0 {
+        e.mem.set_u32(me.wrapping_add(0xc), 0);
+    }
+    e.mem.set_u32(me.wrapping_add(0x14), 0x010c_6fb0);
+    e.mem.set_u32(me, 0x010d_10c4);
+    e.mem.set_u32(me.wrapping_add(0x14), 0x010d_10a4);
+    e.mem.set_u32(me.wrapping_add(0xc), 0x16);
+}
+
+// Translated from 00e010c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc6129). Cdecl `(object)`: calls the first
+/// virtual slot of `object` (`[[object]]`, the destructor entry in the Xbox PDB's class listings)
+/// with the one stack word 0 and answers that call's result.
+pub fn fn_00e010c0(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00e010e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: imm 00fc611f). Cdecl
+/// `(object, flag)`: does nothing for a null `object`. Otherwise it writes the object's
+/// constructor chain: vtable word `0x010305a8` (RTTI `hkpShape`) at `+0` and, when `flag` is not 0,
+/// `0` at `+0xc`; then `0x19` at `+0xc` and the vtable word `0x010ce31c` (RTTI
+/// `hkpSampledHeightFieldShape`) at `+0`; when `flag` is not 0, `0xd` at `+0xc`; the vtable word
+/// `0x010e901c` (RTTI `hkpCompressedSampledHeightFieldShape`) at `+0`; and when `flag` is not 0
+/// the byte `1` at `+0x1d`.
+pub fn fn_00e010e0(e: &mut Engine, object: Ptr, flag: u32) {
+    if object.is_null() {
+        return;
+    }
+    let me = object.addr();
+    e.mem.set_u32(me, 0x0103_05a8);
+    if flag != 0 {
+        e.mem.set_u32(me.wrapping_add(0xc), 0);
+    }
+    e.mem.set_u32(me.wrapping_add(0xc), 0x19);
+    e.mem.set_u32(me, 0x010c_e31c);
+    if flag != 0 {
+        e.mem.set_u32(me.wrapping_add(0xc), 0xd);
+    }
+    e.mem.set_u32(me, 0x010e_901c);
+    if flag != 0 {
+        e.mem.set_u8(me.wrapping_add(0x1d), 1);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -73,6 +212,16 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e010b0, return_constant_00e010b0() -> u32),
         entry!(0x00e01130, return_constant_00e01130() -> u32),
         entry!(0x00e0_0fb0, fn_00e00fb0(Ptr, u32) -> Ptr),
+        entry!(0x00e0_0e70, fn_00e00e70(Ptr) -> u32),
+        entry!(0x00e0_0e90, fn_00e00e90(Ptr, u32)),
+        entry!(0x00e0_0ee0, fn_00e00ee0(Ptr) -> u32),
+        entry!(0x00e0_0f00, fn_00e00f00(Ptr, u32)),
+        entry!(0x00e0_0f50, fn_00e00f50(Ptr) -> u32),
+        entry!(0x00e0_0f70, fn_00e00f70(Ptr, u32)),
+        entry!(0x00e0_1050, fn_00e01050(Ptr) -> u32),
+        entry!(0x00e0_1070, fn_00e01070(Ptr, u32)),
+        entry!(0x00e0_10c0, fn_00e010c0(Ptr) -> u32),
+        entry!(0x00e0_10e0, fn_00e010e0(Ptr, u32)),
     ]
 }
 
@@ -195,5 +344,139 @@ mod tests_a05 {
         e.call(0x00e0_0fb0, &args![this, 5u32]);
         assert_eq!(e.mem.u32(this + 0xc), 7);
         assert_eq!(e.mem.u8(this + 0x15), 3);
+    }
+}
+
+#[cfg(test)]
+mod a05_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type CallLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// A double at `address` that records the argument words of each call and answers `answer`.
+    fn recording_double(e: &mut Engine, address: u32, answer: u32) -> CallLog {
+        let log: CallLog = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&log);
+        e.register_double(address, move |_, a| {
+            seen.borrow_mut().push(a.to_vec());
+            Ret {
+                eax: answer,
+                ..Ret::default()
+            }
+        });
+        log
+    }
+
+    /// `function(object, flag)` calls `callee(object, flag)` for a non-null object and nothing for
+    /// a null one.
+    fn check_finish(function: u32, callee: u32) {
+        let mut e = Engine::new();
+        let log = recording_double(&mut e, callee, 0);
+        e.call(function, &args![0u32, 1u32]);
+        assert!(log.borrow().is_empty());
+        e.call(function, &args![0x4000u32, 1u32]);
+        e.call(function, &args![0x4000u32, 0u32]);
+        assert_eq!(*log.borrow(), vec![vec![0x4000, 1], vec![0x4000, 0]]);
+    }
+
+    macro_rules! finish_test {
+        ($name:ident, $function:expr, $callee:expr) => {
+            #[test]
+            fn $name() {
+                check_finish($function, $callee);
+            }
+        };
+    }
+
+    /// `function(object)` calls slot 0 of the object's vtable with `(object, 0)` and answers
+    /// what the slot answers.
+    fn check_cleanup(function: u32) {
+        let mut e = Engine::new();
+        let log = recording_double(&mut e, 0x7000_0000, 0x1234_5678);
+        let table = e.mem.alloc(0x10);
+        e.mem.set_u32(table, 0x7000_0000);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, table);
+        assert_eq!(e.call(function, &args![object]).u32(), 0x1234_5678);
+        assert_eq!(*log.borrow(), vec![vec![object, 0]]);
+    }
+
+    macro_rules! cleanup_test {
+        ($name:ident, $function:expr) => {
+            #[test]
+            fn $name() {
+                check_cleanup($function);
+            }
+        };
+    }
+
+    finish_test!(
+        fn_00e00f70_calls_00e00fb0_for_a_non_null_object,
+        0x00e0_0f70,
+        0x00e0_0fb0
+    );
+    cleanup_test!(fn_00e00e70_calls_virtual_slot_0_with_zero, 0x00e0_0e70);
+    cleanup_test!(fn_00e00ee0_calls_virtual_slot_0_with_zero, 0x00e0_0ee0);
+    cleanup_test!(fn_00e00f50_calls_virtual_slot_0_with_zero, 0x00e0_0f50);
+    cleanup_test!(fn_00e01050_calls_virtual_slot_0_with_zero, 0x00e0_1050);
+    cleanup_test!(fn_00e010c0_calls_virtual_slot_0_with_zero, 0x00e0_10c0);
+
+    #[test]
+    fn fn_00e00e90_writes_the_convex_translate_shape_header() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x20);
+        e.call(0x00e0_0e90, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_0e5c);
+        assert_eq!(e.mem.u32(object + 0x14), 0x010c_6fd0);
+        assert_eq!(e.mem.u32(object + 0xc), 0xb);
+        e.call(0x00e0_0e90, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_0e5c);
+        assert_eq!(e.mem.u32(object + 0xc), 0xb);
+        e.call(0x00e0_0e90, &args![0u32, 1u32]);
+    }
+
+    #[test]
+    fn fn_00e00f00_writes_the_convex_transform_shape_header() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x20);
+        e.call(0x00e0_0f00, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_102c);
+        assert_eq!(e.mem.u32(object + 0x14), 0x010c_6fd0);
+        assert_eq!(e.mem.u32(object + 0xc), 0xc);
+        e.call(0x00e0_0f00, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_102c);
+        assert_eq!(e.mem.u32(object + 0xc), 0xc);
+        e.call(0x00e0_0f00, &args![0u32, 1u32]);
+    }
+
+    #[test]
+    fn fn_00e01070_writes_the_convex_list_shape_header() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x20);
+        e.call(0x00e0_1070, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_10c4);
+        assert_eq!(e.mem.u32(object + 0x14), 0x010d_10a4);
+        assert_eq!(e.mem.u32(object + 0xc), 0x16);
+        e.call(0x00e0_1070, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_10c4);
+        assert_eq!(e.mem.u32(object + 0xc), 0x16);
+        e.call(0x00e0_1070, &args![0u32, 1u32]);
+    }
+
+    #[test]
+    fn fn_00e010e0_writes_the_compressed_height_field_header() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x20);
+        e.call(0x00e0_10e0, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x010e_901c);
+        assert_eq!(e.mem.u32(object + 0xc), 0x19);
+        assert_eq!(e.mem.u8(object + 0x1d), 0);
+        e.call(0x00e0_10e0, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x010e_901c);
+        assert_eq!(e.mem.u32(object + 0xc), 0xd);
+        assert_eq!(e.mem.u8(object + 0x1d), 1);
+        e.call(0x00e0_10e0, &args![0u32, 1u32]);
     }
 }

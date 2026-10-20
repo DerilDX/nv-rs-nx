@@ -38,9 +38,34 @@ pub fn fn_00ce0c40(e: &mut Engine, x: f32) -> f32 {
     f32::from_bits(x87_quiet_bits(bits))
 }
 
+// Translated from 00ce0ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (a quaternion product): `this` in `ECX` (a quaternion of four floats,
+/// 16-byte aligned) and one stack word, `other` (`RET 4`). Replaces `this` by the product
+/// `this * other` in single precision: with `a` = `this` and `b` = `other`, the vector part is
+/// `b.w * a.v + (a.w * b.v + a Ã— b)` and the last lane `a.w * b.w - (a.z * b.z + (a.y * b.y + a.x * b.x))`
+/// (the order the SSE code adds in).
+pub fn fn_00ce0ca0(e: &mut Engine, this: u32, other: u32) {
+    let a: [f32; 4] = std::array::from_fn(|i| e.mem.f32(this + 4 * i as u32));
+    let b: [f32; 4] = std::array::from_fn(|i| e.mem.f32(other + 4 * i as u32));
+    let cross = |i: usize| -> f32 {
+        let (j, k) = ((i + 1) % 3, (i + 2) % 3);
+        a[j] * b[k] - a[k] * b[j]
+    };
+    let vector: [f32; 3] = std::array::from_fn(|i| b[3] * a[i] + (a[3] * b[i] + cross(i)));
+    let products: [f32; 4] = std::array::from_fn(|i| a[i] * b[i]);
+    let sum = products[2] + (products[1] + products[0]);
+    for (i, value) in vector.iter().enumerate() {
+        e.mem.set_f32(this + 4 * i as u32, *value);
+    }
+    e.mem.set_f32(this + 12, products[3] - sum);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00ce_0c40, fn_00ce0c40(f32) -> f32)]
+    vec![
+        entry!(0x00ce_0c40, fn_00ce0c40(f32) -> f32),
+        entry!(0x00ce_0ca0, fn_00ce0ca0(u32, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -99,5 +124,48 @@ mod tests {
         e.call(0x00ce_0c40, &args![f32::from_bits(0x7f80_0001)]);
         assert_eq!(seen.borrow().len(), 1);
         assert!(seen.borrow()[0].is_nan());
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    fn set_quaternion(e: &mut Engine, values: [f32; 4]) -> u32 {
+        let at = e.mem.alloc(0x10);
+        for (i, value) in values.iter().enumerate() {
+            e.mem.set_f32(at + 4 * i as u32, *value);
+        }
+        at
+    }
+
+    fn quaternion(e: &Engine, at: u32) -> [f32; 4] {
+        std::array::from_fn(|i| e.mem.f32(at + 4 * i as u32))
+    }
+
+    /// (1, 2, 3, 4) * (5, 6, 7, 8): cross (-4, 8, -4), vector (24, 48, 48), scalar 32 - 38.
+    #[test]
+    fn fn_00ce0ca0_multiplies_two_quaternions() {
+        let mut e = Engine::new();
+        let a = set_quaternion(&mut e, [1.0, 2.0, 3.0, 4.0]);
+        let b = set_quaternion(&mut e, [5.0, 6.0, 7.0, 8.0]);
+        e.call(0x00ce_0ca0, &args![a, b]);
+        assert_eq!(quaternion(&e, a), [24.0, 48.0, 48.0, -6.0]);
+        assert_eq!(quaternion(&e, b), [5.0, 6.0, 7.0, 8.0]);
+    }
+
+    /// The identity (0, 0, 0, 1) on either side leaves the other quaternion unchanged.
+    #[test]
+    fn fn_00ce0ca0_has_the_identity_on_both_sides() {
+        let mut e = Engine::new();
+        let q = [0.5, -0.25, 0.125, 2.0];
+        let a = set_quaternion(&mut e, q);
+        let identity = set_quaternion(&mut e, [0.0, 0.0, 0.0, 1.0]);
+        e.call(0x00ce_0ca0, &args![a, identity]);
+        assert_eq!(quaternion(&e, a), q);
+        let b = set_quaternion(&mut e, [0.0, 0.0, 0.0, 1.0]);
+        let other = set_quaternion(&mut e, q);
+        e.call(0x00ce_0ca0, &args![b, other]);
+        assert_eq!(quaternion(&e, b), q);
     }
 }

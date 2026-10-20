@@ -83,8 +83,9 @@ const TYPE_INFO_REGISTRY_MERGE: u32 = 0x00d4_7970;
 const CURRENT_VERSION: u32 = 0x00dc_0fb0;
 /// `hkNativePackfileUtils::load_ov2` (cdecl: data, size, type-info registry).
 const NATIVE_PACKFILE_LOAD: u32 = 0x00dc_0cd0;
-/// `hkBinaryTagfileWriter::save` (cdecl-like `RET 0xc`: object, stream, listener), reached the way
-/// the code reaches it: through the word `010cf9d4` (slot `0xc` of the writer's vtable).
+/// `hkBinaryTagfileWriter::save` (thiscall, `RET 0xc`: object, stream, listener; `this` is the
+/// writer object the caller builds on its stack), reached the way the code reaches it: through
+/// the word `010cf9d4` (slot `0xc` of the writer's vtable).
 const TAGFILE_WRITER_SAVE_SLOT: u32 = TAGFILE_WRITER_VTABLE + 0xc;
 /// `hkBinaryTagfileReader::hkBinaryTagfileReader` and `load` (`this`, output handle, stream,
 /// world).
@@ -241,7 +242,7 @@ pub fn fn_00d48560(e: &mut Engine, stream: u32, listener: u32, object: u32) -> u
     e.mem.set_u16(writer + 6, 1);
     e.mem.set_u32(writer, TAGFILE_WRITER_VTABLE);
     let save = e.mem.u32(TAGFILE_WRITER_SAVE_SLOT);
-    let result = e.call(save, &args![object, stream, listener]).u32();
+    let result = e.call(save, &args![writer, object, stream, listener]).u32();
     e.mem.free(writer);
     result
 }
@@ -1643,15 +1644,30 @@ mod tests {
     fn fn_00d48560_saves_through_the_writer_vtable_word() {
         let mut e = engine();
         e.mem.set_u32(TAGFILE_WRITER_SAVE_SLOT, SAVE_DOUBLE);
-        e.register_double(SAVE_DOUBLE, |_, a| answer(a[0] + a[1] + a[2]));
+        let writers: Rc<RefCell<Vec<(u32, u32, u16)>>> = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&writers);
+        e.register_double(SAVE_DOUBLE, move |e, a| {
+            seen.borrow_mut()
+                .push((a[0], e.mem.u32(a[0]), e.mem.u16(a[0] + 6)));
+            answer(a[1] + a[2] + a[3])
+        });
         e.call_log = Some(vec![]);
         // Without a stream nothing is called and the answer is 1.
         assert_eq!(e.call(0x00d4_8560, &args![0u32, 0x20u32, 0x30u32]).u32(), 1);
         assert!(calls_to(&mut e, SAVE_DOUBLE).is_empty());
-        // `(object, stream, listener)` reach `save`, whose answer is returned.
+        // `this` (the writer object, vtable `010cf9c8`, the word 1 at `+6`) and `(object, stream,
+        // listener)` reach `save`, whose answer is returned.
         let got = e.call(0x00d4_8560, &args![0x10u32, 0x20u32, 0x30u32]).u32();
         assert_eq!(got, 0x20 + 0x30 + 0x10);
-        assert_eq!(calls_to(&mut e, SAVE_DOUBLE), vec![vec![0x30, 0x10, 0x20]]);
+        let writer = writers.borrow()[0].0;
+        assert_eq!(
+            calls_to(&mut e, SAVE_DOUBLE),
+            vec![vec![writer, 0x30, 0x10, 0x20]]
+        );
+        assert_eq!(
+            (writers.borrow()[0].1, writers.borrow()[0].2),
+            (TAGFILE_WRITER_VTABLE, 1)
+        );
     }
 
     #[test]
@@ -1661,10 +1677,10 @@ mod tests {
         let seen: Rc<RefCell<Vec<[u32; 6]>>> = Rc::new(RefCell::new(Vec::new()));
         let log = Rc::clone(&seen);
         e.register_double(SAVE_DOUBLE, move |e, a| {
-            let listener = a[2];
+            let listener = a[3];
             log.borrow_mut().push([
-                a[0],
                 a[1],
+                a[2],
                 e.mem.u32(listener),
                 e.mem.u32(listener + 8),
                 e.mem.u32(listener + 0xc),

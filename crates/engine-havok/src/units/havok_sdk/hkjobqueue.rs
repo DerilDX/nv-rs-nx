@@ -1619,9 +1619,38 @@ fn copy_ints(e: &mut Engine, destination: u32, source: u32, count: i32) {
     }
 }
 
+// Translated from 00d04550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `(queue, shared block, job, word)`): the default
+/// pop hook the `hkJobQueue` constructor stores at `+0x1c`. A tail jump: it picks the job-type
+/// table entry of the job's type (the byte at `job + 1`; entries are 16 bytes from `queue +
+/// 0xf0`) and runs its hook A (`+8`, word `queue + 0xf8 + 16 * type`) with the same four words,
+/// answering what that answers.
+pub fn fn_00d04550(e: &mut Engine, this: Ptr, data: u32, job: Ptr, word: u32) -> u32 {
+    let job_type = u32::from(e.mem.u8(job.addr().wrapping_add(1)));
+    let hook = e
+        .mem
+        .u32(this.addr().wrapping_add(job_type << 4).wrapping_add(0xf8));
+    e.call(hook, &args![this, data, job, word]).u32()
+}
+
+// Translated from 00d04570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `(queue, shared block, job, word)`): the default
+/// finish hook the `hkJobQueue` constructor stores at `+0x20`. A tail jump like `00d04550`, to
+/// hook B of the job's type (`+0xc` of its table entry, word `queue + 0xfc + 16 * type`) with the
+/// same four words, answering what that answers.
+pub fn fn_00d04570(e: &mut Engine, this: Ptr, data: u32, job: Ptr, word: u32) -> u32 {
+    let job_type = u32::from(e.mem.u8(job.addr().wrapping_add(1)));
+    let hook = e
+        .mem
+        .u32(this.addr().wrapping_add(job_type << 4).wrapping_add(0xfc));
+    e.call(hook, &args![this, data, job, word]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d04550, fn_00d04550(Ptr, u32, Ptr, u32) -> u32),
+        entry!(0x00d04570, fn_00d04570(Ptr, u32, Ptr, u32) -> u32),
         entry!(0x00d043b0, fn_00d043b0(Ptr) -> u32),
         entry!(0x00d04400, hk_job_queue_lock_queue(Ptr, u32) -> u32),
         entry!(0x00d04420, hk_job_queue_unlock_queue(Ptr, u32)),
@@ -1675,6 +1704,63 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A queue whose job-type table entry `job_type` has the hooks `hook_a` and `hook_b`, and a
+    /// job of that type; the hooks are doubles answering 42 and 43.
+    fn hook_setup_00d04550(job_type: u32) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        let queue = e.mem.alloc(0x200);
+        let job = e.mem.alloc(0x80);
+        e.mem.set_u8(job + 1, job_type as u8);
+        e.mem.set_u32(queue + 0xf8 + 16 * job_type, 0x0900_0201);
+        e.mem.set_u32(queue + 0xfc + 16 * job_type, 0x0900_0202);
+        e.register(0x0900_0201, |_, _| Ret {
+            eax: 42,
+            ..Ret::default()
+        });
+        e.register(0x0900_0202, |_, _| Ret {
+            eax: 43,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        (e, queue, job)
+    }
+
+    #[test]
+    fn fn_00d04550_jumps_to_hook_a_of_the_jobs_type() {
+        let (mut e, queue, job) = hook_setup_00d04550(3);
+        let answer = e
+            .call(0x00d0_4550, &args![queue, 0x1111u32, job, 0x2222u32])
+            .u32();
+        assert_eq!(answer, 42);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x0900_0201)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x0900_0201, vec![queue, 0x1111, job, 0x2222])]);
+    }
+
+    #[test]
+    fn fn_00d04570_jumps_to_hook_b_of_the_jobs_type() {
+        let (mut e, queue, job) = hook_setup_00d04550(5);
+        let answer = e
+            .call(0x00d0_4570, &args![queue, 0x1111u32, job, 0x2222u32])
+            .u32();
+        assert_eq!(answer, 43);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x0900_0202)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x0900_0202, vec![queue, 0x1111, job, 0x2222])]);
+    }
 
     const TLS_TABLE: u32 = 0x0127_0000;
     const ROUTER_CELL: u32 = 0x0127_0800;

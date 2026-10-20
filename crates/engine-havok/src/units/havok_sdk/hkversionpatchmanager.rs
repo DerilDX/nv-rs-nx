@@ -1996,9 +1996,66 @@ pub fn hk_version_patch_manager_prepare_patches(
         0
     })
 }
+
+// Translated from 00db8540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words, plain `RET`; descriptions, not
+/// confirmed; `00dba1e0` jumps to it): sets up a 0x24-byte object. The vtable `010d6138` and the
+/// 16-bit word 1 at `+6` are stored, the words at `+0xc` and `+0x10` cleared and the one at
+/// `+0x14` set to `0x80000000`; the `hkArray` at `+0x18` is made empty (data 0, size 0, capacity
+/// word `0xffffffff`) and `00cb2030` runs on it (`thiscall`, `(allocator, 0)`, the memory
+/// router's allocator and 0). Then a 0x2c-byte member comes from the same allocator (virtual
+/// slot 4, no size word set): when it is not null the constructor `00d87790` runs on it and on
+/// its sub-object at `+0x1c` (`thiscall`, one stack word the callee never reads: the exe passes
+/// the low byte 0 of a stack slot, here 0), the words at `+0x10` and `+0x14` are cleared and the
+/// one at `+0x18` set to `0x80000000` (between the two constructor runs); the member is stored
+/// at `+8` (0 when the allocator gave none). Answers `this`.
+pub fn fn_00db8540(e: &mut Engine, this: Ptr) -> Ptr {
+    let me = this.addr();
+    e.mem.set_u32(me, 0x010d_6138);
+    e.mem.set_u16(me.wrapping_add(6), 1);
+    e.mem.set_u32(me.wrapping_add(0xc), 0);
+    e.mem.set_u32(me.wrapping_add(0x10), 0);
+    e.mem.set_u32(me.wrapping_add(0x14), 0x8000_0000);
+    let array = me.wrapping_add(0x18);
+    e.mem.set_u32(array, 0);
+    e.mem.set_u32(array.wrapping_add(4), 0);
+    e.mem.set_u32(array.wrapping_add(8), 0xffff_ffff);
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router.wrapping_add(0x10));
+    e.call(0x00cb_2030, &args![array, allocator, 0u32]);
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router.wrapping_add(0x10));
+    let member = e.vcall(allocator, 4, &args![0x2cu32]).u32();
+    if member == 0 {
+        e.mem.set_u32(me.wrapping_add(8), 0);
+        return this;
+    }
+    e.call(0x00d8_7790, &args![member, 0u32]);
+    e.mem.set_u32(member.wrapping_add(0x10), 0);
+    e.mem.set_u32(member.wrapping_add(0x14), 0);
+    e.mem.set_u32(member.wrapping_add(0x18), 0x8000_0000);
+    e.call(0x00d8_7790, &args![member.wrapping_add(0x1c), 0u32]);
+    e.mem.set_u32(me.wrapping_add(8), member);
+    this
+}
+
+// Translated from 00dba1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, no words; no direct caller; descriptions, not confirmed):
+/// allocates 0x24 bytes from the memory router's allocator (virtual slot 4), stores the size in
+/// the 16-bit word at `+4` and jumps to `00db8540` on the block. Answers the block.
+pub fn fn_00dba1e0(e: &mut Engine) -> Ptr {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router.wrapping_add(0x10));
+    let block = e.vcall(allocator, 4, &args![0x24u32]).u32();
+    e.mem.set_u16(block.wrapping_add(4), 0x24);
+    fn_00db8540(e, Ptr::new(block))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00db8540, fn_00db8540(Ptr) -> Ptr),
+        entry!(0x00dba1e0, fn_00dba1e0() -> Ptr),
         entry!(0x00db_a580, deleting_destructor_00dba580(Ptr, u8) -> Ptr),
         entry!(0x00db_7c90, fn_00db7c90(Ptr, u32, u32) -> u32),
         entry!(0x00db_7cb0, fn_00db7cb0(Ptr) -> u32),
@@ -2062,6 +2119,103 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The memory router (`00c85750`) answers an object whose `+0x10` is an allocator; the
+    /// allocator's slot 4 hands out the block that goes with the size it is asked for
+    /// (`blocks`: (size, block)), 0 for any other size. Returns the allocator.
+    fn install_allocator_by_size(e: &mut Engine, blocks: &'static [(u32, u32)]) -> u32 {
+        for (_, block) in blocks {
+            if *block != 0 {
+                e.map(*block, 0x100);
+            }
+        }
+        e.put_vtable(0x0900_0000, &[0, 0x0900_0100]);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, 0x0900_0000);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register_double(0x0900_0100, move |_, a| Ret {
+            eax: blocks
+                .iter()
+                .find(|(size, _)| *size == a[1])
+                .map_or(0, |(_, block)| *block),
+            ..Ret::default()
+        });
+        allocator
+    }
+
+    fn calls_of_00db8540(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(called, _)| *called == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00db8540_sets_up_the_object_and_its_member() {
+        let mut e = Engine::new();
+        let allocator = install_allocator_by_size(&mut e, &[(0x2c, 0x0801_0000)]);
+        e.register(0x00cb_2030, |_, _| Ret::default());
+        e.register(0x00d8_7790, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x24);
+        let answer = e.call(0x00db_8540, &args![this]).u32();
+        assert_eq!(answer, this);
+        assert_eq!(e.mem.u32(this), 0x010d_6138);
+        assert_eq!(e.mem.u16(this + 6), 1);
+        assert_eq!(e.mem.u32(this + 8), 0x0801_0000);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        assert_eq!(e.mem.u32(this + 0x14), 0x8000_0000);
+        assert_eq!(e.mem.u32(this + 0x18), 0);
+        assert_eq!(e.mem.u32(this + 0x1c), 0);
+        assert_eq!(e.mem.u32(this + 0x20), 0xffff_ffff);
+        assert_eq!(
+            calls_of_00db8540(&e, 0x00cb_2030),
+            vec![vec![this + 0x18, allocator, 0]]
+        );
+        assert_eq!(
+            calls_of_00db8540(&e, 0x00d8_7790),
+            vec![vec![0x0801_0000, 0], vec![0x0801_001c, 0]]
+        );
+        assert_eq!(e.mem.u32(0x0801_0010), 0);
+        assert_eq!(e.mem.u32(0x0801_0014), 0);
+        assert_eq!(e.mem.u32(0x0801_0018), 0x8000_0000);
+    }
+
+    #[test]
+    fn fn_00db8540_stores_zero_when_the_allocator_gives_no_member() {
+        let mut e = Engine::new();
+        install_allocator_by_size(&mut e, &[]);
+        e.register(0x00cb_2030, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x24);
+        e.mem.set_u32(this + 8, 0x1234);
+        let answer = e.call(0x00db_8540, &args![this]).u32();
+        assert_eq!(answer, this);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert!(calls_of_00db8540(&e, 0x00d8_7790).is_empty());
+    }
+
+    #[test]
+    fn fn_00dba1e0_allocates_the_object_and_sets_it_up() {
+        let mut e = Engine::new();
+        install_allocator_by_size(&mut e, &[(0x24, 0x0800_0000), (0x2c, 0x0801_0000)]);
+        e.register(0x00cb_2030, |_, _| Ret::default());
+        e.register(0x00d8_7790, |_, _| Ret::default());
+        let object = e.call(0x00db_a1e0, &args![]).u32();
+        assert_eq!(object, 0x0800_0000);
+        assert_eq!(e.mem.u16(object + 4), 0x24);
+        assert_eq!(e.mem.u32(object), 0x010d_6138);
+        assert_eq!(e.mem.u32(object + 8), 0x0801_0000);
+    }
 
     const FREE_SLOT_DOUBLE: u32 = 0x0900_0011;
 

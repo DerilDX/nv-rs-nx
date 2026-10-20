@@ -59,7 +59,12 @@ fn fire_callbacks(e: &mut Engine, constraint: Ptr, label: u32, world_fire: u32, 
 /// `hkpCollisionCallbackUtil::constraintAddedCallback` (Xbox PDB): `constraint` is the
 /// constraint instance. For a contact constraint (data type `0xB`) fires the contact
 /// constraint added callback to the world and to both entities (see `fire_callbacks`).
-pub fn hkp_collision_callback_util_constraint_added_callback(e: &mut Engine, constraint: Ptr) {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn hkp_collision_callback_util_constraint_added_callback(
+    e: &mut Engine,
+    _this: u32,
+    constraint: Ptr,
+) {
     fire_callbacks(
         e,
         constraint,
@@ -72,7 +77,12 @@ pub fn hkp_collision_callback_util_constraint_added_callback(e: &mut Engine, con
 // Translated from 00d0af60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpCollisionCallbackUtil::constraintRemovedCallback` (Xbox PDB): as the added callback,
 /// with the contact constraint removed callbacks.
-pub fn hkp_collision_callback_util_constraint_removed_callback(e: &mut Engine, constraint: Ptr) {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn hkp_collision_callback_util_constraint_removed_callback(
+    e: &mut Engine,
+    _this: u32,
+    constraint: Ptr,
+) {
     fire_callbacks(
         e,
         constraint,
@@ -87,11 +97,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(
             0x00d0_ae80,
-            hkp_collision_callback_util_constraint_added_callback(Ptr)
+            hkp_collision_callback_util_constraint_added_callback(u32, Ptr)
         ),
         entry!(
             0x00d0_af60,
-            hkp_collision_callback_util_constraint_removed_callback(Ptr)
+            hkp_collision_callback_util_constraint_removed_callback(u32, Ptr)
         ),
     ]
 }
@@ -104,6 +114,9 @@ mod tests {
     };
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     const TYPE_DOUBLE: u32 = 0x0900_0020;
     /// The events seen by the fire doubles: (callee, owner, the four event words).
@@ -179,7 +192,7 @@ mod tests {
     #[test]
     fn contact_constraint_fires_world_then_both_entities_00d0ae80() {
         let mut s = scene(0xb);
-        s.e.call(0x00d0_ae80, &[s.constraint]);
+        s.e.call(0x00d0_ae80, &[VCALL_THIS, s.constraint]);
         let world = s.e.mem.u32(s.entity_a + 8);
         assert_eq!(
             *s.events.borrow(),
@@ -208,7 +221,7 @@ mod tests {
     #[test]
     fn other_constraint_types_only_profile_00d0ae80() {
         let mut s = scene(0xa);
-        s.e.call(0x00d0_ae80, &[s.constraint]);
+        s.e.call(0x00d0_ae80, &[VCALL_THIS, s.constraint]);
         assert!(s.events.borrow().is_empty());
         assert!(calls(&s.log, GET_CONTACT_MANAGER).is_empty());
         assert_eq!(labels(&s), vec![LABEL_ADDED, LABEL_END]);
@@ -217,7 +230,7 @@ mod tests {
     #[test]
     fn removed_contact_constraint_fires_the_removed_callbacks_00d0af60() {
         let mut s = scene(0xb);
-        s.e.call(0x00d0_af60, &[s.constraint]);
+        s.e.call(0x00d0_af60, &[VCALL_THIS, s.constraint]);
         let world = s.e.mem.u32(s.entity_a + 8);
         assert_eq!(
             *s.events.borrow(),
@@ -245,7 +258,7 @@ mod tests {
     #[test]
     fn removed_callback_ignores_other_types_00d0af60() {
         let mut s = scene(0);
-        s.e.call(0x00d0_af60, &[s.constraint]);
+        s.e.call(0x00d0_af60, &[VCALL_THIS, s.constraint]);
         assert!(s.events.borrow().is_empty());
         assert_eq!(labels(&s), vec![LABEL_REMOVED, LABEL_END]);
     }

@@ -163,8 +163,10 @@ pub fn fn_00d33ca0(
 
 // Translated from 00d33da0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpConvexListAgent::linearCast` (Xbox PDB): forwards its five words to `00d33ca0`.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_convex_list_agent_linear_cast(
     e: &mut Engine,
+    _this: u32,
     first: Ptr,
     second: Ptr,
     input: Ptr,
@@ -1263,7 +1265,7 @@ pub fn hkp_symmetric_agent_linear_cast_convex_list_get_closest_points(
 /// `this` is only forwarded in `ECX` to that callee, which does not read it.
 pub fn hkp_symmetric_agent_convex_list_linear_cast(
     e: &mut Engine,
-    _unused_this: Ptr,
+    this: Ptr,
     first: Ptr,
     second: Ptr,
     input: Ptr,
@@ -1275,6 +1277,7 @@ pub fn hkp_symmetric_agent_convex_list_linear_cast(
         let start = build_cast_collectors(e, frame, input.addr(), cast_collector, start_collector);
         hkp_convex_list_agent_linear_cast(
             e,
+            this.addr(),
             second,
             first,
             Ptr::new(frame + 0x68),
@@ -1359,7 +1362,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d3_3ca0, fn_00d33ca0(Ptr, Ptr, Ptr, u32, u32)),
         entry!(
             0x00d3_3da0,
-            hkp_convex_list_agent_linear_cast(Ptr, Ptr, Ptr, u32, u32)
+            hkp_convex_list_agent_linear_cast(u32, Ptr, Ptr, Ptr, u32, u32)
         ),
         entry!(0x00d3_4810, fn_00d34810(Ptr, Ptr, Ptr, u32, u32)),
         entry!(
@@ -1453,6 +1456,9 @@ mod movement_tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     /// An engine with the exe's data range and the import page mapped, as the tests run without the exe.
     fn test_engine() -> Engine {
@@ -1582,7 +1588,10 @@ mod movement_tests {
         assert_eq!(e.mem.u32(records + 0xc), LABEL_LINEAR_CAST_DETAIL);
         assert_eq!(e.mem.u32(records + 0x10), LABEL_END);
         *hit.borrow_mut() = true;
-        e.call(0x00d3_3da0, &args![1u32, 2u32, input, 3u32, 4u32]);
+        e.call(
+            0x00d3_3da0,
+            &args![VCALL_THIS, 1u32, 2u32, input, 3u32, 4u32],
+        );
         assert_eq!(seen.borrow().len(), 1);
         assert_eq!(seen.borrow()[0].args[0..2], [2, 1]);
         assert_eq!(

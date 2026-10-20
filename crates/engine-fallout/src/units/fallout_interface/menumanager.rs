@@ -528,48 +528,50 @@ const LIST_BOX_UNSIGNED_INT: ListBoxInstance = list_box_instance(
     [0x011d_8e34, 0x011d_8e40, 0x011d_8e70],
 );
 
-/// `CreateMenuByClass`'s table, in class order: (menu class, allocation
-/// size, constructor). Read from the jump tables at `0071f154` (targets)
-/// and `0071f1ec` (class - 0x3e9 to target index, index 37 the default).
-const MENU_CLASSES: [(u32, u32, u32); 37] = [
-    (0x3e9, 0x94, 0x007a_8a10),
-    (0x3ea, 0x124, 0x0077_fa00),
-    (0x3eb, 0x2a4, 0x0071_f340),
-    (0x3ec, 0x278, 0x0076_bb40),
-    (0x3ef, 0x5c0, 0x0078_8440),
-    (0x3f0, 0x10c, 0x0075_b0d0),
-    (0x3f1, 0x13c, 0x0076_17a0),
-    (0x3f4, 0x4c, 0x007b_fb30),
-    (0x3f5, 0x1d4, 0x007c_b330),
-    (0x3f6, 0xe4, 0x0078_d930),
-    (0x3f8, 0x44, 0x0072_0a10),
-    (0x3ff, 0x230, 0x0079_6740),
-    (0x402, 0x3c, 0x0073_acb0),
-    (0x403, 0xcc, 0x0078_4a40),
-    (0x40b, 0x8c, 0x007b_5400),
-    (0x40c, 0x1a4, 0x007a_c1f0),
-    (0x417, 0x80, 0x0075_f070),
-    (0x418, 0x88, 0x0075_3230),
-    (0x41b, 0x5c, 0x0071_fa80),
-    (0x41d, 0x120, 0x0072_ceb0),
-    (0x41e, 0x160, 0x0071_fbf0),
-    (0x41f, 0x1dc, 0x0076_54f0),
-    (0x420, 0x144, 0x0072_0040),
-    (0x421, 0xfc, 0x0075_77f0),
-    (0x422, 0xa0, 0x007b_7400),
-    (0x423, 0x54, 0x0071_f240),
-    (0x424, 0x1e4, 0x0072_0170),
-    (0x425, 0x90, 0x0078_3310),
-    (0x432, 0x230, 0x0072_0550),
-    (0x433, 0x88, 0x0075_4b40),
-    (0x434, 0x88, 0x007e_7a80),
-    (0x435, 0x104, 0x0072_6df0),
-    (0x438, 0x158, 0x007c_06f0),
-    (0x439, 0xe70, 0x0073_15e0),
-    (0x43a, 0x4014, 0x007b_8d30),
-    (0x43b, 0xe88, 0x0073_b7e0),
-    (0x43c, 0x8c, 0x007e_6780),
-];
+/// `CreateMenuByClass`'s switch on the menu class (`0x3e9..=0x43c`): the allocation size and
+/// the constructor of the classes that have one; a class outside it (or a gap) has none.
+fn menu_class(class: u32) -> Option<(u32, u32)> {
+    Some(match class {
+        0x3e9 => (0x94, 0x007a_8a10),
+        0x3ea => (0x124, 0x0077_fa00),
+        0x3eb => (0x2a4, 0x0071_f340),
+        0x3ec => (0x278, 0x0076_bb40),
+        0x3ef => (0x5c0, 0x0078_8440),
+        0x3f0 => (0x10c, 0x0075_b0d0),
+        0x3f1 => (0x13c, 0x0076_17a0),
+        0x3f4 => (0x4c, 0x007b_fb30),
+        0x3f5 => (0x1d4, 0x007c_b330),
+        0x3f6 => (0xe4, 0x0078_d930),
+        0x3f8 => (0x44, 0x0072_0a10),
+        0x3ff => (0x230, 0x0079_6740),
+        0x402 => (0x3c, 0x0073_acb0),
+        0x403 => (0xcc, 0x0078_4a40),
+        0x40b => (0x8c, 0x007b_5400),
+        0x40c => (0x1a4, 0x007a_c1f0),
+        0x417 => (0x80, 0x0075_f070),
+        0x418 => (0x88, 0x0075_3230),
+        0x41b => (0x5c, 0x0071_fa80),
+        0x41d => (0x120, 0x0072_ceb0),
+        0x41e => (0x160, 0x0071_fbf0),
+        0x41f => (0x1dc, 0x0076_54f0),
+        0x420 => (0x144, 0x0072_0040),
+        0x421 => (0xfc, 0x0075_77f0),
+        0x422 => (0xa0, 0x007b_7400),
+        0x423 => (0x54, 0x0071_f240),
+        0x424 => (0x1e4, 0x0072_0170),
+        0x425 => (0x90, 0x0078_3310),
+        0x432 => (0x230, 0x0072_0550),
+        0x433 => (0x88, 0x0075_4b40),
+        0x434 => (0x88, 0x007e_7a80),
+        0x435 => (0x104, 0x0072_6df0),
+        0x438 => (0x158, 0x007c_06f0),
+        0x439 => (0xe70, 0x0073_15e0),
+        0x43a => (0x4014, 0x007b_8d30),
+        0x43b => (0xe88, 0x0073_b7e0),
+        0x43c => (0x8c, 0x007e_6780),
+        _ => return None,
+    })
+}
 
 /// Writes the vtable pointer at `object + 0`.
 fn set_vtable(e: &mut Engine, object: Ptr, vtable: u32) {
@@ -1189,14 +1191,14 @@ pub fn fn_0071e400(e: &mut Engine, _this: Ptr) {
 
 // Translated from 0071e420 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `MenuManager::CreateMenuByClass` (Xbox PDB): allocates and constructs
-/// the menu of class `class` (`MENU_CLASSES`: allocation size and
+/// the menu of class `class` (`menu_class`: allocation size and
 /// constructor) and returns it; null when the allocation fails. An
 /// unknown class (outside `0x3e9..=0x43c`, or a gap in the table) prints
 /// `"MENUS: Unknown menu class!"` and returns null. `this` is not read.
 // Translation incomplete: 0071e420 - the C++ exception-unwinding frame (FS:[0]) that frees the allocation when a menu constructor throws is not translated
 pub fn menu_manager_create_menu_by_class(e: &mut Engine, _this: Ptr, class: u32) -> u32 {
-    match MENU_CLASSES.iter().find(|(id, _, _)| *id == class) {
-        Some(&(_, size, constructor)) => {
+    match menu_class(class) {
+        Some((size, constructor)) => {
             let block = e.call(ALLOCATE, &args![size]).u32();
             if block == 0 {
                 0
@@ -3438,7 +3440,7 @@ mod tests {
     #[test]
     fn create_menu_by_class_allocates_and_constructs() {
         let mut e = engine();
-        for (_, _, constructor) in MENU_CLASSES {
+        for (_, constructor) in (0x3e9..=0x43c).filter_map(menu_class) {
             e.register(constructor, |_, a| word(a[0] + 1));
         }
         let menu = e.call(0x0071_e420, &args![0u32, 0x3e9u32]).u32();

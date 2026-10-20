@@ -61,9 +61,39 @@ pub fn fn_00c43650(_e: &mut Engine, _this: Ptr) -> u32 {
     0x0120_2de0
 }
 
+/// `NiObjectNET::GetExtraData` (Xbox PDB, `00a5bdd0`): `thiscall`, `RET 4`; the extra data
+/// whose name the given pointer (to a `NiFixedString`) names, or null.
+const GET_EXTRA_DATA: u32 = 0x00a5_bdd0;
+/// The global holding the pointer to the `NiFixedString` that names the `BSXFlags` extra data
+/// (unconfirmed: set by a static initializer).
+const BSX_FLAGS_NAME: u32 = 0x0120_2ddc;
+/// `BSXFlags::ms_RTTI`, the address `BSXFlags::GetRTTI` (`00c43650`) answers.
+const BSX_FLAGS_RTTI: u32 = 0x0120_2de0;
+/// The virtual slot (byte offset) that answers the object's `NiRTTI`.
+const SLOT_GET_RTTI: u32 = 0x08;
+
+// Translated from 00c43490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`bsxflags.obj` range). `cdecl`, one stack word. For a non-null
+/// object, looks up its extra data under the name the global at `01202ddc` points to
+/// (`NiObjectNET::GetExtraData`) and answers it when it is a `BSXFlags` (its virtual slot +8
+/// answers the `NiRTTI` at `01202de0`); null otherwise.
+pub fn fn_00c43490(e: &mut Engine, object: Ptr) -> Ptr {
+    if object.is_null() {
+        return Ptr::NULL;
+    }
+    let name = e.global::<u32>(BSX_FLAGS_NAME);
+    let data = e.call(GET_EXTRA_DATA, &args![object, name]).u32();
+    if data != 0 && e.vcall(data, SLOT_GET_RTTI, &args![]).u32() == BSX_FLAGS_RTTI {
+        Ptr::new(data)
+    } else {
+        Ptr::NULL
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c4_3490, fn_00c43490(Ptr) -> Ptr),
         entry!(0x00c4_3650, fn_00c43650(Ptr) -> u32),
         entry!(0x00a99c60, ni_integer_extra_data_get_rtti() -> Ptr),
         entry!(0x00c4_30d0, bsx_flags_load_binary(Ptr, Ptr)),
@@ -140,5 +170,56 @@ mod constant_getter_tests {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c4_3650, &args![0x1000u32]).u32(), 0x0120_2de0);
         assert_eq!(e.call(0x00c4_3650, &args![0u32]).u32(), 0x0120_2de0);
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    fn rig(rtti_of_data: u32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.map(BSX_FLAGS_NAME, 4);
+        e.set_global(BSX_FLAGS_NAME, 0x0120_3000);
+        let mut slots = [0u32; 4];
+        slots[2] = 0x0f00_c000;
+        e.put_vtable(0x0f00_c100, &slots);
+        e.register_double(0x0f00_c000, move |_, _| rtti_of_data.into_ret());
+        let data = e.mem.alloc(0x10);
+        e.mem.set_u32(data, 0x0f00_c100);
+        e.register_double(GET_EXTRA_DATA, move |_, _| data.into_ret());
+        (e, data)
+    }
+
+    #[test]
+    fn at_00c43490_answers_the_extra_data_when_it_is_a_bsx_flags() {
+        let (mut e, data) = rig(BSX_FLAGS_RTTI);
+        assert_eq!(e.call(0x00c4_3490, &args![0x4000u32]).u32(), data);
+        let lookups: Vec<Vec<u32>> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == GET_EXTRA_DATA)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(lookups, vec![vec![0x4000, 0x0120_3000]]);
+    }
+
+    #[test]
+    fn at_00c43490_answers_null_for_other_extra_data_nothing_or_a_null_object() {
+        let (mut e, _) = rig(0x0120_2de4);
+        assert_eq!(e.call(0x00c4_3490, &args![0x4000u32]).u32(), 0);
+        e.register(GET_EXTRA_DATA, |_, _| Ret::default());
+        assert_eq!(e.call(0x00c4_3490, &args![0x4000u32]).u32(), 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c4_3490, &args![0u32]).u32(), 0);
+        assert!(e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|c| c.0 != GET_EXTRA_DATA));
     }
 }

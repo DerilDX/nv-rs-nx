@@ -20764,9 +20764,55 @@ pub fn fn_00e590f0(
     })
 }
 
+/// Exchanges the bytes at `base + first` and `base + second`.
+fn swap_byte_pair(e: &mut Engine, base: u32, first: u32, second: u32) {
+    let low = e.mem.u8(base.wrapping_add(first));
+    let high = e.mem.u8(base.wrapping_add(second));
+    e.mem.set_u8(base.wrapping_add(first), high);
+    e.mem.set_u8(base.wrapping_add(second), low);
+}
+
+// Translated from 00e52fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word `bytes`; the word at `011be4a0` holds its
+/// address): reverses the byte order of the 4 bytes at `bytes` in place (bytes 0 and 3 swap,
+/// bytes 1 and 2 swap).
+pub fn fn_00e52fe0(e: &mut Engine, bytes: Ptr) {
+    let base = bytes.addr();
+    swap_byte_pair(e, base, 0, 3);
+    swap_byte_pair(e, base, 1, 2);
+}
+
+// Translated from 00e53000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word `bytes`; the word at `011be4a8` holds its
+/// address): reverses the byte order of each of the three 16-bit words at `bytes` in place
+/// (bytes 0 and 1, 2 and 3, 4 and 5 swap).
+pub fn fn_00e53000(e: &mut Engine, bytes: Ptr) {
+    let base = bytes.addr();
+    swap_byte_pair(e, base, 0, 1);
+    swap_byte_pair(e, base, 2, 3);
+    swap_byte_pair(e, base, 4, 5);
+}
+
+// Translated from 00e53030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word `bytes`; the word at `011be4b4` holds its
+/// address): reverses the byte order of each of the three 32-bit words at `bytes` in place
+/// (bytes 0 and 3, 1 and 2, 4 and 7, 5 and 6, 8 and 11, 9 and 10 swap).
+pub fn fn_00e53030(e: &mut Engine, bytes: Ptr) {
+    let base = bytes.addr();
+    swap_byte_pair(e, base, 0, 3);
+    swap_byte_pair(e, base, 1, 2);
+    swap_byte_pair(e, base, 4, 7);
+    swap_byte_pair(e, base, 5, 6);
+    swap_byte_pair(e, base, 8, 0xb);
+    swap_byte_pair(e, base, 9, 0xa);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e52fe0, fn_00e52fe0(Ptr)),
+        entry!(0x00e53000, fn_00e53000(Ptr)),
+        entry!(0x00e53030, fn_00e53030(Ptr)),
         entry!(0x00e53090, fn_00e53090(i32) -> i32),
         entry!(0x00e53130, fn_00e53130(i32, i32) -> i32),
         entry!(0x00e53160, fn_00e53160(Ptr, f32, f32, f32, f32) -> Ptr),
@@ -21158,6 +21204,45 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::*;
     use super::*;
+
+    /// A buffer of 16 bytes holding 0x10, 0x11, ...
+    fn counting_bytes_00e52fe0(e: &mut Engine) -> u32 {
+        let bytes = e.mem.alloc(16);
+        for index in 0..16u8 {
+            e.mem.set_u8(bytes + u32::from(index), 0x10 + index);
+        }
+        bytes
+    }
+
+    #[test]
+    fn fn_00e52fe0_reverses_four_bytes() {
+        let mut e = Engine::new();
+        let bytes = counting_bytes_00e52fe0(&mut e);
+        e.call(0x00e5_2fe0, &args![bytes]);
+        assert_eq!(e.mem.bytes(bytes, 6), [0x13, 0x12, 0x11, 0x10, 0x14, 0x15]);
+    }
+
+    #[test]
+    fn fn_00e53000_swaps_three_16_bit_words() {
+        let mut e = Engine::new();
+        let bytes = counting_bytes_00e52fe0(&mut e);
+        e.call(0x00e5_3000, &args![bytes]);
+        assert_eq!(
+            e.mem.bytes(bytes, 8),
+            [0x11, 0x10, 0x13, 0x12, 0x15, 0x14, 0x16, 0x17]
+        );
+    }
+
+    #[test]
+    fn fn_00e53030_reverses_three_32_bit_words() {
+        let mut e = Engine::new();
+        let bytes = counting_bytes_00e52fe0(&mut e);
+        e.call(0x00e5_3030, &args![bytes]);
+        assert_eq!(
+            e.mem.bytes(bytes, 14),
+            [0x13, 0x12, 0x11, 0x10, 0x17, 0x16, 0x15, 0x14, 0x1b, 0x1a, 0x19, 0x18, 0x1c, 0x1d]
+        );
+    }
 
     #[test]
     fn factorial_table_and_product() {

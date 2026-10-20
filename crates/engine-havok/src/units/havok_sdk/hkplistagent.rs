@@ -563,9 +563,46 @@ pub fn hkp_list_agent_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flag
     this
 }
 
+/// Allocates `size` bytes the way the agent create functions do: the thread's memory router
+/// (`00c85750`) has the allocator at `+0x10`; its virtual slot `4` hands out the block, whose
+/// size goes into the 16-bit word at `+4`.
+fn allocate_agent_block(e: &mut Engine, size: u32) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router.wrapping_add(0x10));
+    let block = e.vcall(allocator, 4, &args![size]).u32();
+    e.mem.set_u16(block.wrapping_add(4), size as u16);
+    block
+}
+
+// Translated from 00d36b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `input`, `contact_mgr`): a
+/// create function of the list agent (code at `00d36bb4` stores its address in an agent
+/// record). Allocates the 0x1c-byte agent (`allocate_agent_block`) and runs the constructor
+/// `00d36b20` on it with the four words in this order. Answers what the constructor answers,
+/// the agent.
+pub fn fn_00d36b70(e: &mut Engine, body_a: u32, body_b: u32, input: Ptr, contact_mgr: u32) -> u32 {
+    let agent = allocate_agent_block(e, 0x1c);
+    fn_00d36b20(e, Ptr::new(agent), body_a, body_b, input, contact_mgr).addr()
+}
+
+// Translated from 00d36be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `input`, `contact_mgr`): the
+/// create function of the flipped list agent (code at `00d36c36` stores its address in an agent
+/// record). Allocates the 0x1c-byte agent (`allocate_agent_block`), runs the constructor
+/// `00d36b20` with the first two words exchanged (`body_b`, `body_a`, `input`, `contact_mgr`) and
+/// stores the vtable `010ced70`. Answers the agent.
+pub fn fn_00d36be0(e: &mut Engine, body_a: u32, body_b: u32, input: Ptr, contact_mgr: u32) -> u32 {
+    let agent = allocate_agent_block(e, 0x1c);
+    fn_00d36b20(e, Ptr::new(agent), body_b, body_a, input, contact_mgr);
+    e.mem.set_u32(agent, 0x010c_ed70);
+    agent
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d36b70, fn_00d36b70(u32, u32, Ptr, u32) -> u32),
+        entry!(0x00d36be0, fn_00d36be0(u32, u32, Ptr, u32) -> u32),
         entry!(0x00d36820, hkp_list_agent_cleanup(Ptr, u32)),
         entry!(0x00d36850, hkp_list_agent_invalidate_tim(Ptr, u32)),
         entry!(0x00d36870, hkp_list_agent_warp_time(Ptr, f32, f32, u32)),
@@ -638,6 +675,66 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The memory router (`00c85750`) answers an object whose `+0x10` is an allocator; the
+    /// allocator's slot 4 hands out `block` and records the size it was asked for. The array
+    /// set-up the constructor runs (`00da4430`) is a no-op double.
+    fn install_allocator(e: &mut Engine, block: u32) -> std::rc::Rc<std::cell::RefCell<Vec<u32>>> {
+        let sizes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = std::rc::Rc::clone(&sizes);
+        e.map(block, 0x100);
+        e.put_vtable(0x0900_0000, &[0, 0x0900_0100]);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, 0x0900_0000);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register_double(0x0900_0100, move |_, a| {
+            seen.borrow_mut().push(a[1]);
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        e.register(SETUP_ENTRIES, |_, _| Ret::default());
+        sizes
+    }
+
+    #[test]
+    fn fn_00d36b70_allocates_the_agent_and_runs_the_constructor() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        let input = e.mem.alloc(0x20);
+        e.mem.set_u32(input, 0x77);
+        let agent = e
+            .call(0x00d3_6b70, &args![1u32, 2u32, input, 0x88u32])
+            .u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x1c]);
+        assert_eq!(e.mem.u16(agent + 4), 0x1c);
+        assert_eq!(e.mem.u32(agent), LIST_AGENT_VTABLE);
+        assert_eq!(e.mem.u32(agent + 8), 0x88);
+        assert_eq!(e.mem.u32(agent + 0xc), 0x77);
+    }
+
+    #[test]
+    fn fn_00d36be0_makes_the_flipped_agent() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        let input = e.mem.alloc(0x20);
+        e.mem.set_u32(input, 0x77);
+        let agent = e
+            .call(0x00d3_6be0, &args![1u32, 2u32, input, 0x88u32])
+            .u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x1c]);
+        assert_eq!(e.mem.u32(agent), 0x010c_ed70);
+        assert_eq!(e.mem.u32(agent + 8), 0x88);
+        assert_eq!(e.mem.u32(agent + 0xc), 0x77);
+    }
 
     fn engine() -> (Engine, Rc<RefCell<Vec<Vec<u32>>>>) {
         let mut e = Engine::new();

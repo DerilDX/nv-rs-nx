@@ -193,9 +193,121 @@ pub fn fn_00df7d00(e: &mut Engine, source: Ptr, dest: Ptr) {
     }
 }
 
+// Translated from 00df79d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, two words `queue`, `job`; a job function: `00da3400` stores its address
+/// at `00da3429`; descriptions, not confirmed). Between the profiling records `010dba08` and
+/// `010c41f8` it runs `00df7760` (this unit) with `(job, [job + 0x18], [job + 0x34], [job +
+/// 0x38])`, then asks the job queue for the next job: `00d04e80` (`thiscall` on `queue`) with
+/// `(job, job, 0)`. Answers what that answers (0 to go on with the next job).
+pub fn fn_00df79d0(e: &mut Engine, queue: Ptr, job: Ptr) -> u32 {
+    let at = job.addr();
+    crate::units::havok_sdk::hkadeltacompressedanimation::profile_record(e, 0x010d_ba08);
+    let first = e.mem.u32(at.wrapping_add(0x18));
+    let second = e.mem.u32(at.wrapping_add(0x34));
+    let count = e.mem.u32(at.wrapping_add(0x38));
+    fn_00df7760(e, job, Ptr::new(first), Ptr::new(second), count as i32);
+    crate::units::havok_sdk::hkadeltacompressedanimation::profile_record(e, 0x010c_41f8);
+    e.call(0x00d0_4e80, &args![queue, job, job, 0u32]).u32()
+}
+
+// Translated from 00df7c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, two words `queue`, `job`; a job function: `00da3480` stores its address
+/// at `00da34ef`; descriptions, not confirmed). Between the profiling records `010dba24` and
+/// `010c41f8` it clears the words at `job + 0x48` and `job + 0x50`, then calls one of two
+/// functions with the job's words and the addresses of those two (the floats at `+0x38` and
+/// `+0x3c` go through `FLD`/`FSTP`, a signalling NaN quieted). When the word at `job + 0x20` is
+/// not zero: `00e29cd0` with `([+0x20], [+0x28], [+0x2c], [+0x30], [+0x34], float +0x38, float
+/// +0x3c, [+0x40], [+0x44], job + 0x48, [+0x4c], job + 0x50)`. Otherwise `00e2a010` with `([+0x24],
+/// [+0x2c], [+0x30], [+0x34], float +0x38, float +0x3c, [+0x40], [+0x44], job + 0x48, [+0x4c],
+/// job + 0x50)`. Then, as `00df79d0` does, `00d04e80` on `queue` with `(job, job, 0)`; answers
+/// what it answers.
+pub fn fn_00df7c00(e: &mut Engine, queue: Ptr, job: Ptr) -> u32 {
+    let at = job.addr();
+    let word = |e: &Engine, offset: u32| e.mem.u32(at.wrapping_add(offset));
+    crate::units::havok_sdk::hkadeltacompressedanimation::profile_record(e, 0x010d_ba24);
+    let selector = word(e, 0x20);
+    let third_float = x87_quiet_bits(word(e, 0x3c));
+    e.mem.set_u32(at.wrapping_add(0x48), 0);
+    e.mem.set_u32(at.wrapping_add(0x50), 0);
+    let second_float = x87_quiet_bits(word(e, 0x38));
+    if selector != 0 {
+        let words = [
+            selector,
+            word(e, 0x28),
+            word(e, 0x2c),
+            word(e, 0x30),
+            word(e, 0x34),
+            second_float,
+            third_float,
+            word(e, 0x40),
+            word(e, 0x44),
+            at.wrapping_add(0x48),
+            word(e, 0x4c),
+            at.wrapping_add(0x50),
+        ];
+        e.call(0x00e2_9cd0, &words);
+    } else {
+        let words = [
+            word(e, 0x24),
+            word(e, 0x2c),
+            word(e, 0x30),
+            word(e, 0x34),
+            second_float,
+            third_float,
+            word(e, 0x40),
+            word(e, 0x44),
+            at.wrapping_add(0x48),
+            word(e, 0x4c),
+            at.wrapping_add(0x50),
+        ];
+        e.call(0x00e2_a010, &words);
+    }
+    crate::units::havok_sdk::hkadeltacompressedanimation::profile_record(e, 0x010c_41f8);
+    e.call(0x00d0_4e80, &args![queue, job, job, 0u32]).u32()
+}
+
+// Translated from 00df7d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, two words `queue`, `job`; a job function: `00da3480` stores its address
+/// at `00da34bd`; descriptions, not confirmed). Between the profiling records `010dba3c` and
+/// `010c41f8` it builds a 16-byte block on the stack (word 0 cleared, `[job + 0x38]` at `+8`,
+/// `[job + 0x3c]` at `+0xc`) and runs `00d9d880` (cdecl, seven words) with `(block + 8, [+0x24],
+/// [+0x28], [+0x30], [+0x20], [+0x34], block)`; the word the block's first word holds afterwards is
+/// stored where `[job + 0x2c]` points. Then, as `00df79d0` does, `00d04e80` on `queue` with
+/// `(job, job, 0)`; answers what it answers.
+pub fn fn_00df7d60(e: &mut Engine, queue: Ptr, job: Ptr) -> u32 {
+    let at = job.addr();
+    crate::units::havok_sdk::hkadeltacompressedanimation::profile_record(e, 0x010d_ba3c);
+    e.with_stack(0x10, |e, block| {
+        let block = block.addr();
+        let first = e.mem.u32(at.wrapping_add(0x38));
+        let second = e.mem.u32(at.wrapping_add(0x3c));
+        e.mem.set_u32(block.wrapping_add(8), first);
+        e.mem.set_u32(block.wrapping_add(0xc), second);
+        e.mem.set_u32(block, 0);
+        let words = [
+            block.wrapping_add(8),
+            e.mem.u32(at.wrapping_add(0x24)),
+            e.mem.u32(at.wrapping_add(0x28)),
+            e.mem.u32(at.wrapping_add(0x30)),
+            e.mem.u32(at.wrapping_add(0x20)),
+            e.mem.u32(at.wrapping_add(0x34)),
+            block,
+        ];
+        e.call(0x00d9_d880, &words);
+        let target = e.mem.u32(at.wrapping_add(0x2c));
+        let result = e.mem.u32(block);
+        e.mem.set_u32(target, result);
+    });
+    crate::units::havok_sdk::hkadeltacompressedanimation::profile_record(e, 0x010c_41f8);
+    e.call(0x00d0_4e80, &args![queue, job, job, 0u32]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00df79d0, fn_00df79d0(Ptr, Ptr) -> u32),
+        entry!(0x00df7c00, fn_00df7c00(Ptr, Ptr) -> u32),
+        entry!(0x00df7d60, fn_00df7d60(Ptr, Ptr) -> u32),
         entry!(0x00df_7760, fn_00df7760(Ptr, Ptr, Ptr, i32)),
         entry!(0x00df_7a60, fn_00df7a60(Ptr) -> u32),
         entry!(0x00df_7d00, fn_00df7d00(Ptr, Ptr)),
@@ -207,6 +319,184 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The thread's record stream (TLS index 3) for the profiling records and a double for the
+    /// job queue's next-job function that answers 7. Returns the stream and the records.
+    fn profiled_engine_00df79d0() -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.map(0x0126_8000, 0x1000);
+        e.set_global(0x0126_835c, 3u32);
+        let stream = e.mem.alloc(0x20);
+        let records = e.mem.alloc(0x40);
+        e.mem.set_u32(stream + 4, records);
+        e.mem.set_u32(stream + 0xc, records + 0x40);
+        e.register_double(0x00fd_f044, move |_, _| Ret {
+            eax: stream,
+            ..Ret::default()
+        });
+        e.register(0x00d0_4e80, |_, _| Ret {
+            eax: 7,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        (e, stream, records)
+    }
+
+    fn labels_00df79d0(e: &Engine, stream: u32, records: u32) -> Vec<u32> {
+        let end = e.mem.u32(stream + 4);
+        (records..end)
+            .step_by(12)
+            .map(|record| e.mem.u32(record))
+            .collect()
+    }
+
+    fn logged_00df79d0(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(called, _)| *called == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    /// A job whose word at each offset `0x20 + 4 * n` is `0x100 + n`, with the floats at `+0x38`
+    /// and `+0x3c` given.
+    fn job_00df79d0(e: &mut Engine, floats: (u32, u32)) -> u32 {
+        let job = e.mem.alloc(0x100);
+        for n in 0..16u32 {
+            e.mem.set_u32(job + 0x20 + 4 * n, 0x100 + n);
+        }
+        e.mem.set_u32(job + 0x38, floats.0);
+        e.mem.set_u32(job + 0x3c, floats.1);
+        job
+    }
+
+    #[test]
+    fn fn_00df79d0_runs_the_sweep_between_two_records_and_asks_for_the_next_job() {
+        let (mut e, stream, records) = profiled_engine_00df79d0();
+        e.map(0x0104_d000, 0x1000);
+        let job = job_00df79d0(&mut e, (0, 0));
+        // `00df7760` reads the two objects the job points to; with a count of 0 it stops there.
+        let first = e.mem.alloc(0x20);
+        let second = e.mem.alloc(0x20);
+        e.mem.set_u32(job + 0x18, first);
+        e.mem.set_u32(job + 0x34, second);
+        let answer = e.call(0x00df_79d0, &args![0x1234u32, job]).u32();
+        assert_eq!(answer, 7);
+        assert_eq!(
+            labels_00df79d0(&e, stream, records),
+            vec![0x010d_ba08, 0x010c_41f8]
+        );
+        assert_eq!(
+            logged_00df79d0(&e, 0x00d0_4e80),
+            vec![vec![0x1234, job, job, 0]]
+        );
+    }
+
+    #[test]
+    fn fn_00df7c00_with_a_selector_calls_00e29cd0_with_twelve_words() {
+        let (mut e, stream, records) = profiled_engine_00df79d0();
+        e.register(0x00e2_9cd0, |_, _| Ret::default());
+        e.register(0x00e2_a010, |_, _| Ret::default());
+        let job = job_00df79d0(&mut e, (0x3f80_0000, 0x7fa0_0001));
+        e.mem.set_u32(job + 0x48, 0x99);
+        e.mem.set_u32(job + 0x50, 0x98);
+        let answer = e.call(0x00df_7c00, &args![0x1234u32, job]).u32();
+        assert_eq!(answer, 7);
+        assert_eq!(e.mem.u32(job + 0x48), 0);
+        assert_eq!(e.mem.u32(job + 0x50), 0);
+        assert_eq!(
+            logged_00df79d0(&e, 0x00e2_9cd0),
+            vec![vec![
+                0x100,
+                0x102,
+                0x103,
+                0x104,
+                0x105,
+                0x3f80_0000,
+                0x7fe0_0001,
+                0x108,
+                0x109,
+                job + 0x48,
+                0x10b,
+                job + 0x50,
+            ]]
+        );
+        assert!(logged_00df79d0(&e, 0x00e2_a010).is_empty());
+        assert_eq!(
+            labels_00df79d0(&e, stream, records),
+            vec![0x010d_ba24, 0x010c_41f8]
+        );
+    }
+
+    #[test]
+    fn fn_00df7c00_without_a_selector_calls_00e2a010_with_eleven_words() {
+        let (mut e, _, _) = profiled_engine_00df79d0();
+        e.register(0x00e2_9cd0, |_, _| Ret::default());
+        e.register(0x00e2_a010, |_, _| Ret::default());
+        let job = job_00df79d0(&mut e, (0x3f80_0000, 0x4000_0000));
+        e.mem.set_u32(job + 0x20, 0);
+        e.call(0x00df_7c00, &args![0x1234u32, job]);
+        assert_eq!(
+            logged_00df79d0(&e, 0x00e2_a010),
+            vec![vec![
+                0x101,
+                0x103,
+                0x104,
+                0x105,
+                0x3f80_0000,
+                0x4000_0000,
+                0x108,
+                0x109,
+                job + 0x48,
+                0x10b,
+                job + 0x50,
+            ]]
+        );
+        assert!(logged_00df79d0(&e, 0x00e2_9cd0).is_empty());
+    }
+
+    #[test]
+    fn fn_00df7d60_stores_the_helpers_first_output_where_the_job_says() {
+        let (mut e, stream, records) = profiled_engine_00df79d0();
+        let job = job_00df79d0(&mut e, (0x38, 0x3c));
+        let target = e.mem.alloc(8);
+        e.mem.set_u32(job + 0x2c, target);
+        // The helper sees the block: its words at +8 and +0xc, and fills its first word.
+        e.register_double(0x00d9_d880, |e, a| {
+            assert_eq!(a[0], a[6] + 8);
+            assert_eq!(e.mem.u32(a[0]), 0x38);
+            assert_eq!(e.mem.u32(a[0] + 4), 0x3c);
+            assert_eq!(e.mem.u32(a[6]), 0);
+            e.mem.set_u32(a[6], 0xcafe);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x00df_7d60, &args![0x1234u32, job]).u32();
+        assert_eq!(answer, 7);
+        assert_eq!(e.mem.u32(target), 0xcafe);
+        let helper = logged_00df79d0(&e, 0x00d9_d880);
+        assert_eq!(helper.len(), 1);
+        assert_eq!(
+            [
+                helper[0][1],
+                helper[0][2],
+                helper[0][3],
+                helper[0][4],
+                helper[0][5]
+            ],
+            [0x101, 0x102, 0x104, 0x100, 0x105]
+        );
+        assert_eq!(
+            labels_00df79d0(&e, stream, records),
+            vec![0x010d_ba3c, 0x010c_41f8]
+        );
+        assert_eq!(
+            logged_00df79d0(&e, 0x00d0_4e80),
+            vec![vec![0x1234, job, job, 0]]
+        );
+    }
 
     type CallLog = Rc<RefCell<Vec<Vec<u32>>>>;
 

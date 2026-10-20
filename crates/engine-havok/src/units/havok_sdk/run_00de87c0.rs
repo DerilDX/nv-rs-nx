@@ -528,6 +528,276 @@ pub fn fn_00de9410(e: &mut Engine, a: Ptr, b: Ptr, c: Ptr, out: Ptr) -> bool {
     true
 }
 
+// Translated from 00de8540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpConstraintAtom` (the record at `011b882c` of the data table, name pointer `010d9590`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8540(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpConstraintAtom` (the record at `011b882c` of the data table, name pointer `010d9590`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8140(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpBridgeConstraintAtom` (the record at `011b8844` of the data table, name pointer `010d95a4`). When `object` is not null and `finishing` is not 0, runs `00d21ce0` (`hkpBridgeConstraintAtom::init` in the engine map; thiscall, one stack word, `RET 4`) with `this` = the object and the word at `object + 8` as its stack word. Otherwise nothing happens.
+pub fn fn_00de8550(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 && finishing != 0 {
+        let word = e.mem.u32(object.addr() + 8);
+        e.call(0x00d2_1ce0, &args![object.addr(), word]);
+    }
+}
+
+// Translated from 00de8160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpBridgeConstraintAtom` (the record at `011b8844` of the data table, name pointer `010d95a4`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8160(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpBridgeAtoms` (the record at `011b885c` of the data table, name pointer `010d95bc`). When `object` is not null and `finishing` is not 0, runs `00d21ce0` (`hkpBridgeConstraintAtom::init` in the engine map; thiscall, one stack word, `RET 4`) with `this` = the object and the word at `object + 8` as its stack word. Otherwise nothing happens.
+pub fn fn_00de8570(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 && finishing != 0 {
+        let word = e.mem.u32(object.addr() + 8);
+        e.call(0x00d2_1ce0, &args![object.addr(), word]);
+    }
+}
+
+// Translated from 00de8180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpBridgeAtoms` (the record at `011b885c` of the data table, name pointer `010d95bc`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8180(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de81a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpSimpleContactConstraintAtom` (the record at `011b8874` of the data table, name pointer `010d95cc`). When `object` is not null, runs `00d21de0` (thiscall, one stack word, `RET 4`) with `this` = the object and the second stack word `finishing`; a null object does nothing.
+pub fn fn_00de81a0(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x00d2_1de0, &args![object.addr(), finishing]);
+    }
+}
+
+// Translated from 00de81c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpSimpleContactConstraintAtom` (the record at `011b8874` of the data table, name pointer `010d95cc`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de81c0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpBallSocketConstraintAtom` (the record at `011b88a0` of the data table, name pointer `010d95ec`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8590(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de81e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpBallSocketConstraintAtom` (the record at `011b88a0` of the data table, name pointer `010d95ec`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de81e0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de85a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpStiffSpringConstraintAtom` (the record at `011b88b8` of the data table, name pointer `010d9608`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de85a0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpStiffSpringConstraintAtom` (the record at `011b88b8` of the data table, name pointer `010d9608`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8200(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpSetLocalTransformsConstraintAtom` (the record at `011b88d0` of the data table, name pointer `010d9628`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8730(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpSetLocalTransformsConstraintAtom` (the record at `011b88d0` of the data table, name pointer `010d9628`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8220(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de85b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpSetLocalTranslationsConstraintAtom` (the record at `011b88e8` of the data table, name pointer `010d964c`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de85b0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpSetLocalTranslationsConstraintAtom` (the record at `011b88e8` of the data table, name pointer `010d964c`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8240(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de85c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpSetLocalRotationsConstraintAtom` (the record at `011b8900` of the data table, name pointer `010d9674`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de85c0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpSetLocalRotationsConstraintAtom` (the record at `011b8900` of the data table, name pointer `010d9674`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8260(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de85d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpOverwritePivotConstraintAtom` (the record at `011b8918` of the data table, name pointer `010d9698`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de85d0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpOverwritePivotConstraintAtom` (the record at `011b8918` of the data table, name pointer `010d9698`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8280(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de85e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpLinConstraintAtom` (the record at `011b8930` of the data table, name pointer `010d96b8`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de85e0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de82a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpLinConstraintAtom` (the record at `011b8930` of the data table, name pointer `010d96b8`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de82a0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de85f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpLinSoftConstraintAtom` (the record at `011b8948` of the data table, name pointer `010d96d0`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de85f0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de82c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpLinSoftConstraintAtom` (the record at `011b8948` of the data table, name pointer `010d96d0`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de82c0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpLinLimitConstraintAtom` (the record at `011b8960` of the data table, name pointer `010d96ec`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8600(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de82e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpLinLimitConstraintAtom` (the record at `011b8960` of the data table, name pointer `010d96ec`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de82e0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkp2dAngConstraintAtom` (the record at `011b8978` of the data table, name pointer `010d9708`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8610(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkp2dAngConstraintAtom` (the record at `011b8978` of the data table, name pointer `010d9708`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8300(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpAngConstraintAtom` (the record at `011b8990` of the data table, name pointer `010d9720`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8620(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpAngConstraintAtom` (the record at `011b8990` of the data table, name pointer `010d9720`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8320(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpAngLimitConstraintAtom` (the record at `011b89a8` of the data table, name pointer `010d9738`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8630(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpAngLimitConstraintAtom` (the record at `011b89a8` of the data table, name pointer `010d9738`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8340(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpTwistLimitConstraintAtom` (the record at `011b89c0` of the data table, name pointer `010d9754`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8640(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpTwistLimitConstraintAtom` (the record at `011b89c0` of the data table, name pointer `010d9754`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8360(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpConeLimitConstraintAtom` (the record at `011b89d8` of the data table, name pointer `010d9788`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8650(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpConeLimitConstraintAtom` (the record at `011b89d8` of the data table, name pointer `010d9788`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8380(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpAngFrictionConstraintAtom` (the record at `011b89f0` of the data table, name pointer `010d97a4`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8660(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de83a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpAngFrictionConstraintAtom` (the record at `011b89f0` of the data table, name pointer `010d97a4`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de83a0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpAngMotorConstraintAtom` (the record at `011b8a08` of the data table, name pointer `010d97c4`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8670(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de83c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpAngMotorConstraintAtom` (the record at `011b8a08` of the data table, name pointer `010d97c4`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de83c0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpRagdollMotorConstraintAtom` (the record at `011b8a20` of the data table, name pointer `010d97e0`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8680(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de83e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpRagdollMotorConstraintAtom` (the record at `011b8a20` of the data table, name pointer `010d97e0`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de83e0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpLinFrictionConstraintAtom` (the record at `011b8a38` of the data table, name pointer `010d9800`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8690(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpLinFrictionConstraintAtom` (the record at `011b8a38` of the data table, name pointer `010d9800`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8400(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de86a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpLinMotorConstraintAtom` (the record at `011b8a50` of the data table, name pointer `010d9820`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de86a0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpLinMotorConstraintAtom` (the record at `011b8a50` of the data table, name pointer `010d9820`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8420(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de86b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpPulleyConstraintAtom` (the record at `011b8a68` of the data table, name pointer `010d983c`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de86b0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpPulleyConstraintAtom` (the record at `011b8a68` of the data table, name pointer `010d983c`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8440(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de86c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpModifierConstraintAtom` (the record at `011b8a80` of the data table, name pointer `010d9854`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de86c0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpModifierConstraintAtom` (the record at `011b8a80` of the data table, name pointer `010d9854`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8460(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de86d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpSoftContactModifierConstraintAtom` (the record at `011b8a98` of the data table, name pointer `010d9870`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de86d0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpSoftContactModifierConstraintAtom` (the record at `011b8a98` of the data table, name pointer `010d9870`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8480(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de86e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpMassChangerModifierConstraintAtom` (the record at `011b8ab0` of the data table, name pointer `010d9898`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de86e0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de84a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpMassChangerModifierConstraintAtom` (the record at `011b8ab0` of the data table, name pointer `010d9898`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de84a0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de86f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpCenterOfMassChangerModifierConstraintAtom` (the record at `011b8ac8` of the data table, name pointer `010d98c0`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de86f0(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de84c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpCenterOfMassChangerModifierConstraintAtom` (the record at `011b8ac8` of the data table, name pointer `010d98c0`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de84c0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpViscousSurfaceModifierConstraintAtom` (the record at `011b8ae0` of the data table, name pointer `010d98f0`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8700(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de84e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpViscousSurfaceModifierConstraintAtom` (the record at `011b8ae0` of the data table, name pointer `010d98f0`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de84e0(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpMovingSurfaceModifierConstraintAtom` (the record at `011b8af8` of the data table, name pointer `010d9918`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8710(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpMovingSurfaceModifierConstraintAtom` (the record at `011b8af8` of the data table, name pointer `010d9918`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8500(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The finish function (record word `+4`; `hkTypeInfoRegistry::finishLoadedObject` `00d47900` calls it cdecl with the object and a word of the registry) of the type-info record of `hkpIgnoreModifierConstraintAtom` (the record at `011b8b10` of the data table, name pointer `010d9940`). A bare `RET`: it takes the two stack words, pops none and does nothing.
+pub fn fn_00de8720(_e: &mut Engine, _unused_0: Ptr, _unused_1: u32) {}
+
+// Translated from 00de8520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkpIgnoreModifierConstraintAtom` (the record at `011b8b10` of the data table, name pointer `010d9940`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8520(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkAabb` (the record at `011b91c0` of the data table, name pointer `010d9fa8`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8740(_e: &mut Engine, _unused_0: Ptr) {}
+
+// Translated from 00de8760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map. The cleanup function (record word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject` `00d47940` calls it cdecl with the object) of the type-info record of `hkAabbUint32` (the record at `011b91d8` of the data table, name pointer `010d9fb0`). A bare `RET`: it takes the one stack word, pops none and does nothing.
+pub fn fn_00de8760(_e: &mut Engine, _unused_0: Ptr) {}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -547,6 +817,70 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00de_9270, fn_00de9270(Ptr, Ptr, Ptr)),
         entry!(0x00de_92d0, fn_00de92d0(Ptr, Ptr, Ptr, Ptr) -> bool),
         entry!(0x00de_9410, fn_00de9410(Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x00de_8540, fn_00de8540(Ptr, u32)),
+        entry!(0x00de_8140, fn_00de8140(Ptr)),
+        entry!(0x00de_8550, fn_00de8550(Ptr, u32)),
+        entry!(0x00de_8160, fn_00de8160(Ptr)),
+        entry!(0x00de_8570, fn_00de8570(Ptr, u32)),
+        entry!(0x00de_8180, fn_00de8180(Ptr)),
+        entry!(0x00de_81a0, fn_00de81a0(Ptr, u32)),
+        entry!(0x00de_81c0, fn_00de81c0(Ptr)),
+        entry!(0x00de_8590, fn_00de8590(Ptr, u32)),
+        entry!(0x00de_81e0, fn_00de81e0(Ptr)),
+        entry!(0x00de_85a0, fn_00de85a0(Ptr, u32)),
+        entry!(0x00de_8200, fn_00de8200(Ptr)),
+        entry!(0x00de_8730, fn_00de8730(Ptr, u32)),
+        entry!(0x00de_8220, fn_00de8220(Ptr)),
+        entry!(0x00de_85b0, fn_00de85b0(Ptr, u32)),
+        entry!(0x00de_8240, fn_00de8240(Ptr)),
+        entry!(0x00de_85c0, fn_00de85c0(Ptr, u32)),
+        entry!(0x00de_8260, fn_00de8260(Ptr)),
+        entry!(0x00de_85d0, fn_00de85d0(Ptr, u32)),
+        entry!(0x00de_8280, fn_00de8280(Ptr)),
+        entry!(0x00de_85e0, fn_00de85e0(Ptr, u32)),
+        entry!(0x00de_82a0, fn_00de82a0(Ptr)),
+        entry!(0x00de_85f0, fn_00de85f0(Ptr, u32)),
+        entry!(0x00de_82c0, fn_00de82c0(Ptr)),
+        entry!(0x00de_8600, fn_00de8600(Ptr, u32)),
+        entry!(0x00de_82e0, fn_00de82e0(Ptr)),
+        entry!(0x00de_8610, fn_00de8610(Ptr, u32)),
+        entry!(0x00de_8300, fn_00de8300(Ptr)),
+        entry!(0x00de_8620, fn_00de8620(Ptr, u32)),
+        entry!(0x00de_8320, fn_00de8320(Ptr)),
+        entry!(0x00de_8630, fn_00de8630(Ptr, u32)),
+        entry!(0x00de_8340, fn_00de8340(Ptr)),
+        entry!(0x00de_8640, fn_00de8640(Ptr, u32)),
+        entry!(0x00de_8360, fn_00de8360(Ptr)),
+        entry!(0x00de_8650, fn_00de8650(Ptr, u32)),
+        entry!(0x00de_8380, fn_00de8380(Ptr)),
+        entry!(0x00de_8660, fn_00de8660(Ptr, u32)),
+        entry!(0x00de_83a0, fn_00de83a0(Ptr)),
+        entry!(0x00de_8670, fn_00de8670(Ptr, u32)),
+        entry!(0x00de_83c0, fn_00de83c0(Ptr)),
+        entry!(0x00de_8680, fn_00de8680(Ptr, u32)),
+        entry!(0x00de_83e0, fn_00de83e0(Ptr)),
+        entry!(0x00de_8690, fn_00de8690(Ptr, u32)),
+        entry!(0x00de_8400, fn_00de8400(Ptr)),
+        entry!(0x00de_86a0, fn_00de86a0(Ptr, u32)),
+        entry!(0x00de_8420, fn_00de8420(Ptr)),
+        entry!(0x00de_86b0, fn_00de86b0(Ptr, u32)),
+        entry!(0x00de_8440, fn_00de8440(Ptr)),
+        entry!(0x00de_86c0, fn_00de86c0(Ptr, u32)),
+        entry!(0x00de_8460, fn_00de8460(Ptr)),
+        entry!(0x00de_86d0, fn_00de86d0(Ptr, u32)),
+        entry!(0x00de_8480, fn_00de8480(Ptr)),
+        entry!(0x00de_86e0, fn_00de86e0(Ptr, u32)),
+        entry!(0x00de_84a0, fn_00de84a0(Ptr)),
+        entry!(0x00de_86f0, fn_00de86f0(Ptr, u32)),
+        entry!(0x00de_84c0, fn_00de84c0(Ptr)),
+        entry!(0x00de_8700, fn_00de8700(Ptr, u32)),
+        entry!(0x00de_84e0, fn_00de84e0(Ptr)),
+        entry!(0x00de_8710, fn_00de8710(Ptr, u32)),
+        entry!(0x00de_8500, fn_00de8500(Ptr)),
+        entry!(0x00de_8720, fn_00de8720(Ptr, u32)),
+        entry!(0x00de_8520, fn_00de8520(Ptr)),
+        entry!(0x00de_8740, fn_00de8740(Ptr)),
+        entry!(0x00de_8760, fn_00de8760(Ptr)),
     ]
 }
 
@@ -977,4 +1311,158 @@ mod tests {
         let end = vector(&mut e, [0.0, 0.0, f32::NAN, 0.0]);
         assert!(!e.call(0x00de_9410, &args![start, end, plane, out]).bool());
     }
+}
+
+#[cfg(test)]
+mod tests_a03_type_info {
+    use crate::prelude::*;
+
+    /// Calls `function` with an object holding a pattern (and, for two words, a finishing word):
+    /// nothing else is called and the object is unchanged.
+    fn check_nothing(function: u32, words: usize) {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x40);
+        for i in 0..16 {
+            e.mem.set_u32(object + 4 * i, 0x1000_0000 + i);
+        }
+        e.call_log = Some(vec![]);
+        if words == 2 {
+            e.call(function, &args![object, 1u32]);
+        } else {
+            e.call(function, &args![object]);
+        }
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.len(), 1);
+        for i in 0..16 {
+            assert_eq!(e.mem.u32(object + 4 * i), 0x1000_0000 + i);
+        }
+    }
+
+    macro_rules! nothing_test {
+        ($name:ident, $function:expr, $words:expr) => {
+            #[test]
+            fn $name() {
+                check_nothing($function, $words);
+            }
+        };
+    }
+
+    /// A non-null object: the callee double runs once with `this` = the object and the finishing
+    /// word; a null object calls nothing.
+    fn check_calls(function: u32, callee: u32) {
+        let mut e = Engine::new();
+        e.register(callee, |_, _| Ret::default());
+        let object = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        e.call(function, &args![0u32, 0x55u32]);
+        e.call(function, &args![object, 0x66u32]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == callee).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![object, 0x66]);
+    }
+
+    macro_rules! calls_test {
+        ($name:ident, $function:expr, $callee:expr) => {
+            #[test]
+            fn $name() {
+                check_calls($function, $callee);
+            }
+        };
+    }
+
+    /// `00d21ce0` runs (with the word at `+8` of the object) only for a non-null object and a
+    /// non-zero finishing word.
+    fn check_bridge(function: u32) {
+        let mut e = Engine::new();
+        e.register(0x00d2_1ce0, |_, _| Ret::default());
+        let object = e.mem.alloc(0x20);
+        e.mem.set_u32(object + 8, 0xfeed_0001);
+        e.call_log = Some(vec![]);
+        e.call(function, &args![0u32, 1u32]);
+        e.call(function, &args![object, 0u32]);
+        e.call(function, &args![object, 1u32]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == 0x00d2_1ce0).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![object, 0xfeed_0001]);
+    }
+
+    macro_rules! bridge_test {
+        ($name:ident, $function:expr) => {
+            #[test]
+            fn $name() {
+                check_bridge($function);
+            }
+        };
+    }
+
+    nothing_test!(fn_00de8540_does_nothing, 0x00de_8540, 2);
+    nothing_test!(fn_00de8140_does_nothing, 0x00de_8140, 1);
+    bridge_test!(fn_00de8550_runs_init_only_when_finishing, 0x00de_8550);
+    nothing_test!(fn_00de8160_does_nothing, 0x00de_8160, 1);
+    bridge_test!(fn_00de8570_runs_init_only_when_finishing, 0x00de_8570);
+    nothing_test!(fn_00de8180_does_nothing, 0x00de_8180, 1);
+    calls_test!(
+        fn_00de81a0_runs_its_callee_on_a_non_null_object,
+        0x00de_81a0,
+        0x00d2_1de0
+    );
+    nothing_test!(fn_00de81c0_does_nothing, 0x00de_81c0, 1);
+    nothing_test!(fn_00de8590_does_nothing, 0x00de_8590, 2);
+    nothing_test!(fn_00de81e0_does_nothing, 0x00de_81e0, 1);
+    nothing_test!(fn_00de85a0_does_nothing, 0x00de_85a0, 2);
+    nothing_test!(fn_00de8200_does_nothing, 0x00de_8200, 1);
+    nothing_test!(fn_00de8730_does_nothing, 0x00de_8730, 2);
+    nothing_test!(fn_00de8220_does_nothing, 0x00de_8220, 1);
+    nothing_test!(fn_00de85b0_does_nothing, 0x00de_85b0, 2);
+    nothing_test!(fn_00de8240_does_nothing, 0x00de_8240, 1);
+    nothing_test!(fn_00de85c0_does_nothing, 0x00de_85c0, 2);
+    nothing_test!(fn_00de8260_does_nothing, 0x00de_8260, 1);
+    nothing_test!(fn_00de85d0_does_nothing, 0x00de_85d0, 2);
+    nothing_test!(fn_00de8280_does_nothing, 0x00de_8280, 1);
+    nothing_test!(fn_00de85e0_does_nothing, 0x00de_85e0, 2);
+    nothing_test!(fn_00de82a0_does_nothing, 0x00de_82a0, 1);
+    nothing_test!(fn_00de85f0_does_nothing, 0x00de_85f0, 2);
+    nothing_test!(fn_00de82c0_does_nothing, 0x00de_82c0, 1);
+    nothing_test!(fn_00de8600_does_nothing, 0x00de_8600, 2);
+    nothing_test!(fn_00de82e0_does_nothing, 0x00de_82e0, 1);
+    nothing_test!(fn_00de8610_does_nothing, 0x00de_8610, 2);
+    nothing_test!(fn_00de8300_does_nothing, 0x00de_8300, 1);
+    nothing_test!(fn_00de8620_does_nothing, 0x00de_8620, 2);
+    nothing_test!(fn_00de8320_does_nothing, 0x00de_8320, 1);
+    nothing_test!(fn_00de8630_does_nothing, 0x00de_8630, 2);
+    nothing_test!(fn_00de8340_does_nothing, 0x00de_8340, 1);
+    nothing_test!(fn_00de8640_does_nothing, 0x00de_8640, 2);
+    nothing_test!(fn_00de8360_does_nothing, 0x00de_8360, 1);
+    nothing_test!(fn_00de8650_does_nothing, 0x00de_8650, 2);
+    nothing_test!(fn_00de8380_does_nothing, 0x00de_8380, 1);
+    nothing_test!(fn_00de8660_does_nothing, 0x00de_8660, 2);
+    nothing_test!(fn_00de83a0_does_nothing, 0x00de_83a0, 1);
+    nothing_test!(fn_00de8670_does_nothing, 0x00de_8670, 2);
+    nothing_test!(fn_00de83c0_does_nothing, 0x00de_83c0, 1);
+    nothing_test!(fn_00de8680_does_nothing, 0x00de_8680, 2);
+    nothing_test!(fn_00de83e0_does_nothing, 0x00de_83e0, 1);
+    nothing_test!(fn_00de8690_does_nothing, 0x00de_8690, 2);
+    nothing_test!(fn_00de8400_does_nothing, 0x00de_8400, 1);
+    nothing_test!(fn_00de86a0_does_nothing, 0x00de_86a0, 2);
+    nothing_test!(fn_00de8420_does_nothing, 0x00de_8420, 1);
+    nothing_test!(fn_00de86b0_does_nothing, 0x00de_86b0, 2);
+    nothing_test!(fn_00de8440_does_nothing, 0x00de_8440, 1);
+    nothing_test!(fn_00de86c0_does_nothing, 0x00de_86c0, 2);
+    nothing_test!(fn_00de8460_does_nothing, 0x00de_8460, 1);
+    nothing_test!(fn_00de86d0_does_nothing, 0x00de_86d0, 2);
+    nothing_test!(fn_00de8480_does_nothing, 0x00de_8480, 1);
+    nothing_test!(fn_00de86e0_does_nothing, 0x00de_86e0, 2);
+    nothing_test!(fn_00de84a0_does_nothing, 0x00de_84a0, 1);
+    nothing_test!(fn_00de86f0_does_nothing, 0x00de_86f0, 2);
+    nothing_test!(fn_00de84c0_does_nothing, 0x00de_84c0, 1);
+    nothing_test!(fn_00de8700_does_nothing, 0x00de_8700, 2);
+    nothing_test!(fn_00de84e0_does_nothing, 0x00de_84e0, 1);
+    nothing_test!(fn_00de8710_does_nothing, 0x00de_8710, 2);
+    nothing_test!(fn_00de8500_does_nothing, 0x00de_8500, 1);
+    nothing_test!(fn_00de8720_does_nothing, 0x00de_8720, 2);
+    nothing_test!(fn_00de8520_does_nothing, 0x00de_8520, 1);
+    nothing_test!(fn_00de8740_does_nothing, 0x00de_8740, 1);
+    nothing_test!(fn_00de8760_does_nothing, 0x00de_8760, 1);
 }

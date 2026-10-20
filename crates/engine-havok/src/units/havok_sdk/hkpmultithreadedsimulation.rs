@@ -712,7 +712,8 @@ const POST_COLLIDE_JOB: u32 = 0x00d9_31a0;
 const CONSTRAINT_QUERY_SET: u32 = 0x00cf_a6e0;
 const COPY_INTEGRATION_INFO: u32 = 0x00cf_a7d0;
 /// `hkpContinuousSimulation::processAgentNnEntries` (`00d0c9c0`, translated as taking
-/// `(entries, count, input, owner, use_toi_quality)`).
+/// `(this, entries, count, input, owner, use_toi_quality)`; the callers leave their
+/// `this` in `ECX`).
 const CONTINUOUS_PROCESS_ENTRIES: u32 = 0x00d0_c9c0;
 /// The vtable word the post collide job state keeps at `+0x11c`.
 const POST_COLLIDE_STATE_TABLE: u32 = 0x0126_9210;
@@ -1014,7 +1015,7 @@ pub fn process_agent_nn_entries(
     if queue == 0 || count <= e.mem.i32(world + 0xec) {
         e.call(
             CONTINUOUS_PROCESS_ENTRIES,
-            &args![entries, count, input, owner, use_toi_quality],
+            &args![me, entries, count, input, owner, use_toi_quality],
         );
         return;
     }
@@ -1116,7 +1117,7 @@ pub fn process_agent_nn_entries_from_multiple_islands(
             let (count, island) = (e.mem.u32(record + 4), e.mem.u32(record));
             e.call(
                 CONTINUOUS_PROCESS_ENTRIES,
-                &args![entries, count, input, island, use_toi_quality],
+                &args![me, entries, count, input, island, use_toi_quality],
             );
         }
         return;
@@ -1211,7 +1212,7 @@ pub fn process_agent_nn_entries_from_multiple_islands(
         let (count, island) = (e.mem.u32(remembered + 4), e.mem.u32(remembered));
         e.call(
             CONTINUOUS_PROCESS_ENTRIES,
-            &args![entries, count, input, island, 0u32],
+            &args![me, entries, count, input, island, 0u32],
         );
     }
     let router = e.call(MEMORY_ROUTER, &args![]).u32();
@@ -1888,6 +1889,21 @@ fn run_new_agent(e: &mut Engine, this: Ptr, out: u32, buffer: u32, agent: u32) {
     }
 }
 
+// Translated from 00d02220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a "less than" comparison for a sort, cdecl, three stack words
+/// (nothing popped): `out`, `a` and `b`. Writes at `out` the byte 1 when the word at +0xd4 of the
+/// object that the word at +0 of the object at `a + 0x48` points to is below (unsigned) the same
+/// word for `b`, else 0. Returns `out`. Ghidra made no function here; the address is pushed at 00d0332e.
+pub fn fn_00d02220(e: &mut Engine, out: u32, a: u32, b: u32) -> u32 {
+    let a_block = e.mem.u32(a + 0x48);
+    let a_object = e.mem.u32(a_block);
+    let b_block = e.mem.u32(b + 0x48);
+    let b_object = e.mem.u32(b_block);
+    let less = e.mem.u32(a_object + 0xd4) < e.mem.u32(b_object + 0xd4);
+    e.mem.set_u8(out, u8::from(less));
+    out
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1965,6 +1981,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00d03c20,
             collide_entities_needing_psi_collision_detection_narrow_phase_toi_only(Ptr, u32, u32)
         ),
+        entry!(0x00d0_2220, fn_00d02220(u32, u32, u32) -> u32),
     ]
 }
 
@@ -3410,7 +3427,7 @@ mod step_tests {
         let log: Log = j.r.e.call_log.take().unwrap();
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
-            vec![args![0x1000_0000u32, 4u32, input, owner, 0x1ffu32]]
+            vec![args![sim, 0x1000_0000u32, 4u32, input, owner, 0x1ffu32]]
         );
         assert!(calls_to(&log, JOB_QUEUE_ADD_JOB).is_empty());
         // A negative count is below the limit too (signed compare).
@@ -3545,7 +3562,7 @@ mod step_tests {
         // The world's own island runs directly, with the low byte of the last word clear.
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
-            vec![args![base + 12, 4u32, input, 0x22u32, 0u32]]
+            vec![args![sim, base + 12, 4u32, input, 0x22u32, 0u32]]
         );
         assert_eq!(
             order(
@@ -3583,9 +3600,9 @@ mod step_tests {
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
             vec![
-                args![base, 3u32, input, first, 0x77u32],
-                args![base + 12, 4u32, input, 0x22u32, 0x77u32],
-                args![base + 28, 0u32, input, third, 0x77u32],
+                args![sim, base, 3u32, input, first, 0x77u32],
+                args![sim, base + 12, 4u32, input, 0x22u32, 0x77u32],
+                args![sim, base + 28, 0u32, input, third, 0x77u32],
             ]
         );
         assert!(calls_to(&log, JOB_QUEUE_ADD_JOB).is_empty());
@@ -3713,7 +3730,7 @@ mod step_tests {
         assert_eq!(e.mem.u32(list), a1);
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
-            vec![args![list, 1u32, 0x7777_0000u32, island, 0u32]]
+            vec![args![sim, list, 1u32, 0x7777_0000u32, island, 0u32]]
         );
         // The array the last scan left is given back (2 pairs of words); the list and the flags
         // are on the temporary stack.
@@ -3891,8 +3908,8 @@ mod step_tests {
         assert_eq!(
             calls_to(&log, CONTINUOUS_PROCESS_ENTRIES),
             vec![
-                args![top, 2u32, integrator, 0x100u32, 0u32],
-                args![top + 8, 1u32, integrator, 0x200u32, 0u32]
+                args![sim, top, 2u32, integrator, 0x100u32, 0u32],
+                args![sim, top + 8, 1u32, integrator, 0x200u32, 0u32]
             ]
         );
         assert_eq!(e.mem.u32(p.r.router), top);
@@ -4566,5 +4583,42 @@ mod step_tests {
         release_block(&mut r.e, flags, 0x10 | DONT_DEALLOCATE_FLAG, 1);
         let log: Log = r.e.call_log.take().unwrap();
         assert!(calls_to(&log, FREE_ARRAY).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    /// An object whose key sits at +0xd4 of the object behind two levels of pointers at +0x48.
+    fn keyed_object(e: &mut Engine, key: u32) -> u32 {
+        let holder = e.mem.alloc(0x60);
+        let block = e.mem.alloc(0x10);
+        let object = e.mem.alloc(0xe0);
+        e.mem.set_u32(holder + 0x48, block);
+        e.mem.set_u32(block, object);
+        e.mem.set_u32(object + 0xd4, key);
+        holder
+    }
+
+    /// The byte at `out` is 1 only when the first key is below the second, unsigned.
+    #[test]
+    fn fn_00d02220_writes_whether_the_first_key_is_below_the_second() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(8);
+        for (a, b, expected) in [
+            (1, 2, 1),
+            (2, 1, 0),
+            (2, 2, 0),
+            (0xffff_ffff, 1, 0),
+            (1, 0xffff_ffff, 1),
+        ] {
+            let first = keyed_object(&mut e, a);
+            let second = keyed_object(&mut e, b);
+            e.mem.set_u8(out, 0x55);
+            assert_eq!(e.call(0x00d0_2220, &args![out, first, second]).u32(), out);
+            assert_eq!(e.mem.u8(out), expected, "{a:#x} against {b:#x}");
+            assert_eq!(e.mem.u8(out + 1), 0);
+        }
     }
 }

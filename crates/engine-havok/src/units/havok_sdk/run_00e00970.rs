@@ -183,6 +183,204 @@ pub fn fn_00e00c90(e: &mut Engine, object: Ptr, mode: u32) {
     }
 }
 
+// Translated from 00e00930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpRemoveTerminalsMoppModifier` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hkp_remove_terminals_mopp_modifier_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpRemoveTerminalsMoppModifier` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, stores 0x010e_8894 at `+8`, the vtable address 0x010e_88b4 at `+0`, then 0x010e_88a4 at `+8`; the flag (second word) is not read.
+pub fn hkp_remove_terminals_mopp_modifier_finish_loaded_object(
+    e: &mut Engine,
+    object: Ptr,
+    _unused_1: u32,
+) {
+    if !object.is_null() {
+        let base = object.addr();
+        e.mem.set_u32(base + 8, 0x010e_8894);
+        e.mem.set_u32(base, 0x010e_88b4);
+        e.mem.set_u32(base + 8, 0x010e_88a4);
+    }
+}
+
+// Translated from 00e009c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpPlaneShape` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hkp_plane_shape_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e009e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpPlaneShape` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, stores the vtable address 0x0103_05a8 at `+0`, then (only with a non-zero flag) 0 at `+0xc`, then the vtable address 0x010d_0e18 at `+0` and 0x1c at `+0xc`.
+pub fn hkp_plane_shape_finish_loaded_object(e: &mut Engine, object: Ptr, flag: u32) {
+    if object.is_null() {
+        return;
+    }
+    let base = object.addr();
+    e.mem.set_u32(base, 0x0103_05a8);
+    if flag != 0 {
+        e.mem.set_u32(base + 0xc, 0);
+    }
+    e.mem.set_u32(base, 0x010d_0e18);
+    e.mem.set_u32(base + 0xc, 0x1c);
+}
+
+// Translated from 00e00a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpNullCollisionFilter` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hkp_null_collision_filter_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpNullCollisionFilter` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, runs `00e00a80` on it (thiscall, `this` = `object`, one word = the flag, the callee pops it); the callee is in this file.
+pub fn hkp_null_collision_filter_finish_loaded_object(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        fn_00e00a80(e, object, flag);
+    }
+}
+
+// Translated from 00e00ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpMultiSphereShape` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hkp_multi_sphere_shape_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpMultiSphereShape` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, stores the vtable address 0x0103_05a8 at `+0`, then (only with a non-zero flag) 0 at `+0xc`, then the vtable address 0x010c_e4bc at `+0` and 0x15 at `+0xc`.
+pub fn hkp_multi_sphere_shape_finish_loaded_object(e: &mut Engine, object: Ptr, flag: u32) {
+    if object.is_null() {
+        return;
+    }
+    let base = object.addr();
+    e.mem.set_u32(base, 0x0103_05a8);
+    if flag != 0 {
+        e.mem.set_u32(base + 0xc, 0);
+    }
+    e.mem.set_u32(base, 0x010c_e4bc);
+    e.mem.set_u32(base + 0xc, 0x15);
+}
+
+// Translated from 00e00b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpGroupFilter` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hkp_group_filter_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpGroupFilter` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, runs `00e00ba0` on it (thiscall, `this` = `object`, one word = the flag, the callee pops it); the callee is in this file.
+pub fn hkp_group_filter_finish_loaded_object(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        fn_00e00ba0(e, object, flag);
+    }
+}
+
+// Translated from 00e00c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpFastMeshShape` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hkp_fast_mesh_shape_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpDefaultConvexListFilter` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hkp_default_convex_list_filter_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpDefaultConvexListFilter` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, stores the vtable address 0x010c_63cc at `+0`; the flag (second word) is not read.
+pub fn hkp_default_convex_list_filter_finish_loaded_object(
+    e: &mut Engine,
+    object: Ptr,
+    _unused_1: u32,
+) {
+    if !object.is_null() {
+        e.mem.set_u32(object.addr(), 0x010c_63cc);
+    }
+}
+
+// Translated from 00e00d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpCylinderShape` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hkp_cylinder_shape_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpCylinderShape` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, calls `00d57b20` on it (thiscall, `this` = `object`, one word = the flag, the callee pops it).
+pub fn hkp_cylinder_shape_finish_loaded_object(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        e.call(0x00d5_7b20, &args![object, flag]);
+    }
+}
+
+// Translated from 00e00d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpConvexVerticesConnectivity` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hkp_convex_vertices_connectivity_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpConvexVerticesConnectivity` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, stores the vtable address 0x010e_8d8c at `+0`; the flag (second word) is not read.
+pub fn hkp_convex_vertices_connectivity_finish_loaded_object(
+    e: &mut Engine,
+    object: Ptr,
+    _unused_1: u32,
+) {
+    if !object.is_null() {
+        e.mem.set_u32(object.addr(), 0x010e_8d8c);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -203,6 +401,56 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e0_0a80, fn_00e00a80(Ptr, u32) -> Ptr),
         entry!(0x00e0_0ba0, fn_00e00ba0(Ptr, u32) -> Ptr),
         entry!(0x00e0_0c90, fn_00e00c90(Ptr, u32)),
+        entry!(
+            0x00e0_0930,
+            hkp_remove_terminals_mopp_modifier_cleanup_loaded_object(Ptr)
+        ),
+        entry!(
+            0x00e0_0950,
+            hkp_remove_terminals_mopp_modifier_finish_loaded_object(Ptr, u32)
+        ),
+        entry!(0x00e0_09c0, hkp_plane_shape_cleanup_loaded_object(Ptr)),
+        entry!(0x00e0_09e0, hkp_plane_shape_finish_loaded_object(Ptr, u32)),
+        entry!(
+            0x00e0_0a20,
+            hkp_null_collision_filter_cleanup_loaded_object(Ptr)
+        ),
+        entry!(
+            0x00e0_0a40,
+            hkp_null_collision_filter_finish_loaded_object(Ptr, u32)
+        ),
+        entry!(
+            0x00e0_0ae0,
+            hkp_multi_sphere_shape_cleanup_loaded_object(Ptr)
+        ),
+        entry!(
+            0x00e0_0b00,
+            hkp_multi_sphere_shape_finish_loaded_object(Ptr, u32)
+        ),
+        entry!(0x00e0_0b40, hkp_group_filter_cleanup_loaded_object(Ptr)),
+        entry!(0x00e0_0b60, hkp_group_filter_finish_loaded_object(Ptr, u32)),
+        entry!(0x00e0_0c70, hkp_fast_mesh_shape_cleanup_loaded_object(Ptr)),
+        entry!(
+            0x00e0_0cf0,
+            hkp_default_convex_list_filter_cleanup_loaded_object(Ptr)
+        ),
+        entry!(
+            0x00e0_0d10,
+            hkp_default_convex_list_filter_finish_loaded_object(Ptr, u32)
+        ),
+        entry!(0x00e0_0d30, hkp_cylinder_shape_cleanup_loaded_object(Ptr)),
+        entry!(
+            0x00e0_0d50,
+            hkp_cylinder_shape_finish_loaded_object(Ptr, u32)
+        ),
+        entry!(
+            0x00e0_0d90,
+            hkp_convex_vertices_connectivity_cleanup_loaded_object(Ptr)
+        ),
+        entry!(
+            0x00e0_0db0,
+            hkp_convex_vertices_connectivity_finish_loaded_object(Ptr, u32)
+        ),
     ]
 }
 
@@ -545,5 +793,236 @@ mod tests_a05 {
         let object = e.mem.alloc(0x20);
         e.call(0x00e0_0c90, &args![object, 3u32]);
         assert_eq!(e.mem.u32(object + 0xc), 0x17);
+    }
+}
+
+#[cfg(test)]
+mod a04_type_info_callback_tests {
+    use crate::prelude::*;
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn hkp_remove_terminals_mopp_modifier_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_0016, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_0016);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00e0_0930, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_0016), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hkp_remove_terminals_mopp_modifier_finish_loaded_object_stores_the_vtable_and_the_final_word(
+    ) {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.call(0x00e0_0950, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x010e_88b4);
+        assert_eq!(e.mem.u32(object + 8), 0x010e_88a4);
+        assert_eq!(e.mem.u32(object + 4), 0);
+        // A null object is left alone.
+        e.call(0x00e0_0950, &args![0u32, 1u32]);
+    }
+
+    #[test]
+    fn hkp_plane_shape_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_0017, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_0017);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00e0_09c0, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_0017), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hkp_plane_shape_finish_loaded_object_stores_the_vtable_and_the_word() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object + 0xc, 0x77);
+        e.call(0x00e0_09e0, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_0e18);
+        assert_eq!(e.mem.u32(object + 0xc), 0x1c);
+        e.call(0x00e0_09e0, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_0e18);
+        assert_eq!(e.mem.u32(object + 0xc), 0x1c);
+        // A null object is left alone.
+        e.call(0x00e0_09e0, &args![0u32, 1u32]);
+    }
+
+    #[test]
+    fn hkp_null_collision_filter_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_0018, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_0018);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00e0_0a20, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_0018), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hkp_null_collision_filter_finish_loaded_object_runs_the_constructor_chain_on_a_non_null_object(
+    ) {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x40);
+        e.call(0x00e0_0a40, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x010c_646c);
+        assert_eq!(e.mem.u32(object + 0x20), 1);
+        // A null object is left alone (nothing is written or read).
+        e.call(0x00e0_0a40, &args![0u32, 1u32]);
+    }
+
+    #[test]
+    fn hkp_multi_sphere_shape_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_0019, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_0019);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00e0_0ae0, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_0019), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hkp_multi_sphere_shape_finish_loaded_object_stores_the_vtable_and_the_word() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object + 0xc, 0x77);
+        e.call(0x00e0_0b00, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x010c_e4bc);
+        assert_eq!(e.mem.u32(object + 0xc), 0x15);
+        e.call(0x00e0_0b00, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x010c_e4bc);
+        assert_eq!(e.mem.u32(object + 0xc), 0x15);
+        // A null object is left alone.
+        e.call(0x00e0_0b00, &args![0u32, 1u32]);
+    }
+
+    #[test]
+    fn hkp_group_filter_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_001a, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_001a);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00e0_0b40, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_001a), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hkp_group_filter_finish_loaded_object_runs_the_constructor_chain_on_a_non_null_object() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x40);
+        e.call(0x00e0_0b60, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x010e_8a6c);
+        assert_eq!(e.mem.u32(object + 0x20), 2);
+        // A null object is left alone (nothing is written or read).
+        e.call(0x00e0_0b60, &args![0u32, 1u32]);
+    }
+
+    #[test]
+    fn hkp_fast_mesh_shape_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_001b, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_001b);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00e0_0c70, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_001b), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hkp_default_convex_list_filter_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_001c, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_001c);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00e0_0cf0, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_001c), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hkp_default_convex_list_filter_finish_loaded_object_stores_the_vtable() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.call(0x00e0_0d10, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x010c_63cc);
+        assert_eq!(e.mem.u32(object + 4), 0);
+        // A null object is left alone.
+        e.call(0x00e0_0d10, &args![0u32, 1u32]);
+    }
+
+    #[test]
+    fn hkp_cylinder_shape_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_001d, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_001d);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00e0_0d30, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_001d), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hkp_cylinder_shape_finish_loaded_object_calls_the_helper_for_a_non_null_object() {
+        let mut e = Engine::new();
+        e.register(0x00d5_7b20, |_, _| Ret::default());
+        e.call_log = Some(Vec::new());
+        e.call(0x00e0_0d50, &args![0x5000u32, 7u32]);
+        assert_eq!(calls_to(&e, 0x00d5_7b20), vec![vec![0x5000, 7]]);
+        e.call(0x00e0_0d50, &args![0u32, 7u32]);
+        assert_eq!(calls_to(&e, 0x00d5_7b20).len(), 1);
+    }
+
+    #[test]
+    fn hkp_convex_vertices_connectivity_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_001e, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_001e);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00e0_0d90, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_001e), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hkp_convex_vertices_connectivity_finish_loaded_object_stores_the_vtable() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.call(0x00e0_0db0, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x010e_8d8c);
+        assert_eq!(e.mem.u32(object + 4), 0);
+        // A null object is left alone.
+        e.call(0x00e0_0db0, &args![0u32, 1u32]);
     }
 }

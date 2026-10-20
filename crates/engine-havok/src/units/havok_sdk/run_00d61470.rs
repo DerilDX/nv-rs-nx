@@ -198,9 +198,80 @@ pub fn fn_00d619d0(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00d61480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, three stack words `needle`, `offset`, `_unused_2`, `RET 0xc`; no
+/// direct caller; descriptions, not confirmed): `this` holds a string pointer in its first word.
+/// Looks for `needle` in the string from `offset` with the CRT search `00cb1130` (cdecl,
+/// `(string + offset, needle)`; a character search). Answers the position found, counted from the
+/// start of the string, or -1 when the search answers null.
+pub fn fn_00d61480(e: &mut Engine, this: Ptr, needle: u32, offset: u32, _unused_2: u32) -> i32 {
+    let text = e.mem.u32(this.addr());
+    let found = e
+        .call(0x00cb_1130, &args![text.wrapping_add(offset), needle])
+        .u32();
+    if found == 0 {
+        return -1;
+    }
+    found.wrapping_sub(e.mem.u32(this.addr())) as i32
+}
+
+// Translated from 00d61560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one stack word `other`, `RET 4`; no direct caller; descriptions, not
+/// confirmed): `this` holds a string pointer in its first word. Compares that string with the
+/// string at `other` while neither has ended: a difference answers 0. When the loop ends it
+/// answers 1 if `other` has ended (it is equal to the start of the string, or all of it), else
+/// 0.
+pub fn fn_00d61560(e: &mut Engine, this: Ptr, other: u32) -> u32 {
+    let text = e.mem.u32(this.addr());
+    let mut index = 0u32;
+    if e.mem.u8(text) != 0 {
+        loop {
+            let wanted = e.mem.u8(other.wrapping_add(index));
+            if wanted == 0 {
+                break;
+            }
+            if e.mem.u8(text.wrapping_add(index)) != wanted {
+                return 0;
+            }
+            index += 1;
+            if e.mem.u8(text.wrapping_add(index)) == 0 {
+                break;
+            }
+        }
+    }
+    u32::from(e.mem.u8(other.wrapping_add(index)) == 0)
+}
+
+// Translated from 00d617d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (`thiscall`, one stack word `count`, `RET 4`; no direct caller; descriptions, not
+/// confirmed): `this` holds a string pointer in its first word and the length in the word at
+/// `+4`. Nothing happens for a `count` of 0 or less (signed). Otherwise the length drops by
+/// `count` and, when the new length is above 0 (signed), that many bytes are moved down from
+/// `count` bytes later, a byte at a time from the front.
+pub fn fn_00d617d0(e: &mut Engine, this: Ptr, count: i32) {
+    if count <= 0 {
+        return;
+    }
+    let length = e.mem.i32(this.addr().wrapping_add(4)).wrapping_sub(count);
+    e.mem.set_i32(this.addr().wrapping_add(4), length);
+    let text = e.mem.u32(this.addr());
+    if length <= 0 {
+        return;
+    }
+    let mut destination = text;
+    for _ in 0..length {
+        let byte = e.mem.u8(destination.wrapping_add(count as u32));
+        e.mem.set_u8(destination, byte);
+        destination = destination.wrapping_add(1);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d61480, fn_00d61480(Ptr, u32, u32, u32) -> i32),
+        entry!(0x00d61560, fn_00d61560(Ptr, u32) -> u32),
+        entry!(0x00d617d0, fn_00d617d0(Ptr, i32)),
         entry!(0x00d6_1470, fn_00d61470(Ptr) -> Ptr),
         entry!(0x00d6_1600, fn_00d61600(Ptr, u8, i32, i32) -> i32),
         entry!(0x00d6_1700, fn_00d61700(Ptr, u32) -> bool),
@@ -217,6 +288,106 @@ mod string_tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// A string object: the first word points to `text` (zero ended), the word at `+4` is its
+    /// length.
+    fn string_object_00d61470(e: &mut Engine, text: &[u8]) -> (u32, u32) {
+        let buffer = e.mem.alloc(text.len() as u32 + 8);
+        e.mem.write(buffer, text);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, buffer);
+        e.mem.set_u32(object + 4, text.len() as u32);
+        (object, buffer)
+    }
+
+    #[test]
+    fn fn_00d61480_answers_the_position_counted_from_the_start() {
+        let mut e = Engine::new();
+        let (object, buffer) = string_object_00d61470(&mut e, b"hello world");
+        e.register(0x00cb_1130, |_, a| Ret {
+            eax: a[0] + 4,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e
+            .call(0x00d6_1480, &args![object, 0x6fu32, 3u32, 0u32])
+            .i32();
+        assert_eq!(answer, 7);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00cb_1130)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x00cb_1130, vec![buffer + 3, 0x6f])]);
+    }
+
+    #[test]
+    fn fn_00d61480_answers_minus_one_when_the_search_finds_nothing() {
+        let mut e = Engine::new();
+        let (object, _) = string_object_00d61470(&mut e, b"hello");
+        e.register(0x00cb_1130, |_, _| Ret::default());
+        let answer = e
+            .call(0x00d6_1480, &args![object, 0x7au32, 0u32, 0u32])
+            .i32();
+        assert_eq!(answer, -1);
+    }
+
+    #[test]
+    fn fn_00d61560_tells_whether_the_other_string_starts_the_text() {
+        let mut e = Engine::new();
+        let (object, _) = string_object_00d61470(&mut e, b"hello");
+        let (_, prefix) = string_object_00d61470(&mut e, b"hel");
+        let (_, whole) = string_object_00d61470(&mut e, b"hello");
+        let (_, longer) = string_object_00d61470(&mut e, b"hello!");
+        let (_, different) = string_object_00d61470(&mut e, b"help");
+        let (_, empty) = string_object_00d61470(&mut e, b"");
+        assert_eq!(e.call(0x00d6_1560, &args![object, prefix]).u32(), 1);
+        assert_eq!(e.call(0x00d6_1560, &args![object, whole]).u32(), 1);
+        assert_eq!(e.call(0x00d6_1560, &args![object, longer]).u32(), 0);
+        assert_eq!(e.call(0x00d6_1560, &args![object, different]).u32(), 0);
+        assert_eq!(e.call(0x00d6_1560, &args![object, empty]).u32(), 1);
+    }
+
+    #[test]
+    fn fn_00d61560_with_an_empty_text_is_true_only_for_an_empty_other() {
+        let mut e = Engine::new();
+        let (object, _) = string_object_00d61470(&mut e, b"");
+        let (_, empty) = string_object_00d61470(&mut e, b"");
+        let (_, some) = string_object_00d61470(&mut e, b"a");
+        assert_eq!(e.call(0x00d6_1560, &args![object, empty]).u32(), 1);
+        assert_eq!(e.call(0x00d6_1560, &args![object, some]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00d617d0_removes_bytes_from_the_front() {
+        let mut e = Engine::new();
+        let (object, buffer) = string_object_00d61470(&mut e, b"abcdef");
+        e.call(0x00d6_17d0, &args![object, 2i32]);
+        assert_eq!(e.mem.u32(object + 4), 4);
+        assert_eq!(e.mem.bytes(buffer, 4), b"cdef");
+    }
+
+    #[test]
+    fn fn_00d617d0_ignores_a_count_of_zero_or_less() {
+        let mut e = Engine::new();
+        let (object, buffer) = string_object_00d61470(&mut e, b"abcdef");
+        e.call(0x00d6_17d0, &args![object, 0i32]);
+        e.call(0x00d6_17d0, &args![object, -3i32]);
+        assert_eq!(e.mem.u32(object + 4), 6);
+        assert_eq!(e.mem.bytes(buffer, 6), b"abcdef");
+    }
+
+    #[test]
+    fn fn_00d617d0_empties_the_length_without_moving_when_everything_is_removed() {
+        let mut e = Engine::new();
+        let (object, buffer) = string_object_00d61470(&mut e, b"abc");
+        e.call(0x00d6_17d0, &args![object, 5i32]);
+        assert_eq!(e.mem.i32(object + 4), -2);
+        assert_eq!(e.mem.bytes(buffer, 3), b"abc");
+    }
 
     const ALLOCATOR_FREE: u32 = 0x0900_0001;
     const ALLOCATOR_ALLOCATE: u32 = 0x0900_0002;

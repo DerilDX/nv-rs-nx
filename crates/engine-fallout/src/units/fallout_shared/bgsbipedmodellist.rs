@@ -148,12 +148,43 @@ pub fn bgs_biped_model_list_init_item(e: &mut Engine, this: Ptr<BGSBipedModelLis
     }
 }
 
+/// `00401170` (unnamed in the engine map): `thiscall` getter, the form type byte at `this + 4`.
+const FORM_TYPE_GETTER_00401170: u32 = 0x0040_1170;
+
+// Translated from 00475020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSBipedModelList::GetFormAsBipedModelList` (Xbox PDB): `cdecl`, one stack word. For a
+/// non-null form, answers its biped model list part by the form's type byte (`00401170`): type
+/// 0x18 at `form + 0x164`, type 0x28 at `form + 0xe0`; null for any other type or a null form.
+/// (The exe tests the form for null again inside each case; those tests cannot fail and are
+/// kept.)
+pub fn bgs_biped_model_list_get_form_as_biped_model_list(e: &mut Engine, form: Ptr) -> Ptr {
+    let mut result = 0;
+    if !form.is_null() {
+        let part_at = |offset: u32| {
+            if form.is_null() {
+                0
+            } else {
+                form.addr().wrapping_add(offset)
+            }
+        };
+        match e.call(FORM_TYPE_GETTER_00401170, &args![form]).u32() {
+            0x18 => result = part_at(0x164),
+            0x28 => result = part_at(0xe0),
+            _ => {}
+        }
+    }
+    Ptr::new(result)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00474da0,
-        bgs_biped_model_list_init_item(Ptr<BGSBipedModelList>, Ptr)
-    )]
+    vec![
+        entry!(0x0047_5020, bgs_biped_model_list_get_form_as_biped_model_list(Ptr) -> Ptr),
+        entry!(
+            0x00474da0,
+            bgs_biped_model_list_init_item(Ptr<BGSBipedModelList>, Ptr)
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -366,5 +397,33 @@ mod tests {
         e.call(0x00474da0, &args![object, owner]);
         assert_eq!(e.mem.u32(object + 4), 0x9000);
         assert!(calls_to(&e, GET_FORM_AS_BIPED_MODEL).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    #[test]
+    fn at_00475020_answers_the_part_each_type_selects() {
+        let mut e = Engine::new();
+        e.register(FORM_TYPE_GETTER_00401170, |e, a| {
+            e.mem.u32(a[0] + 4).into_ret()
+        });
+        for (kind, offset) in [(0x18u32, 0x164u32), (0x28, 0xe0)] {
+            let form = e.mem.alloc(0x180);
+            e.mem.set_u32(form + 4, kind);
+            assert_eq!(
+                e.call(0x0047_5020, &args![form]).u32(),
+                form + offset,
+                "{kind:#x}"
+            );
+        }
+        for kind in [0u32, 0x17, 0x19, 0x27, 0x29, 0xff] {
+            let form = e.mem.alloc(0x180);
+            e.mem.set_u32(form + 4, kind);
+            assert_eq!(e.call(0x0047_5020, &args![form]).u32(), 0, "{kind:#x}");
+        }
+        assert_eq!(e.call(0x0047_5020, &args![0u32]).u32(), 0);
     }
 }

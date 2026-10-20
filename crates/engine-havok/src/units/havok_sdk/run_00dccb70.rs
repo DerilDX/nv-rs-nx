@@ -436,6 +436,28 @@ pub fn fn_00dccf60(e: &mut Engine, this: u32, key: u32, result: u32) {
     }
 }
 
+// Translated from 00dccae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b7f70): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `13306480` (thiscall, `RET 4`) on `object + 0x4` with the one stack word `finishing`.
+pub fn fn_00dccae0(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x1330_6480, &args![object.addr() + 4, finishing]);
+    }
+}
+
+// Translated from 00dccb10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b7f74): cdecl with one stack word, `object`. Jumps to `13306880` (`hkStringPtr::~hkStringPtr` in Ghidra, fastcall, no stack word) with `object + 0x4` as `this`, so it answers what that answers.
+pub fn fn_00dccb10(e: &mut Engine, object: Ptr) -> u32 {
+    e.call(0x1330_6880, &args![object.addr() + 4]).u32()
+}
+
+// Translated from 00dccb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b7fb0): cdecl with one stack word (never read); only returns.
+pub fn fn_00dccb20(_e: &mut Engine, _unused_0: u32) {}
+
+// Translated from 00dccb40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b7ff4): cdecl with one stack word (never read); only returns.
+pub fn fn_00dccb40(_e: &mut Engine, _unused_0: u32) {}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -447,6 +469,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00dccdd0, fn_00dccdd0(u32, u32, f32, u32)),
         entry!(0x00dccf40, fn_00dccf40(u32, u32)),
         entry!(0x00dccf60, fn_00dccf60(u32, u32, u32)),
+        entry!(0x00dccae0, fn_00dccae0(Ptr, u32)),
+        entry!(0x00dccb10, fn_00dccb10(Ptr) -> u32),
+        entry!(0x00dccb20, fn_00dccb20(u32)),
+        entry!(0x00dccb40, fn_00dccb40(u32)),
     ]
 }
 
@@ -806,5 +832,61 @@ mod tests {
         assert_eq!(load_vec4(&e, result + 0x20), [8.0, 12.0, 16.0, 0.0]);
         assert_eq!(load_vec4(&e, result + 0x30), [4.0, 6.0, 8.0, 0.0]);
         assert_eq!(load_vec4(&e, result + 0x40), [2.0, 3.0, 4.0, 0.0]);
+    }
+}
+
+#[cfg(test)]
+mod tests_a07_gap {
+    use super::*;
+
+    /// The argument words of every call to `address` in the engine's call log (which is taken).
+    fn calls_to(e: &mut Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(called, _)| *called == address)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    #[test]
+    fn fn_00dccae0_runs_the_callee_unless_the_object_is_null() {
+        let mut e = Engine::new();
+        e.register(0x1330_6480, |_, _| Ret::default());
+        let object = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x00dc_cae0, &args![0u32, 7u32]);
+        e.call(0x00dc_cae0, &args![object, 7u32]);
+        assert_eq!(calls_to(&mut e, 0x1330_6480), vec![vec![object + 4, 7]]);
+    }
+
+    #[test]
+    fn fn_00dccb10_hands_the_object_to_the_callee() {
+        let mut e = Engine::new();
+        e.register(0x1330_6880, |_, _| Ret {
+            eax: 0x55,
+            ..Ret::default()
+        });
+        let object = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00dc_cb10, &args![object]).u32(), 0x55);
+        assert_eq!(calls_to(&mut e, 0x1330_6880), vec![vec![object + 4]]);
+    }
+
+    #[test]
+    fn fn_00dccb20_only_returns() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00dc_cb20, &args![0u32]).u32(), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00dccb40_only_returns() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00dc_cb40, &args![0u32]).u32(), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

@@ -235,8 +235,10 @@ pub fn hkp_bv_tree_agent_static_linear_cast(
 // Translated from 00d315a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpBvTreeAgent::linearCast` (Xbox PDB): forwards its five words to `staticLinearCast`
 /// (`00d30f50`).
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_bv_tree_agent_linear_cast(
     e: &mut Engine,
+    _this: u32,
     first: Ptr,
     second: Ptr,
     input: Ptr,
@@ -1377,9 +1379,79 @@ pub fn hkp_bv_tree_agent_get_penetrations(
     hkp_bv_tree_agent_static_get_penetrations(e, first, second, input, collector);
 }
 
+/// Allocates `size` bytes the way the agent create functions do: the thread's memory router
+/// (`00c85750`) has the allocator at `+0x10`; its virtual slot `4` hands out the block, whose
+/// size goes into the 16-bit word at `+4`.
+fn allocate_agent_block(e: &mut Engine, size: u32) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router.wrapping_add(0x10));
+    let block = e.vcall(allocator, 4, &args![size]).u32();
+    e.mem.set_u16(block.wrapping_add(4), size as u16);
+    block
+}
+
+// Translated from 00d2f9d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words of which only the last, `owner`, is read): a
+/// create function of the bounding-volume tree pair (code at `00d2f30f` stores its address in an
+/// agent record). Allocates the 0x40-byte agent (`allocate_agent_block`) and runs the
+/// `hkpBvTreeAgent` constructor `00d2f980` on it with `owner`. Answers the agent.
+pub fn fn_00d2f9d0(
+    e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    owner: u32,
+) -> u32 {
+    let agent = allocate_agent_block(e, 0x40);
+    fn_00d2f980(e, Ptr::new(agent), owner).addr()
+}
+
+// Translated from 00d2fa00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words of which only the last, `owner`, is read): the
+/// create function of the flipped bounding-volume tree agent (code at `00d2f2d6` stores its
+/// address in an agent record). Allocates the 0x40-byte agent (`allocate_agent_block`), runs the
+/// constructor `00d2f980` with `owner` and stores the vtable `010ce9bc`. Answers the agent.
+pub fn fn_00d2fa00(
+    e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    owner: u32,
+) -> u32 {
+    let agent = allocate_agent_block(e, 0x40);
+    fn_00d2f980(e, Ptr::new(agent), owner);
+    e.mem.set_u32(agent, 0x010c_e9bc);
+    agent
+}
+
+// Translated from 00d2fa40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `_unused_2`, `owner`; code at
+/// `00d31567` stores its address in an agent record): chooses between the two create functions
+/// by the float at `+0xa0` of the object each body's word at `+8` points to. When `body_b`'s is
+/// above `body_a`'s (`FCOMPP`, a NaN counts as not above) it makes the agent as `00d2f9d0` does;
+/// otherwise as `00d2fa00` does (the flipped agent, vtable `010ce9bc`). Answers the agent.
+pub fn fn_00d2fa40(e: &mut Engine, body_a: Ptr, body_b: Ptr, _unused_2: u32, owner: u32) -> u32 {
+    let motion_a = e.mem.u32(body_a.addr().wrapping_add(8));
+    let first = x87_load32(e.mem.u32(motion_a.wrapping_add(0xa0)));
+    let motion_b = e.mem.u32(body_b.addr().wrapping_add(8));
+    let second = x87_load32(e.mem.u32(motion_b.wrapping_add(0xa0)));
+    if second > first {
+        let agent = allocate_agent_block(e, 0x40);
+        fn_00d2f980(e, Ptr::new(agent), owner).addr()
+    } else {
+        let agent = allocate_agent_block(e, 0x40);
+        fn_00d2f980(e, Ptr::new(agent), owner);
+        e.mem.set_u32(agent, 0x010c_e9bc);
+        agent
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d2f9d0, fn_00d2f9d0(u32, u32, u32, u32) -> u32),
+        entry!(0x00d2fa00, fn_00d2fa00(u32, u32, u32, u32) -> u32),
+        entry!(0x00d2fa40, fn_00d2fa40(Ptr, Ptr, u32, u32) -> u32),
         entry!(
             0x00d2_f690,
             hkp_bv_tree_agent_calc_aabb_linear_cast(Ptr, Ptr, Ptr, Ptr)
@@ -1390,7 +1462,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d3_15a0,
-            hkp_bv_tree_agent_linear_cast(Ptr, Ptr, Ptr, u32, u32)
+            hkp_bv_tree_agent_linear_cast(u32, Ptr, Ptr, Ptr, u32, u32)
         ),
         entry!(0x00d2_f550, hkp_bv_tree_agent_cleanup(Ptr, u32)),
         entry!(0x00d2_f5a0, hkp_bv_tree_agent_invalidate_tim(Ptr, u32)),
@@ -1438,6 +1510,9 @@ mod movement_tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     /// An engine with the exe's data range and the import page mapped, as the tests run without the exe.
     fn test_engine() -> Engine {
@@ -1650,7 +1725,10 @@ mod movement_tests {
         e.mem.set_u32(second, owner);
         let input = e.mem.alloc(0x100);
         // The allocator the array would be freed through (never needed: inline storage).
-        e.call(0x00d3_15a0, &args![first, second, input, 1u32, 2u32]);
+        e.call(
+            0x00d3_15a0,
+            &args![VCALL_THIS, first, second, input, 1u32, 2u32],
+        );
         assert_eq!(calls(&log, 0x0900_0030).len(), 1);
         assert_eq!(calls(&log, 0x0900_0010).len(), 1);
         assert_eq!(e.mem.u32(stream + 4), records);
@@ -1662,6 +1740,92 @@ mod havok_agent_tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The memory router (`00c85750`) answers an object whose `+0x10` is an allocator; the
+    /// allocator's slot 4 hands out `block` and records the size it was asked for. The float the
+    /// constructor reads (`0104da48`) is set to 2.5.
+    fn install_allocator(e: &mut Engine, block: u32) -> std::rc::Rc<std::cell::RefCell<Vec<u32>>> {
+        let sizes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = std::rc::Rc::clone(&sizes);
+        e.map(block, 0x100);
+        e.map(0x0104_d000, 0x1000);
+        e.mem.set_f32(0x0104_da48, 2.5);
+        e.put_vtable(0x0900_0000, &[0, 0x0900_0100]);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, 0x0900_0000);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register_double(0x0900_0100, move |_, a| {
+            seen.borrow_mut().push(a[1]);
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        sizes
+    }
+
+    /// A body whose word at `+8` points to a motion with the float `value` at `+0xa0`.
+    fn body_with_float_00d2fa40(e: &mut Engine, value: f32) -> u32 {
+        let body = e.mem.alloc(0x10);
+        let motion = e.mem.alloc(0x100);
+        e.mem.set_f32(motion + 0xa0, value);
+        e.mem.set_u32(body + 8, motion);
+        body
+    }
+
+    #[test]
+    fn fn_00d2f9d0_allocates_the_agent_and_runs_the_constructor_with_the_owner() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        let agent = e.call(0x00d2_f9d0, &args![1u32, 2u32, 3u32, 0x88u32]).u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x40]);
+        assert_eq!(e.mem.u16(agent + 4), 0x40);
+        assert_eq!(e.mem.u32(agent + 8), 0x88);
+        assert_eq!(e.mem.u32(agent), AGENT_VTABLE);
+    }
+
+    #[test]
+    fn fn_00d2fa00_makes_the_flipped_agent() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        let agent = e.call(0x00d2_fa00, &args![1u32, 2u32, 3u32, 0x88u32]).u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x40]);
+        assert_eq!(e.mem.u32(agent + 8), 0x88);
+        assert_eq!(e.mem.u32(agent), 0x010c_e9bc);
+    }
+
+    #[test]
+    fn fn_00d2fa40_makes_the_plain_agent_when_the_second_float_is_larger() {
+        let mut e = Engine::new();
+        install_allocator(&mut e, 0x0800_0000);
+        let a = body_with_float_00d2fa40(&mut e, 1.0);
+        let b = body_with_float_00d2fa40(&mut e, 2.0);
+        let agent = e.call(0x00d2_fa40, &args![a, b, 0u32, 0x88u32]).u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(e.mem.u32(agent), AGENT_VTABLE);
+        assert_eq!(e.mem.u32(agent + 8), 0x88);
+    }
+
+    #[test]
+    fn fn_00d2fa40_makes_the_flipped_agent_when_the_second_float_is_not_larger() {
+        for (first, second) in [(2.0, 1.0), (2.0, 2.0), (f32::NAN, 1.0), (1.0, f32::NAN)] {
+            let mut e = Engine::new();
+            install_allocator(&mut e, 0x0800_0000);
+            let a = body_with_float_00d2fa40(&mut e, first);
+            let b = body_with_float_00d2fa40(&mut e, second);
+            let agent = e.call(0x00d2_fa40, &args![a, b, 0u32, 0x88u32]).u32();
+            assert_eq!(agent, 0x0800_0000);
+            assert_eq!(e.mem.u32(agent), 0x010c_e9bc);
+            assert_eq!(e.mem.u32(agent + 8), 0x88);
+        }
+    }
 
     type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
 

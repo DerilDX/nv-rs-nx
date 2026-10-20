@@ -78,13 +78,14 @@ const LIGHT_SCALE_0101DE30: u32 = 0x0101_de30;
 const SECONDS_PER_HOUR_01012640: u32 = 0x0101_2640;
 /// The number of worn-item slots `CastPermanentMagic` walks.
 const WORN_SLOT_COUNT: usize = 20;
-/// `UpdateMagic`'s jump table: for the animation group id minus `0x1a`
-/// (`0..=0x42`), 0 clears the caster's source and 1 keeps it.
-const NO_CLEAR_ANIMATION_GROUPS: [u8; 0x43] = [
-    0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1,
-    1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 0,
-];
+/// `UpdateMagic`'s switch on the animation group id minus `0x1a` (`0..=0x42`): the groups
+/// (as that offset) whose case skips the call that clears the caster's source.
+fn animation_group_skips_caster_call(offset: u32) -> bool {
+    matches!(
+        offset,
+        0 | 3 | 6 | 9 | 12 | 15 | 18 | 21 | 24 | 27 | 30 | 33 | 36 | 39 | 42 | 45 | 48 | 51 | 66
+    )
+}
 
 // ---- Run-time type descriptors given to `__RTDynamicCast` (RTTI names read
 // from the exe)
@@ -1421,7 +1422,7 @@ pub fn actor_update_magic(e: &mut Engine, this: Ptr, use_game_time: bool, use_fi
                 let group_data = e.call(FN_0048F7F0, &args![animation]).u32();
                 let group = e.call(FN_005F2420, &args![group_data]).u32();
                 let offset = group.wrapping_sub(0x1a);
-                if offset <= 0x42 && NO_CLEAR_ANIMATION_GROUPS[offset as usize] == 0 {
+                if animation_group_skips_caster_call(offset) {
                     keep = false;
                 }
             }
@@ -3532,7 +3533,6 @@ mod tests {
         start_log(&mut e);
         actor_update_magic(&mut e, actor, false, true);
         assert_eq!(calls(&e, caster_slot(0x40)).len(), 1);
-        assert_eq!(NO_CLEAR_ANIMATION_GROUPS.len(), 0x43);
     }
 
     #[test]

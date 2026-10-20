@@ -2673,11 +2673,11 @@ pub fn bhk_character_controller_character_interaction_callback(
     });
 }
 
-/// The collidable layers `CheckInsideOfObject` skips: `(layer - 4)` indexes this table
-/// from `00c6fd00` (0 = skip); layers below 4 or above 30 are tested.
-const INSIDE_LAYER_TESTED: [u8; 27] = [
-    0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0,
-];
+/// Whether `CheckInsideOfObject` tests a collidable of the layer `layer - 4` (`0..=0x1a`): the
+/// compiler's switch skips the other layers. Layers below 4 or above 30 are tested.
+fn inside_layer_tested(layer: u32) -> bool {
+    matches!(layer, 5 | 9..=11 | 14..=17 | 21..=24)
+}
 
 /// Three ray casts of `shape` (vtable slot 0x20) from the input at `frame + 0x20`, each
 /// first lifting both ends (z at `+0x28` and `+0x38`) by `step`; true at the first hit
@@ -2749,7 +2749,7 @@ pub fn bhk_character_controller_check_inside_of_object(e: &mut Engine, this: Ptr
                 .u32(entries.wrapping_add((index as u32).wrapping_mul(8)) + 4);
             if collidable != 0 {
                 let layer = (e.mem.u32(collidable + 0x1c) & 0x7f).wrapping_sub(4);
-                let tested = layer > 0x1a || INSIDE_LAYER_TESTED[layer as usize] != 0;
+                let tested = layer > 0x1a || inside_layer_tested(layer);
                 let shape = e.mem.u32(collidable);
                 if tested && matches!(e.mem.u32(shape + 0xc), 6 | 8 | 10) {
                     e.mem.set_u32(f + 0x80, 0x3f80_0000);

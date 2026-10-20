@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::bshavok::bhknicollisionobject::BhkNiCollisionObject;
 
 const HEAP_ALLOC: u32 = 0x00aa_3e40;
 const HEAP_FREE: u32 = 0x00aa_4060;
@@ -143,10 +144,11 @@ pub fn bhk_world_set_pick_count_override(e: &mut Engine, enabled: u8) {
 }
 
 // Translated from 00c66240 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `bhkWorld::SethkObject` (Xbox PDB): forwards `this` to
-/// `bhkRefObject::SethkObject` (`00c87c50`).
-pub fn bhk_world_set_hk_object(e: &mut Engine, this: Ptr<BhkWorld>) {
-    e.call(0x00c8_7c50, &args![this]);
+/// `bhkWorld::SethkObject` (Xbox PDB): a virtual method (`this` in `ECX`, one stack word, the
+/// Havok object) that is a tail `JMP` to `bhkRefObject::SethkObject` (`00c87c50`), so the callee
+/// gets `this` and the same stack word.
+pub fn bhk_world_set_hk_object(e: &mut Engine, this: Ptr<BhkWorld>, hk_object: u32) {
+    e.call(0x00c8_7c50, &args![this, hk_object]);
 }
 
 // Translated from 00c66300 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3647,6 +3649,355 @@ pub fn bhk_world_add_ov3(e: &mut Engine, this: Ptr<BhkWorld>, action: Ptr) {
     leave_scope(e, scope);
 }
 
+// Translated from 00c66250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afe90). An entry of
+/// the callback table at `011afe88`; `00c68900` calls such entries as `callback(collision_object,
+/// request)` (cdecl, two stack words) on the `bhkNiCollisionObject` that a scene node's `+0x1c`
+/// object answers to virtual slot `0x38`. This one reads only the first word: sets bit 6 (`0x40`,
+/// the `bReset` flag of `m_uFlags`) of the collision object.
+pub fn fn_00c66250(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, _unused_1: u32) {
+    let flags = e.get(collision_object, BhkNiCollisionObject::m_uFlags);
+    e.set(
+        collision_object,
+        BhkNiCollisionObject::m_uFlags,
+        flags | 0x40,
+    );
+}
+
+// Translated from 00c66260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afe94). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`). Sets
+/// bit 0 (the `bActive` flag of `m_uFlags`) when the word at `request + 0xc` is not 0, clears it
+/// otherwise; the other flag bits stay.
+pub fn fn_00c66260(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, request: Ptr) {
+    let value = e.mem.u32(request.addr().wrapping_add(0xc));
+    let flags = e.get(collision_object, BhkNiCollisionObject::m_uFlags);
+    if value != 0 {
+        e.set(
+            collision_object,
+            BhkNiCollisionObject::m_uFlags,
+            flags | 0x1,
+        );
+    } else {
+        e.set(
+            collision_object,
+            BhkNiCollisionObject::m_uFlags,
+            flags & 0xfffe,
+        );
+    }
+}
+
+// Translated from 00c66280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afe9c). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`). Calls
+/// the collision object's virtual slot `0xb0` with `(request[0xc], 0, request[0x10] != 0)` and
+/// answers the result. The Xbox PDB lists slot `0xb0` of `bhkNiCollisionObject` as
+/// `SetMotionType`.
+pub fn fn_00c66280(
+    e: &mut Engine,
+    collision_object: Ptr<BhkNiCollisionObject>,
+    request: Ptr,
+) -> u32 {
+    let flag = u32::from(e.mem.u32(request.addr().wrapping_add(0x10)) != 0);
+    let value = e.mem.u32(request.addr().wrapping_add(0xc));
+    e.vcall(collision_object.addr(), 0xb0, &args![value, 0u32, flag])
+        .u32()
+}
+
+// Translated from 00c662b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afea0). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`). Calls
+/// the collision object's virtual slot `0xc0` with `request[0xc] != 0` and answers the result. The
+/// Xbox PDB lists slot `0xc0` of `bhkNiCollisionObject` as `SetDebugDisplay`.
+pub fn fn_00c662b0(
+    e: &mut Engine,
+    collision_object: Ptr<BhkNiCollisionObject>,
+    request: Ptr,
+) -> u32 {
+    let flag = u32::from(e.mem.u32(request.addr().wrapping_add(0xc)) != 0);
+    e.vcall(collision_object.addr(), 0xc0, &args![flag]).u32()
+}
+
+// Translated from 00c662d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afebc). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`).
+/// Does nothing for a null object. Otherwise asks the object's virtual slot `0x3c` (the Xbox PDB
+/// lists `IsBhkBlendCollisionObject` there) for a second object and, when that is not null,
+/// tail-jumps to `00c81b40` (when the word at `request + 0xc` is 0) or to `00c81ae0` (otherwise),
+/// both thiscall on that second object with no stack words.
+pub fn fn_00c662d0(e: &mut Engine, collision_object: Ptr, request: Ptr) {
+    if collision_object.is_null() {
+        return;
+    }
+    let blend = e.vcall(collision_object.addr(), 0x3c, &args![]).u32();
+    if blend == 0 {
+        return;
+    }
+    if e.mem.u32(request.addr().wrapping_add(0xc)) == 0 {
+        e.call(0x00c8_1b40, &args![blend]);
+    } else {
+        e.call(0x00c8_1ae0, &args![blend]);
+    }
+}
+
+// Translated from 00c67110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afe8c). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`).
+/// Reads only the first word: when the world object (`spWorldObject`, `+0x10`) is not null,
+/// tail-jumps to its virtual slot `0xa0` (the Xbox PDB lists `Remove` there for `bhkWorldObject`).
+pub fn fn_00c67110(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, _unused_1: u32) {
+    let world_object = e.get(collision_object, BhkNiCollisionObject::spWorldObject);
+    if world_object.is_null() {
+        return;
+    }
+    e.vcall(world_object.addr(), 0xa0, &args![]);
+}
+
+// Translated from 00c67130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afec0). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`). When the
+/// world object (`spWorldObject`, `+0x10`) is not null, calls `00c85d20` (thiscall on it, `RET 4`)
+/// with `request[0xc] != 0`.
+pub fn fn_00c67130(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, request: Ptr) {
+    let world_object = e.get(collision_object, BhkNiCollisionObject::spWorldObject);
+    if world_object.is_null() {
+        return;
+    }
+    let flag = u32::from(e.mem.u32(request.addr().wrapping_add(0xc)) != 0);
+    e.call(0x00c8_5d20, &args![world_object, flag]);
+}
+
+// Translated from 00c67150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afec4). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`). Asks
+/// the world object (`spWorldObject`, `+0x10`, when not null) for its object through virtual slot
+/// `0x40` (the Xbox PDB lists `IsBhkRigidBody` there) and, when that is not null, copies the float
+/// at `request + 0xc` to `+0x94` of the Havok object at `+8` of the answer (a `FLD`/`FSTP` copy,
+/// which quiets a signalling NaN).
+pub fn fn_00c67150(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, request: Ptr) {
+    let world_object = e.get(collision_object, BhkNiCollisionObject::spWorldObject);
+    if world_object.is_null() {
+        return;
+    }
+    let body = e.vcall(world_object.addr(), 0x40, &args![]).u32();
+    if body == 0 {
+        return;
+    }
+    let havok_object = e.mem.u32(body.wrapping_add(8));
+    let value = x87_quiet_bits(e.mem.u32(request.addr().wrapping_add(0xc)));
+    e.mem.set_u32(havok_object.wrapping_add(0x94), value);
+}
+
+// Translated from 00c67180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afec8). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`). Asks
+/// the world object (`spWorldObject`, `+0x10`, when not null) for its object through virtual slot
+/// `0x40` (the Xbox PDB lists `IsBhkRigidBody` there) and, when that is not null, copies the float
+/// at `request + 0xc` to `+0x90` of the Havok object at `+8` of the answer (a `FLD`/`FSTP` copy,
+/// which quiets a signalling NaN).
+pub fn fn_00c67180(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, request: Ptr) {
+    let world_object = e.get(collision_object, BhkNiCollisionObject::spWorldObject);
+    if world_object.is_null() {
+        return;
+    }
+    let body = e.vcall(world_object.addr(), 0x40, &args![]).u32();
+    if body == 0 {
+        return;
+    }
+    let havok_object = e.mem.u32(body.wrapping_add(8));
+    let value = x87_quiet_bits(e.mem.u32(request.addr().wrapping_add(0xc)));
+    e.mem.set_u32(havok_object.wrapping_add(0x90), value);
+}
+
+// Translated from 00c671b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afeb8). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`). Does
+/// nothing for a null collision object. Otherwise asks the world object (`spWorldObject`, `+0x10`,
+/// when not null) for its object through virtual slot `0x40` (the Xbox PDB lists `IsBhkRigidBody`
+/// there) and, when that is not null, calls `00561580` (thiscall on it, `RET 4`) with
+/// `request[0xc] != 0`.
+pub fn fn_00c671b0(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, request: Ptr) {
+    if collision_object.is_null() {
+        return;
+    }
+    let world_object = e.get(collision_object, BhkNiCollisionObject::spWorldObject);
+    if world_object.is_null() {
+        return;
+    }
+    let body = e.vcall(world_object.addr(), 0x40, &args![]).u32();
+    if body == 0 {
+        return;
+    }
+    let flag = u32::from(e.mem.u32(request.addr().wrapping_add(0xc)) != 0);
+    e.call(0x0056_1580, &args![body, flag]);
+}
+
+// Translated from 00c671f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afe98; Ghidra's
+/// listing of this range is misaligned, the bytes were decoded by hand). An entry of the callback
+/// table at `011afe88` (`callback(collision_object, request)`, see `00c66250`); it reads only the
+/// first word. Takes the scene object (`m_pkSceneObject`, `+8`) and does nothing when it is null.
+/// Otherwise the object held at `+0x1c` of the scene object (when not null) is released
+/// (`InterlockedDecrement` of its count at `+4`; virtual slot `4` when the count reaches 0) and
+/// the field is set to null. The exe then reads the field again and, when it is not null and that
+/// object's `+8` is not the scene object, calls its virtual slot `0x8c` with the scene object;
+/// the field was just null, so that last step is never taken.
+pub fn fn_00c671f0(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, _unused_1: u32) {
+    let scene_object = e.get(collision_object, BhkNiCollisionObject::m_pkSceneObject);
+    if scene_object.is_null() {
+        return;
+    }
+    let me = scene_object.addr();
+    let held = e.mem.u32(me.wrapping_add(0x1c));
+    if held != 0 {
+        if e.call(0x00fd_f1c4, &args![held.wrapping_add(4)]).u32() == 0 {
+            e.vcall(held, 4, &args![]);
+        }
+        e.mem.set_u32(me.wrapping_add(0x1c), 0);
+    }
+    let again = e.mem.u32(me.wrapping_add(0x1c));
+    if again != 0 && e.mem.u32(again.wrapping_add(8)) != me {
+        e.vcall(again, 0x8c, &args![me]);
+    }
+}
+
+// Translated from 00c67240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afea4). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`). When the
+/// world object (`spWorldObject`, `+0x10`) is not null, calls `00c85ce0` (thiscall on it, `RET 4`)
+/// with the word at `request + 0xc`.
+pub fn fn_00c67240(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, request: Ptr) {
+    let world_object = e.get(collision_object, BhkNiCollisionObject::spWorldObject);
+    if world_object.is_null() {
+        return;
+    }
+    let value = e.mem.u32(request.addr().wrapping_add(0xc));
+    e.call(0x00c8_5ce0, &args![world_object, value]);
+}
+
+// Translated from 00c67260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afea8). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`). Asks
+/// the world object (`spWorldObject`, `+0x10`, when not null) for its object through virtual slot
+/// `0x40` (the Xbox PDB lists `IsBhkRigidBody` there). When that is not null: if its Havok object
+/// (`+8`) is not null, calls `00c9bff0` (thiscall on the Havok object, `RET 4`) with the address of
+/// the stack word that holds `collision_object` (the first argument slot itself) and, when the byte
+/// it answers the address of is not 0, increments the word at `request + 0xc`; in every case it
+/// then sets the byte at `request + 4` to 0.
+pub fn fn_00c67260(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, request: Ptr) {
+    let world_object = e.get(collision_object, BhkNiCollisionObject::spWorldObject);
+    if world_object.is_null() {
+        return;
+    }
+    let body = e.vcall(world_object.addr(), 0x40, &args![]).u32();
+    if body == 0 {
+        return;
+    }
+    let havok_object = e.mem.u32(body.wrapping_add(8));
+    if havok_object != 0 {
+        let found = e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), collision_object.addr());
+            e.call(0x00c9_bff0, &args![havok_object, slot]).u32()
+        });
+        if e.mem.u8(found) != 0 {
+            let count = e.mem.u32(request.addr().wrapping_add(0xc));
+            e.mem
+                .set_u32(request.addr().wrapping_add(0xc), count.wrapping_add(1));
+        }
+    }
+    e.mem.set_u8(request.addr().wrapping_add(4), 0);
+}
+
+// Translated from 00c672a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afeac). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`).
+/// Changes the low seven bits of the word at `+0x2c` of the world object's Havok object (`+8` of
+/// `spWorldObject`; read as 0 when there is none). With `new = request[0x10]` and `expected =
+/// request[0xc]`: does nothing when `new` equals the current low seven bits, or when `expected`
+/// is not 0 and differs from them. Otherwise, with a Havok object, it calls `00a29680` twice on the
+/// world object (thiscall, no stack words) and stores the word with its low seven bits replaced by
+/// `new`'s; in every case it ends by tail-jumping to the world object's virtual slot `0xc4` (the
+/// Xbox PDB lists `UpdateCFilter` there for `bhkWorldObject`).
+pub fn fn_00c672a0(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, request: Ptr) {
+    let world_object = e
+        .get(collision_object, BhkNiCollisionObject::spWorldObject)
+        .addr();
+    let new_bits = e.mem.u32(request.addr().wrapping_add(0x10));
+    let expected = e.mem.u32(request.addr().wrapping_add(0xc));
+    let havok_object = e.mem.u32(world_object.wrapping_add(8));
+    let mut word = 0;
+    if havok_object != 0 {
+        let member = havok_object.wrapping_add(0x10);
+        if member != 0 {
+            word = e.mem.u32(member.wrapping_add(0x1c));
+        }
+    }
+    let current = word & 0x7f;
+    if new_bits == current {
+        return;
+    }
+    if expected != 0 && expected != current {
+        return;
+    }
+    let updated = ((word ^ new_bits) & 0x7f) ^ word;
+    if havok_object != 0 {
+        e.call(0x00a2_9680, &args![world_object]);
+        let member = havok_object.wrapping_add(0x10);
+        e.call(0x00a2_9680, &args![world_object]);
+        if member != 0 {
+            e.mem.set_u32(member.wrapping_add(0x1c), updated);
+        }
+    }
+    e.vcall(world_object, 0xc4, &args![]);
+}
+
+// Translated from 00c68990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afecc). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`). Asks
+/// the world object (`spWorldObject`, `+0x10`, when not null) for its object through virtual slot
+/// `0x40` (the Xbox PDB lists `IsBhkRigidBody` there) and, when that is not null, sets bit 6
+/// (`0x40`) of the word at its `+0x10` when the word at `request + 0xc` is not 0, clears it
+/// otherwise.
+pub fn fn_00c68990(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, request: Ptr) {
+    let world_object = e.get(collision_object, BhkNiCollisionObject::spWorldObject);
+    if world_object.is_null() {
+        return;
+    }
+    let body = e.vcall(world_object.addr(), 0x40, &args![]).u32();
+    if body == 0 {
+        return;
+    }
+    let flags = e.mem.u32(body.wrapping_add(0x10));
+    if e.mem.u32(request.addr().wrapping_add(0xc)) != 0 {
+        e.mem.set_u32(body.wrapping_add(0x10), flags | 0x40);
+    } else {
+        e.mem.set_u32(body.wrapping_add(0x10), flags & 0xffff_ffbf);
+    }
+}
+
+// Translated from 00c689c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (Ghidra never created it; ghidra_gaps.tsv: data 011afeb0). An entry of
+/// the callback table at `011afe88` (`callback(collision_object, request)`, see `00c66250`); it
+/// reads only the first word. Asks the world object (`spWorldObject`, `+0x10`, when not null) for
+/// its object through virtual slot `0x40` (the Xbox PDB lists `IsBhkRigidBody` there). When that is
+/// not null and its Havok object (`+8`) is null or has the byte `5` at `+0xe8`, calls the answer's
+/// virtual slot `0xe4` with the argument `4`.
+pub fn fn_00c689c0(e: &mut Engine, collision_object: Ptr<BhkNiCollisionObject>, _unused_1: u32) {
+    let world_object = e.get(collision_object, BhkNiCollisionObject::spWorldObject);
+    if world_object.is_null() {
+        return;
+    }
+    let body = e.vcall(world_object.addr(), 0x40, &args![]).u32();
+    if body == 0 {
+        return;
+    }
+    let havok_object = e.mem.u32(body.wrapping_add(8));
+    if havok_object != 0 && e.mem.u8(havok_object.wrapping_add(0xe8)) != 5 {
+        return;
+    }
+    e.vcall(body, 0xe4, &args![4u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3656,7 +4007,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c6_61d0, bhk_world_set_update_mode(u32)),
         entry!(0x00c6_6210, bhk_world_reset_step_accumulators()),
         entry!(0x00c6_6230, bhk_world_set_pick_count_override(u8)),
-        entry!(0x00c6_6240, bhk_world_set_hk_object(Ptr<BhkWorld>)),
+        entry!(0x00c6_6240, bhk_world_set_hk_object(Ptr<BhkWorld>, u32)),
         entry!(0x00c6_6300, bhk_world_increment_batch_add(Ptr)),
         entry!(0x00c6_6310, bhk_world_increment_batch_remove(Ptr)),
         entry!(
@@ -3825,6 +4176,28 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c6_b0a0, bhk_world_add(Ptr<BhkWorld>, Ptr)),
         entry!(0x00c6_b320, bhk_world_add_ov2(Ptr<BhkWorld>, Ptr)),
         entry!(0x00c6_b3c0, bhk_world_add_ov3(Ptr<BhkWorld>, Ptr)),
+        entry!(0x00c6_6250, fn_00c66250(Ptr<BhkNiCollisionObject>, u32)),
+        entry!(0x00c6_6260, fn_00c66260(Ptr<BhkNiCollisionObject>, Ptr)),
+        entry!(
+            0x00c6_6280,
+            fn_00c66280(Ptr<BhkNiCollisionObject>, Ptr) -> u32
+        ),
+        entry!(
+            0x00c6_62b0,
+            fn_00c662b0(Ptr<BhkNiCollisionObject>, Ptr) -> u32
+        ),
+        entry!(0x00c6_62d0, fn_00c662d0(Ptr, Ptr)),
+        entry!(0x00c6_7110, fn_00c67110(Ptr<BhkNiCollisionObject>, u32)),
+        entry!(0x00c6_7130, fn_00c67130(Ptr<BhkNiCollisionObject>, Ptr)),
+        entry!(0x00c6_7150, fn_00c67150(Ptr<BhkNiCollisionObject>, Ptr)),
+        entry!(0x00c6_7180, fn_00c67180(Ptr<BhkNiCollisionObject>, Ptr)),
+        entry!(0x00c6_71b0, fn_00c671b0(Ptr<BhkNiCollisionObject>, Ptr)),
+        entry!(0x00c6_71f0, fn_00c671f0(Ptr<BhkNiCollisionObject>, u32)),
+        entry!(0x00c6_7240, fn_00c67240(Ptr<BhkNiCollisionObject>, Ptr)),
+        entry!(0x00c6_7260, fn_00c67260(Ptr<BhkNiCollisionObject>, Ptr)),
+        entry!(0x00c6_72a0, fn_00c672a0(Ptr<BhkNiCollisionObject>, Ptr)),
+        entry!(0x00c6_8990, fn_00c68990(Ptr<BhkNiCollisionObject>, Ptr)),
+        entry!(0x00c6_89c0, fn_00c689c0(Ptr<BhkNiCollisionObject>, u32)),
     ]
 }
 
@@ -3924,10 +4297,10 @@ mod tests {
         let mut e = engine();
         let this: Ptr<BhkWorld> = e.new_object();
         e.register_double(0x00c8_7c50, move |_, a| {
-            assert_eq!(a, [this.addr()]);
+            assert_eq!(a, [this.addr(), 0x5555_0001]);
             Ret::default()
         });
-        e.call(0x00c6_6240, &args![this]);
+        e.call(0x00c6_6240, &args![this, 0x5555_0001u32]);
     }
 
     #[test]
@@ -8146,5 +8519,469 @@ mod tests {
         profile_record(&mut e, 0x1234);
         assert_eq!(e.mem.u32(stream + 0x20), 0x1234);
         assert_eq!(e.mem.u32(stream + 4), stream + 0x2c);
+    }
+}
+
+#[cfg(test)]
+mod a05_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type CallLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// A double at `address` that records the argument words of each call and answers `answer`.
+    fn recording_double(e: &mut Engine, address: u32, answer: u32) -> CallLog {
+        let log: CallLog = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&log);
+        e.register_double(address, move |_, a| {
+            seen.borrow_mut().push(a.to_vec());
+            Ret {
+                eax: answer,
+                ..Ret::default()
+            }
+        });
+        log
+    }
+
+    /// An object whose vtable (zeroed, 0x100 bytes) holds `0x7000_0000 + slot` in each of `slots`.
+    fn object_with_slots(e: &mut Engine, slots: &[u32]) -> u32 {
+        let table = e.mem.alloc(0x100);
+        for slot in slots {
+            e.mem.set_u32(table + slot, 0x7000_0000 + slot);
+        }
+        let object = e.mem.alloc(0x20);
+        e.mem.set_u32(object, table);
+        object
+    }
+
+    /// A `bhkNiCollisionObject` (flags at `+0xc`, world object at `+0x10`).
+    fn new_collision_object(e: &mut Engine, flags: u16, world_object: u32) -> u32 {
+        let object = e.mem.alloc(0x14);
+        e.mem.set_u16(object + 0xc, flags);
+        e.mem.set_u32(object + 0x10, world_object);
+        object
+    }
+
+    /// A callback request record of five words.
+    fn new_request(e: &mut Engine, words: [u32; 5]) -> u32 {
+        let request = e.mem.alloc(0x14);
+        for (index, word) in words.iter().enumerate() {
+            e.mem.set_u32(request + 4 * index as u32, *word);
+        }
+        request
+    }
+
+    /// `(collision_object, body, havok_object)`: a collision object whose world object answers
+    /// `body` to slot `0x40`, and `body` holds `havok_object` at `+8`.
+    fn body_in_world(e: &mut Engine) -> (u32, u32, u32) {
+        let havok_object = e.mem.alloc(0x100);
+        let body = e.mem.alloc(0x40);
+        e.mem.set_u32(body + 8, havok_object);
+        let world_object = object_with_slots(e, &[0x40]);
+        e.register_double(0x7000_0040, move |_, _| Ret {
+            eax: body,
+            ..Ret::default()
+        });
+        let collision_object = new_collision_object(e, 0, world_object);
+        (collision_object, body, havok_object)
+    }
+
+    #[test]
+    fn fn_00c66250_sets_the_reset_flag() {
+        let mut e = Engine::new();
+        let collision_object = new_collision_object(&mut e, 0x8001, 0);
+        e.call(0x00c6_6250, &args![collision_object, 0u32]);
+        assert_eq!(e.mem.u16(collision_object + 0xc), 0x8041);
+    }
+
+    #[test]
+    fn fn_00c66260_sets_or_clears_the_active_flag() {
+        let mut e = Engine::new();
+        let collision_object = new_collision_object(&mut e, 0x8040, 0);
+        let request = new_request(&mut e, [0, 0, 0, 5, 0]);
+        e.call(0x00c6_6260, &args![collision_object, request]);
+        assert_eq!(e.mem.u16(collision_object + 0xc), 0x8041);
+        e.mem.set_u32(request + 0xc, 0);
+        e.call(0x00c6_6260, &args![collision_object, request]);
+        assert_eq!(e.mem.u16(collision_object + 0xc), 0x8040);
+    }
+
+    #[test]
+    fn fn_00c66280_calls_slot_b0_with_the_value_zero_and_the_flag() {
+        let mut e = Engine::new();
+        let collision_object = object_with_slots(&mut e, &[0xb0]);
+        let log = recording_double(&mut e, 0x7000_00b0, 0x99);
+        let request = new_request(&mut e, [0, 0, 0, 7, 9]);
+        assert_eq!(
+            e.call(0x00c6_6280, &args![collision_object, request]).u32(),
+            0x99
+        );
+        e.mem.set_u32(request + 0x10, 0);
+        e.call(0x00c6_6280, &args![collision_object, request]);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                vec![collision_object, 7, 0, 1],
+                vec![collision_object, 7, 0, 0]
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00c662b0_calls_slot_c0_with_the_flag() {
+        let mut e = Engine::new();
+        let collision_object = object_with_slots(&mut e, &[0xc0]);
+        let log = recording_double(&mut e, 0x7000_00c0, 0x98);
+        let request = new_request(&mut e, [0, 0, 0, 3, 0]);
+        assert_eq!(
+            e.call(0x00c6_62b0, &args![collision_object, request]).u32(),
+            0x98
+        );
+        e.mem.set_u32(request + 0xc, 0);
+        e.call(0x00c6_62b0, &args![collision_object, request]);
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![collision_object, 1], vec![collision_object, 0]]
+        );
+    }
+
+    #[test]
+    fn fn_00c662d0_runs_the_off_or_on_step_on_the_blend_object() {
+        let mut e = Engine::new();
+        let collision_object = object_with_slots(&mut e, &[0x3c]);
+        recording_double(&mut e, 0x7000_003c, 0x8000);
+        let off = recording_double(&mut e, 0x00c8_1b40, 0);
+        let on = recording_double(&mut e, 0x00c8_1ae0, 0);
+        let request = new_request(&mut e, [0, 0, 0, 0, 0]);
+        e.call(0x00c6_62d0, &args![collision_object, request]);
+        assert_eq!((off.borrow().len(), on.borrow().len()), (1, 0));
+        assert_eq!(*off.borrow(), vec![vec![0x8000]]);
+        e.mem.set_u32(request + 0xc, 1);
+        e.call(0x00c6_62d0, &args![collision_object, request]);
+        assert_eq!(*on.borrow(), vec![vec![0x8000]]);
+        // A null object does nothing.
+        e.call(0x00c6_62d0, &args![0u32, request]);
+        assert_eq!((off.borrow().len(), on.borrow().len()), (1, 1));
+    }
+
+    #[test]
+    fn fn_00c662d0_does_nothing_without_a_blend_object() {
+        let mut e = Engine::new();
+        let collision_object = object_with_slots(&mut e, &[0x3c]);
+        recording_double(&mut e, 0x7000_003c, 0);
+        let off = recording_double(&mut e, 0x00c8_1b40, 0);
+        let on = recording_double(&mut e, 0x00c8_1ae0, 0);
+        let request = new_request(&mut e, [0, 0, 0, 0, 0]);
+        e.call(0x00c6_62d0, &args![collision_object, request]);
+        assert!(off.borrow().is_empty() && on.borrow().is_empty());
+    }
+
+    #[test]
+    fn fn_00c67110_calls_slot_a0_of_the_world_object() {
+        let mut e = Engine::new();
+        let world_object = object_with_slots(&mut e, &[0xa0]);
+        let log = recording_double(&mut e, 0x7000_00a0, 0);
+        let with_world = new_collision_object(&mut e, 0, world_object);
+        let without_world = new_collision_object(&mut e, 0, 0);
+        e.call(0x00c6_7110, &args![without_world, 0u32]);
+        assert!(log.borrow().is_empty());
+        e.call(0x00c6_7110, &args![with_world, 0u32]);
+        assert_eq!(*log.borrow(), vec![vec![world_object]]);
+    }
+
+    #[test]
+    fn fn_00c67130_hands_the_flag_to_the_world_object() {
+        let mut e = Engine::new();
+        let log = recording_double(&mut e, 0x00c8_5d20, 0);
+        let with_world = new_collision_object(&mut e, 0, 0x6000);
+        let without_world = new_collision_object(&mut e, 0, 0);
+        let request = new_request(&mut e, [0, 0, 0, 4, 0]);
+        e.call(0x00c6_7130, &args![without_world, request]);
+        assert!(log.borrow().is_empty());
+        e.call(0x00c6_7130, &args![with_world, request]);
+        e.mem.set_u32(request + 0xc, 0);
+        e.call(0x00c6_7130, &args![with_world, request]);
+        assert_eq!(*log.borrow(), vec![vec![0x6000, 1], vec![0x6000, 0]]);
+    }
+
+    #[test]
+    fn fn_00c67150_copies_the_float_to_offset_94_of_the_havok_object() {
+        let mut e = Engine::new();
+        let (collision_object, _, havok_object) = body_in_world(&mut e);
+        let request = new_request(&mut e, [0, 0, 0, 1.5f32.to_bits(), 0]);
+        e.call(0x00c6_7150, &args![collision_object, request]);
+        assert_eq!(e.mem.u32(havok_object + 0x94), 1.5f32.to_bits());
+        assert_eq!(e.mem.u32(havok_object + 0x90), 0);
+        // A signalling NaN comes out quiet.
+        e.mem.set_u32(request + 0xc, 0x7f80_0001);
+        e.call(0x00c6_7150, &args![collision_object, request]);
+        assert_eq!(e.mem.u32(havok_object + 0x94), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn fn_00c67150_needs_a_world_object_and_a_body() {
+        let mut e = Engine::new();
+        let request = new_request(&mut e, [0, 0, 0, 1.5f32.to_bits(), 0]);
+        let without_world = new_collision_object(&mut e, 0, 0);
+        e.call(0x00c6_7150, &args![without_world, request]);
+        let world_object = object_with_slots(&mut e, &[0x40]);
+        recording_double(&mut e, 0x7000_0040, 0);
+        let without_body = new_collision_object(&mut e, 0, world_object);
+        e.call(0x00c6_7150, &args![without_body, request]);
+    }
+
+    #[test]
+    fn fn_00c67180_copies_the_float_to_offset_90_of_the_havok_object() {
+        let mut e = Engine::new();
+        let (collision_object, _, havok_object) = body_in_world(&mut e);
+        let request = new_request(&mut e, [0, 0, 0, 2.5f32.to_bits(), 0]);
+        e.call(0x00c6_7180, &args![collision_object, request]);
+        assert_eq!(e.mem.u32(havok_object + 0x90), 2.5f32.to_bits());
+        assert_eq!(e.mem.u32(havok_object + 0x94), 0);
+        e.mem.set_u32(request + 0xc, 0x7f80_0001);
+        e.call(0x00c6_7180, &args![collision_object, request]);
+        assert_eq!(e.mem.u32(havok_object + 0x90), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn fn_00c67180_needs_a_world_object_and_a_body() {
+        let mut e = Engine::new();
+        let request = new_request(&mut e, [0, 0, 0, 1.5f32.to_bits(), 0]);
+        let without_world = new_collision_object(&mut e, 0, 0);
+        e.call(0x00c6_7180, &args![without_world, request]);
+        let world_object = object_with_slots(&mut e, &[0x40]);
+        recording_double(&mut e, 0x7000_0040, 0);
+        let without_body = new_collision_object(&mut e, 0, world_object);
+        e.call(0x00c6_7180, &args![without_body, request]);
+    }
+
+    #[test]
+    fn fn_00c671b0_hands_the_flag_to_the_body() {
+        let mut e = Engine::new();
+        let log = recording_double(&mut e, 0x0056_1580, 0);
+        let (collision_object, _, _) = body_in_world(&mut e);
+        let request = new_request(&mut e, [0, 0, 0, 6, 0]);
+        e.call(0x00c6_71b0, &args![collision_object, request]);
+        e.mem.set_u32(request + 0xc, 0);
+        e.call(0x00c6_71b0, &args![collision_object, request]);
+        let calls = log.borrow();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0][1..], [1]);
+        assert_eq!(calls[1][1..], [0]);
+        assert_eq!(calls[0][0], calls[1][0]);
+    }
+
+    #[test]
+    fn fn_00c671b0_does_nothing_without_a_collision_object_world_object_or_body() {
+        let mut e = Engine::new();
+        let log = recording_double(&mut e, 0x0056_1580, 0);
+        let request = new_request(&mut e, [0, 0, 0, 6, 0]);
+        e.call(0x00c6_71b0, &args![0u32, request]);
+        let without_world = new_collision_object(&mut e, 0, 0);
+        e.call(0x00c6_71b0, &args![without_world, request]);
+        let world_object = object_with_slots(&mut e, &[0x40]);
+        recording_double(&mut e, 0x7000_0040, 0);
+        let without_body = new_collision_object(&mut e, 0, world_object);
+        e.call(0x00c6_71b0, &args![without_body, request]);
+        assert!(log.borrow().is_empty());
+    }
+
+    #[test]
+    fn fn_00c671f0_releases_the_object_held_by_the_scene_object() {
+        for (count, deleted) in [(1u32, true), (2, false)] {
+            let mut e = Engine::new();
+            e.register(0x00fd_f1c4, |e, a| {
+                let value = e.mem.u32(a[0]).wrapping_sub(1);
+                e.mem.set_u32(a[0], value);
+                Ret {
+                    eax: value,
+                    ..Ret::default()
+                }
+            });
+            let held = object_with_slots(&mut e, &[4]);
+            e.mem.set_u32(held + 4, count);
+            let log = recording_double(&mut e, 0x7000_0004, 0);
+            let scene_object = e.mem.alloc(0x40);
+            e.mem.set_u32(scene_object + 0x1c, held);
+            let collision_object = new_collision_object(&mut e, 0, 0);
+            e.mem.set_u32(collision_object + 8, scene_object);
+            e.call(0x00c6_71f0, &args![collision_object, 0u32]);
+            assert_eq!(e.mem.u32(scene_object + 0x1c), 0);
+            assert_eq!(e.mem.u32(held + 4), count - 1);
+            assert_eq!(
+                *log.borrow(),
+                if deleted { vec![vec![held]] } else { vec![] }
+            );
+        }
+    }
+
+    #[test]
+    fn fn_00c671f0_leaves_an_empty_scene_object_and_a_null_scene_object_alone() {
+        let mut e = Engine::new();
+        let scene_object = e.mem.alloc(0x40);
+        let collision_object = new_collision_object(&mut e, 0, 0);
+        e.mem.set_u32(collision_object + 8, scene_object);
+        e.call(0x00c6_71f0, &args![collision_object, 0u32]);
+        assert_eq!(e.mem.u32(scene_object + 0x1c), 0);
+        e.mem.set_u32(collision_object + 8, 0);
+        e.call(0x00c6_71f0, &args![collision_object, 0u32]);
+    }
+
+    #[test]
+    fn fn_00c67240_hands_the_value_to_the_world_object() {
+        let mut e = Engine::new();
+        let log = recording_double(&mut e, 0x00c8_5ce0, 0);
+        let with_world = new_collision_object(&mut e, 0, 0x6000);
+        let without_world = new_collision_object(&mut e, 0, 0);
+        let request = new_request(&mut e, [0, 0, 0, 0x1234, 0]);
+        e.call(0x00c6_7240, &args![without_world, request]);
+        assert!(log.borrow().is_empty());
+        e.call(0x00c6_7240, &args![with_world, request]);
+        assert_eq!(*log.borrow(), vec![vec![0x6000, 0x1234]]);
+    }
+
+    #[test]
+    fn fn_00c67260_counts_when_the_lookup_answers_a_set_byte() {
+        for (byte, counted) in [(1u8, 1u32), (0, 0)] {
+            let mut e = Engine::new();
+            let (collision_object, _, havok_object) = body_in_world(&mut e);
+            let answer = e.mem.alloc(4);
+            e.mem.set_u8(answer, byte);
+            let seen: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(Vec::new()));
+            let log = Rc::clone(&seen);
+            e.register_double(0x00c9_bff0, move |e, a| {
+                log.borrow_mut().push((a[0], e.mem.u32(a[1])));
+                Ret {
+                    eax: answer,
+                    ..Ret::default()
+                }
+            });
+            let request = new_request(&mut e, [0, 0x0101, 0, 5, 0]);
+            e.call(0x00c6_7260, &args![collision_object, request]);
+            assert_eq!(*seen.borrow(), vec![(havok_object, collision_object)]);
+            assert_eq!(e.mem.u32(request + 0xc), 5 + counted);
+            assert_eq!(e.mem.u8(request + 4), 0);
+            // The byte next to it is not touched.
+            assert_eq!(e.mem.u8(request + 5), 1);
+        }
+    }
+
+    #[test]
+    fn fn_00c67260_without_a_havok_object_only_clears_the_request_byte() {
+        let mut e = Engine::new();
+        let (collision_object, body, _) = body_in_world(&mut e);
+        e.mem.set_u32(body + 8, 0);
+        let log = recording_double(&mut e, 0x00c9_bff0, 0);
+        let request = new_request(&mut e, [0, 1, 0, 5, 0]);
+        e.call(0x00c6_7260, &args![collision_object, request]);
+        assert!(log.borrow().is_empty());
+        assert_eq!(e.mem.u32(request + 0xc), 5);
+        assert_eq!(e.mem.u8(request + 4), 0);
+    }
+
+    #[test]
+    fn fn_00c672a0_replaces_the_low_seven_bits_and_updates_the_filter() {
+        for (expected, new_bits, changes) in [
+            (0u32, 0x2au32, true),
+            (0x15, 0x2a, true),
+            (0x20, 0x2a, false),
+            (0, 0x15, false),
+        ] {
+            let mut e = Engine::new();
+            let world_object = object_with_slots(&mut e, &[0xc4]);
+            let update = recording_double(&mut e, 0x7000_00c4, 0);
+            let lock = recording_double(&mut e, 0x00a2_9680, 0);
+            let havok_object = e.mem.alloc(0x40);
+            e.mem.set_u32(havok_object + 0x2c, 0x1234_5695);
+            e.mem.set_u32(world_object + 8, havok_object);
+            let collision_object = new_collision_object(&mut e, 0, world_object);
+            let request = new_request(&mut e, [0, 0, 0, expected, new_bits]);
+            e.call(0x00c6_72a0, &args![collision_object, request]);
+            if changes {
+                assert_eq!(e.mem.u32(havok_object + 0x2c), 0x1234_56aa);
+                assert_eq!(*lock.borrow(), vec![vec![world_object], vec![world_object]]);
+                assert_eq!(*update.borrow(), vec![vec![world_object]]);
+            } else {
+                assert_eq!(e.mem.u32(havok_object + 0x2c), 0x1234_5695);
+                assert!(lock.borrow().is_empty());
+                assert!(update.borrow().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn fn_00c672a0_without_a_havok_object_only_updates_the_filter() {
+        let mut e = Engine::new();
+        let world_object = object_with_slots(&mut e, &[0xc4]);
+        let update = recording_double(&mut e, 0x7000_00c4, 0);
+        let lock = recording_double(&mut e, 0x00a2_9680, 0);
+        let collision_object = new_collision_object(&mut e, 0, world_object);
+        let request = new_request(&mut e, [0, 0, 0, 0, 5]);
+        e.call(0x00c6_72a0, &args![collision_object, request]);
+        assert!(lock.borrow().is_empty());
+        assert_eq!(*update.borrow(), vec![vec![world_object]]);
+        // The current bits read as 0, so a request for 0 changes nothing.
+        e.mem.set_u32(request + 0x10, 0);
+        e.call(0x00c6_72a0, &args![collision_object, request]);
+        assert_eq!(update.borrow().len(), 1);
+    }
+
+    #[test]
+    fn fn_00c68990_sets_or_clears_bit_6_of_the_body_flags() {
+        let mut e = Engine::new();
+        let (collision_object, body, _) = body_in_world(&mut e);
+        e.mem.set_u32(body + 0x10, 0x8000_0001);
+        let request = new_request(&mut e, [0, 0, 0, 1, 0]);
+        e.call(0x00c6_8990, &args![collision_object, request]);
+        assert_eq!(e.mem.u32(body + 0x10), 0x8000_0041);
+        e.mem.set_u32(request + 0xc, 0);
+        e.call(0x00c6_8990, &args![collision_object, request]);
+        assert_eq!(e.mem.u32(body + 0x10), 0x8000_0001);
+    }
+
+    #[test]
+    fn fn_00c68990_needs_a_world_object_and_a_body() {
+        let mut e = Engine::new();
+        let request = new_request(&mut e, [0, 0, 0, 1, 0]);
+        let without_world = new_collision_object(&mut e, 0, 0);
+        e.call(0x00c6_8990, &args![without_world, request]);
+        let world_object = object_with_slots(&mut e, &[0x40]);
+        recording_double(&mut e, 0x7000_0040, 0);
+        let without_body = new_collision_object(&mut e, 0, world_object);
+        e.call(0x00c6_8990, &args![without_body, request]);
+    }
+
+    #[test]
+    fn fn_00c689c0_calls_slot_e4_for_a_missing_havok_object_or_type_5() {
+        for (havok_type, called) in [(Some(5u8), true), (Some(3), false), (None, true)] {
+            let mut e = Engine::new();
+            let body = object_with_slots(&mut e, &[0xe4]);
+            let log = recording_double(&mut e, 0x7000_00e4, 0);
+            let world_object = object_with_slots(&mut e, &[0x40]);
+            recording_double(&mut e, 0x7000_0040, body);
+            if let Some(byte) = havok_type {
+                let havok_object = e.mem.alloc(0x100);
+                e.mem.set_u8(havok_object + 0xe8, byte);
+                e.mem.set_u32(body + 8, havok_object);
+            }
+            let collision_object = new_collision_object(&mut e, 0, world_object);
+            e.call(0x00c6_89c0, &args![collision_object, 0u32]);
+            assert_eq!(
+                *log.borrow(),
+                if called { vec![vec![body, 4]] } else { vec![] }
+            );
+        }
+    }
+
+    #[test]
+    fn fn_00c689c0_needs_a_world_object_and_a_body() {
+        let mut e = Engine::new();
+        let without_world = new_collision_object(&mut e, 0, 0);
+        e.call(0x00c6_89c0, &args![without_world, 0u32]);
+        let world_object = object_with_slots(&mut e, &[0x40]);
+        recording_double(&mut e, 0x7000_0040, 0);
+        let without_body = new_collision_object(&mut e, 0, world_object);
+        e.call(0x00c6_89c0, &args![without_body, 0u32]);
     }
 }

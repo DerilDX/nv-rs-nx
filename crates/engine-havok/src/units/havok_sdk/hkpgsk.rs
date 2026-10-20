@@ -873,10 +873,6 @@ const FEATURE_TOLERANCE: u32 = 0x010d_51c4;
 const ZERO: u32 = 0x0101_1d78;
 const THREE: u32 = 0x0101_7718;
 const HALF: u32 = 0x0101_6248;
-/// The case number (the exe's byte table at `00dabc7c`) for `count_a * 8 | count_b` minus 9.
-const FEATURE_CASE: [u8; 25] = [
-    0, 1, 2, 3, 10, 10, 10, 10, 4, 5, 6, 10, 10, 10, 10, 10, 7, 8, 10, 10, 10, 10, 10, 10, 9,
-];
 
 // Program counters of `getClosestFeature` (the exe's addresses).
 const PC_TOP: u32 = 0x00da_ae60;
@@ -1074,17 +1070,17 @@ pub fn hkp_gsk_get_closest_feature(
                         converged = true;
                         PC_POST
                     } else {
-                        match FEATURE_CASE[key as usize] {
+                        match key {
                             0 => PC_POINTS,
                             1 => PC_B2,
                             2 => PC_B3,
                             3 => PC_B4,
-                            4 => PC_A2,
-                            5 => PC_SEGMENTS,
-                            6 => PC_EDGE_A2_B3,
-                            7 => PC_A3,
-                            8 => PC_EDGE_A3_B2,
-                            9 => PC_A4,
+                            8 => PC_A2,
+                            9 => PC_SEGMENTS,
+                            10 => PC_EDGE_A2_B3,
+                            16 => PC_A3,
+                            17 => PC_EDGE_A3_B2,
+                            24 => PC_A4,
                             _ => {
                                 converged = true;
                                 PC_POST
@@ -2156,17 +2152,17 @@ pub fn hkp_gsk_linear_cast(
                     pc = if key > 0x18 {
                         LC_EXIT
                     } else {
-                        match FEATURE_CASE[key as usize] {
+                        match key {
                             0 => LC_POINTS,
                             1 => LC_B2,
                             2 => LC_B3,
                             3 => LC_B4,
-                            4 => LC_A2,
-                            5 => LC_SEGMENTS,
-                            6 => LC_EDGE_A2_B3,
-                            7 => LC_A3,
-                            8 => LC_EDGE_A3_B2,
-                            9 => LC_A4,
+                            8 => LC_A2,
+                            9 => LC_SEGMENTS,
+                            10 => LC_EDGE_A2_B3,
+                            16 => LC_A3,
+                            17 => LC_EDGE_A3_B2,
+                            24 => LC_A4,
                             _ => LC_EXIT,
                         }
                     };

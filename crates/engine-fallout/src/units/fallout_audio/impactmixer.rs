@@ -19,9 +19,19 @@ pub fn fn_0083b5e0(e: &mut Engine, this: Ptr, argument: u32) -> Ptr {
     this
 }
 
+// Translated from 008397d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`impactmixer.cpp`). `__fastcall` getter: the byte at `+0x7c6` of
+/// `this`, in `AL`.
+pub fn fn_008397d0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr().wrapping_add(0x7c6))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0083_b5e0, fn_0083b5e0(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x0083_97d0, fn_008397d0(Ptr) -> u8),
+        entry!(0x0083_b5e0, fn_0083b5e0(Ptr, u32) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -53,5 +63,20 @@ mod static_init_callee_tests {
             vec![vec![this, 0x1f]]
         );
         assert_eq!(e.mem.u32(this), VTABLE_0083B5E0);
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    #[test]
+    fn at_008397d0_answers_the_byte_at_offset_0x7c6() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x7d0);
+        e.mem.set_u8(this + 0x7c5, 0x11);
+        e.mem.set_u8(this + 0x7c6, 0x5a);
+        e.mem.set_u8(this + 0x7c7, 0x22);
+        assert_eq!(e.call(0x0083_97d0, &args![this]).u8(), 0x5a);
     }
 }

@@ -35,11 +35,13 @@ const ONE_F64: u32 = 0x0101_2070;
 const CELL_BIAS: u32 = 0x011b_1bd0;
 
 // Translated from 00d496b0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkpStorageSampledHeightFieldShape::calcSizeForSpu` (Xbox PDB; a static function with two
+/// `hkpStorageSampledHeightFieldShape::calcSizeForSpu` (Xbox PDB; a virtual method with two
 /// stack words, the first unused): 0x80 when the second word (signed) is at least 0x80, else
 /// 0xffffffff.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_storage_sampled_height_field_shape_calc_size_for_spu(
     _e: &mut Engine,
+    _this: u32,
     _unused: u32,
     buffer_size: u32,
 ) -> u32 {
@@ -321,7 +323,7 @@ pub fn hkp_storage_sampled_height_field_shape_collide_spheres(
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00d4_96b0, hkp_storage_sampled_height_field_shape_calc_size_for_spu(u32, u32) -> u32),
+        entry!(0x00d4_96b0, hkp_storage_sampled_height_field_shape_calc_size_for_spu(u32, u32, u32) -> u32),
         entry!(0x00d4_96d0, fn_00d496d0(Ptr)),
         entry!(0x00d4_9750, fn_00d49750(Ptr, Ptr) -> Ptr),
         entry!(
@@ -337,6 +339,9 @@ mod tests {
     use crate::units::havok_sdk::hkpsphereshape::{HALF_F32, THREE_F32};
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     const HEIGHT_SLOT_DOUBLE: u32 = 0x0900_0034;
     const FLAG_SLOT_DOUBLE: u32 = 0x0900_0038;
@@ -418,11 +423,22 @@ mod tests {
     fn calc_size_for_spu_needs_a_signed_size_of_at_least_0x80() {
         let mut e = engine();
         let address = 0x00d4_96b0;
-        assert_eq!(e.call(address, &args![7u32, 0x80u32]).u32(), 0x80);
-        assert_eq!(e.call(address, &args![7u32, 0x7fff_ffffu32]).u32(), 0x80);
-        assert_eq!(e.call(address, &args![7u32, 0x7fu32]).u32(), 0xffff_ffff);
         assert_eq!(
-            e.call(address, &args![7u32, 0xffff_ff00u32]).u32(),
+            e.call(address, &args![VCALL_THIS, 7u32, 0x80u32]).u32(),
+            0x80
+        );
+        assert_eq!(
+            e.call(address, &args![VCALL_THIS, 7u32, 0x7fff_ffffu32])
+                .u32(),
+            0x80
+        );
+        assert_eq!(
+            e.call(address, &args![VCALL_THIS, 7u32, 0x7fu32]).u32(),
+            0xffff_ffff
+        );
+        assert_eq!(
+            e.call(address, &args![VCALL_THIS, 7u32, 0xffff_ff00u32])
+                .u32(),
             0xffff_ffff
         );
     }

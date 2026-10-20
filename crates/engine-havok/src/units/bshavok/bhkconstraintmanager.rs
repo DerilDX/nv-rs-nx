@@ -23,37 +23,45 @@ const ADD_REFERENCE: u32 = 0x00c9_0510;
 const SCOPE_WORD: u32 = 0x2b4;
 /// Size of every Cinfo object.
 const CINFO_SIZE: u32 = 0x14;
-/// The constructors of the Cinfo objects by constraint type (thiscall, no stack arguments, each
-/// answers the object); the types 4, 5 and 11 have none. The type 3 one is `00cf4820`.
-const CINFO_CONSTRUCTORS: [(u32, u32); 11] = [
-    (0, 0x00cb_9c30),
-    (1, 0x009b_a550),
-    (2, 0x00c8_8430),
-    (3, 0x00cf_4820),
-    (6, 0x00cc_7590),
-    (7, 0x00cb_9c50),
-    (8, 0x00c7_fb20),
-    (9, 0x00cc_51c0),
-    (10, 0x00cc_7f10),
-    (12, 0x00cc_4990),
-    (13, 0x00ca_9a80),
-];
+/// The constructor of the Cinfo object of a constraint type (thiscall, no stack arguments, each
+/// answers the object): the compiler's switch of `GetInfo`; the types 4, 5 and 11 and the numbers
+/// above 13 have none. The type 3 one is `00cf4820`.
+fn cinfo_constructor(constraint_type: u32) -> Option<u32> {
+    Some(match constraint_type {
+        0 => 0x00cb_9c30,
+        1 => 0x009b_a550,
+        2 => 0x00c8_8430,
+        3 => 0x00cf_4820,
+        6 => 0x00cc_7590,
+        7 => 0x00cb_9c50,
+        8 => 0x00c7_fb20,
+        9 => 0x00cc_51c0,
+        10 => 0x00cc_7f10,
+        12 => 0x00cc_4990,
+        13 => 0x00ca_9a80,
+        _ => return None,
+    })
+}
 /// The vtable `00cf4820` stores.
 const TYPE_3_CINFO_VTABLE: u32 = 0x010c_c2e0;
-/// The type names by constraint type, and the one answered for the other numbers (`0106f148`).
-const TYPE_NAMES: [(u32, u32); 11] = [
-    (0, 0x010c_c2c0),
-    (1, 0x010c_c2ac),
-    (2, 0x010c_c290),
-    (3, 0x010c_c278),
-    (6, 0x010c_c260),
-    (7, 0x010c_c24c),
-    (8, 0x010c_c230),
-    (9, 0x010c_c21c),
-    (10, 0x010c_c208),
-    (12, 0x010c_c1f0),
-    (13, 0x010c_c1d8),
-];
+/// The address of the name of a constraint type: the compiler's switch of `GetTypeName`; the
+/// other numbers (4, 5, 11 and above 13) get [`UNKNOWN_TYPE_NAME`] (`0106f148`).
+fn type_name(constraint_type: u32) -> Option<u32> {
+    Some(match constraint_type {
+        0 => 0x010c_c2c0,
+        1 => 0x010c_c2ac,
+        2 => 0x010c_c290,
+        3 => 0x010c_c278,
+        6 => 0x010c_c260,
+        7 => 0x010c_c24c,
+        8 => 0x010c_c230,
+        9 => 0x010c_c21c,
+        10 => 0x010c_c208,
+        12 => 0x010c_c1f0,
+        13 => 0x010c_c1d8,
+        _ => return None,
+    })
+}
 const UNKNOWN_TYPE_NAME: u32 = 0x0106_f148;
 
 /// Sets the per-thread word `TLS + 0x2b4` to 0x10, answering the thread block and the old value.
@@ -73,10 +81,7 @@ fn leave_scope(e: &mut Engine, scope: (u32, u32)) {
 /// the name string for the constraint types 0 to 13, `0106f148` for the types 4, 5 and 11 and
 /// every number above 13.
 pub fn bhk_constraint_manager_get_type_name(_e: &mut Engine, constraint_type: u32) -> u32 {
-    TYPE_NAMES
-        .iter()
-        .find(|(number, _)| *number == constraint_type)
-        .map_or(UNKNOWN_TYPE_NAME, |(_, name)| *name)
+    type_name(constraint_type).unwrap_or(UNKNOWN_TYPE_NAME)
 }
 
 // Translated from 00cf4820 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -101,10 +106,7 @@ pub fn fn_00cf4820(e: &mut Engine, this: Ptr) -> Ptr {
 /// types 4, 5 and 11, for numbers above 13, and when the allocation fails.
 pub fn bhk_constraint_manager_get_info(e: &mut Engine, constraint_type: u32) -> Ptr {
     let scope = enter_scope(e);
-    let constructor = CINFO_CONSTRUCTORS
-        .iter()
-        .find(|(number, _)| *number == constraint_type)
-        .map(|(_, constructor)| *constructor);
+    let constructor = cinfo_constructor(constraint_type);
     let mut info = Ptr::new(0);
     if let Some(constructor) = constructor {
         let block = e
@@ -299,14 +301,17 @@ mod tests {
     fn bhk_constraint_manager_get_info_constructs_the_cinfo_of_the_type() {
         let mut e = logged_engine();
         install_allocator(&mut e);
-        for (_, constructor) in CINFO_CONSTRUCTORS {
+        for constructor in (0..=13).filter_map(cinfo_constructor) {
             if constructor != 0x00cf_4820 {
                 e.register(constructor, |_, a| a[0].into_ret());
             }
         }
         let thread = e.tls();
         e.mem.set_u32(thread + SCOPE_WORD, 0x77);
-        for (number, constructor) in CINFO_CONSTRUCTORS {
+        for number in 0..=13u32 {
+            let Some(constructor) = cinfo_constructor(number) else {
+                continue;
+            };
             clear_log(&mut e);
             let object = e.call(0x00cf_4840, &args![number]).u32();
             assert_ne!(object, 0);

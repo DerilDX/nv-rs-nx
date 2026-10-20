@@ -53,6 +53,7 @@ pub mod nilines;
 pub mod nilinesdata;
 pub mod niloddata;
 pub mod nilodnode;
+pub mod nimainsdm;
 pub mod nimaterial;
 pub mod nimateriallibrary;
 pub mod nimaterialproperty;
@@ -248,6 +249,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(nilinesdata::funcs());
     out.extend(niloddata::funcs());
     out.extend(nilodnode::funcs());
+    out.extend(nimainsdm::funcs());
     out.extend(nimaterial::funcs());
     out.extend(nimateriallibrary::funcs());
     out.extend(nimaterialproperty::funcs());

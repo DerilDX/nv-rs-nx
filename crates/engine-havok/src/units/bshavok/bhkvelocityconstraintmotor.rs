@@ -52,10 +52,11 @@ pub fn fn_00cf4490(e: &mut Engine, this: Ptr, stream: u32) {
 
 // Translated from 00cf4520 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00cf4520 - the FS:[0] exception-unwinding frame is not modeled.
-/// `bhkVelocityConstraintMotor::GetViewerStrings` (Xbox PDB), stack `(list)`, `ECX` unused: in
+/// `bhkVelocityConstraintMotor::GetViewerStrings` (Xbox PDB), stack word `(list)`: in
 /// the allocation scope (`TLS + 0x2b4` = 0x10), appends the viewer string of the type
 /// description `01268738` to the viewer string list.
-pub fn bhk_velocity_constraint_motor_get_viewer_strings(e: &mut Engine, list: u32) {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn bhk_velocity_constraint_motor_get_viewer_strings(e: &mut Engine, _this: u32, list: u32) {
     let old = enter_scope(e);
     let description = e.global::<u32>(VIEWER_TYPE);
     let text = e.call(VIEWER_STRING, &args![description]).u32();
@@ -71,7 +72,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00cf4490, fn_00cf4490(Ptr, u32)),
         entry!(
             0x00cf4520,
-            bhk_velocity_constraint_motor_get_viewer_strings(u32)
+            bhk_velocity_constraint_motor_get_viewer_strings(u32, u32)
         ),
     ]
 }
@@ -79,6 +80,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     type Log = Vec<Vec<u32>>;
 
@@ -202,7 +206,7 @@ mod tests {
         let list = e.mem.alloc(0x20);
         e.mem.set_u16(list + 8, 4);
         e.mem.set_u16(list + 0xa, 2);
-        e.call(0x00cf_4520, &args![list]);
+        e.call(0x00cf_4520, &args![VCALL_THIS, list]);
         assert_eq!(calls_to(&e, VIEWER_STRING), vec![vec![0x5eed]]);
         assert_eq!(e.mem.u32(SEEN_SCOPE), 0x10);
         assert_eq!(e.mem.u32(tls + 0x2b4), 0x77);
@@ -212,7 +216,7 @@ mod tests {
         // A full list grows first, by its growth step plus the index.
         e.mem.set_u16(list + 0xa, 4);
         e.mem.set_u16(list + 0xe, 3);
-        e.call(0x00cf_4520, &args![list]);
+        e.call(0x00cf_4520, &args![VCALL_THIS, list]);
         assert_eq!(calls_to(&e, ARRAY_GROW), vec![vec![list, 7]]);
     }
 

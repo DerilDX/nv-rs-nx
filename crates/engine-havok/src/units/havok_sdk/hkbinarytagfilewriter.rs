@@ -1754,8 +1754,10 @@ pub fn writer_constructor(
 /// objects): the magic words `0xcab00d1e` and `0xd011face`, the numbers 1 and 0, the first pass
 /// over the object (`00dbf450`), the object itself (`writeObject`), the stream's slot `0x14`
 /// (called with no arguments), then the writer is destroyed. Returns 0.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hk_binary_tagfile_writer_save(
     e: &mut Engine,
+    _this: u32,
     object: Ptr,
     stream: Ptr,
     listener: Ptr,
@@ -1844,7 +1846,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00dc0500,
             writer_constructor(Ptr<TagfileWriter>, Ptr, Ptr) -> Ptr<TagfileWriter>
         ),
-        entry!(0x00dc05b0, hk_binary_tagfile_writer_save(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x00dc05b0, hk_binary_tagfile_writer_save(u32, Ptr, Ptr, Ptr) -> u32),
     ]
 }
 
@@ -1854,6 +1856,9 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     type Shared<T> = Rc<RefCell<T>>;
 
@@ -3035,7 +3040,7 @@ mod tests {
         let stream_object = f.e.mem.alloc(8);
         f.e.mem.set_u32(stream_object, stream_vtable);
         let result =
-            f.e.call(0x00dc_05b0, &args![handle, stream_object, 0u32])
+            f.e.call(0x00dc_05b0, &args![VCALL_THIS, handle, stream_object, 0u32])
                 .u32();
         assert_eq!(result, 0);
         assert_eq!(

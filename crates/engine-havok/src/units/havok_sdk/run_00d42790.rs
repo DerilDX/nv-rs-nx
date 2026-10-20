@@ -60,11 +60,64 @@ pub fn fn_00d42960(e: &mut Engine, queue: Ptr) {
     });
 }
 
+// Translated from 00d42800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (an agent creation function, cdecl, four stack words, nothing popped):
+/// `body_a`, `body_b`, `input` and `manager`. Allocates 0x24 bytes through the memory router's
+/// allocator (`00c85750`; virtual function at +4 of the object at router + 0x10), stores the size
+/// as a 16-bit word at +4 and runs the constructor `00d42790` on it with `body_a`, `body_b` and
+/// `manager`. When the word at +0x1c of the new object is 0x1d, the virtual function at +0x2c of
+/// the shape of `body_a` (the word at +0 of the body) is called on that shape with the outermost
+/// parent of `body_a`, the outermost parent of `body_b` (each found by following the word at +0xc
+/// until it is 0) and `input`, and the shape is stored at +0x14; when the word at +0x20 is 0x1d
+/// the same happens with the roles swapped (shape of `body_b`, parents `body_b`'s then `body_a`'s)
+/// and the shape is stored at +0x18. Returns the new object. Ghidra made no function here; the address is an immediate operand at 00d42978.
+pub fn fn_00d42800(e: &mut Engine, body_a: u32, body_b: u32, input: u32, manager: u32) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let block = e.vcall(allocator, 4, &args![0x24u32]).u32();
+    e.mem.set_u16(block + 4, 0x24);
+    let object = e
+        .call(0x00d4_2790, &args![block, body_a, body_b, manager])
+        .u32();
+    if e.mem.u32(object + 0x1c) == 0x1d {
+        let shape = e.mem.u32(body_a);
+        let outer_b = outermost_parent_00d42800(e, body_b);
+        let outer_a = outermost_parent_00d42800(e, body_a);
+        e.vcall(shape, 0x2c, &args![outer_a, outer_b, input]);
+        e.mem.set_u32(object + 0x14, shape);
+    }
+    if e.mem.u32(object + 0x20) == 0x1d {
+        let shape = e.mem.u32(body_b);
+        let outer_a = outermost_parent_00d42800(e, body_a);
+        let outer_b = outermost_parent_00d42800(e, body_b);
+        e.vcall(shape, 0x2c, &args![outer_b, outer_a, input]);
+        e.mem.set_u32(object + 0x18, shape);
+    }
+    object
+}
+
+/// The last link of the chain of parent words (at +0xc) that starts at `body`.
+fn outermost_parent_00d42800(e: &Engine, body: u32) -> u32 {
+    let mut current = body;
+    let mut next = e.mem.u32(current + 0xc);
+    while next != 0 {
+        current = next;
+        next = e.mem.u32(current + 0xc);
+    }
+    current
+}
+// Translated from 00d42780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a lone `RET`, so it reads nothing and does nothing. It is the word at
+/// `+0xc` of the function record that `00d42790`'s caller registers with the agent registry. Ghidra made no function here; the address is an immediate operand at 00d42990.
+pub fn fn_00d42780(_e: &mut Engine) {}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d4_2790, fn_00d42790(Ptr, u32, u32, u32) -> Ptr),
         entry!(0x00d4_2960, fn_00d42960(Ptr)),
+        entry!(0x00d4_2800, fn_00d42800(u32, u32, u32, u32) -> u32),
+        entry!(0x00d4_2780, fn_00d42780()),
     ]
 }
 
@@ -140,5 +193,130 @@ mod havok_a04_tests {
         assert_eq!(seen[0][4..], record);
         assert_eq!(seen[1][2..4], [0xffff_ffff, 0x1d]);
         assert_eq!(seen[1][4..], record);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The slot of the allocator's vtable (offset 4) that allocates, as a test double.
+    const ALLOCATE_SLOT_DOUBLE: u32 = 0x0900_0001;
+
+    /// A memory router (`00c85750`) whose allocator allocates through a double that logs the
+    /// size it was asked for and answers a zeroed block.
+    fn allocator_engine() -> (Engine, Rc<RefCell<Vec<u32>>>) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, ALLOCATE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&sizes);
+        e.register_double(ALLOCATE_SLOT_DOUBLE, move |e, a| {
+            log.borrow_mut().push(a[1]);
+            Ret {
+                eax: e.mem.alloc(a[1]),
+                ..Ret::default()
+            }
+        });
+        (e, sizes)
+    }
+
+    /// A collidable with a shape whose virtual function at +0x2c logs its words, and an optional parent.
+    fn shaped_body(
+        e: &mut Engine,
+        parent: u32,
+        log: &Rc<RefCell<Vec<Vec<u32>>>>,
+        slot_address: u32,
+    ) -> (u32, u32) {
+        let body = e.mem.alloc(0x20);
+        let shape = e.mem.alloc(0x20);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0x2c, slot_address);
+        e.mem.set_u32(shape, vtable);
+        e.mem.set_u32(body, shape);
+        e.mem.set_u32(body + 0xc, parent);
+        let sink = Rc::clone(log);
+        e.register_double(slot_address, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        (body, shape)
+    }
+
+    /// With both type words 0x1d each shape is asked with the outermost parents, in swapped order.
+    #[test]
+    fn fn_00d42800_asks_both_shapes_with_the_outermost_parents() {
+        let (mut e, sizes) = allocator_engine();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let top_a = e.mem.alloc(0x20);
+        let middle_a = e.mem.alloc(0x20);
+        e.mem.set_u32(middle_a + 0xc, top_a);
+        let (body_a, shape_a) = shaped_body(&mut e, middle_a, &log, 0x0900_0007);
+        let (body_b, shape_b) = shaped_body(&mut e, 0, &log, 0x0900_0008);
+        e.register_double(0x00d4_2790, |e, a| {
+            e.mem.set_u32(a[0] + 0x1c, 0x1d);
+            e.mem.set_u32(a[0] + 0x20, 0x1d);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        let object = e
+            .call(0x00d4_2800, &args![body_a, body_b, 0x55u32, 0x7777u32])
+            .u32();
+        assert_eq!(*sizes.borrow(), vec![0x24]);
+        assert_eq!(e.mem.u16(object + 4), 0x24);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                vec![shape_a, top_a, body_b, 0x55],
+                vec![shape_b, body_b, top_a, 0x55],
+            ]
+        );
+        assert_eq!(e.mem.u32(object + 0x14), shape_a);
+        assert_eq!(e.mem.u32(object + 0x18), shape_b);
+    }
+
+    /// Other type words skip the calls and leave the fields alone; the constructor gets the right words.
+    #[test]
+    fn fn_00d42800_skips_the_shape_calls_for_other_types() {
+        let (mut e, _) = allocator_engine();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let (body_a, _) = shaped_body(&mut e, 0, &log, 0x0900_0007);
+        let (body_b, _) = shaped_body(&mut e, 0, &log, 0x0900_0008);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&seen);
+        e.register_double(0x00d4_2790, move |e, a| {
+            sink.borrow_mut().push(a.to_vec());
+            e.mem.set_u32(a[0] + 0x1c, 0x1c);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        let object = e
+            .call(0x00d4_2800, &args![body_a, body_b, 0x55u32, 0x7777u32])
+            .u32();
+        assert!(log.borrow().is_empty());
+        assert_eq!(*seen.borrow(), vec![vec![object, body_a, body_b, 0x7777]]);
+        assert_eq!(e.mem.u32(object + 0x14), 0);
+        assert_eq!(e.mem.u32(object + 0x18), 0);
+    }
+    #[test]
+    fn fn_00d42780_does_nothing() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00d4_2780, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

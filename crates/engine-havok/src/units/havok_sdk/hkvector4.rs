@@ -196,9 +196,114 @@ pub fn fn_00c7f5b0(e: &mut Engine, this: Ptr, out: Ptr, epsilon: f32) -> Ptr {
     out
 }
 
+/// `SHUFPS dest, src, imm`: lanes 0 and 1 of the result are lanes of `dest` picked by bits 0-1 and
+/// 2-3 of `imm`, lanes 2 and 3 lanes of `src` picked by bits 4-5 and 6-7.
+fn shufps(dest: Lanes, src: Lanes, imm: u8) -> Lanes {
+    let pick = |v: Lanes, shift: u8| v[usize::from((imm >> shift) & 3)];
+    [pick(dest, 0), pick(dest, 2), pick(src, 4), pick(src, 6)]
+}
+
+fn sub(a: Lanes, b: Lanes) -> Lanes {
+    std::array::from_fn(|lane| a[lane] - b[lane])
+}
+
+/// The four-lane quaternion rotation both `_ov2` functions end in, in the order of their
+/// instructions: `2 * (w * cross + (w * w - 0.5) * v + dot * q)`, where `q` is the quaternion,
+/// `w` its fourth lane and `dot` the sum `z + (y + x)` of the products `q * v`; `cross` is the
+/// lane-wise `left - right` of the two shuffled products the caller built.
+fn rotate_by_quaternion(
+    e: &Engine,
+    quaternion: Lanes,
+    vector: Lanes,
+    cross: Lanes,
+    products: Lanes,
+) -> Lanes {
+    // `ADDSS` adds only lane 0; the other lanes keep the broadcast value.
+    let mut y_sum = splat(products, 1);
+    y_sum[0] += products[0];
+    let mut dot = splat(products, 2);
+    dot[0] += y_sum[0];
+    let w = shufps(quaternion, quaternion, 0xff);
+    let cross_w = mul(cross, w);
+    let w_squared = mul(w, w);
+    let half_offsets = load(e, 0x010c_71e0);
+    let biased = add(w_squared, half_offsets);
+    let along = mul(biased, vector);
+    let dot_q = mul(splat(dot, 0), quaternion);
+    let combined = add(along, dot_q);
+    let sum = add(cross_w, combined);
+    add(sum, sum)
+}
+
+// Translated from 00c7f7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkVector4::setTransformedPos_ov2` (engine map name; `thiscall`, two stack words
+/// `transform`, `vector`, `RET 8`; the transform is an `hkQsTransform` as the offsets read it:
+/// translation at `+0`, rotation quaternion at `+0x10`, scale at `+0x20`): `this = translation +
+/// rotate(quaternion, scale * vector)`, all four lanes in `f32` in the order of the SSE
+/// instructions (the rotation is `rotate_by_quaternion`; its constant vector is at `010c71e0`).
+/// `this` is stored once before the translation is read and added, as the exe does.
+pub fn fn_00c7f7a0(e: &mut Engine, this: Ptr, transform: Ptr, vector: Ptr) {
+    let t = transform.addr();
+    let quaternion = load(e, t.wrapping_add(0x10));
+    let scale = load(e, t.wrapping_add(0x20));
+    let v = load(e, vector.addr());
+    let scaled = mul(scale, v);
+    let products = mul(quaternion, scaled);
+    let left = mul(
+        shufps(quaternion, quaternion, 0xc9),
+        shufps(scaled, scaled, 0xd2),
+    );
+    let right = mul(
+        shufps(quaternion, quaternion, 0xd2),
+        shufps(scaled, scaled, 0xc9),
+    );
+    let cross = sub(left, right);
+    let rotated = rotate_by_quaternion(e, quaternion, scaled, cross, products);
+    store(e, this.addr(), rotated);
+    let translation = load(e, t);
+    store(e, this.addr(), add(translation, rotated));
+}
+
+// Translated from 00c7f840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkVector4::setTransformedInversePos_ov2` (engine map name; `thiscall`, two stack words
+/// `transform`, `vector`, `RET 8`; an `hkQsTransform` as for `00c7f7a0`): `this = inverse
+/// rotation of (vector - translation), divided by the scale`: the difference is rotated by the
+/// conjugate quaternion (`rotate_by_quaternion` with the cross product of the other sign), stored
+/// once, and then multiplied lane by lane by `2r - r * scale * r` where `r` is the `RCPPS`
+/// estimate of the scale (a Newton step; the estimate is the host CPU's, so results can differ
+/// in the last bits from another CPU's).
+pub fn fn_00c7f840(e: &mut Engine, this: Ptr, transform: Ptr, vector: Ptr) {
+    let t = transform.addr();
+    let quaternion = load(e, t.wrapping_add(0x10));
+    let translation = load(e, t);
+    let difference = sub(load(e, vector.addr()), translation);
+    let products = mul(quaternion, difference);
+    let left = mul(
+        shufps(quaternion, quaternion, 0xc9),
+        shufps(difference, difference, 0xd2),
+    );
+    let right = mul(
+        shufps(quaternion, quaternion, 0xd2),
+        shufps(difference, difference, 0xc9),
+    );
+    let cross = sub(right, left);
+    let rotated = rotate_by_quaternion(e, quaternion, difference, cross, products);
+    store(e, this.addr(), rotated);
+    let scale = load(e, t.wrapping_add(0x20));
+    let estimate: Lanes =
+        std::array::from_fn(|lane| crate::units::havok_sdk::hkaabbtree::rcp_estimate(scale[lane]));
+    let estimate_times_scale = mul(estimate, scale);
+    let twice = add(estimate, estimate);
+    let refined_part = mul(estimate_times_scale, estimate);
+    let refined = sub(twice, refined_part);
+    store(e, this.addr(), mul(refined, rotated));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00c7f7a0, fn_00c7f7a0(Ptr, Ptr, Ptr)),
+        entry!(0x00c7f840, fn_00c7f840(Ptr, Ptr, Ptr)),
         entry!(0x00c7_f640, set_transformed_pos(Ptr, Ptr, Ptr)),
         entry!(0x00c7_f690, set_transformed_inverse_pos(Ptr, Ptr, Ptr)),
         entry!(0x00c7_f700, set_rotated_dir(Ptr, Ptr, Ptr)),
@@ -214,6 +319,109 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A transform (translation, quaternion, scale; 16-byte lanes), a vector and a result block,
+    /// with the constant vector `010c71e0` set to four -0.5.
+    fn qs_setup_00c7f7a0(
+        translation: [f32; 4],
+        quaternion: [f32; 4],
+        scale: [f32; 4],
+        vector: [f32; 4],
+    ) -> (Engine, u32, u32, u32) {
+        let mut e = Engine::new();
+        e.map(0x010c_7000, 0x1000);
+        for lane in 0..4 {
+            e.mem.set_f32(0x010c_71e0 + 4 * lane, -0.5);
+        }
+        let transform = e.mem.alloc(0x40);
+        let vector_at = e.mem.alloc(0x10);
+        let out = e.mem.alloc(0x10);
+        for lane in 0..4usize {
+            let at = 4 * lane as u32;
+            e.mem.set_f32(transform + at, translation[lane]);
+            e.mem.set_f32(transform + 0x10 + at, quaternion[lane]);
+            e.mem.set_f32(transform + 0x20 + at, scale[lane]);
+            e.mem.set_f32(vector_at + at, vector[lane]);
+        }
+        (e, transform, vector_at, out)
+    }
+
+    fn lanes_at_00c7f7a0(e: &Engine, at: u32) -> [f32; 4] {
+        std::array::from_fn(|lane| e.mem.f32(at + 4 * lane as u32))
+    }
+
+    #[test]
+    fn fn_00c7f7a0_with_the_identity_rotation_scales_and_translates() {
+        let (mut e, transform, vector, out) = qs_setup_00c7f7a0(
+            [1.0, 2.0, 3.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [2.0, 2.0, 2.0, 1.0],
+            [4.0, 5.0, 6.0, 0.0],
+        );
+        e.call(0x00c7_f7a0, &args![out, transform, vector]);
+        assert_eq!(lanes_at_00c7f7a0(&e, out), [9.0, 12.0, 15.0, 0.0]);
+    }
+
+    #[test]
+    fn fn_00c7f7a0_rotates_a_quarter_turn_about_z() {
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        let (mut e, transform, vector, out) = qs_setup_00c7f7a0(
+            [1.0, 2.0, 3.0, 0.0],
+            [0.0, 0.0, s, s],
+            [1.0, 1.0, 1.0, 1.0],
+            [1.0, 0.0, 0.0, 0.0],
+        );
+        e.call(0x00c7_f7a0, &args![out, transform, vector]);
+        let got = lanes_at_00c7f7a0(&e, out);
+        for (g, w) in got.iter().zip([1.0, 3.0, 3.0, 0.0]) {
+            assert!((g - w).abs() < 1e-5, "{got:?}");
+        }
+    }
+
+    #[test]
+    fn fn_00c7f7a0_adds_the_translation_read_after_the_first_store() {
+        // The result block is the translation itself: the first store overwrites it, so the
+        // translation the exe adds is the rotated vector.
+        let (mut e, transform, vector, _) = qs_setup_00c7f7a0(
+            [1.0, 2.0, 3.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+            [4.0, 5.0, 6.0, 0.0],
+        );
+        e.call(0x00c7_f7a0, &args![transform, transform, vector]);
+        assert_eq!(lanes_at_00c7f7a0(&e, transform), [8.0, 10.0, 12.0, 0.0]);
+    }
+
+    #[test]
+    fn fn_00c7f840_undoes_the_transform_of_00c7f7a0() {
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        let (mut e, transform, vector, out) = qs_setup_00c7f7a0(
+            [1.0, 2.0, 3.0, 0.0],
+            [0.0, 0.0, s, s],
+            [2.0, 2.0, 2.0, 1.0],
+            [1.0, 4.0, 3.0, 0.0],
+        );
+        e.call(0x00c7_f840, &args![out, transform, vector]);
+        let got = lanes_at_00c7f7a0(&e, out);
+        for (g, w) in got.iter().zip([1.0, 0.0, 0.0, 0.0]) {
+            assert!((g - w).abs() < 1e-4, "{got:?}");
+        }
+    }
+
+    #[test]
+    fn fn_00c7f840_with_the_identity_rotation_subtracts_and_divides() {
+        let (mut e, transform, vector, out) = qs_setup_00c7f7a0(
+            [1.0, 2.0, 3.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [2.0, 4.0, 8.0, 1.0],
+            [5.0, 10.0, 19.0, 0.0],
+        );
+        e.call(0x00c7_f840, &args![out, transform, vector]);
+        let got = lanes_at_00c7f7a0(&e, out);
+        for (g, w) in got.iter().zip([2.0, 2.0, 2.0, 0.0]) {
+            assert!((g - w).abs() < 1e-4, "{got:?}");
+        }
+    }
 
     /// A 4x4 transform with distinct columns, a vector and an output block.
     fn setup(e: &mut Engine) -> (u32, u32, u32) {

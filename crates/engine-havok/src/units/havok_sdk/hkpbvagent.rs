@@ -908,9 +908,46 @@ pub fn hkp_symmetric_agent_bv_agent_linear_cast(
     );
 }
 
+/// Allocates `size` bytes the way the agent create functions do: the thread's memory router
+/// (`00c85750`) has the allocator at `+0x10`; its virtual slot `4` hands out the block, whose
+/// size goes into the 16-bit word at `+4`.
+fn allocate_agent_block(e: &mut Engine, size: u32) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router.wrapping_add(0x10));
+    let block = e.vcall(allocator, 4, &args![size]).u32();
+    e.mem.set_u16(block.wrapping_add(4), size as u16);
+    block
+}
+
+// Translated from 00d45480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `input`, `contact_mgr`): the
+/// create function of the bounding-volume pair (code at `00d45fcd` stores its address in an
+/// agent record). Allocates the 0x14-byte agent (`allocate_agent_block`) and runs the
+/// `hkpBvAgent` constructor `00d453d0` on it with the four words in this order. Answers what
+/// the constructor answers, the agent.
+pub fn fn_00d45480(e: &mut Engine, body_a: Ptr, body_b: Ptr, input: Ptr, contact_mgr: u32) -> u32 {
+    let agent = allocate_agent_block(e, 0x14);
+    fn_00d453d0(e, Ptr::new(agent), body_a, body_b, input, contact_mgr).addr()
+}
+
+// Translated from 00d45f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `input`, `contact_mgr`): the
+/// create function of the flipped bounding-volume agent (code at `00d45f93` stores its address
+/// in an agent record). Allocates the 0x14-byte agent (`allocate_agent_block`), runs the
+/// constructor `00d453d0` with the two bodies exchanged (`body_b`, `body_a`, `input`,
+/// `contact_mgr`) and stores the vtable `010cf428`. Answers the agent.
+pub fn fn_00d45f30(e: &mut Engine, body_a: Ptr, body_b: Ptr, input: Ptr, contact_mgr: u32) -> u32 {
+    let agent = allocate_agent_block(e, 0x14);
+    fn_00d453d0(e, Ptr::new(agent), body_b, body_a, input, contact_mgr);
+    e.mem.set_u32(agent, 0x010c_f428);
+    agent
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d45480, fn_00d45480(Ptr, Ptr, Ptr, u32) -> u32),
+        entry!(0x00d45f30, fn_00d45f30(Ptr, Ptr, Ptr, u32) -> u32),
         entry!(0x00d4_5230, hkp_bv_agent_cleanup(Ptr, u32)),
         entry!(0x00d4_5270, hkp_bv_agent_invalidate_tim(Ptr, u32)),
         entry!(0x00d4_52a0, hkp_bv_agent_warp_time(Ptr, f32, f32, u32)),
@@ -1118,6 +1155,65 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The memory router (`00c85750`) answers an object whose `+0x10` is an allocator; the
+    /// allocator's slot 4 hands out `block` and records the size it was asked for.
+    fn install_allocator(e: &mut Engine, block: u32) -> Rc<RefCell<Vec<u32>>> {
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&sizes);
+        e.map(block, 0x100);
+        e.put_vtable(0x0950_0000, &[0, 0x0950_0100]);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, 0x0950_0000);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register_double(0x0950_0100, move |_, a| {
+            seen.borrow_mut().push(a[1]);
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        sizes
+    }
+
+    #[test]
+    fn fn_00d45480_allocates_the_agent_and_runs_the_constructor() {
+        let mut f = fixture();
+        let sizes = install_allocator(&mut f.e, 0x0800_0000);
+        let agent =
+            f.e.call(0x00d4_5480, &args![f.body_a, f.body_b, f.input, 0x77u32])
+                .u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x14]);
+        assert_eq!(f.e.mem.u16(agent + 4), 0x14);
+        assert_eq!(f.e.mem.u32(agent), BV_AGENT_VTABLE);
+        assert_eq!(f.e.mem.u32(agent + 8), 0x77);
+        let created = calls(&f.log, CREATE_BV);
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0][1..], [f.body_b, f.input, 0x77]);
+    }
+
+    #[test]
+    fn fn_00d45f30_exchanges_the_bodies_and_stores_the_flipped_vtable() {
+        let mut f = fixture();
+        let sizes = install_allocator(&mut f.e, 0x0800_0000);
+        // Called with the bodies the other way round, the constructor sees them in order.
+        let agent =
+            f.e.call(0x00d4_5f30, &args![f.body_b, f.body_a, f.input, 0x77u32])
+                .u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x14]);
+        assert_eq!(f.e.mem.u32(agent), 0x010c_f428);
+        assert_eq!(f.e.mem.u32(agent + 8), 0x77);
+        let created = calls(&f.log, CREATE_BV);
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0][1..], [f.body_b, f.input, 0x77]);
+    }
 
     /// The vtable doubles of the first and second agent and of `this`.
     const FIRST: u32 = 0x0900_0000;

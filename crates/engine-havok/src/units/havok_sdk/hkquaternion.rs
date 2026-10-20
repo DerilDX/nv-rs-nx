@@ -396,9 +396,63 @@ pub fn hk_quaternion_decompose_rest_axis(
     });
 }
 
+/// `hkVector4::isOk4` (`00c7f500`, `this` = the vector, one stack word: the result byte), which
+/// sets the byte to whether every lane is finite.
+const VECTOR_IS_OK4: u32 = 0x00c7_f500;
+/// `0.001` as a `float`: how far from 1 the squared length may be.
+const IS_OK_LENGTH_TOLERANCE: u32 = 0x0101_7d00;
+
+// Translated from 00cb24c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A quaternion check (the engine map gives no name): `result` points to a byte that
+/// `hkVector4::isOk4` (`00c7f500`) first sets from the four lanes; the byte stays set only when
+/// the squared length is within `0.001` of 1, and is cleared otherwise. Returns `result`.
+///
+/// The squared length is the `MULPS` / `SHUFPS 0x4e` / `0xb1` ladder in `float` lanes; the
+/// difference from 1 and its absolute value go through the x87 stack with a `float` store at
+/// each step.
+pub fn fn_00cb24c0(e: &mut Engine, this: Ptr, result: Ptr) -> Ptr {
+    e.call(VECTOR_IS_OK4, &args![this, result]);
+    let lanes = load_vec(e, this.addr());
+    let length_squared = sum_four(mul_ps(lanes, lanes));
+    let difference = x87_store32(x87_sub(
+        x87_load32(length_squared.to_bits()),
+        double_at(e, DOUBLE_ONE),
+    ));
+    // `FABS` on the reloaded float, stored back as a float.
+    let magnitude = f32::from_bits(x87_quiet_bits(difference) & 0x7fff_ffff);
+    let within = magnitude < e.mem.f32(IS_OK_LENGTH_TOLERANCE);
+    let ok = e.mem.u8(result.addr()) != 0 && within;
+    e.mem.set_u8(result.addr(), ok as u8);
+    result
+}
+
+/// `_CIcos` (`00ec9f70`, the argument in `ST0`, a leading `f64`).
+const CI_COS: u32 = 0x00ec_9f70;
+
+// Translated from 00cb2450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkQuaternion::setAxisAngle` (Xbox PDB): the rotation of `angle` radians about the unit
+/// vector `axis` (four lanes, 16-byte aligned): `(sin(angle / 2) * axis, cos(angle / 2))`.
+///
+/// The half angle, the sine and the cosine each round to `float` on the way (x87 stores); the
+/// four lanes of the product are `MULPS` on the sine broadcast, then the cosine replaces lane 3.
+pub fn hk_quaternion_set_axis_angle(e: &mut Engine, this: Ptr, axis: Ptr, angle: f32) {
+    let half = x87_store32(x87_mul(
+        x87_load32(angle.to_bits()),
+        double_at(e, DOUBLE_HALF),
+    ));
+    let sine = x87_store32(e.call(CI_SIN, &args![x87_load32(half)]).f64());
+    let sine = f32::from_bits(x87_quiet_bits(sine));
+    let axis_lanes = load_vec(e, axis.addr());
+    store_vec(e, this.addr(), mul_ps([sine; 4], axis_lanes));
+    let cosine = x87_store32(e.call(CI_COS, &args![x87_load32(half)]).f64());
+    e.mem.set_u32(this.addr() + 0xc, x87_quiet_bits(cosine));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00cb_2450, hk_quaternion_set_axis_angle(Ptr, Ptr, f32)),
+        entry!(0x00cb_24c0, fn_00cb24c0(Ptr, Ptr) -> Ptr),
         entry!(0x00cb_2550, quaternion_from_rotation(Ptr, Ptr)),
         entry!(0x00cb_26e0, hk_quaternion_set(Ptr, Ptr)),
         entry!(0x00cb_2700, fn_00cb2700(Ptr, Ptr)),
@@ -684,5 +738,80 @@ mod tests {
             // The rest is the quaternion with the axis component removed: the identity.
             close(load_vec(&e, rest), [0.0, 0.0, 0.0, 1.0]);
         }
+    }
+
+    #[test]
+    fn fn_00cb24c0_accepts_unit_quaternions_only() {
+        let mut e = engine();
+        e.register(VECTOR_IS_OK4, |e, a| {
+            // Finite lanes: the byte is set.
+            e.mem.set_u8(a[1], 1);
+            Ret::default()
+        });
+        e.mem.map(0x0200_0000, 0x100);
+        e.mem.set_f32(IS_OK_LENGTH_TOLERANCE, 0.001);
+        let result: Ptr = Ptr::new(0x0200_0000);
+        let unit = vec_at(&mut e, [0.0, 0.6, 0.0, 0.8]);
+        let back = e.call(0x00cb_24c0, &args![unit, result]).ptr::<()>();
+        assert_eq!(back, result);
+        assert_eq!(e.mem.u8(result.addr()), 1);
+        let long = vec_at(&mut e, [0.0, 0.6, 0.0, 0.9]);
+        e.call(0x00cb_24c0, &args![long, result]);
+        assert_eq!(e.mem.u8(result.addr()), 0);
+        // Just outside the tolerance (0.001 away).
+        let edge = vec_at(&mut e, [0.0, 0.0, 0.0, 1.0005]);
+        e.call(0x00cb_24c0, &args![edge, result]);
+        assert_eq!(e.mem.u8(result.addr()), 0);
+        let near = vec_at(&mut e, [0.0, 0.0, 0.0, 1.0004]);
+        e.call(0x00cb_24c0, &args![near, result]);
+        assert_eq!(e.mem.u8(result.addr()), 1);
+    }
+
+    #[test]
+    fn fn_00cb24c0_clears_the_byte_when_the_vector_check_fails_or_a_lane_is_nan() {
+        let mut e = engine();
+        e.register(VECTOR_IS_OK4, |e, a| {
+            e.mem.set_u8(a[1], 0);
+            Ret::default()
+        });
+        e.mem.map(0x0200_0000, 0x100);
+        e.mem.set_f32(IS_OK_LENGTH_TOLERANCE, 0.001);
+        let result: Ptr = Ptr::new(0x0200_0000);
+        let unit = vec_at(&mut e, [0.0, 0.0, 0.0, 1.0]);
+        e.call(0x00cb_24c0, &args![unit, result]);
+        assert_eq!(e.mem.u8(result.addr()), 0);
+        e.register(VECTOR_IS_OK4, |e, a| {
+            e.mem.set_u8(a[1], 1);
+            Ret::default()
+        });
+        let not_a_number = vec_at(&mut e, [f32::NAN, 0.0, 0.0, 1.0]);
+        e.call(0x00cb_24c0, &args![not_a_number, result]);
+        assert_eq!(e.mem.u8(result.addr()), 0);
+    }
+
+    #[test]
+    fn set_axis_angle_builds_the_half_angle_quaternion() {
+        let mut e = engine();
+        e.register(CI_SIN, |_, a| Ret {
+            st0: f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32).sin(),
+            ..Ret::default()
+        });
+        e.register(CI_COS, |_, a| Ret {
+            st0: f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32).cos(),
+            ..Ret::default()
+        });
+        let axis = vec_at(&mut e, [0.0, 1.0, 0.0, 0.0]);
+        let result = vec_at(&mut e, [9.0; 4]);
+        e.call(
+            0x00cb_2450,
+            &args![result, axis, std::f32::consts::FRAC_PI_2],
+        );
+        let lanes = load_vec(&e, result);
+        let half_sqrt = std::f32::consts::FRAC_1_SQRT_2;
+        close(lanes, [0.0, half_sqrt, 0.0, half_sqrt]);
+        // The sine multiplies the axis's fourth lane too, before the cosine replaces it.
+        let odd_axis = vec_at(&mut e, [1.0, 0.0, 0.0, 5.0]);
+        e.call(0x00cb_2450, &args![result, odd_axis, 0.0f32]);
+        assert_eq!(load_vec(&e, result), [0.0, 0.0, 0.0, 1.0]);
     }
 }

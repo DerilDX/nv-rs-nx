@@ -406,6 +406,26 @@ pub fn fn_00d2da20(e: &mut Engine, dispatcher: u32) {
     });
 }
 
+// Translated from 00d2d460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: three stack words (cdecl, nothing popped), the first never read
+/// (`_unused_0`). Calls `00da3510` with the second and third words and returns its answer (`EAX`).
+/// Ghidra made no function here; the address is an immediate operand at 00d2da00.
+pub fn fn_00d2d460(e: &mut Engine, _unused_0: u32, a: u32, b: u32) -> u32 {
+    e.call(0x00da_3510, &args![a, b]).u32()
+}
+// Translated from 00d2d480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: five stack words (cdecl, nothing popped), the first never read
+/// (`_unused_0`). Calls `00da35f0` with the second word, the two floats (each passed through the
+/// x87 stack: a signalling NaN is quieted) and the last word, and returns its answer (`EAX`).
+/// Ghidra made no function here; the address is an immediate operand at 00d2da07.
+pub fn fn_00d2d480(e: &mut Engine, _unused_0: u32, a: u32, first: f32, second: f32, b: u32) -> u32 {
+    e.call(
+        0x00da_35f0,
+        &args![a, x87_quiet(first), x87_quiet(second), b],
+    )
+    .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -423,6 +443,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d2_d9d0, fn_00d2d9d0(Ptr)),
         entry!(0x00d2_da20, fn_00d2da20(u32)),
         entry!(0x00d2_da70, quick_sort_recursive_u32(u32, i32, i32, u32)),
+        entry!(0x00d2_d460, fn_00d2d460(u32, u32, u32) -> u32),
+        entry!(0x00d2_d480, fn_00d2d480(u32, u32, f32, f32, u32) -> u32),
     ]
 }
 
@@ -894,5 +916,50 @@ mod movement_tests {
         assert_eq!(s.e.mem.u32(stream + 4), records + 0x28);
         assert_eq!(s.e.mem.u32(buffer), 2);
         assert_eq!(s.e.mem.u32(buffer + 8), 0xffff_ffff);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_00d2d460_forwards_the_second_and_third_words() {
+        let mut e = Engine::new();
+        e.register_double(0x00da_3510, |_, a| {
+            assert_eq!(a, [0x22, 0x33]);
+            Ret {
+                eax: 0x44,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(
+            e.call(0x00d2_d460, &args![0x11u32, 0x22u32, 0x33u32]).u32(),
+            0x44
+        );
+    }
+    #[test]
+    fn fn_00d2d480_forwards_the_words_and_quiets_the_floats() {
+        let mut e = Engine::new();
+        e.register_double(0x00da_35f0, |_, a| {
+            assert_eq!(a, [0x22, 0x3fc0_0000, 0x7fc0_0001, 0x55]);
+            Ret {
+                eax: 0x66,
+                ..Ret::default()
+            }
+        });
+        let result = e
+            .call(
+                0x00d2_d480,
+                &args![
+                    0x11u32,
+                    0x22u32,
+                    1.5f32,
+                    f32::from_bits(0x7f80_0001),
+                    0x55u32
+                ],
+            )
+            .u32();
+        assert_eq!(result, 0x66);
     }
 }

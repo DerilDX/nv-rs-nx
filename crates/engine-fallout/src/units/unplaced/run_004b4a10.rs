@@ -99,9 +99,29 @@ pub fn fn_004b4ad0(e: &mut Engine, this: Ptr, matrix: Ptr, vector: Ptr) {
     }
 }
 
+/// The `float` factor `fn_004b4e50` multiplies each component by.
+const COMPONENT_SCALE: u32 = 0x011c_6294;
+
+// Translated from 004b4e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. `thiscall`, `RET 4`: writes the three `float`s at `source`, each
+/// multiplied by the `float` global at `011c6294`, to `this[0..3]` and `0.0` to `this[3]`;
+/// returns `this`. The global is loaded again for every component (`FLD`, then `FMUL dword`),
+/// so a NaN is chosen as the x87 does.
+pub fn fn_004b4e50(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    for lane in 0..3u32 {
+        let scale = e.mem.u32(COMPONENT_SCALE);
+        let component = e.mem.u32(source.addr().wrapping_add(4 * lane));
+        let product = x87_store32(x87_mul(x87_load32(scale), x87_m32(component)));
+        e.mem.set_u32(this.addr().wrapping_add(4 * lane), product);
+    }
+    e.mem.set_u32(this.addr().wrapping_add(0xc), 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004b_4e50, fn_004b4e50(Ptr, Ptr) -> Ptr),
         entry!(0x004b4ab0, fn_004b4ab0(Ptr, u32, u32)),
         entry!(0x004b_4f20, fn_004b4f20(Ptr) -> Ptr),
         entry!(0x004b_4ad0, fn_004b4ad0(Ptr, Ptr, Ptr)),
@@ -261,5 +281,75 @@ mod physics_step_tests {
         assert_eq!(e.mem.u32(this + 16), 0x1111_1111);
         assert_eq!(lanes(&e, matrix)[0], 1.0f32.to_bits());
         assert_eq!(lanes(&e, this)[..3], bits(&[3.0, 3.0, 3.0])[..]);
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    #[test]
+    fn at_004b4e50_scales_three_components_and_clears_the_fourth() {
+        let mut e = Engine::new();
+        e.map(COMPONENT_SCALE, 4);
+        e.mem.set_f32(COMPONENT_SCALE, 2.0);
+        let source = e.mem.alloc(0x10);
+        e.mem.set_f32(source, 1.5);
+        e.mem.set_f32(source + 4, -4.0);
+        e.mem.set_f32(source + 8, 0.25);
+        e.mem.set_f32(source + 0xc, 99.0);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_f32(this + 0xc, 7.0);
+        assert_eq!(e.call(0x004b_4e50, &args![this, source]).u32(), this);
+        assert_eq!(e.mem.f32(this), 3.0);
+        assert_eq!(e.mem.f32(this + 4), -8.0);
+        assert_eq!(e.mem.f32(this + 8), 0.5);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        // The source is left alone.
+        assert_eq!(e.mem.f32(source + 0xc), 99.0);
+    }
+
+    #[test]
+    fn at_004b4e50_scaling_in_place_reads_each_component_before_writing_it() {
+        let mut e = Engine::new();
+        e.map(COMPONENT_SCALE, 4);
+        e.mem.set_f32(COMPONENT_SCALE, 0.5);
+        let vector = e.mem.alloc(0x10);
+        e.mem.set_f32(vector, 8.0);
+        e.mem.set_f32(vector + 4, 6.0);
+        e.mem.set_f32(vector + 8, 4.0);
+        e.call(0x004b_4e50, &args![vector, vector]);
+        assert_eq!(e.mem.f32(vector), 4.0);
+        assert_eq!(e.mem.f32(vector + 4), 3.0);
+        assert_eq!(e.mem.f32(vector + 8), 2.0);
+        assert_eq!(e.mem.u32(vector + 0xc), 0);
+    }
+
+    #[test]
+    fn at_004b4e50_nan_components_come_out_quiet() {
+        let mut e = Engine::new();
+        e.map(COMPONENT_SCALE, 4);
+        e.mem.set_f32(COMPONENT_SCALE, 2.0);
+        let source = e.mem.alloc(0x10);
+        e.mem.set_u32(source, 0x7f80_0001);
+        e.mem.set_u32(source + 4, 0xff80_0001);
+        e.mem.set_f32(source + 8, 1.0);
+        let this = e.mem.alloc(0x10);
+        e.call(0x004b_4e50, &args![this, source]);
+        assert_eq!(e.mem.u32(this), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(this + 4), 0xffc0_0001);
+        assert_eq!(e.mem.f32(this + 8), 2.0);
+    }
+
+    #[test]
+    fn at_004b4e50_a_nan_scale_wins_over_a_number() {
+        let mut e = Engine::new();
+        e.map(COMPONENT_SCALE, 4);
+        e.mem.set_u32(COMPONENT_SCALE, 0x7fc0_0123);
+        let source = e.mem.alloc(0x10);
+        e.mem.set_f32(source, 1.0);
+        let this = e.mem.alloc(0x10);
+        e.call(0x004b_4e50, &args![this, source]);
+        assert_eq!(e.mem.u32(this), 0x7fc0_0123);
     }
 }

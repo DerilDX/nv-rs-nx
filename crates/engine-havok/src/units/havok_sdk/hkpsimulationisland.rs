@@ -564,6 +564,188 @@ pub fn fn_00d077d0(e: &mut Engine, this: Ptr<HkpSimulationIsland>) -> bool {
     answer != 0
 }
 
+// Translated from 00d074c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (the unit is `hkpSimulationIsland.cpp`; the class is unconfirmed): `this`
+/// in `ECX` and one stack word, `context` (`RET 4`). The island holds an array of entity pointers
+/// (data at +0x48, signed count at +0x4c) and an array of object pointers (data at +0x38, signed
+/// count at +0x3c). `context` is an object for which `00d28030` (`this` = `context`, two words) is
+/// called with a pair of numbers; the walk stops with `true` as soon as the word reached through three
+/// pointers from `context` (`[[[context]]]`) equals the negated word at `context + 4`. Three passes:
+///
+/// 1. For each entity `i` and each 8-byte record `j` of its array at `entity + 0x60` (data, signed
+///    count): the record's word at +4, moved by the signed byte at its +0x10, gives an object; unless
+///    the byte at +0xe8 of it is 5, `00d28030(context, i, word at +0xa8)` is called.
+/// 2. For each entity and each of the `n` (16-bit count at `entity + 0xb0`) 0x30-byte entries of the
+///    table at `entity + 0xac`: with `a` the word at +4 and `b` the word at +8 of the entry, unless
+///    the byte at +0xe8 of either is 5, `00d28030(context, a's word at +0xa8, b's word at +0xa8)`.
+/// 3. For each non-null object of the second array: a local array (10 words of storage on the stack,
+///    size 0, not owned) is filled by the virtual function at +0x10 of the object; the first entry
+///    whose byte at +0xe8 is not 5 is paired with every later such entry:
+///    `00d28030(context, first's word at +0xa8, the later one's word at +0xa8)`.
+///
+/// The local array's storage is freed before either answer when it is owned (capacity word not
+/// negative: the memory router's allocator, virtual function at +0x10, with the data pointer and
+/// `(capacity & 0x3fffffff) * 4` bytes). Answers `true` as soon as the stop condition holds after a
+/// call, otherwise whether it holds after all passes. (The upper bytes of `EAX` differ between the
+/// exe's paths; only `AL` is the answer.)
+pub fn fn_00d074c0(e: &mut Engine, this: u32, context: u32) -> bool {
+    let entity_count = e.mem.i32(this + 0x4c);
+    // Pass 1.
+    let mut i = 0i32;
+    if entity_count > 0 {
+        loop {
+            let entities = e.mem.u32(this + 0x48);
+            let entity = e.mem.u32(entities.wrapping_add(4 * i as u32));
+            let list = entity.wrapping_add(0x60);
+            let mut j = 0i32;
+            if e.mem.i32(list + 4) > j {
+                loop {
+                    let records = e.mem.u32(list);
+                    let record = e.mem.u32(records.wrapping_add(8 * j as u32 + 4));
+                    let object = record.wrapping_add(e.mem.i8(record + 0x10) as u32);
+                    if e.mem.u8(object + 0xe8) != 5 {
+                        let id = u32::from(e.mem.u16(object + 0xa8));
+                        e.call(0x00d2_8030, &args![context, i as u32, id]);
+                        if stop_reached_00d074c0(e, context) {
+                            return true;
+                        }
+                    }
+                    j += 1;
+                    if j >= e.mem.i32(list + 4) {
+                        break;
+                    }
+                }
+            }
+            i += 1;
+            if i >= e.mem.i32(this + 0x4c) {
+                break;
+            }
+        }
+    }
+    // Pass 2.
+    let mut index = 0i32;
+    if e.mem.i32(this + 0x4c) > 0 {
+        loop {
+            let entities = e.mem.u32(this + 0x48);
+            let entity = e.mem.u32(entities.wrapping_add(4 * index as u32));
+            if e.mem.u16(entity + 0xb0) != 0 {
+                let mut n = 0i32;
+                let mut offset = 0u32;
+                loop {
+                    let table = e.mem.u32(entity + 0xac);
+                    let first = e.mem.u32(table.wrapping_add(offset + 4));
+                    if e.mem.u8(first + 0xe8) != 5 {
+                        let second = e.mem.u32(table.wrapping_add(offset + 8));
+                        if e.mem.u8(second + 0xe8) != 5 {
+                            let first_id = u32::from(e.mem.u16(first + 0xa8));
+                            let second_id = u32::from(e.mem.u16(second + 0xa8));
+                            e.call(0x00d2_8030, &args![context, first_id, second_id]);
+                            if stop_reached_00d074c0(e, context) {
+                                return true;
+                            }
+                        }
+                    }
+                    n += 1;
+                    offset = offset.wrapping_add(0x30);
+                    if n >= i32::from(e.mem.u16(entity + 0xb0)) {
+                        break;
+                    }
+                }
+            }
+            index += 1;
+            if index >= e.mem.i32(this + 0x4c) {
+                break;
+            }
+        }
+    }
+    // Pass 3, with the exe's local array: header (data, size, capacity word) and 10 words of storage.
+    e.with_stack(0x34, |e, frame| {
+        let header = frame.addr();
+        e.mem.set_u32(header, header + 0xc);
+        e.mem.set_u32(header + 4, 0);
+        e.mem.set_u32(header + 8, 0x8000_000a);
+        let mut slot_index = 0i32;
+        if e.mem.i32(this + 0x3c) > 0 {
+            loop {
+                let slots = e.mem.u32(this + 0x38);
+                let slot = slots.wrapping_add(4 * slot_index as u32);
+                if e.mem.u32(slot) != 0 {
+                    e.mem.set_u32(header + 4, 0);
+                    let object = e.mem.u32(slot);
+                    e.vcall(object, 0x10, &args![header]);
+                    let mut size = e.mem.i32(header + 4);
+                    let mut data = e.mem.u32(header);
+                    let mut scan = 0i32;
+                    let mut first = -1i32;
+                    loop {
+                        if scan >= size {
+                            break;
+                        }
+                        let candidate = e.mem.u32(data.wrapping_add(4 * scan as u32));
+                        if e.mem.u8(candidate + 0xe8) != 5 {
+                            first = scan;
+                        }
+                        scan += 1;
+                        if first == -1 {
+                            continue;
+                        }
+                        if scan >= size {
+                            break;
+                        }
+                        loop {
+                            let current = e.mem.u32(data.wrapping_add(4 * scan as u32));
+                            if e.mem.u8(current + 0xe8) != 5 {
+                                let current_id = u32::from(e.mem.u16(current + 0xa8));
+                                let first_object = e.mem.u32(data.wrapping_add(4 * first as u32));
+                                let first_id = u32::from(e.mem.u16(first_object + 0xa8));
+                                e.call(0x00d2_8030, &args![context, first_id, current_id]);
+                                if stop_reached_00d074c0(e, context) {
+                                    release_frame_array_00d074c0(e, header);
+                                    return true;
+                                }
+                                size = e.mem.i32(header + 4);
+                                data = e.mem.u32(header);
+                            }
+                            scan += 1;
+                            if scan >= size {
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+                slot_index += 1;
+                if slot_index >= e.mem.i32(this + 0x3c) {
+                    break;
+                }
+            }
+        }
+        release_frame_array_00d074c0(e, header);
+        stop_reached_00d074c0(e, context)
+    })
+}
+
+/// Whether the word reached through three pointers from `context` equals the negated word at
+/// `context + 4`.
+fn stop_reached_00d074c0(e: &Engine, context: u32) -> bool {
+    let first = e.mem.u32(context);
+    let second = e.mem.u32(first);
+    e.mem.u32(second) == e.mem.u32(context + 4).wrapping_neg()
+}
+
+/// Frees the local array's storage when it is owned, after setting its size to 0.
+fn release_frame_array_00d074c0(e: &mut Engine, header: u32) {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let capacity = e.mem.u32(header + 8);
+    e.mem.set_u32(header + 4, 0);
+    if (capacity as i32) >= 0 {
+        let data = e.mem.u32(header);
+        let bytes = (capacity & 0x3fff_ffff).wrapping_mul(4);
+        e.vcall(allocator, 0x10, &args![data, bytes]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -609,6 +791,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d0_7720, fn_00d07720(Ptr)),
         entry!(0x00d0_77d0, fn_00d077d0(Ptr<HkpSimulationIsland>) -> bool),
         entry!(0x00d0_78e0, deleting_destructor_00d078e0(Ptr, u8) -> Ptr),
+        entry!(0x00d0_74c0, fn_00d074c0(u32, u32) -> bool),
     ]
 }
 
@@ -1171,5 +1354,238 @@ mod tests {
         assert_eq!(log[1][1], log[0][0]);
         assert_eq!(log[1][2], 0x0a00_0080);
         assert_eq!(e.mem.u32(router), 0x0a00_0000);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type PairLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// A stop context: `[[[context]]]` is 1 against `-[context + 4]` = 0 (not reached) until the
+    /// double for `00d28030` has run `trigger` times (0: never), when it sets the word to 0. The
+    /// double logs the words it receives.
+    fn stop_context(e: &mut Engine, trigger: u32) -> (u32, PairLog) {
+        let context = e.mem.alloc(8);
+        let first = e.mem.alloc(4);
+        let second = e.mem.alloc(4);
+        e.mem.set_u32(context, first);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(second, 1);
+        let log: PairLog = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&log);
+        e.register_double(0x00d2_8030, move |e, a| {
+            sink.borrow_mut().push(a.to_vec());
+            if sink.borrow().len() as u32 == trigger {
+                e.mem.set_u32(second, 0);
+            }
+            Ret::default()
+        });
+        (context, log)
+    }
+
+    /// An object whose byte at +0xe8 is `kind` and whose word at +0xa8 is `id`.
+    fn object(e: &mut Engine, kind: u8, id: u16) -> u32 {
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u8(object + 0xe8, kind);
+        e.mem.set_u16(object + 0xa8, id);
+        object
+    }
+
+    /// An island with `entities` (pointers) and `slots` (object pointers).
+    fn island(e: &mut Engine, entities: &[u32], slots: &[u32]) -> u32 {
+        let this = e.mem.alloc(0x60);
+        let entity_data = e.mem.alloc(4 * entities.len().max(1) as u32);
+        for (i, entity) in entities.iter().enumerate() {
+            e.mem.set_u32(entity_data + 4 * i as u32, *entity);
+        }
+        e.mem.set_u32(this + 0x48, entity_data);
+        e.mem.set_u32(this + 0x4c, entities.len() as u32);
+        let slot_data = e.mem.alloc(4 * slots.len().max(1) as u32);
+        for (i, slot) in slots.iter().enumerate() {
+            e.mem.set_u32(slot_data + 4 * i as u32, *slot);
+        }
+        e.mem.set_u32(this + 0x38, slot_data);
+        e.mem.set_u32(this + 0x3c, slots.len() as u32);
+        // The memory router the local array's cleanup asks for (nothing is freed unless a test says so).
+        let router = e.mem.alloc(0x20);
+        let allocator = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(allocator, vtable);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        this
+    }
+
+    /// An entity whose list at +0x60 holds one record per `(kind, id, adjust)`: the record's byte at
+    /// +0x10 is `adjust`, so the object it leads to lies `adjust` bytes from the record.
+    fn entity_with_records(e: &mut Engine, objects: &[(u8, u16, i8)]) -> u32 {
+        let entity = e.mem.alloc(0x100);
+        let records = e.mem.alloc(8 * objects.len().max(1) as u32);
+        for (i, (kind, id, adjust)) in objects.iter().enumerate() {
+            let block = e.mem.alloc(0x400);
+            let record = block + 0x100;
+            e.mem.set_u8(record + 0x10, *adjust as u8);
+            let target = record.wrapping_add(*adjust as u32);
+            e.mem.set_u8(target + 0xe8, *kind);
+            e.mem.set_u16(target + 0xa8, *id);
+            e.mem.set_u32(records + 8 * i as u32 + 4, record);
+        }
+        e.mem.set_u32(entity + 0x60, records);
+        e.mem.set_u32(entity + 0x64, objects.len() as u32);
+        entity
+    }
+    /// The first pass pairs the entity index with each object's id and skips objects of kind 5; a
+    /// positive and a negative adjustment both find the object.
+    #[test]
+    fn fn_00d074c0_pairs_entity_indexes_with_ids_in_the_first_pass() {
+        let mut e = Engine::new();
+        let entity_zero = entity_with_records(&mut e, &[(1, 11, 0x20), (5, 12, 0)]);
+        let entity_one = entity_with_records(&mut e, &[(2, 21, -0x20)]);
+        let this = island(&mut e, &[entity_zero, entity_one], &[]);
+        let (context, log) = stop_context(&mut e, 0);
+        assert!(!e.call(0x00d0_74c0, &args![this, context]).bool());
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![context, 0, 11], vec![context, 1, 21]]
+        );
+    }
+
+    /// The walk stops with true at the first call that makes the condition hold.
+    #[test]
+    fn fn_00d074c0_stops_as_soon_as_the_condition_holds() {
+        let mut e = Engine::new();
+        let entity = entity_with_records(&mut e, &[(1, 11, 0), (1, 12, 0)]);
+        let this = island(&mut e, &[entity], &[]);
+        let (context, log) = stop_context(&mut e, 1);
+        assert!(e.call(0x00d0_74c0, &args![this, context]).bool());
+        assert_eq!(*log.borrow(), vec![vec![context, 0, 11]]);
+    }
+    /// The second pass pairs the two objects of each 0x30-byte table entry unless either is kind 5.
+    #[test]
+    fn fn_00d074c0_pairs_the_objects_of_each_table_entry_in_the_second_pass() {
+        let mut e = Engine::new();
+        let entity = e.mem.alloc(0x100);
+        let table = e.mem.alloc(0x30 * 4);
+        let pairs = [
+            (object(&mut e, 1, 31), object(&mut e, 1, 32)),
+            (object(&mut e, 5, 33), object(&mut e, 1, 34)),
+            (object(&mut e, 3, 41), object(&mut e, 3, 42)),
+            (object(&mut e, 2, 35), object(&mut e, 5, 36)),
+        ];
+        for (i, (first, second)) in pairs.iter().enumerate() {
+            e.mem.set_u32(table + 0x30 * i as u32 + 4, *first);
+            e.mem.set_u32(table + 0x30 * i as u32 + 8, *second);
+        }
+        e.mem.set_u32(entity + 0xac, table);
+        e.mem.set_u16(entity + 0xb0, 4);
+        let this = island(&mut e, &[entity], &[]);
+        let (context, log) = stop_context(&mut e, 0);
+        assert!(!e.call(0x00d0_74c0, &args![this, context]).bool());
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![context, 31, 32], vec![context, 41, 42]]
+        );
+    }
+    /// An entity without table entries (count 0) is skipped.
+    #[test]
+    fn fn_00d074c0_skips_entities_without_table_entries() {
+        let mut e = Engine::new();
+        let entity = e.mem.alloc(0x100);
+        let this = island(&mut e, &[entity], &[]);
+        let (context, log) = stop_context(&mut e, 0);
+        assert!(!e.call(0x00d0_74c0, &args![this, context]).bool());
+        assert!(log.borrow().is_empty());
+    }
+
+    /// An object whose virtual function at +0x10 fills the array with the given objects.
+    fn filler(e: &mut Engine, entries: &[u32]) -> u32 {
+        let table = e.mem.alloc(0x20);
+        e.mem.set_u32(table + 0x10, 0x0900_0020);
+        let owner = e.mem.alloc(8);
+        e.mem.set_u32(owner, table);
+        let entries = entries.to_vec();
+        e.register_double(0x0900_0020, move |e, a| {
+            let data = e.mem.u32(a[1]);
+            for (i, entry) in entries.iter().enumerate() {
+                e.mem.set_u32(data + 4 * i as u32, *entry);
+            }
+            e.mem.set_u32(a[1] + 4, entries.len() as u32);
+            Ret::default()
+        });
+        owner
+    }
+
+    /// The third pass pairs the first entry that is not kind 5 with each later one that is not.
+    #[test]
+    fn fn_00d074c0_pairs_the_first_usable_entry_with_the_later_ones_in_the_third_pass() {
+        let mut e = Engine::new();
+        let entries = [
+            object(&mut e, 5, 1),
+            object(&mut e, 1, 2),
+            object(&mut e, 5, 3),
+            object(&mut e, 2, 4),
+            object(&mut e, 3, 5),
+        ];
+        let owner = filler(&mut e, &entries);
+        // Null slots are skipped.
+        let this = island(&mut e, &[], &[0, owner]);
+        let (context, log) = stop_context(&mut e, 0);
+        assert!(!e.call(0x00d0_74c0, &args![this, context]).bool());
+        assert_eq!(
+            *log.borrow(),
+            vec![vec![context, 2, 4], vec![context, 2, 5]]
+        );
+    }
+
+    /// The third pass can stop too; and storage that became owned is freed with its size in bytes.
+    #[test]
+    fn fn_00d074c0_frees_owned_local_storage() {
+        let mut e = Engine::new();
+        // The island is built first: it installs a router that frees nothing, which this test replaces.
+        let first = object(&mut e, 1, 7);
+        let second = object(&mut e, 1, 8);
+        let table = e.mem.alloc(0x20);
+        e.mem.set_u32(table + 0x10, 0x0900_0022);
+        let owner = e.mem.alloc(8);
+        e.mem.set_u32(owner, table);
+        let this = island(&mut e, &[], &[owner]);
+        let router = e.mem.alloc(0x20);
+        let allocator = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 0x10, 0x0900_0021);
+        e.mem.set_u32(allocator, vtable);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let freed = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&freed);
+        e.register_double(0x0900_0021, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        // The filler grows the array: its own storage, capacity 8 and no flag bits.
+        let storage = e.mem.alloc(0x40);
+        e.mem.set_u32(storage, first);
+        e.mem.set_u32(storage + 4, second);
+        e.register_double(0x0900_0022, move |e, a| {
+            e.mem.set_u32(a[1], storage);
+            e.mem.set_u32(a[1] + 4, 2);
+            e.mem.set_u32(a[1] + 8, 8);
+            Ret::default()
+        });
+        let (context, log) = stop_context(&mut e, 1);
+        // The first pair stops the walk: true, after freeing 8 * 4 bytes.
+        assert!(e.call(0x00d0_74c0, &args![this, context]).bool());
+        assert_eq!(*log.borrow(), vec![vec![context, 7, 8]]);
+        assert_eq!(*freed.borrow(), vec![vec![allocator, storage, 32]]);
     }
 }

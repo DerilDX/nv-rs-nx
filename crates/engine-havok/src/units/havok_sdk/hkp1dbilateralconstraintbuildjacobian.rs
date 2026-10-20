@@ -446,9 +446,146 @@ pub fn hk_stabilized_ball_socket_constraint_build_jacobian_no_schema(
     }
 }
 
+/// The four sign bits (`010c44d0`) the exe negates a vector with (`XORPS`).
+const NEGATION_MASK: u32 = 0x010c_44d0;
+
+/// `vector` with every lane's sign flipped (`XORPS` with [`NEGATION_MASK`]).
+fn negated(e: &Engine, vector: Lanes) -> Lanes {
+    let mask = [0, 1, 2, 3].map(|lane| e.mem.u32(NEGATION_MASK + 4 * lane));
+    [0, 1, 2, 3].map(|lane| f32::from_bits(vector[lane].to_bits() ^ mask[lane]))
+}
+
+// Translated from 00dcee80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A one-row angular record (no engine-map name; cdecl, three words: `block`, the info block and
+/// the cursor). `block` holds the axis at `+0x10` and two triples at `+0` and `+0x20`; the info
+/// block the bodies at `+0x30`/`+0x34`, floats at `+0x20` and `+0x24`. Writes at the cursor
+/// record: the axis carried through body A's rotation rows at `+0`, the negated axis through
+/// body B's at `+0x10`, `info[0x24] / (sum + FLT_EPSILON)` at `+0xc` (the sum of the squared
+/// terms times the inverse inertias, `z + (y + x)`), `-(b[9] * b[1] + b[0] * b[8] + b[10] * b[2])
+/// * info[0x20]` at `+0x1c` (x87), and gives the record the header with tag 0xc. The cursor
+/// moves on by 0x20.
+pub fn fn_00dcee80(e: &mut Engine, block: u32, info: u32, cursor: u32) {
+    let record = e.mem.u32(cursor);
+    let axis = load(e, block + 0x10);
+    let opposite = negated(e, axis);
+    let bodies = bodies_of(e, info);
+    let tau = x87_float(e, info + 0x24);
+    let first = rotate(e, bodies[0], axis);
+    store(e, record, first);
+    let second = rotate(e, bodies[1], opposite);
+    store(e, record + 0x10, second);
+    let first = load(e, record);
+    let terms = add(
+        mul(mul(first, first), load(e, bodies[0] + 0x30)),
+        mul(mul(second, second), load(e, bodies[1] + 0x30)),
+    );
+    let sum = lane_sum(terms);
+    let addend = e.mem.f64(HEADER_ADDEND);
+    let denominator = rounded(f64::from(sum) + addend);
+    e.mem.set_f32(
+        record + 0xc,
+        rounded(x87_div(f64::from(tau), f64::from(x87_quiet(denominator)))),
+    );
+    let stored = x87_store32(x87_add(
+        x87_add(
+            x87_mul(
+                x87_load32(e.mem.u32(block + 0x24)),
+                x87_m32(e.mem.u32(block + 4)),
+            ),
+            x87_mul(
+                x87_load32(e.mem.u32(block)),
+                x87_m32(e.mem.u32(block + 0x20)),
+            ),
+        ),
+        x87_mul(
+            x87_load32(e.mem.u32(block + 0x28)),
+            x87_m32(e.mem.u32(block + 8)),
+        ),
+    ));
+    let negative = -x87_load32(stored);
+    e.mem.set_f32(
+        record + 0x1c,
+        f32::from_bits(x87_store32(x87_mul(
+            negative,
+            x87_m32(e.mem.u32(info + 0x20)),
+        ))),
+    );
+    e.mem.set_u32(cursor, record + 0x20);
+    let first_word = f64::from(x87_float(e, record));
+    e.mem.set_f32(record, rounded(addend + first_word));
+    e.mem.set_u8(record, 0xc);
+}
+
+// Translated from 00dcefb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hk1dAngularFrictionBuildJacobian` (Xbox PDB; cdecl, three words: `block`, the info block and
+/// the cursor). `block` holds a pointer to `count` axis vectors at `+0`, a pointer to `count`
+/// pairs of floats (8 bytes each) at `+4`, a float at `+8` and `count` at `+0xc`; the info block the
+/// floats at `+4` and `+8` and the bodies at `+0x30`/`+0x34`. For each axis a 0x30-byte record:
+/// the axis through body A's rotation rows at `+0`, the negated axis through body B's at `+0x10`,
+/// `1 / (sum + FLT_EPSILON)` at `+0xc` (the sum of the squared terms times the inverse
+/// inertias, `z + (y + x)`, rounded to float first), the second float of the pair times
+/// `info[8]` at `+0x1c`, `info[4] * block[8]` at `+0x20`, and the header with tag 0xe. With no
+/// axis only the cursor is rewritten (unchanged).
+pub fn hk1d_angular_friction_build_jacobian(e: &mut Engine, block: u32, info: u32, cursor: u32) {
+    let axes = e.mem.u32(block);
+    let pairs = e.mem.u32(block + 4);
+    let mut record = e.mem.u32(cursor);
+    let mut remaining = (e.mem.u32(block + 0xc) as i32).wrapping_sub(1);
+    if remaining < 0 {
+        e.mem.set_u32(cursor, record);
+        return;
+    }
+    let addend = e.mem.f64(HEADER_ADDEND);
+    let (mut axis_at, mut pair_at) = (axes, pairs + 4);
+    loop {
+        let axis = load(e, axis_at);
+        let opposite = negated(e, axis);
+        let bodies = bodies_of(e, info);
+        let first = rotate(e, bodies[0], axis);
+        store(e, record, first);
+        let second = rotate(e, bodies[1], opposite);
+        store(e, record + 0x10, second);
+        let first = load(e, record);
+        let terms = add(
+            mul(mul(first, first), load(e, bodies[0] + 0x30)),
+            mul(mul(second, second), load(e, bodies[1] + 0x30)),
+        );
+        let sum = lane_sum(terms);
+        let denominator = rounded(f64::from(sum) + addend);
+        let this_record = record;
+        record += 0x30;
+        axis_at += 0x10;
+        remaining -= 1;
+        e.mem.set_f32(
+            this_record + 0xc,
+            rounded(1.0 / f64::from(x87_quiet(denominator))),
+        );
+        let pair_second = f64::from(x87_float(e, pair_at));
+        pair_at += 8;
+        e.mem.set_f32(
+            this_record + 0x1c,
+            rounded(pair_second * f64::from(x87_float(e, info + 8))),
+        );
+        e.mem.set_f32(
+            this_record + 0x20,
+            rounded(f64::from(x87_float(e, info + 4)) * f64::from(x87_float(e, block + 8))),
+        );
+        finish_header(e, this_record, 0xe);
+        if remaining < 0 {
+            break;
+        }
+    }
+    e.mem.set_u32(cursor, record);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00dc_ee80, fn_00dcee80(u32, u32, u32)),
+        entry!(
+            0x00dc_efb0,
+            hk1d_angular_friction_build_jacobian(u32, u32, u32)
+        ),
         entry!(0x00dcedd0, hk_add_velocity_build_jacobian(u32, u32, u32)),
         entry!(
             0x00dcee10,
@@ -770,5 +907,128 @@ mod tests {
         e.call(0x00dc_fc00, &args![first, second, 0.25f32, data, record]);
         assert!(calls_to(&e, X87_SQRT).is_empty());
         assert!(e.mem.f32(record + 0x0c).is_nan());
+    }
+}
+
+#[cfg(test)]
+mod angular_record_tests {
+    use super::*;
+
+    /// An engine with the image constants and two bodies with identity rotation rows and
+    /// inverse inertias (1, 1, 1, 0) hanging off an info block.
+    fn rig() -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.set_global(HEADER_ADDEND, 1.1920929e-7f64);
+        for lane in 0..4 {
+            e.mem.set_u32(NEGATION_MASK + 4 * lane, 0x8000_0000);
+        }
+        let info = e.mem.alloc(0x80);
+        let mut bodies = [0u32; 2];
+        for body in &mut bodies {
+            *body = e.mem.alloc(0x100);
+            for (row, lanes) in [
+                (0x50u32, [1.0f32, 0.0, 0.0, 0.0]),
+                (0x60, [0.0, 1.0, 0.0, 0.0]),
+                (0x70, [0.0, 0.0, 1.0, 0.0]),
+                (0x30, [1.0, 1.0, 1.0, 0.0]),
+            ] {
+                for (lane, value) in lanes.into_iter().enumerate() {
+                    e.mem.set_f32(*body + row + 4 * lane as u32, value);
+                }
+            }
+        }
+        e.mem.set_u32(info + 0x30, bodies[0]);
+        e.mem.set_u32(info + 0x34, bodies[1]);
+        let records = e.mem.alloc(0x100);
+        (e, info, records)
+    }
+
+    #[test]
+    fn the_angular_friction_records_carry_each_axis_through_both_bodies() {
+        let (mut e, info, records) = rig();
+        e.mem.set_f32(info + 4, 3.0);
+        e.mem.set_f32(info + 8, 0.5);
+        let axes = e.mem.alloc(0x20);
+        for (lane, value) in [1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_f32(axes + 4 * lane as u32, value);
+        }
+        let pairs = e.mem.alloc(0x10);
+        for (i, value) in [10.0f32, 20.0, 30.0, 40.0].into_iter().enumerate() {
+            e.mem.set_f32(pairs + 4 * i as u32, value);
+        }
+        let block = e.mem.alloc(0x20);
+        e.mem.set_u32(block, axes);
+        e.mem.set_u32(block + 4, pairs);
+        e.mem.set_f32(block + 8, 4.0);
+        e.mem.set_u32(block + 0xc, 2);
+        let cursor = e.mem.alloc(8);
+        e.mem.set_u32(cursor, records);
+        e.call(0x00dc_efb0, &args![block, info, cursor]);
+        assert_eq!(e.mem.u32(cursor), records + 0x60);
+        // First axis (1, 0, 0): body A turns it into (1, 0, 0), body B into (-1, 0, 0).
+        assert_eq!(e.mem.f32(records + 0x10), -1.0);
+        let epsilon = (1.0f64 + 1.1920929e-7) as f32;
+        assert_eq!(e.mem.u32(records), epsilon.to_bits() & !0xff | 0xe);
+        // 1 / (2 + FLT_EPSILON), the sum rounded to float first.
+        let denominator = f64::from((2.0 + 1.1920929e-7f64) as f32);
+        assert_eq!(e.mem.f32(records + 0xc), (1.0 / denominator) as f32);
+        // The second float of the pair times info[2], and info[1] times block[2].
+        assert_eq!(e.mem.f32(records + 0x1c), 20.0 * 0.5);
+        assert_eq!(e.mem.f32(records + 0x20), 3.0 * 4.0);
+        // Second axis (0, 1, 0): the header float is 0 + FLT_EPSILON, the pair is the next one.
+        assert_eq!(e.mem.f32(records + 0x30 + 4), 1.0);
+        assert_eq!(e.mem.u32(records + 0x30), 0x3400_000e);
+        assert_eq!(e.mem.f32(records + 0x30 + 0x1c), 40.0 * 0.5);
+    }
+
+    #[test]
+    fn the_angular_friction_without_axes_leaves_the_cursor_alone() {
+        let (mut e, info, records) = rig();
+        let block = e.mem.alloc(0x20);
+        e.mem.set_u32(block + 0xc, 0);
+        let cursor = e.mem.alloc(8);
+        e.mem.set_u32(cursor, records);
+        e.call(0x00dc_efb0, &args![block, info, cursor]);
+        assert_eq!(e.mem.u32(cursor), records);
+        assert_eq!(e.mem.u32(records), 0);
+    }
+
+    #[test]
+    fn the_one_row_angular_record_negates_the_axis_for_the_second_body() {
+        let (mut e, info, records) = rig();
+        e.mem.set_f32(info + 0x20, 0.5);
+        e.mem.set_f32(info + 0x24, 6.0);
+        let block = e.mem.alloc(0x40);
+        for (lane, value) in [0.0f32, 0.0, 1.0, 0.0].into_iter().enumerate() {
+            e.mem.set_f32(block + 0x10 + 4 * lane as u32, value);
+        }
+        for (offset, value) in [
+            (0u32, 2.0f32),
+            (4, 3.0),
+            (8, 4.0),
+            (0x20, 5.0),
+            (0x24, 6.0),
+            (0x28, 7.0),
+        ] {
+            e.mem.set_f32(block + offset, value);
+        }
+        let cursor = e.mem.alloc(8);
+        e.mem.set_u32(cursor, records);
+        e.call(0x00dc_ee80, &args![block, info, cursor]);
+        assert_eq!(e.mem.u32(cursor), records + 0x20);
+        assert_eq!(e.mem.f32(records + 8), 1.0);
+        assert_eq!(e.mem.f32(records + 0x10 + 8), -1.0);
+        // 6 / (2 + FLT_EPSILON).
+        assert_eq!(
+            e.mem.f32(records + 0xc),
+            (6.0 / (2.0 + 1.1920929e-7f64)) as f32
+        );
+        // -(6 * 3 + 2 * 5 + 7 * 4) * 0.5 = -28.
+        assert_eq!(e.mem.f32(records + 0x1c), -28.0);
+        assert_eq!(e.mem.u32(records), 0x3400_000c);
     }
 }

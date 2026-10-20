@@ -545,6 +545,35 @@ pub fn hkp_symmetric_agent_linear_cast_multi_sphere_triangle_process_collision(
     flip_contacts(e, result, first_point, saved);
 }
 
+// Translated from 00d37e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (the agent class is unconfirmed): a collision agent creation function,
+/// cdecl, four stack words (nothing popped): the first is the first collidable (`body_a`), the second and third are never read (`_unused_1`, `_unused_2`) and the last is the contact manager, `manager`. Allocates 0x2c bytes through the memory
+/// router's allocator (`00c85750`; virtual function at +4 of the object at router + 0x10) and fills
+/// the block: the size as a 16-bit word at +4, the count 1 as a 16-bit word at +6, `manager` at
+/// +8, `0xffffffff` as a word at +0x1c, +0x20, +0x24 and +0x28 and the vtable word `010cee4c` at +0 (replaced by `010cee88` once the copy is done). Then calls `00cd7160` with the data at +0x20 of the shape (the word at +0 of the collidable) and the address of the block + 0xc. Returns the block. Ghidra made no function here; the address is an immediate operand at 00d38a03.
+pub fn fn_00d37e60(
+    e: &mut Engine,
+    body_a: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    manager: u32,
+) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let block = e.vcall(allocator, 4, &args![0x2cu32]).u32();
+    e.mem.set_u16(block + 4, 0x2c);
+    e.mem.set_u16(block + 6, 1);
+    e.mem.set_u32(block + 8, manager);
+    for offset in [0x1c, 0x20, 0x24, 0x28] {
+        e.mem.set_u32(block + offset, 0xffff_ffff);
+    }
+    e.mem.set_u32(block, 0x010c_ee4c);
+    let shape = e.mem.u32(body_a);
+    e.call(0x00cd_7160, &args![shape + 0x20, block + 0xc]);
+    e.mem.set_u32(block, 0x010c_ee88);
+    block
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -587,6 +616,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 Ptr, u32, u32, u32, u32
             )
         ),
+        entry!(0x00d3_7e60, fn_00d37e60(u32, u32, u32, u32) -> u32),
     ]
 }
 
@@ -1175,5 +1205,71 @@ mod tests {
             normal.map(f32::to_bits),
             [0x8000_0000, 0x8000_0000, 0xbf80_0000, 0xbf40_0000]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The slot of the allocator's vtable (offset 4) that allocates, as a test double.
+    const ALLOCATE_SLOT_DOUBLE: u32 = 0x0900_0001;
+
+    /// A memory router (`00c85750`) whose allocator allocates through a double that logs the
+    /// size it was asked for and answers a zeroed block.
+    fn allocator_engine() -> (Engine, Rc<RefCell<Vec<u32>>>) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, ALLOCATE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&sizes);
+        e.register_double(ALLOCATE_SLOT_DOUBLE, move |e, a| {
+            log.borrow_mut().push(a[1]);
+            Ret {
+                eax: e.mem.alloc(a[1]),
+                ..Ret::default()
+            }
+        });
+        (e, sizes)
+    }
+
+    #[test]
+    fn fn_00d37e60_fills_the_block_and_copies_the_shape_data() {
+        let (mut e, sizes) = allocator_engine();
+        let shape = e.mem.alloc(0x40);
+        let body = e.mem.alloc(0x10);
+        e.mem.set_u32(body, shape);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register_double(0x00cd_7160, move |e, a| {
+            // The block already holds the first vtable word while the data is copied.
+            log.borrow_mut().push((a.to_vec(), e.mem.u32(a[1] - 0xc)));
+            Ret::default()
+        });
+        let block = e
+            .call(0x00d3_7e60, &args![body, 0x2000u32, 3u32, 0x7777u32])
+            .u32();
+        assert_eq!(*sizes.borrow(), vec![0x2c]);
+        assert_eq!(
+            *seen.borrow(),
+            vec![(vec![shape + 0x20, block + 0xc], 0x010c_ee4c)]
+        );
+        assert_eq!(e.mem.u16(block + 4), 0x2c);
+        assert_eq!(e.mem.u16(block + 6), 1);
+        assert_eq!(e.mem.u32(block + 8), 0x7777);
+        assert_eq!(e.mem.u32(block), 0x010c_ee88);
+        for offset in [0x1c, 0x20, 0x24, 0x28] {
+            assert_eq!(e.mem.u32(block + offset), 0xffff_ffff);
+        }
     }
 }

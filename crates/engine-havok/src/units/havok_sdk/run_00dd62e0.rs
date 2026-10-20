@@ -903,9 +903,33 @@ pub fn fn_00dd7140(e: &mut Engine, this: u32, out: u32) {
     e.mem.set_u8(out, 0);
 }
 
+// Translated from 00dd6ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, three words `out`, `first`, `second`; descriptions, not
+/// confirmed; the code at `00dd6f7c` stores its address): a "less than" test on two words in
+/// memory. Stores 1 in the byte at `out` when the word `first` points to is below the word
+/// `second` points to (unsigned), else 0, and answers `out`.
+pub fn fn_00dd6ea0(e: &mut Engine, out: Ptr, first: Ptr, second: Ptr) -> u32 {
+    let first_word = e.mem.u32(first.addr());
+    let second_word = e.mem.u32(second.addr());
+    e.mem.set_u8(out.addr(), u8::from(first_word < second_word));
+    out.addr()
+}
+
+// Translated from 00dd70f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, three words `out`, `first`, `second`; descriptions, not
+/// confirmed; code in `walkMemory`, `findGarbage` and others stores its address): a "less than"
+/// test on two words. Stores 1 in the byte at `out` when `first` is below `second` (unsigned),
+/// else 0, and answers `out`.
+pub fn fn_00dd70f0(e: &mut Engine, out: Ptr, first: u32, second: u32) -> u32 {
+    e.mem.set_u8(out.addr(), u8::from(first < second));
+    out.addr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00dd6ea0, fn_00dd6ea0(Ptr, Ptr, Ptr) -> u32),
+        entry!(0x00dd70f0, fn_00dd70f0(Ptr, u32, u32) -> u32),
         entry!(0x00dd62e0, fn_00dd62e0(u32, i32, i32, i32, u32)),
         entry!(0x00dd6380, fn_00dd6380(u32, i32, i32, i32, u32) -> u32),
         entry!(0x00dd6510, fn_00dd6510(u32, u32, i32, i32, u32, u32) -> u32),
@@ -926,6 +950,37 @@ mod tests {
     use crate::units::havok_sdk::hkgeometryprocessing::store_vec4;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    #[test]
+    fn fn_00dd6ea0_compares_the_words_the_pointers_lead_to() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(8);
+        let low = e.mem.alloc(8);
+        let high = e.mem.alloc(8);
+        e.mem.set_u32(low, 5);
+        e.mem.set_u32(high, 0x8000_0000);
+        assert_eq!(e.call(0x00dd_6ea0, &args![out, low, high]).u32(), out);
+        assert_eq!(e.mem.u8(out), 1);
+        e.call(0x00dd_6ea0, &args![out, high, low]);
+        assert_eq!(e.mem.u8(out), 0);
+        e.call(0x00dd_6ea0, &args![out, low, low]);
+        assert_eq!(e.mem.u8(out), 0);
+    }
+
+    #[test]
+    fn fn_00dd70f0_compares_the_words_themselves() {
+        let mut e = Engine::new();
+        let out = e.mem.alloc(8);
+        assert_eq!(
+            e.call(0x00dd_70f0, &args![out, 5u32, 0x8000_0000u32]).u32(),
+            out
+        );
+        assert_eq!(e.mem.u8(out), 1);
+        e.call(0x00dd_70f0, &args![out, 0x8000_0000u32, 5u32]);
+        assert_eq!(e.mem.u8(out), 0);
+        e.call(0x00dd_70f0, &args![out, 5u32, 5u32]);
+        assert_eq!(e.mem.u8(out), 0);
+    }
 
     type Log = Rc<RefCell<Vec<(&'static str, Vec<u32>)>>>;
 

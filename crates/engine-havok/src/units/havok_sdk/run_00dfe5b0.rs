@@ -31,11 +31,20 @@ pub fn fn_00dfe5b0(e: &mut Engine, object: Ptr, extra: u32) {
     }
 }
 
+// Translated from 00dfe590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns what it returns (`EAX`). Ghidra made no function here; the address is an immediate operand at 00fc3f69.
+pub fn fn_00dfe590(e: &mut Engine, object: u32) -> u32 {
+    e.vcall(object, 0, &args![0u32]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00dfe5e0, fn_00dfe5e0() -> u32),
         entry!(0x00df_e5b0, fn_00dfe5b0(Ptr, u32)),
+        entry!(0x00df_e590, fn_00dfe590(u32) -> u32),
     ]
 }
 
@@ -118,5 +127,33 @@ mod tests_a05 {
             *log.borrow(),
             vec![vec![object + 8, 4], vec![object + 0x54, 4]]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The virtual function in slot 0 gets the object and the word 0; its answer comes back.
+    #[test]
+    fn fn_00dfe590_calls_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(vtable, 0x0900_0002);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register_double(0x0900_0002, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            Ret {
+                eax: 0x77,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(e.call(0x00df_e590, &args![object]).u32(), 0x77);
+        assert_eq!(*seen.borrow(), vec![vec![object, 0]]);
     }
 }

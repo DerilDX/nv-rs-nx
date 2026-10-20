@@ -41,9 +41,31 @@ pub fn fn_00dced90(e: &mut Engine, first: u32, second: u32, cursor: u32) {
     e.mem.set_u32(cursor, at.wrapping_add(0x20));
 }
 
+// Translated from 00dced30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word `object`): calls the object's virtual function at
+/// vtable offset 0 (the destructor) with the one stack word 0 and answers what it answers. It is
+/// the cleanup function of a type-info record (word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject`
+/// calls it with `(object)`): the start-up initializer at `00fc00e9` stores its address there.
+pub fn fn_00dced30(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00dced50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, two words `(object, extra)`): with a non-null `object` runs
+/// `00d4dfc0` on it with `extra` (`thiscall`, one stack word); otherwise does nothing. It is the
+/// finish function of a type-info record (word `+4`): the start-up initializer at `00fc00df` stores
+/// its address there.
+pub fn fn_00dced50(e: &mut Engine, object: Ptr, extra: u32) {
+    if !object.is_null() {
+        e.call(0x00d4_dfc0, &args![object, extra]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00dced30, fn_00dced30(Ptr) -> u32),
+        entry!(0x00dced50, fn_00dced50(Ptr, u32)),
         entry!(0x00dc_ed70, fn_00dced70() -> u32),
         entry!(0x00dced90, fn_00dced90(u32, u32, u32)),
     ]
@@ -94,6 +116,58 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    #[test]
+    fn fn_00dced30_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(8);
+        e.put_vtable(0x0900_0000, &[0x0900_0100]);
+        e.mem.set_u32(object, 0x0900_0000);
+        e.register(0x0900_0100, |_, a| Ret {
+            eax: a[0].wrapping_add(a[1]).wrapping_add(7),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x00dc_ed30, &args![object]).u32();
+        assert_eq!(answer, object + 7);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x0900_0100)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x0900_0100, vec![object, 0])]);
+    }
+
+    #[test]
+    fn fn_00dced50_runs_the_callee_on_a_non_null_object() {
+        let mut e = Engine::new();
+        e.register(0x00d4_dfc0, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00dc_ed50, &args![0x1234u32, 0x55u32]);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00d4_dfc0)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x00d4_dfc0, vec![0x1234, 0x55])]);
+    }
+
+    #[test]
+    fn fn_00dced50_does_nothing_for_a_null_object() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00dc_ed50, &args![0u32, 0x55u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
 
     type ConstructorLog = Rc<RefCell<Vec<Vec<u32>>>>;
 

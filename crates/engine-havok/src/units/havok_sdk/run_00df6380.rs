@@ -61,11 +61,72 @@ pub fn fn_00df6380(e: &mut Engine, this: Ptr, pair: Ptr) -> f32 {
     x87_quiet(sum3(total))
 }
 
+// Translated from 00df6440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fc0a2f): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `13188368` (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
+pub fn fn_00df6440(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x1318_8368, &args![object.addr(), finishing]);
+    }
+}
+
+// Translated from 00df6460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fc0a39): cdecl with one stack word, `object`. Calls the object's virtual slot 0 with the one stack word 0 (no null check) and answers what it answers.
+pub fn fn_00df6460(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00df64a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b94ec): cdecl with one stack word (never read); only returns.
+pub fn fn_00df64a0(_e: &mut Engine, _unused_0: u32) {}
+
+// Translated from 00df6540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b9504): cdecl with one stack word (never read); only returns.
+pub fn fn_00df6540(_e: &mut Engine, _unused_0: u32) {}
+
+// Translated from 00df64d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b94e8): cdecl with two stack words, `object` and `finishing`. When neither is 0, clears the 16-bit values at `+0x20` and `+0x22` and the words at `+0x24`, `+0x28` and `+0x10`, and stores 1 in the word at its start.
+pub fn fn_00df64d0(e: &mut Engine, object: Ptr, finishing: u32) {
+    let base = object.addr();
+    if base == 0 || finishing == 0 {
+        return;
+    }
+    e.mem.set_u16(base + 0x20, 0);
+    e.mem.set_u16(base + 0x22, 0);
+    e.mem.set_u32(base + 0x24, 0);
+    e.mem.set_u32(base + 0x28, 0);
+    e.mem.set_u32(base, 1);
+    e.mem.set_u32(base + 0x10, 0);
+}
+
+// Translated from 00df6500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b9500): cdecl with two stack words, `object` and `finishing`. When neither is 0, clears the words at `+0x44`, `+0x48` and `+0x30` and the 16-bit values at `+0x40` and `+0x42`, stores 1 in the word at `+0x20`, and stores in the byte at `+0x19` the low byte of `object` minus the low byte of `object + 0x14` (`SUB AL, CL` with `ECX = object + 0x14`), which is always 0xEC.
+pub fn fn_00df6500(e: &mut Engine, object: Ptr, finishing: u32) {
+    let base = object.addr();
+    if base == 0 || finishing == 0 {
+        return;
+    }
+    e.mem.set_u32(base + 0x44, 0);
+    e.mem.set_u32(base + 0x48, 0);
+    e.mem.set_u32(base + 0x30, 0);
+    e.mem.set_u16(base + 0x40, 0);
+    e.mem.set_u16(base + 0x42, 0);
+    e.mem.set_u32(base + 0x20, 1);
+    let inner = base.wrapping_add(0x14);
+    e.mem
+        .set_u8(inner + 5, (base as u8).wrapping_sub(inner as u8));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00df_6380, fn_00df6380(Ptr, Ptr) -> f32),
         entry!(0x00df_6470, fn_00df6470() -> u32),
+        entry!(0x00df6440, fn_00df6440(Ptr, u32)),
+        entry!(0x00df6460, fn_00df6460(Ptr) -> u32),
+        entry!(0x00df64a0, fn_00df64a0(u32)),
+        entry!(0x00df6540, fn_00df6540(u32)),
+        entry!(0x00df64d0, fn_00df64d0(Ptr, u32)),
+        entry!(0x00df6500, fn_00df6500(Ptr, u32)),
     ]
 }
 
@@ -210,5 +271,112 @@ mod quadratic_tests {
         let mut r = rig([1.0; 4], [0.001; 4]);
         let direct = fn_00df6380(&mut r.e, Ptr::new(r.this), Ptr::new(r.pair));
         close(direct, 14.0 + 64.0 + 342.25 + 841.0);
+    }
+}
+
+#[cfg(test)]
+mod tests_a07_gap {
+    use super::*;
+
+    /// The argument words of every call to `address` in the engine's call log (which is taken).
+    fn calls_to(e: &mut Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(called, _)| *called == address)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    /// The address the doubled virtual slot 0 of [`object_with_slot_0`] answers at.
+    const SLOT_0_TARGET: u32 = 0x0900_0001;
+
+    /// An object whose vtable's slot 0 is a double answering 0x1234.
+    fn object_with_slot_0(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable, SLOT_0_TARGET);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object, vtable);
+        e.register(SLOT_0_TARGET, |_, _| Ret {
+            eax: 0x1234,
+            ..Ret::default()
+        });
+        object
+    }
+
+    #[test]
+    fn fn_00df6440_runs_the_callee_unless_the_object_is_null() {
+        let mut e = Engine::new();
+        e.register(0x1318_8368, |_, _| Ret::default());
+        let object = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x00df_6440, &args![0u32, 7u32]);
+        e.call(0x00df_6440, &args![object, 7u32]);
+        assert_eq!(calls_to(&mut e, 0x1318_8368), vec![vec![object, 7]]);
+    }
+
+    #[test]
+    fn fn_00df6460_calls_virtual_slot_0_with_zero() {
+        let mut e = Engine::new();
+        let object = object_with_slot_0(&mut e);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00df_6460, &args![object]).u32(), 0x1234);
+        assert_eq!(calls_to(&mut e, SLOT_0_TARGET), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn fn_00df64a0_only_returns() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00df_64a0, &args![0u32]).u32(), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00df6540_only_returns() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00df_6540, &args![0u32]).u32(), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00df64d0_resets_the_fields_only_when_finishing_a_real_object() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x40);
+        for offset in (0..0x30).step_by(4) {
+            e.mem.set_u32(object + offset, 0x5a5a_5a5a);
+        }
+        e.call(0x00df_64d0, &args![0u32, 1u32]);
+        e.call(0x00df_64d0, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x5a5a_5a5a);
+        e.call(0x00df_64d0, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 1);
+        assert_eq!(e.mem.u32(object + 0x10), 0);
+        assert_eq!(e.mem.u32(object + 0x20), 0);
+        assert_eq!(e.mem.u32(object + 0x24), 0);
+        assert_eq!(e.mem.u32(object + 0x28), 0);
+        assert_eq!(e.mem.u32(object + 0x14), 0x5a5a_5a5a);
+    }
+
+    #[test]
+    fn fn_00df6500_resets_the_fields_and_writes_the_offset_byte() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x60);
+        for offset in (0..0x50).step_by(4) {
+            e.mem.set_u32(object + offset, 0x5a5a_5a5a);
+        }
+        e.call(0x00df_6500, &args![0u32, 1u32]);
+        e.call(0x00df_6500, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object + 0x44), 0x5a5a_5a5a);
+        e.call(0x00df_6500, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object + 0x44), 0);
+        assert_eq!(e.mem.u32(object + 0x48), 0);
+        assert_eq!(e.mem.u32(object + 0x30), 0);
+        assert_eq!(e.mem.u32(object + 0x40), 0);
+        assert_eq!(e.mem.u32(object + 0x20), 1);
+        assert_eq!(e.mem.u8(object + 0x19), 0xec);
+        assert_eq!(e.mem.u32(object + 0x34), 0x5a5a_5a5a);
     }
 }

@@ -40,13 +40,15 @@ fn forward_event(e: &mut Engine, world: u32, slot: u32, first: u32, other: u32) 
 
 // Translated from 00ca0b70 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00ca0b70 - the /GS cookie check (00ec408c) is not modeled, and the event block's uninitialised bytes are passed as zeros.
-/// `bhkAcousticSpacePhantomCallbackShape::phantomEnterEvent` (Xbox PDB): takes three words
-/// (the third is unused), finds the world object through the second collidable
-/// ([`event_world`]) and runs virtual slot 0x1C of the object at `world + 0x28` on the event
-/// block. The exe does not test the world object for 0 here: with no world object it reads
-/// address 0x28 and faults, which the translation reproduces as a memory panic.
+/// `bhkAcousticSpacePhantomCallbackShape::phantomEnterEvent` (Xbox PDB): a virtual method
+/// (`this` in `ECX`, never read) with three stack words (the third is unused). Finds the world
+/// object through the second collidable ([`event_world`]) and runs virtual slot 0x1C of the
+/// object at `world + 0x28` on the event block. The exe does not test the world object for 0
+/// here: with no world object it reads address 0x28 and faults, which the translation
+/// reproduces as a memory panic.
 pub fn bhk_acoustic_space_phantom_callback_shape_phantom_enter_event(
     e: &mut Engine,
+    _this: u32,
     first: u32,
     other: u32,
     _unused_3: u32,
@@ -57,11 +59,13 @@ pub fn bhk_acoustic_space_phantom_callback_shape_phantom_enter_event(
 
 // Translated from 00ca0bd0 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00ca0bd0 - the /GS cookie check (00ec408c) is not modeled, and the event block's uninitialised bytes are passed as zeros.
-/// `bhkAcousticSpacePhantomCallbackShape::phantomLeaveEvent` (Xbox PDB): takes two words,
-/// finds the world object through the second collidable ([`event_world`]) and, when there
-/// is one, runs virtual slot 0x20 of the object at `world + 0x28` on the event block.
+/// `bhkAcousticSpacePhantomCallbackShape::phantomLeaveEvent` (Xbox PDB): a virtual method
+/// (`this` in `ECX`, never read) with two stack words. Finds the world object through the second
+/// collidable ([`event_world`]) and, when there is one, runs virtual slot 0x20 of the object at
+/// `world + 0x28` on the event block.
 pub fn bhk_acoustic_space_phantom_callback_shape_phantom_leave_event(
     e: &mut Engine,
+    _this: u32,
     first: u32,
     other: u32,
 ) {
@@ -76,11 +80,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(
             0x00ca0b70,
-            bhk_acoustic_space_phantom_callback_shape_phantom_enter_event(u32, u32, u32)
+            bhk_acoustic_space_phantom_callback_shape_phantom_enter_event(u32, u32, u32, u32)
         ),
         entry!(
             0x00ca0bd0,
-            bhk_acoustic_space_phantom_callback_shape_phantom_leave_event(u32, u32)
+            bhk_acoustic_space_phantom_callback_shape_phantom_leave_event(u32, u32, u32)
         ),
     ]
 }
@@ -90,6 +94,9 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: the exe never reads `ECX` in these functions.
+    const THIS: u32 = 0x7777_0000;
 
     /// Records of the sink callbacks: `(slot, this, first word, second word)`.
     type Seen = Rc<RefCell<Vec<(u32, u32, u32, u32)>>>;
@@ -129,7 +136,7 @@ mod tests {
     #[test]
     fn enter_event_forwards_to_slot_0x1c_of_the_sink() {
         let (mut e, other, seen) = setup();
-        e.call(0x00ca0b70, &args![0x1111u32, other, 0x9999u32]);
+        e.call(0x00ca0b70, &args![THIS, 0x1111u32, other, 0x9999u32]);
         let seen = seen.borrow();
         assert_eq!(seen.len(), 1);
         assert_eq!((seen[0].0, seen[0].2, seen[0].3), (0x1c, 0x1111, other));
@@ -141,13 +148,13 @@ mod tests {
         let (mut e, other, _) = setup();
         let region = other - 0x20;
         e.mem.set_u32(region + 8, 0);
-        e.call(0x00ca0b70, &args![0x1111u32, other, 0u32]);
+        e.call(0x00ca0b70, &args![THIS, 0x1111u32, other, 0u32]);
     }
 
     #[test]
     fn leave_event_forwards_to_slot_0x20_only_with_a_world_object() {
         let (mut e, other, seen) = setup();
-        e.call(0x00ca0bd0, &args![0x2222u32, other]);
+        e.call(0x00ca0bd0, &args![THIS, 0x2222u32, other]);
         {
             let seen = seen.borrow();
             assert_eq!(seen.len(), 1);
@@ -155,7 +162,7 @@ mod tests {
         }
         let region = other - 0x20;
         e.mem.set_u32(region + 8, 0);
-        e.call(0x00ca0bd0, &args![0x2222u32, other]);
+        e.call(0x00ca0bd0, &args![THIS, 0x2222u32, other]);
         assert_eq!(seen.borrow().len(), 1);
     }
 }

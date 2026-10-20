@@ -111,11 +111,69 @@ pub fn fn_00d39150(e: &mut Engine, job: Ptr, _unused_2: u32, settings: u32, resu
     });
 }
 
+/// `00cd72a0` (cdecl, two words; Ghidra made it a function of two float pointers).
+const FILL_FROM_SHAPE: u32 = 0x00cd_72a0;
+
+// Translated from 00d39030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, three words, the first never read: `_unused_0`, `record`, `value`; descriptions, not confirmed; the address is stored at offset `+0xc` of the function words that `00d39840` registers): looks through the three 16-bit slots at `record + 0`, `+2` and `+4` for the first one equal to the low 16 bits of `value`, stores `0xffff` in it and answers its index; answers 3 when none matches.
+pub fn fn_00d39030(e: &mut Engine, _unused_0: u32, record: u32, value: u32) -> u32 {
+    let wanted = value as u16;
+    for index in 0..3u32 {
+        let at = record.wrapping_add(index * 2);
+        if e.mem.u16(at) == wanted {
+            e.mem.set_u16(at, 0xffff);
+            return index;
+        }
+    }
+    3
+}
+
+// Translated from 00d39060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, three words, the first never read: `_unused_0`, `record`, `value`; descriptions, not confirmed; the address is stored at offset `+0x10` of the function words that `00d39840` registers): looks through the three 16-bit slots at `record + 0`, `+2` and `+4` for the first one equal to `0xffff`, stores the low 16 bits of `value` in it and answers its index; answers 3 when none is free.
+pub fn fn_00d39060(e: &mut Engine, _unused_0: u32, record: u32, value: u32) -> u32 {
+    for index in 0..3u32 {
+        let at = record.wrapping_add(index * 2);
+        if e.mem.u16(at) == 0xffff {
+            e.mem.set_u16(at, value as u16);
+            return index;
+        }
+    }
+    3
+}
+
+// Translated from 00d39090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (the address is stored at offset `+0x14` of the function words that `00d39840` registers): reads no argument and only returns; how many words its callers push is not confirmed.
+pub fn fn_00d39090(_e: &mut Engine) {}
+
+// Translated from 00d390a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, three words: `input`, `entry`, `record`; descriptions, not confirmed; the address is stored at offset `+0` of the function words that `00d39840` registers). Takes the word that the pointer at `input + 4` points to, clears the byte at `entry + 2`, stores `0xffff` in the 16-bit values at `record + 0`, `+2` and `+4`, runs `00cd72a0` (cdecl, two words) with that word plus 0x20 and `record + 8`, and answers `record + 0x20`.
+pub fn fn_00d390a0(e: &mut Engine, input: u32, entry: u32, record: u32) -> u32 {
+    let holder = e.mem.u32(input + 4);
+    let base = e.mem.u32(holder);
+    e.mem.set_u8(entry + 2, 0);
+    e.mem.set_u16(record + 2, 0xffff);
+    e.mem.set_u16(record, 0xffff);
+    e.mem.set_u16(record + 4, 0xffff);
+    e.call(FILL_FROM_SHAPE, &args![base + 0x20, record + 8]);
+    record + 0x20
+}
+
+// Translated from 00d39130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, four words, handed unchanged to [`fn_00d390e0`], whose answer it returns; the address is stored at offset `+4` of the function words that `00d39840` registers).
+pub fn fn_00d39130(e: &mut Engine, word_1: u32, word_2: u32, word_3: u32, word_4: u32) -> u32 {
+    fn_00d390e0(e, word_1, word_2, word_3, word_4)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00d3_90e0, fn_00d390e0(u32, u32, u32, u32) -> u32),
         entry!(0x00d3_9150, fn_00d39150(Ptr, u32, u32, u32)),
+        entry!(0x00d39030, fn_00d39030(u32, u32, u32) -> u32),
+        entry!(0x00d39060, fn_00d39060(u32, u32, u32) -> u32),
+        entry!(0x00d39090, fn_00d39090()),
+        entry!(0x00d390a0, fn_00d390a0(u32, u32, u32) -> u32),
+        entry!(0x00d39130, fn_00d39130(u32, u32, u32, u32) -> u32),
     ]
 }
 
@@ -257,5 +315,133 @@ mod havok_a04_tests {
         assert_eq!(lanes(8), vec![101.0, 202.0, 303.0, 1.0]);
         assert_eq!(lanes(12), vec![101.0, 202.0, 303.0, 1.0]);
         assert_eq!(lanes(16), vec![101.0, 202.0, 303.0, 1.0]);
+    }
+}
+
+#[cfg(test)]
+mod tests_a07_gap {
+    use super::*;
+
+    /// The argument words of every call to `address` in the engine's call log (which is taken).
+    fn calls_to(e: &mut Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(called, _)| *called == address)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    #[test]
+    fn fn_00d39030_frees_the_slot_that_holds_the_value() {
+        let mut e = Engine::new();
+        let record = e.mem.alloc(0x20);
+        for (index, value) in [0x1111u16, 0x2222, 0x3333].into_iter().enumerate() {
+            e.mem.set_u16(record + 2 * index as u32, value);
+        }
+        // Only the low 16 bits of the value count.
+        assert_eq!(
+            e.call(0x00d3_9030, &args![0u32, record, 0xabcd_2222u32])
+                .u32(),
+            1
+        );
+        assert_eq!(e.mem.u16(record + 2), 0xffff);
+        assert_eq!(e.mem.u16(record), 0x1111);
+        assert_eq!(e.mem.u16(record + 4), 0x3333);
+        assert_eq!(
+            e.call(0x00d3_9030, &args![0u32, record, 0x4444u32]).u32(),
+            3
+        );
+        assert_eq!(
+            e.call(0x00d3_9030, &args![0u32, record, 0x3333u32]).u32(),
+            2
+        );
+        assert_eq!(e.mem.u16(record + 4), 0xffff);
+    }
+
+    #[test]
+    fn fn_00d39060_fills_the_first_free_slot() {
+        let mut e = Engine::new();
+        let record = e.mem.alloc(0x20);
+        for (index, value) in [0x1111u16, 0xffff, 0xffff].into_iter().enumerate() {
+            e.mem.set_u16(record + 2 * index as u32, value);
+        }
+        assert_eq!(
+            e.call(0x00d3_9060, &args![0u32, record, 0xabcd_7777u32])
+                .u32(),
+            1
+        );
+        assert_eq!(e.mem.u16(record + 2), 0x7777);
+        assert_eq!(
+            e.call(0x00d3_9060, &args![0u32, record, 0x8888u32]).u32(),
+            2
+        );
+        assert_eq!(e.mem.u16(record + 4), 0x8888);
+        // Nothing is free now.
+        assert_eq!(
+            e.call(0x00d3_9060, &args![0u32, record, 0x9999u32]).u32(),
+            3
+        );
+        assert_eq!(e.mem.u16(record), 0x1111);
+    }
+
+    #[test]
+    fn fn_00d39090_only_returns() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00d3_9090, &args![]).u32(), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00d390a0_clears_the_record_and_runs_the_fill() {
+        let mut e = Engine::new();
+        e.register(FILL_FROM_SHAPE, |_, _| Ret::default());
+        let shape = e.mem.alloc(0x40);
+        let holder = e.mem.alloc(0x10);
+        e.mem.set_u32(holder, shape);
+        let input = e.mem.alloc(0x10);
+        e.mem.set_u32(input + 4, holder);
+        let entry = e.mem.alloc(0x10);
+        e.mem.set_u8(entry + 2, 0x55);
+        let record = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00d3_90a0, &args![input, entry, record]).u32(),
+            record + 0x20
+        );
+        assert_eq!(e.mem.u8(entry + 2), 0);
+        for offset in [0, 2, 4] {
+            assert_eq!(e.mem.u16(record + offset), 0xffff);
+        }
+        assert_eq!(
+            calls_to(&mut e, FILL_FROM_SHAPE),
+            vec![vec![shape + 0x20, record + 8]]
+        );
+    }
+
+    #[test]
+    fn fn_00d39130_hands_its_words_to_the_notifying_function() {
+        let mut e = Engine::new();
+        e.register(0x0900_00c1, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0x14, 0x0900_00c1);
+        let receiver = e.mem.alloc(0x10);
+        e.mem.set_u32(receiver, vtable);
+        let record = e.mem.alloc(0x30);
+        for (index, value) in [5u16, 0xffff, 7].into_iter().enumerate() {
+            e.mem.set_u16(record + 2 * index as u32, value);
+        }
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00d3_9130, &args![1u32, record, receiver, 9u32])
+                .u32(),
+            record + 0x20
+        );
+        assert_eq!(
+            calls_to(&mut e, 0x0900_00c1),
+            vec![vec![receiver, 5, 9], vec![receiver, 7, 9]]
+        );
     }
 }

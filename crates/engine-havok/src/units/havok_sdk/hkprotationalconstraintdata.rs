@@ -26,11 +26,13 @@ pub fn hkp_rotational_constraint_data_get_constraint_info(e: &mut Engine, this: 
 }
 
 // Translated from 00e3b520 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `hkpRotationalConstraintData::getRuntimeInfo` (named in the engine map), stdcall
-/// `(want_runtime, info)` (`RET 8`): with a nonzero first byte the info gets size `0x18` and `3`
+/// `hkpRotationalConstraintData::getRuntimeInfo` (named in the engine map), a virtual method:
+/// stack words `(want_runtime, info)` (`RET 8`): with a nonzero first byte the info gets size `0x18` and `3`
 /// solver results, without one both are zero. The first word is read as a byte.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_rotational_constraint_data_get_runtime_info(
     e: &mut Engine,
+    _this: u32,
     want_runtime: u32,
     info: Ptr,
 ) {
@@ -87,7 +89,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00e3_b520,
-            hkp_rotational_constraint_data_get_runtime_info(u32, Ptr)
+            hkp_rotational_constraint_data_get_runtime_info(u32, u32, Ptr)
         ),
         entry!(
             0x00e3_b550,
@@ -103,6 +105,9 @@ mod tests {
     use crate::units::havok_sdk::hkpbvagent::test_support::{calls, engine, log_double, new_log};
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     #[test]
     fn the_constraint_info_uses_the_atoms_at_0x10_00e3b500() {
@@ -120,14 +125,14 @@ mod tests {
     fn the_runtime_info_depends_on_the_low_byte_00e3b520() {
         let mut e = engine();
         let info = e.mem.alloc(8);
-        e.call(0x00e3_b520, &args![1u32, info]);
+        e.call(0x00e3_b520, &args![VCALL_THIS, 1u32, info]);
         assert_eq!((e.mem.u32(info), e.mem.u32(info + 4)), (0x18, 3));
         // Only the low byte counts.
-        e.call(0x00e3_b520, &args![0x100u32, info]);
+        e.call(0x00e3_b520, &args![VCALL_THIS, 0x100u32, info]);
         assert_eq!((e.mem.u32(info), e.mem.u32(info + 4)), (0, 0));
-        e.call(0x00e3_b520, &args![0xffu32, info]);
+        e.call(0x00e3_b520, &args![VCALL_THIS, 0xffu32, info]);
         assert_eq!((e.mem.u32(info), e.mem.u32(info + 4)), (0x18, 3));
-        e.call(0x00e3_b520, &args![0u32, info]);
+        e.call(0x00e3_b520, &args![VCALL_THIS, 0u32, info]);
         assert_eq!((e.mem.u32(info), e.mem.u32(info + 4)), (0, 0));
     }
 

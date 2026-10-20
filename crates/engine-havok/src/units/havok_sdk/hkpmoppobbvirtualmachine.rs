@@ -30,16 +30,6 @@ const ERROR_FILE: u32 = 0x010d_7af8;
 const ABS_MASK: u32 = 0x0101_7d10;
 const SIGN_MASK: u32 = 0x010c_44d0;
 
-/// The jump table of the command interpreter (`00dd1b74`): the case number for each command
-/// byte from 0 to 0x70 (case 34 is the corrupted-data error).
-const COMMAND_CASE: [u8; 113] = [
-    0, 1, 1, 1, 1, 2, 3, 4, 34, 5, 6, 7, 8, 9, 34, 34, 10, 10, 10, 11, 12, 13, 14, 15, 16, 17, 18,
-    19, 20, 34, 34, 34, 21, 21, 21, 22, 22, 22, 23, 23, 23, 24, 24, 24, 34, 34, 34, 34, 25, 25, 25,
-    25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25,
-    25, 25, 25, 25, 25, 26, 27, 28, 29, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 30, 30, 30,
-    30, 31, 31, 31, 31, 32, 32, 32, 32, 34, 34, 34, 34, 33,
-];
-
 /// `FISTP` of a single-precision value with the default rounding mode (nearest, ties to even);
 /// the integer indefinite `0x80000000` for NaN and out-of-range values.
 fn fistp(value: f32) -> i32 {
@@ -148,10 +138,44 @@ pub fn hkp_mopp_obb_virtual_machine_query_aabb_on_tree(
         let mut a3 = offset;
         loop {
             let op = u32::from(e.mem.u8(c));
-            let case = if op > 0x70 {
-                34
-            } else {
-                COMMAND_CASE[op as usize]
+            // The compiler's switch on the command byte: the case of each byte from 0 to 0x70
+            // (case 34 is the corrupted-data error, also the case of a byte past 0x70).
+            let case = match op {
+                0 => 0,
+                1..=4 => 1,
+                5 => 2,
+                6 => 3,
+                7 => 4,
+                9 => 5,
+                10 => 6,
+                11 => 7,
+                12 => 8,
+                13 => 9,
+                16..=18 => 10,
+                19 => 11,
+                20 => 12,
+                21 => 13,
+                22 => 14,
+                23 => 15,
+                24 => 16,
+                25 => 17,
+                26 => 18,
+                27 => 19,
+                28 => 20,
+                32..=34 => 21,
+                35..=37 => 22,
+                38..=40 => 23,
+                41..=43 => 24,
+                48..=79 => 25,
+                80 => 26,
+                81 => 27,
+                82 => 28,
+                83 => 29,
+                96..=99 => 30,
+                100..=103 => 31,
+                104..=107 => 32,
+                112 => 33,
+                _ => 34,
             };
             match case {
                 0 => return,

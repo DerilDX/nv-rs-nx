@@ -583,9 +583,130 @@ pub fn fn_00d97010(e: &mut Engine, this: Ptr) -> Ptr {
     Ptr::new(this)
 }
 
+// Translated from 00d967a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl, four stack words of which the first two are never read (`_unused_0`, `_unused_1`):
+/// `(_, _, source, destination)`; a callback in a table (`00d2cca0` stores its address, with
+/// `00d968e0`), the sibling of `00d96600`. Copies the first 0x80 bytes of `source` to
+/// `destination` word by word and sets `destination + 0x14` to `[[[source + 0x1c]] +
+/// 0x28][16-bit word at destination + 0x10]`; then by the kind byte at `source`, with `n` the
+/// 16-bit word at `source + 0x28` and `m` the one at `source + 0x2a`:
+/// - 0xd: when `n > m` (unsigned) the 16-bit word at `+0x24` goes up, `+0x28` becomes `n - m`,
+///   `[source + 0x40]` gains `m`, the 16-bit words `destination + 0x44` and `destination + 0x28`
+///   become 0x200 and `m`; answers 1;
+/// - 0xe: the 0x80 bytes are copied again (the word at `destination + 0x14` becomes the source's
+///   own); answers 0;
+/// - 0xf: when `n > m` the 16-bit word at `+0x24` goes up, `+0x28` becomes `n - m` and
+///   `destination + 0x28` becomes `m`; answers 1;
+/// - every other kind, and the cases above that do not apply: answers 0.
+///
+/// The class is unconfirmed.
+pub fn fn_00d967a0(
+    e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+    source: u32,
+    destination: u32,
+) -> u32 {
+    for block in 0..8u32 {
+        for word in 0..4u32 {
+            let value = e.mem.u32(source.wrapping_add(16 * block + 4 * word));
+            e.mem
+                .set_u32(destination.wrapping_add(16 * block + 4 * word), value);
+        }
+    }
+    let outer = e.mem.u32(source.wrapping_add(0x1c));
+    let table_owner = e.mem.u32(outer);
+    let index = u32::from(e.mem.u16(destination.wrapping_add(0x10)));
+    let table = e.mem.u32(table_owner.wrapping_add(0x28));
+    let entry = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+    e.mem.set_u32(destination.wrapping_add(0x14), entry);
+    match e.mem.u8(source) {
+        0xd => {
+            let total = e.mem.u16(source.wrapping_add(0x28));
+            let part = e.mem.u16(source.wrapping_add(0x2a));
+            if total <= part {
+                return 0;
+            }
+            let counter = e.mem.u16(source.wrapping_add(0x24)).wrapping_add(1);
+            e.mem.set_u16(source.wrapping_add(0x24), counter);
+            e.mem
+                .set_u16(source.wrapping_add(0x28), total.wrapping_sub(part));
+            let moved = e.mem.u32(source.wrapping_add(0x40));
+            e.mem.set_u32(
+                source.wrapping_add(0x40),
+                moved.wrapping_add(u32::from(part)),
+            );
+            e.mem.set_u16(destination.wrapping_add(0x44), 0x200);
+            e.mem.set_u16(destination.wrapping_add(0x28), part);
+            1
+        }
+        0xe => {
+            for word in 0..0x20u32 {
+                let value = e.mem.u32(source.wrapping_add(4 * word));
+                e.mem.set_u32(destination.wrapping_add(4 * word), value);
+            }
+            0
+        }
+        0xf => {
+            let total = e.mem.u16(source.wrapping_add(0x28));
+            let part = e.mem.u16(source.wrapping_add(0x2a));
+            if total <= part {
+                return 0;
+            }
+            let counter = e.mem.u16(source.wrapping_add(0x24)).wrapping_add(1);
+            e.mem.set_u16(source.wrapping_add(0x24), counter);
+            e.mem
+                .set_u16(source.wrapping_add(0x28), total.wrapping_sub(part));
+            e.mem.set_u16(destination.wrapping_add(0x28), part);
+            1
+        }
+        _ => 0,
+    }
+}
+
+// Translated from 00d968e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl, four stack words of which the first two are never read (`_unused_0`, `_unused_1`):
+/// `(_, _, source, destination)`; a callback in a table (`00d2cca0` stores its address, with
+/// `00d967a0`). Answers 1 for every kind of `source` (the byte at `+0`) except 0xd. For kind 0xd
+/// with a pointer at `source + 0x20`: it takes one off the count at the pointer's `+4`; while the
+/// count stays above 0 it answers 1. At 0 it starts the record of kind 0xe at `destination +
+/// 0x10` (flag 2, size 0x30, `0xffff` at `+6`, the 16-bit word at `+0x10` and the words at `+0x14`,
+/// `+0x18`, `+0x1c` copied from `source`) with the source's word at `+0x20` added at `+0x20`
+/// (skipped when `destination + 0x10` is 0); then it clears the word at `destination` and
+/// answers 0. The class is unconfirmed.
+pub fn fn_00d968e0(
+    e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+    source: u32,
+    destination: u32,
+) -> u32 {
+    if e.mem.u8(source) != 0xd {
+        return 1;
+    }
+    let shared = e.mem.u32(source.wrapping_add(0x20));
+    if shared == 0 {
+        return 1;
+    }
+    let count = e.mem.u32(shared.wrapping_add(4)).wrapping_sub(1);
+    e.mem.set_u32(shared.wrapping_add(4), count);
+    if count != 0 {
+        return 1;
+    }
+    let record = start_record(e, destination, 0xe, 2, 0x30, source);
+    if record != 0 {
+        let word = e.mem.u32(source.wrapping_add(0x20));
+        e.mem.set_u32(record.wrapping_add(0x20), word);
+    }
+    e.mem.set_u32(destination, 0);
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d967a0, fn_00d967a0(u32, u32, u32, u32) -> u32),
+        entry!(0x00d968e0, fn_00d968e0(u32, u32, u32, u32) -> u32),
         entry!(0x00d9_65b0, fn_00d965b0(Ptr)),
         entry!(0x00d9_6600, fn_00d96600(u32, u32, u32, u32) -> u32),
         entry!(0x00d9_6870, fn_00d96870(u32, u32, u32) -> u32),
@@ -600,6 +721,168 @@ mod a09_tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// A source of kind `kind` for `00d967a0`: index 2 in the word at `+0x10`, the table entry
+    /// 0xbeef behind `[[+0x1c]] + 0x28`, `n` and `m` at `+0x28` and `+0x2a`.
+    fn source_00d967a0(e: &mut Engine, kind: u8, total: u16, part: u16) -> u32 {
+        let source = e.mem.alloc(0x100);
+        let table = e.mem.alloc(0x40);
+        e.mem.set_u32(table + 8, 0xbeef);
+        let owner = e.mem.alloc(0x40);
+        e.mem.set_u32(owner + 0x28, table);
+        let outer = e.mem.alloc(8);
+        e.mem.set_u32(outer, owner);
+        e.mem.set_u8(source, kind);
+        e.mem.set_u16(source + 0x10, 2);
+        e.mem.set_u32(source + 0x14, 0x1414);
+        e.mem.set_u32(source + 0x1c, outer);
+        e.mem.set_u16(source + 0x24, 7);
+        e.mem.set_u16(source + 0x28, total);
+        e.mem.set_u16(source + 0x2a, part);
+        e.mem.set_u32(source + 0x40, 0x1000);
+        source
+    }
+
+    #[test]
+    fn fn_00d967a0_splits_kind_0xd_by_the_part_size() {
+        let mut e = Engine::new();
+        let source = source_00d967a0(&mut e, 0xd, 10, 3);
+        let destination = e.mem.alloc(0x100);
+        let answer = e
+            .call(0x00d9_67a0, &args![0u32, 0u32, source, destination])
+            .u32();
+        assert_eq!(answer, 1);
+        assert_eq!(e.mem.u8(destination), 0xd);
+        assert_eq!(e.mem.u32(destination + 0x14), 0xbeef);
+        assert_eq!(e.mem.u16(source + 0x24), 8);
+        assert_eq!(e.mem.u16(source + 0x28), 7);
+        assert_eq!(e.mem.u32(source + 0x40), 0x1003);
+        assert_eq!(e.mem.u16(destination + 0x44), 0x200);
+        assert_eq!(e.mem.u16(destination + 0x28), 3);
+    }
+
+    #[test]
+    fn fn_00d967a0_splits_kind_0xf_without_the_offset_and_size_words() {
+        let mut e = Engine::new();
+        let source = source_00d967a0(&mut e, 0xf, 10, 3);
+        let destination = e.mem.alloc(0x100);
+        let answer = e
+            .call(0x00d9_67a0, &args![0u32, 0u32, source, destination])
+            .u32();
+        assert_eq!(answer, 1);
+        assert_eq!(e.mem.u16(source + 0x24), 8);
+        assert_eq!(e.mem.u16(source + 0x28), 7);
+        assert_eq!(e.mem.u32(source + 0x40), 0x1000);
+        assert_eq!(e.mem.u16(destination + 0x44), 0);
+        assert_eq!(e.mem.u16(destination + 0x28), 3);
+    }
+
+    #[test]
+    fn fn_00d967a0_answers_zero_when_the_part_is_not_smaller() {
+        for kind in [0xd, 0xf] {
+            let mut e = Engine::new();
+            let source = source_00d967a0(&mut e, kind, 5, 5);
+            let destination = e.mem.alloc(0x100);
+            let answer = e
+                .call(0x00d9_67a0, &args![0u32, 0u32, source, destination])
+                .u32();
+            assert_eq!(answer, 0);
+            assert_eq!(e.mem.u16(source + 0x24), 7);
+            assert_eq!(e.mem.u32(destination + 0x14), 0xbeef);
+        }
+    }
+
+    #[test]
+    fn fn_00d967a0_copies_kind_0xe_again_and_answers_zero() {
+        let mut e = Engine::new();
+        let source = source_00d967a0(&mut e, 0xe, 10, 3);
+        let destination = e.mem.alloc(0x100);
+        let answer = e
+            .call(0x00d9_67a0, &args![0u32, 0u32, source, destination])
+            .u32();
+        assert_eq!(answer, 0);
+        // The table entry is overwritten by the second copy.
+        assert_eq!(e.mem.u32(destination + 0x14), 0x1414);
+        assert_eq!(e.mem.u8(destination), 0xe);
+    }
+
+    #[test]
+    fn fn_00d967a0_answers_zero_for_other_kinds() {
+        let mut e = Engine::new();
+        let source = source_00d967a0(&mut e, 1, 10, 3);
+        let destination = e.mem.alloc(0x100);
+        let answer = e
+            .call(0x00d9_67a0, &args![0u32, 0u32, source, destination])
+            .u32();
+        assert_eq!(answer, 0);
+        assert_eq!(e.mem.u32(destination + 0x14), 0xbeef);
+        assert_eq!(e.mem.u16(source + 0x24), 7);
+    }
+
+    /// A source of kind `kind` whose pointer at `+0x20` has the count `count` at `+4`.
+    fn shared_source_00d968e0(e: &mut Engine, kind: u8, count: u32) -> (u32, u32) {
+        let source = e.mem.alloc(0x40);
+        let shared = e.mem.alloc(8);
+        e.mem.set_u32(shared + 4, count);
+        e.mem.set_u8(source, kind);
+        e.mem.set_u16(source + 0x10, 0x1234);
+        e.mem.set_u32(source + 0x14, 1);
+        e.mem.set_u32(source + 0x18, 2);
+        e.mem.set_u32(source + 0x1c, 3);
+        e.mem.set_u32(source + 0x20, shared);
+        (source, shared)
+    }
+
+    #[test]
+    fn fn_00d968e0_answers_one_for_other_kinds_and_for_a_shared_count_above_one() {
+        let mut e = Engine::new();
+        let destination = e.mem.alloc(0x80);
+        let (other, _) = shared_source_00d968e0(&mut e, 4, 1);
+        assert_eq!(
+            e.call(0x00d9_68e0, &args![0u32, 0u32, other, destination])
+                .u32(),
+            1
+        );
+        let (busy, shared) = shared_source_00d968e0(&mut e, 0xd, 3);
+        assert_eq!(
+            e.call(0x00d9_68e0, &args![0u32, 0u32, busy, destination])
+                .u32(),
+            1
+        );
+        assert_eq!(e.mem.u32(shared + 4), 2);
+        let unshared = e.mem.alloc(0x40);
+        e.mem.set_u8(unshared, 0xd);
+        assert_eq!(
+            e.call(0x00d9_68e0, &args![0u32, 0u32, unshared, destination])
+                .u32(),
+            1
+        );
+    }
+
+    #[test]
+    fn fn_00d968e0_starts_the_record_when_the_last_user_lets_go() {
+        let mut e = Engine::new();
+        let destination = e.mem.alloc(0x80);
+        e.mem.set_u32(destination, 0x55);
+        let (source, shared) = shared_source_00d968e0(&mut e, 0xd, 1);
+        let answer = e
+            .call(0x00d9_68e0, &args![0u32, 0u32, source, destination])
+            .u32();
+        assert_eq!(answer, 0);
+        assert_eq!(e.mem.u32(shared + 4), 0);
+        assert_eq!(e.mem.u32(destination), 0);
+        let record = destination + 0x10;
+        assert_eq!(e.mem.u8(record), 0xe);
+        assert_eq!(e.mem.u8(record + 1), 0);
+        assert_eq!(e.mem.u8(record + 2), 2);
+        assert_eq!(e.mem.u16(record + 4), 0x30);
+        assert_eq!(e.mem.u16(record + 6), 0xffff);
+        assert_eq!(e.mem.u16(record + 0x10), 0x1234);
+        assert_eq!(e.mem.u32(record + 0x14), 1);
+        assert_eq!(e.mem.u32(record + 0x18), 2);
+        assert_eq!(e.mem.u32(record + 0x1c), 3);
+        assert_eq!(e.mem.u32(record + 0x20), shared);
+    }
 
     const FREE_SLOT: u32 = 0x0900_0008;
 

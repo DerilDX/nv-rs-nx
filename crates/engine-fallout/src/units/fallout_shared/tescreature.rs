@@ -206,9 +206,36 @@ pub fn fn_005f7a40(e: &mut Engine, this: Ptr<TESCreature>) {
     e.call(0x006e_cd40, &args![base + 0xb0, 0x32u32]);
 }
 
+/// `00461580` (unnamed in the engine map): `thiscall`, `RET 4`; whether `this[4] & mask` is
+/// non-zero (`SETNZ AL`).
+const FORM_FLAGS_TEST: u32 = 0x0046_1580;
+/// The offset, from `this`, of the object whose flags word (+4) is tested.
+const FLAGS_OBJECT_OFFSET_30: u32 = 0x30;
+
+// Translated from 005f90c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. `__fastcall`: whether bit `0x1000000` is set in the flags word of
+/// the object at `this + 0x30` (`00461580`); the result is the callee's `AL`, which this function
+/// leaves in `EAX` unchanged (the decompiler shows it as `void`).
+pub fn fn_005f90c0(e: &mut Engine, this: Ptr) -> bool {
+    let flags_object = this.addr().wrapping_add(FLAGS_OBJECT_OFFSET_30);
+    e.call(FORM_FLAGS_TEST, &args![flags_object, 0x0100_0000u32])
+        .bool()
+}
+
+// Translated from 005f90e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. `__fastcall`: whether bit `0x2000000` is set in the flags word of
+/// the object at `this + 0x30` (`00461580`); like `005f90c0`, the callee's `AL` stays the result.
+pub fn fn_005f90e0(e: &mut Engine, this: Ptr) -> bool {
+    let flags_object = this.addr().wrapping_add(FLAGS_OBJECT_OFFSET_30);
+    e.call(FORM_FLAGS_TEST, &args![flags_object, 0x0200_0000u32])
+        .bool()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x005f_90c0, fn_005f90c0(Ptr) -> bool),
+        entry!(0x005f_90e0, fn_005f90e0(Ptr) -> bool),
         entry!(0x005f_7230, tescreature_tescreature(Ptr) -> Ptr),
         entry!(0x005f_b430, fn_005fb430(Ptr, Ptr)),
         entry!(0x005f_75e0, tesactorbase_tesactorbase(Ptr) -> Ptr),
@@ -453,5 +480,43 @@ mod start_value_tests {
     fn fn_005f7a40_quiets_a_signalling_nan_foot_weight() {
         let (e, c, _) = run(0x7f80_0001);
         assert_eq!(e.mem.u32(c + 0x138), 0x7fc0_0001);
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    fn check_flag_test(address: u32, mask: u32) {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x40);
+        e.register_double(0x0046_1580, move |_, a| u32::from(a[1] == mask).into_ret());
+        assert!(e.call(address, &args![this]).bool());
+        let log = e.call_log.take().unwrap();
+        let tests: Vec<&Vec<u32>> = log
+            .iter()
+            .filter(|c| c.0 == 0x0046_1580)
+            .map(|c| &c.1)
+            .collect();
+        assert_eq!(tests, vec![&vec![this + 0x30, mask]]);
+    }
+
+    #[test]
+    fn at_005f90c0_tests_the_flag_0x1000000_of_the_object_at_offset_0x30() {
+        check_flag_test(0x005f_90c0, 0x0100_0000);
+    }
+
+    #[test]
+    fn at_005f90e0_tests_the_flag_0x2000000_of_the_object_at_offset_0x30() {
+        check_flag_test(0x005f_90e0, 0x0200_0000);
+    }
+
+    #[test]
+    fn the_flag_tests_answer_false_when_the_callee_does() {
+        let mut e = Engine::new();
+        e.register(0x0046_1580, |_, _| Ret::default());
+        assert!(!e.call(0x005f_90c0, &args![0x1000u32]).bool());
+        assert!(!e.call(0x005f_90e0, &args![0x1000u32]).bool());
     }
 }

@@ -80,9 +80,17 @@ pub fn fn_0051b970(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 0051b860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. `__fastcall` getter: the `float` at `+0x70` of `this`, returned
+/// in `ST0` (`FLD dword`, so a signalling NaN comes out quiet).
+pub fn fn_0051b860(e: &mut Engine, this: Ptr) -> f32 {
+    x87_quiet(e.mem.f32(this.addr().wrapping_add(0x70)))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0051_b860, fn_0051b860(Ptr) -> f32),
         entry!(0x0051_b990, fn_0051b990(Ptr)),
         entry!(0x0051_b6e0, fn_0051b6e0(Ptr) -> Ptr),
         entry!(0x0051_b930, fn_0051b930(Ptr) -> Ptr),
@@ -188,5 +196,26 @@ mod component_tests {
             calls: &[(0x0051_b9b0, &[A::T(0)])],
             stores: &[(0, 4, 0x0102_be94)],
         });
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    #[test]
+    fn at_0051b860_answers_the_float_at_offset_0x70() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x80);
+        e.mem.set_f32(this + 0x6c, 1.0);
+        e.mem.set_f32(this + 0x70, -3.5);
+        e.mem.set_f32(this + 0x74, 2.0);
+        assert_eq!(e.call(0x0051_b860, &args![this]).f32(), -3.5);
+        // A signalling NaN is returned quiet.
+        e.mem.set_u32(this + 0x70, 0x7f80_0001);
+        assert_eq!(
+            e.call(0x0051_b860, &args![this]).f32().to_bits(),
+            0x7fc0_0001
+        );
     }
 }

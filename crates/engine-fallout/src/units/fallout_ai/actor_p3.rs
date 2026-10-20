@@ -11039,10 +11039,15 @@ pub fn fn_008a40e0(e: &mut Engine, this: Ptr<Actor>, other: u32) -> u8 {
     let package = e.vcall(process, PROCESS_SLOT_22C, &args![]).u32();
     if package != 0 {
         let package_type = e.call(PACKAGE_TYPE, &args![package]).u32();
-        let handler = if package_type <= 0x1c {
-            HEAD_PACKAGE_HANDLER_TABLE[package_type as usize]
-        } else {
-            5
+        // The compiler's switch on the package type: the case (handler) of each type; the types
+        // past `0x1c` take the last case.
+        let handler = match package_type {
+            0 | 2 => 0,
+            5 => 1,
+            6 | 13..=14 => 2,
+            8 | 15..=16 | 20 | 28 => 3,
+            12 => 4,
+            _ => 5,
         };
         match handler {
             0 => {
@@ -11165,12 +11170,6 @@ pub fn fn_008a40e0(e: &mut Engine, this: Ptr<Actor>, other: u32) -> u8 {
     }
     1
 }
-
-/// Which handler `fn_008a40e0` runs for each package type `0..=0x1c` (the
-/// byte table at `0x008a4680`).
-const HEAD_PACKAGE_HANDLER_TABLE: [u8; 29] = [
-    0, 5, 0, 5, 5, 1, 2, 5, 3, 5, 5, 5, 4, 2, 2, 3, 3, 5, 5, 5, 3, 5, 5, 5, 5, 5, 5, 5, 3,
-];
 
 // Translated from 008a46a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Tests the flag `0x40000000` of the object (`00461580`).

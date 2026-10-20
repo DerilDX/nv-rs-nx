@@ -99,6 +99,111 @@ pub fn fn_00df6b30(e: &mut Engine, this: Ptr, out: Ptr, slot: Ptr) -> Ptr {
     out
 }
 
+// Translated from 00df6850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (a job function: `imm 00da3465` in the gap list): cdecl, two stack words
+/// (nothing popped): `owner` and `job`. Appends the timer record `010db904`, then walks the `count`
+/// entries (0x30 bytes each) of the array at `job + 0x2c` (`count` at `job + 0x30`, signed). For each
+/// entry it zeroes the word at +0x28 and keeps the entry's word at +0x24 in a local cell, passes
+/// that cell by address and starts with the budget in the word at +0x20; then, for each of the three
+/// job words that is not 0 (at `job + 0x20`, `+0x24`, `+0x28`), it calls `00d1d540`, `00d1d4d0` and
+/// `00d1b930` in that order with (the word, the entry, the cell, the budget left); the first two add
+/// their answer to the entry's word at +0x28 and take it off the budget, the third only adds it.
+/// (The exe keeps the cell in the stack slot of the `job` argument.) Then it appends the timer
+/// record `010c41f8` and returns the answer of `00d04e80` called on `owner` with (`job`, `job`, 0).
+/// Ghidra made no function here; the address is an immediate operand at 00da3465.
+pub fn fn_00df6850(e: &mut Engine, owner: u32, job: u32) -> u32 {
+    crate::units::havok_sdk::hkpworld::profile_record(e, 0x010d_b904);
+    let count = e.mem.i32(job + 0x30);
+    let mut entry = e.mem.u32(job + 0x2c);
+    if count > 0 {
+        e.with_stack(4, |e, cell| {
+            let cell = cell.addr();
+            for _ in 0..count {
+                let kept = e.mem.u32(entry + 0x24);
+                let mut budget = e.mem.u32(entry + 0x20);
+                e.mem.set_u32(entry + 0x28, 0);
+                e.mem.set_u32(cell, kept);
+                let first = e.mem.u32(job + 0x20);
+                if first != 0 {
+                    let used = e
+                        .call(0x00d1_d540, &args![first, entry, cell, budget])
+                        .u32();
+                    let total = e.mem.u32(entry + 0x28).wrapping_add(used);
+                    e.mem.set_u32(entry + 0x28, total);
+                    budget = budget.wrapping_sub(used);
+                }
+                let second = e.mem.u32(job + 0x24);
+                if second != 0 {
+                    let used = e
+                        .call(0x00d1_d4d0, &args![second, entry, cell, budget])
+                        .u32();
+                    let total = e.mem.u32(entry + 0x28).wrapping_add(used);
+                    e.mem.set_u32(entry + 0x28, total);
+                    budget = budget.wrapping_sub(used);
+                }
+                let third = e.mem.u32(job + 0x28);
+                if third != 0 {
+                    let used = e
+                        .call(0x00d1_b930, &args![third, entry, cell, budget])
+                        .u32();
+                    let total = e.mem.u32(entry + 0x28).wrapping_add(used);
+                    e.mem.set_u32(entry + 0x28, total);
+                }
+                entry = entry.wrapping_add(0x30);
+            }
+        });
+    }
+    crate::units::havok_sdk::hkpworld::profile_record(e, 0x010c_41f8);
+    e.call(0x00d0_4e80, &args![owner, job, job, 0u32]).u32()
+}
+// Translated from 00df6950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (a job function: `imm 00da345b` in the gap list): cdecl, two stack words
+/// (nothing popped): `owner` and `job`. Appends the timer record `010db918`, then walks the `count`
+/// entries (0x30 bytes each) of the array at `job + 0x24` (`count` at `job + 0x28`, signed). For
+/// each entry it zeroes the word at +0x28, keeps the word at +0x24 in a local cell and, for each of
+/// the non-zero pointers of the list at `job + 0x30` (length at `job + 0x2c`, read again after each
+/// step), calls `00d1b930` with (the pointer, the entry, the cell, the budget left), adds the answer
+/// to the entry's word at +0x28 and takes it off the budget (which starts as the word at +0x20).
+/// (The exe keeps the cell in a stack slot of its own.) Then it appends the timer record
+/// `010c41f8` and returns the answer of `00d04e80` called on `owner` with (`job`, `job`, 0). Ghidra made no function here; the address is an immediate operand at 00da345b.
+pub fn fn_00df6950(e: &mut Engine, owner: u32, job: u32) -> u32 {
+    crate::units::havok_sdk::hkpworld::profile_record(e, 0x010d_b918);
+    let count = e.mem.i32(job + 0x28);
+    let mut entry = e.mem.u32(job + 0x24);
+    if count > 0 {
+        e.with_stack(4, |e, cell| {
+            let cell = cell.addr();
+            for _ in 0..count {
+                let kept = e.mem.u32(entry + 0x24);
+                let mut budget = e.mem.u32(entry + 0x20);
+                e.mem.set_u32(entry + 0x28, 0);
+                e.mem.set_u32(cell, kept);
+                if e.mem.i32(job + 0x2c) > 0 {
+                    let mut index = 0u32;
+                    loop {
+                        let pointer = e.mem.u32(job + 0x30 + 4 * index);
+                        if pointer != 0 {
+                            let used = e
+                                .call(0x00d1_b930, &args![pointer, entry, cell, budget])
+                                .u32();
+                            let total = e.mem.u32(entry + 0x28).wrapping_add(used);
+                            e.mem.set_u32(entry + 0x28, total);
+                            budget = budget.wrapping_sub(used);
+                        }
+                        index += 1;
+                        if (index as i32) >= e.mem.i32(job + 0x2c) {
+                            break;
+                        }
+                    }
+                }
+                entry = entry.wrapping_add(0x30);
+            }
+        });
+    }
+    crate::units::havok_sdk::hkpworld::profile_record(e, 0x010c_41f8);
+    e.call(0x00d0_4e80, &args![owner, job, job, 0u32]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -108,6 +213,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00df_6af0, fn_00df6af0(Ptr, Ptr, u32) -> f32),
         entry!(0x00df_6b10, fn_00df6b10(Ptr, Ptr) -> f32),
         entry!(0x00df_6b30, fn_00df6b30(Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x00df_6850, fn_00df6850(u32, u32) -> u32),
+        entry!(0x00df_6950, fn_00df6950(u32, u32) -> u32),
     ]
 }
 
@@ -303,5 +410,177 @@ mod tests {
                 vec![0x3000 - 8, 0x5555],
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use crate::units::havok_sdk::hkpworld::profiling_support::{labels, profiling_engine};
+    type CalleeLog = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// A job with `budgets.len()` 0x30-byte entries (budget = the word at +0x20, kept word at +0x24)
+    /// and the three job words; doubles for the three callees log (callee, words and the kept cell
+    /// value) and answer 3, 4 and 5.
+    fn job_with_entries(e: &mut Engine, budgets: &[u32], words: [u32; 3]) -> (u32, u32, CalleeLog) {
+        let job = e.mem.alloc(0x40);
+        let entries = e.mem.alloc(0x30 * budgets.len().max(1) as u32);
+        e.mem.set_u32(job + 0x2c, entries);
+        e.mem.set_u32(job + 0x30, budgets.len() as u32);
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(job + 0x20 + 4 * i as u32, *word);
+        }
+        for (i, budget) in budgets.iter().enumerate() {
+            let entry = entries + 0x30 * i as u32;
+            e.mem.set_u32(entry + 0x20, *budget);
+            e.mem.set_u32(entry + 0x24, 0x500 + i as u32);
+            e.mem.set_u32(entry + 0x28, 0xdead);
+        }
+        let log: CalleeLog = Rc::new(RefCell::new(Vec::new()));
+        for (address, used) in [(0x00d1_d540u32, 3u32), (0x00d1_d4d0, 4), (0x00d1_b930, 5)] {
+            let sink = Rc::clone(&log);
+            e.register_double(address, move |e, a| {
+                sink.borrow_mut()
+                    .push((address, vec![a[0], a[1], a[3], e.mem.u32(a[2])]));
+                Ret {
+                    eax: used,
+                    ..Ret::default()
+                }
+            });
+        }
+        (job, entries, log)
+    }
+
+    /// Each entry gets the three calls in order with the shrinking budget; the first two answers are
+    /// summed into the entry's +0x28 and taken off the budget, the third is only added.
+    #[test]
+    fn fn_00df6850_walks_the_entries_and_accumulates() {
+        let (mut e, stream, area) = profiling_engine(4);
+        let (job, entries, log) = job_with_entries(&mut e, &[100, 50], [0x11, 0x22, 0x33]);
+        e.register_double(0x00d0_4e80, |_, a| Ret {
+            eax: a[1] + a[2] + a[3],
+            ..Ret::default()
+        });
+        let result = e.call(0x00df_6850, &args![0x4000u32, job]).u32();
+        assert_eq!(result, job + job);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                (0x00d1_d540, vec![0x11, entries, 100, 0x500]),
+                (0x00d1_d4d0, vec![0x22, entries, 97, 0x500]),
+                (0x00d1_b930, vec![0x33, entries, 93, 0x500]),
+                (0x00d1_d540, vec![0x11, entries + 0x30, 50, 0x501]),
+                (0x00d1_d4d0, vec![0x22, entries + 0x30, 47, 0x501]),
+                (0x00d1_b930, vec![0x33, entries + 0x30, 43, 0x501]),
+            ]
+        );
+        assert_eq!(e.mem.u32(entries + 0x28), 12);
+        assert_eq!(e.mem.u32(entries + 0x30 + 0x28), 12);
+        assert_eq!(labels(&e, stream, area), vec![0x010d_b904, 0x010c_41f8]);
+    }
+
+    /// Job words that are 0 skip their call; no entries means no calls at all but both timer records.
+    #[test]
+    fn fn_00df6850_skips_null_job_words_and_empty_arrays() {
+        let (mut e, stream, area) = profiling_engine(4);
+        let (job, entries, log) = job_with_entries(&mut e, &[10], [0, 0x22, 0]);
+        e.register_double(0x00d0_4e80, |_, _| Ret::default());
+        e.call(0x00df_6850, &args![0u32, job]);
+        assert_eq!(
+            *log.borrow(),
+            vec![(0x00d1_d4d0, vec![0x22, entries, 10, 0x500])]
+        );
+        assert_eq!(e.mem.u32(entries + 0x28), 4);
+
+        let (job, _, log) = job_with_entries(&mut e, &[], [0x11, 0x22, 0x33]);
+        e.call(0x00df_6850, &args![0u32, job]);
+        assert!(log.borrow().is_empty());
+        assert_eq!(
+            labels(&e, stream, area),
+            vec![0x010d_b904, 0x010c_41f8, 0x010d_b904, 0x010c_41f8]
+        );
+    }
+
+    /// A full profiling stream (cursor at the limit) gets no record.
+    #[test]
+    fn fn_00df6850_writes_no_timer_record_into_a_full_stream() {
+        let (mut e, _, area) = profiling_engine(0);
+        let (job, _, _) = job_with_entries(&mut e, &[], [0, 0, 0]);
+        e.register_double(0x00d0_4e80, |_, _| Ret::default());
+        e.call(0x00df_6850, &args![0u32, job]);
+        assert_eq!(e.mem.u32(area), 0);
+    }
+    /// A job for 00df6950: `budgets.len()` entries at +0x24 (count at +0x28) and `pointers` at +0x30
+    /// (length at +0x2c); the callee at 00d1b930 answers 5 and logs its words (and the cell value).
+    fn pointer_job(
+        e: &mut Engine,
+        budgets: &[u32],
+        pointers: &[u32],
+    ) -> (u32, u32, Rc<RefCell<Vec<Vec<u32>>>>) {
+        let job = e.mem.alloc(0x40 + 4 * pointers.len() as u32);
+        let entries = e.mem.alloc(0x30 * budgets.len().max(1) as u32);
+        e.mem.set_u32(job + 0x24, entries);
+        e.mem.set_u32(job + 0x28, budgets.len() as u32);
+        e.mem.set_u32(job + 0x2c, pointers.len() as u32);
+        for (i, pointer) in pointers.iter().enumerate() {
+            e.mem.set_u32(job + 0x30 + 4 * i as u32, *pointer);
+        }
+        for (i, budget) in budgets.iter().enumerate() {
+            let entry = entries + 0x30 * i as u32;
+            e.mem.set_u32(entry + 0x20, *budget);
+            e.mem.set_u32(entry + 0x24, 0x500 + i as u32);
+            e.mem.set_u32(entry + 0x28, 0xdead);
+        }
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&log);
+        e.register_double(0x00d1_b930, move |e, a| {
+            sink.borrow_mut()
+                .push(vec![a[0], a[1], a[3], e.mem.u32(a[2])]);
+            Ret {
+                eax: 5,
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00d0_4e80, |_, a| Ret {
+            eax: a[1],
+            ..Ret::default()
+        });
+        (job, entries, log)
+    }
+
+    /// The pointers are tried in order for each entry; null ones are skipped; the budget shrinks.
+    #[test]
+    fn fn_00df6950_calls_the_helper_for_each_pointer_of_each_entry() {
+        let (mut e, stream, area) = profiling_engine(2);
+        let (job, entries, log) = pointer_job(&mut e, &[100, 7], &[0x11, 0, 0x33]);
+        assert_eq!(e.call(0x00df_6950, &args![0x4000u32, job]).u32(), job);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                vec![0x11, entries, 100, 0x500],
+                vec![0x33, entries, 95, 0x500],
+                vec![0x11, entries + 0x30, 7, 0x501],
+                vec![0x33, entries + 0x30, 2, 0x501],
+            ]
+        );
+        assert_eq!(e.mem.u32(entries + 0x28), 10);
+        assert_eq!(e.mem.u32(entries + 0x30 + 0x28), 10);
+        assert_eq!(labels(&e, stream, area), vec![0x010d_b918, 0x010c_41f8]);
+    }
+
+    /// No entries or no pointers leave the entries' words alone (zeroed or not) and call nothing.
+    #[test]
+    fn fn_00df6950_with_no_pointers_only_clears_the_totals() {
+        let (mut e, _, _) = profiling_engine(2);
+        let (job, entries, log) = pointer_job(&mut e, &[9], &[]);
+        e.call(0x00df_6950, &args![0u32, job]);
+        assert!(log.borrow().is_empty());
+        assert_eq!(e.mem.u32(entries + 0x28), 0);
+        let (job, _, log) = pointer_job(&mut e, &[], &[0x11]);
+        e.call(0x00df_6950, &args![0u32, job]);
+        assert!(log.borrow().is_empty());
     }
 }

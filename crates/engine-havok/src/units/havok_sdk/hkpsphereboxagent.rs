@@ -225,7 +225,15 @@ pub fn hkp_sphere_box_agent_static_get_penetrations(
 // Translated from 00d3c590 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpSphereBoxAgent::getPenetrations` (Xbox PDB), `RET 0x10`: passes its four stack words on
 /// unchanged to `staticGetPenetrations` (`00d3c440`).
-pub fn hkp_sphere_box_agent_get_penetrations(e: &mut Engine, a: u32, b: u32, c: u32, d: u32) {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn hkp_sphere_box_agent_get_penetrations(
+    e: &mut Engine,
+    _this: u32,
+    a: u32,
+    b: u32,
+    c: u32,
+    d: u32,
+) {
     hkp_sphere_box_agent_static_get_penetrations(e, a, b, c, d);
 }
 
@@ -304,8 +312,10 @@ fn closest_points_body(e: &mut Engine, a: u32, b: u32, input: u32, collector: u3
 /// `hkpSphereBoxAgent::getClosestPoints` (Xbox PDB), `RET 0x10`: `(a, b, input, collector)`.
 /// The sphere against box test (`input + 8` the largest distance); a hit goes to the
 /// collector's slot `4` as a 0x30-byte record.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn hkp_sphere_box_agent_get_closest_points(
     e: &mut Engine,
+    _this: u32,
     a: u32,
     b: u32,
     input: u32,
@@ -366,8 +376,10 @@ pub fn fn_00d3cef0(e: &mut Engine, registry: u32) {
 /// `(a, b, c, collector)`. Wraps the collector in a 12-byte object (vtable `010ce81c`, a zero
 /// byte at `+4`, the collector at `+8`) and calls `getPenetrations` (`00d3c590`) with the two
 /// collidables swapped: `(b, a, c, wrapper)`.
+/// Virtual method: the first word is `this` (`ECX` in the exe), left in `ECX` for the callee.
 pub fn hkp_symmetric_agent_linear_cast_sphere_box_agent_get_penetrations(
     e: &mut Engine,
+    this: u32,
     a: u32,
     b: u32,
     c: u32,
@@ -377,7 +389,7 @@ pub fn hkp_symmetric_agent_linear_cast_sphere_box_agent_get_penetrations(
         e.mem.set_u32(wrapper.addr(), PENETRATION_COLLECTOR_VTABLE);
         e.mem.set_u8(wrapper.addr() + 4, 0);
         e.mem.set_u32(wrapper.addr() + 8, collector);
-        hkp_sphere_box_agent_get_penetrations(e, b, a, c, wrapper.addr());
+        hkp_sphere_box_agent_get_penetrations(e, this, b, a, c, wrapper.addr());
     });
 }
 
@@ -399,8 +411,10 @@ pub fn fn_00d3cfc0(e: &mut Engine, a: u32, b: u32, c: u32, collector: u32) {
 /// `(a, b, c, collector)`. Wraps the collector in a 12-byte object (vtable `010ce7fc`, the
 /// `float` at `0104da48` at `+4`, copied through the x87, the collector at `+8`) and calls
 /// `getClosestPoints` (`00d3c910`) with `(b, a, c, wrapper)`.
+/// Virtual method: the first word is `this` (`ECX` in the exe), left in `ECX` for the callee.
 pub fn hkp_symmetric_agent_linear_cast_sphere_box_agent_get_closest_points(
     e: &mut Engine,
+    this: u32,
     a: u32,
     b: u32,
     c: u32,
@@ -412,7 +426,7 @@ pub fn hkp_symmetric_agent_linear_cast_sphere_box_agent_get_closest_points(
         e.mem.set_f32(wrapper.addr() + 4, value);
         e.mem
             .set_u32(wrapper.addr(), CLOSEST_POINTS_COLLECTOR_VTABLE);
-        hkp_sphere_box_agent_get_closest_points(e, b, a, c, wrapper.addr());
+        hkp_sphere_box_agent_get_closest_points(e, this, b, a, c, wrapper.addr());
     });
 }
 
@@ -495,6 +509,30 @@ pub fn hkp_symmetric_agent_linear_cast_sphere_box_agent_process_collision(
     }
 }
 
+// Translated from 00d3c400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (the agent class is unconfirmed): a collision agent creation function,
+/// cdecl, four stack words (nothing popped): the first three are never read (`_unused_0`, `_unused_1`, `_unused_2`) and the last is the contact manager, `manager`. Allocates 0x10 bytes through the memory
+/// router's allocator (`00c85750`; virtual function at +4 of the object at router + 0x10) and fills
+/// the block: the size as a 16-bit word at +4, the count 1 as a 16-bit word at +6, `manager` at
+/// +8, `0xffff` as a 16-bit word at +0xc and the vtable word `010cf018` at +0. Returns the block. Ghidra made no function here; the address is an immediate operand at 00d3cf03.
+pub fn fn_00d3c400(
+    e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    manager: u32,
+) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let block = e.vcall(allocator, 4, &args![0x10u32]).u32();
+    e.mem.set_u16(block + 4, 0x10);
+    e.mem.set_u16(block + 6, 1);
+    e.mem.set_u32(block + 8, manager);
+    e.mem.set_u32(block, 0x010c_f018);
+    e.mem.set_u16(block + 0xc, 0xffff);
+    block
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -505,7 +543,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d3_c590,
-            hkp_sphere_box_agent_get_penetrations(u32, u32, u32, u32)
+            hkp_sphere_box_agent_get_penetrations(u32, u32, u32, u32, u32)
         ),
         entry!(
             0x00d3_c5b0,
@@ -513,18 +551,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00d3_c910,
-            hkp_sphere_box_agent_get_closest_points(u32, u32, u32, u32)
+            hkp_sphere_box_agent_get_closest_points(u32, u32, u32, u32, u32)
         ),
         entry!(0x00d3_cc00, fn_00d3cc00(u32, u32, u32, u32)),
         entry!(0x00d3_cef0, fn_00d3cef0(u32)),
         entry!(
             0x00d3_cf80,
-            hkp_symmetric_agent_linear_cast_sphere_box_agent_get_penetrations(u32, u32, u32, u32)
+            hkp_symmetric_agent_linear_cast_sphere_box_agent_get_penetrations(
+                u32, u32, u32, u32, u32
+            )
         ),
         entry!(0x00d3_cfc0, fn_00d3cfc0(u32, u32, u32, u32)),
         entry!(
             0x00d3_d000,
-            hkp_symmetric_agent_linear_cast_sphere_box_agent_get_closest_points(u32, u32, u32, u32)
+            hkp_symmetric_agent_linear_cast_sphere_box_agent_get_closest_points(
+                u32, u32, u32, u32, u32
+            )
         ),
         entry!(0x00d3_d040, fn_00d3d040(u32, u32, u32, u32)),
         entry!(
@@ -533,6 +575,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 u32, u32, u32, u32, u32
             )
         ),
+        entry!(0x00d3_c400, fn_00d3c400(u32, u32, u32, u32) -> u32),
     ]
 }
 
@@ -544,6 +587,9 @@ mod tests {
     };
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     /// The doubles for the agent's deleting destructor, the collector's slot `4`, and the
     /// owner's slots `0xc` (create the contact point) and `0x14` (remove it).
@@ -772,7 +818,10 @@ mod tests {
         profile(&mut e);
         let collector = collector_object(&mut e);
         let (sphere, cuboid) = scene(&mut e, [1.5, 0.0, 0.0]);
-        e.call(0x00d3_c590, &args![sphere, cuboid, 0xdeadu32, collector]);
+        e.call(
+            0x00d3_c590,
+            &args![VCALL_THIS, sphere, cuboid, 0xdeadu32, collector],
+        );
         assert_eq!(
             calls(&e, COLLECTOR_DOUBLE),
             vec![vec![collector, sphere, cuboid]]
@@ -892,7 +941,14 @@ mod tests {
         let collector = collector_object(&mut e);
         let (sphere, cuboid) = scene(&mut e, [3.0, 0.0, 0.0]);
         let close = input(&mut e, 2.0);
-        e.call(address, &args![sphere, cuboid, close, collector]);
+        {
+            let mut words = Vec::new();
+            if address == 0x00d3_c910 {
+                words.push(VCALL_THIS);
+            }
+            words.extend([sphere, cuboid, close, collector]);
+            e.call(address, &words);
+        }
         assert_profiled(&e, stream);
         let record = log.borrow()[0].clone();
         let values = floats(&record);
@@ -907,12 +963,26 @@ mod tests {
         assert_eq!((record[8], record[9]), (sphere, cuboid));
         // Too far: nothing is reported.
         let short = input(&mut e, 1.0);
-        e.call(address, &args![sphere, cuboid, short, collector]);
+        {
+            let mut words = Vec::new();
+            if address == 0x00d3_c910 {
+                words.push(VCALL_THIS);
+            }
+            words.extend([sphere, cuboid, short, collector]);
+            e.call(address, &words);
+        }
         assert_eq!(log.borrow().len(), 1);
         // Inside the box the largest distance is ignored.
         move_sphere(&mut e, sphere, [0.5, -0.25, 0.0]);
         let ignored = input(&mut e, -1.0);
-        e.call(address, &args![sphere, cuboid, ignored, collector]);
+        {
+            let mut words = Vec::new();
+            if address == 0x00d3_c910 {
+                words.push(VCALL_THIS);
+            }
+            words.extend([sphere, cuboid, ignored, collector]);
+            e.call(address, &words);
+        }
         assert_eq!(log.borrow().len(), 2);
         let values = floats(&log.borrow()[1]);
         near(values[0], 1.25);
@@ -973,7 +1043,13 @@ mod tests {
             Ret::default()
         });
         let (sphere, cuboid) = scene(&mut e, [1.5, 0.0, 0.0]);
-        e.call(address, &args![cuboid, sphere, 0u32, 0x1234u32]);
+        // The vtable entry takes `this` first; its static twin does not.
+        let mut words = Vec::new();
+        if address == 0x00d3_cf80 {
+            words.push(VCALL_THIS);
+        }
+        words.extend([cuboid, sphere, 0u32, 0x1234u32]);
+        e.call(address, &words);
         assert_eq!(*wrapped.borrow(), vec![vec![sphere, cuboid, 0, 0x1234]]);
     }
 
@@ -1007,7 +1083,13 @@ mod tests {
         });
         let (sphere, cuboid) = scene(&mut e, [3.0, 0.0, 0.0]);
         let close = input(&mut e, 2.0);
-        e.call(address, &args![cuboid, sphere, close, 0x1234u32]);
+        // The vtable entry takes `this` first; its static twin does not.
+        let mut words = Vec::new();
+        if address == 0x00d3_d000 {
+            words.push(VCALL_THIS);
+        }
+        words.extend([cuboid, sphere, close, 0x1234u32]);
+        e.call(address, &words);
         assert_eq!(
             *wrapped.borrow(),
             vec![vec![7.5f32.to_bits(), 0x1234, sphere, cuboid]]
@@ -1093,5 +1175,55 @@ mod tests {
         e.call(0x00d3_d080, &args![this, cuboid, sphere, close, out]);
         assert_eq!(load_vec(&e, out + 0x3020), [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(e.mem.u8(out + 0x304a), 0x12);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The slot of the allocator's vtable (offset 4) that allocates, as a test double.
+    const ALLOCATE_SLOT_DOUBLE: u32 = 0x0900_0001;
+
+    /// A memory router (`00c85750`) whose allocator allocates through a double that logs the
+    /// size it was asked for and answers a zeroed block.
+    fn allocator_engine() -> (Engine, Rc<RefCell<Vec<u32>>>) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, ALLOCATE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&sizes);
+        e.register_double(ALLOCATE_SLOT_DOUBLE, move |e, a| {
+            log.borrow_mut().push(a[1]);
+            Ret {
+                eax: e.mem.alloc(a[1]),
+                ..Ret::default()
+            }
+        });
+        (e, sizes)
+    }
+
+    #[test]
+    fn fn_00d3c400_fills_the_block() {
+        let (mut e, sizes) = allocator_engine();
+        let block = e
+            .call(0x00d3_c400, &args![1u32, 2u32, 3u32, 0x7777u32])
+            .u32();
+        assert_eq!(*sizes.borrow(), vec![0x10]);
+        assert_eq!(e.mem.u16(block + 4), 0x10);
+        assert_eq!(e.mem.u16(block + 6), 1);
+        assert_eq!(e.mem.u32(block + 8), 0x7777);
+        assert_eq!(e.mem.u32(block), 0x010c_f018);
+        assert_eq!(e.mem.u16(block + 0xc), 0xffff);
     }
 }

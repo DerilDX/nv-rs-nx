@@ -618,6 +618,31 @@ pub fn pred_gsk_cylinder_agent3_process(
     Ptr::new(((words * 2 + 0x1f) & 0xffff_fff0).wrapping_add(agent_data))
 }
 
+// Translated from 00d40b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: three stack words (cdecl, nothing popped): `bodies` (a pair of
+/// collidable pointers: the first at +0, the second at +4), `second` and `result`. Calls `00d418d0`
+/// with all three, then keeps only the high nibble of the byte at `result + 0xb` (`AND 0xf0`) and
+/// sets its bits 0 and 2 when the shape of the first collidable (the word at +0 of the body) has the
+/// type word 2 (at +0xc), and its bits 1 and 3 when the shape of the second one has it. Returns
+/// the answer of `00d418d0` (`EAX`). @EV@
+pub fn fn_00d40b90(e: &mut Engine, bodies: u32, second: u32, result: u32) -> u32 {
+    let answer = e.call(0x00d4_18d0, &args![bodies, second, result]).u32();
+    let kept = e.mem.u8(result + 0xb) & 0xf0;
+    e.mem.set_u8(result + 0xb, kept);
+    let first_body = e.mem.u32(bodies);
+    let first_shape = e.mem.u32(first_body);
+    if e.mem.u32(first_shape + 0xc) == 2 {
+        e.mem.set_u8(result + 0xb, kept | 0x5);
+    }
+    let second_body = e.mem.u32(bodies + 4);
+    let second_shape = e.mem.u32(second_body);
+    if e.mem.u32(second_shape + 0xc) == 2 {
+        let flags = e.mem.u8(result + 0xb);
+        e.mem.set_u8(result + 0xb, flags | 0xa);
+    }
+    answer
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -627,6 +652,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00d4_0be0, separating_distance_using_capsule_representations(Ptr, Ptr, Ptr) -> f32),
         entry!(0x00d4_0d80, pred_gsk_cylinder_agent3_process(Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x00d4_0b90, fn_00d40b90(u32, u32, u32) -> u32),
     ]
 }
 
@@ -1199,5 +1225,57 @@ mod a05_cylinder_agent_tests {
         assert_eq!(r.e.mem.u8(r.data + 0xb), 1);
         assert_eq!(r.calls(SEPARATING_DISTANCE).len(), 1);
         assert!(r.calls(MANIFOLD_CLEANUP).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    /// A pair of collidables whose shapes have the given type words.
+    fn pair_of_shapes(e: &mut Engine, first_type: u32, second_type: u32) -> u32 {
+        let pair = e.mem.alloc(8);
+        for (slot, type_word) in [(0, first_type), (4, second_type)] {
+            let body = e.mem.alloc(0x20);
+            let shape = e.mem.alloc(0x20);
+            e.mem.set_u32(shape + 0xc, type_word);
+            e.mem.set_u32(body, shape);
+            e.mem.set_u32(pair + slot, body);
+        }
+        pair
+    }
+
+    #[test]
+    fn fn_00d40b90_sets_the_flag_bits_for_type_two_shapes() {
+        for (first, second, expected) in [(2, 2, 0xf), (2, 3, 0x5), (3, 2, 0xa), (3, 3, 0x0)] {
+            let mut e = Engine::new();
+            e.register_double(0x00d4_18d0, |_, _| Ret {
+                eax: 0x31,
+                ..Ret::default()
+            });
+            let pair = pair_of_shapes(&mut e, first, second);
+            let result = e.mem.alloc(0x20);
+            e.mem.set_u8(result + 0xb, 0xbf);
+            assert_eq!(
+                e.call(0x00d4_0b90, &args![pair, 0x77u32, result]).u32(),
+                0x31
+            );
+            assert_eq!(e.mem.u8(result + 0xb), 0xb0 | expected, "{first} {second}");
+        }
+    }
+
+    /// The call happens first (it may change the byte), with the words in order.
+    #[test]
+    fn fn_00d40b90_calls_the_helper_with_its_words_before_masking() {
+        let mut e = Engine::new();
+        e.register_double(0x00d4_18d0, |e, a| {
+            e.mem.set_u8(a[2] + 0xb, 0xff);
+            assert_eq!(a[1], 0x77);
+            Ret::default()
+        });
+        let pair = pair_of_shapes(&mut e, 3, 3);
+        let result = e.mem.alloc(0x20);
+        e.call(0x00d4_0b90, &args![pair, 0x77u32, result]);
+        assert_eq!(e.mem.u8(result + 0xb), 0xf0);
     }
 }

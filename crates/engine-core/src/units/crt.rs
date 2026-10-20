@@ -383,11 +383,14 @@ pub fn acos_cdecl(e: &mut Engine, x: f64) -> f64 {
     e.call(CI_ACOS, &args![x]).f64()
 }
 
-/// Where the engine keeps the x87 control word (`FSTCW`/`FLDCW`): a word of the thread's
-/// block past the exe's `.tls` data, holding `0x10000 | cw` once set; zero means the
-/// control word the game runs with, `0x027F` (all exceptions masked, 53-bit precision,
-/// round to nearest), the value the CRT's x87 code checks for. The engine computes in `f64`
-/// whatever the control word says.
+/// Where the engine keeps the running thread's x87 control word (`FSTCW`/`FLDCW`): a word of
+/// the thread's block past the exe's `.tls` data, holding `0x10000 | cw` once set; zero means
+/// the control word every thread starts with, `0x027F` (all exceptions masked, 53-bit
+/// precision, round to nearest: `crate::x87::DEFAULT_CONTROL_WORD`), the value the CRT's x87
+/// code checks for. The FPU register the x87 arithmetic helpers round with
+/// (`crate::x87::control_word`) always holds the same word: [`set_x87_control_word`] sets
+/// both. A thread made by `CreateThread` keeps its word in its kernel object while it does
+/// not run (`units::platform::run_as_thread` swaps it in).
 const X87_CONTROL_WORD: u32 = 0x0e04;
 
 /// The x87 control word as `FSTCW` reads it.
@@ -395,10 +398,19 @@ pub fn x87_control_word(e: &mut Engine) -> u16 {
     let at = e.tls() + X87_CONTROL_WORD;
     let slot = e.mem.u32(at);
     if slot & 0x1_0000 == 0 {
-        0x027f
+        crate::x87::DEFAULT_CONTROL_WORD
     } else {
         slot as u16
     }
+}
+
+/// `FLDCW`: loads the running thread's x87 control word, its word in the thread block and the
+/// FPU register the x87 arithmetic helpers read (`crate::x87::set_control_word`), so precision
+/// control (bits 8-9) applies to them from here on.
+pub fn set_x87_control_word(e: &mut Engine, word: u16) {
+    let at = e.tls() + X87_CONTROL_WORD;
+    e.mem.set_u32(at, 0x1_0000 | u32::from(word));
+    crate::x87::set_control_word(word);
 }
 
 // Translated from 00ed5abb (decompiled, FalloutNV.exe 1.4.0.525)
@@ -408,8 +420,7 @@ pub fn x87_control_word(e: &mut Engine) -> u16 {
 pub fn ctrlfp(e: &mut Engine, newctrl: u32, mask: u32) -> i32 {
     let old = x87_control_word(e);
     let new = (!mask & u32::from(old)) | (newctrl & mask);
-    let at = e.tls() + X87_CONTROL_WORD;
-    e.mem.set_u32(at, 0x1_0000 | (new & 0xffff));
+    set_x87_control_word(e, new as u16);
     i32::from(old as i16)
 }
 
@@ -1381,12 +1392,6 @@ const MATH_ERROR_SWITCH: u32 = 0x0126_fd90;
 /// `MXCSR` as the game runs with it (every exception masked, `0x1f80`). The SSE2 routines test
 /// `STMXCSR`; the engine does not track the register.
 const MXCSR: u32 = 0x1f80;
-
-/// `FLDCW`: loads the control word the engine keeps for `FSTCW`.
-fn set_x87_control_word(e: &mut Engine, word: u16) {
-    let at = e.tls() + X87_CONTROL_WORD;
-    e.mem.set_u32(at, 0x1_0000 | u32::from(word));
-}
 
 /// `FLD m64`: a double loaded onto the x87 stack. A signalling NaN becomes quiet (the quiet bit
 /// is set, the payload kept); every other value is exact. There is no shared helper for

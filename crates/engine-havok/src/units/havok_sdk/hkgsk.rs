@@ -833,12 +833,6 @@ impl Flags {
     }
 }
 
-/// The byte map of `getClosestPoint`'s dispatch (`00e4da34`): from `(count_a * 8 | count_b) - 9`
-/// to the entry of its table of ten handlers (10 is the default, `00e4cd40`).
-const BYTE_MAP: [u8; 25] = [
-    0, 1, 2, 3, 10, 10, 10, 10, 4, 5, 6, 10, 10, 10, 10, 10, 7, 8, 10, 10, 10, 10, 10, 10, 9,
-];
-
 // Translated from 00e4c730 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkGsk::getClosestPoint` (Xbox PDB name, Ghidra: `getClosestPoint`), `thiscall` on the GJK state
 /// `this` with the stack words `input`, `ids` (a byte array, or null) and `output`; answers the
@@ -882,7 +876,8 @@ const BYTE_MAP: [u8; 25] = [
 /// words of the exe's frame are a block of memory at the exe's offsets (words the exe never
 /// wrote read as 0 here, as stale stack words there; the same for the vector registers at entry),
 /// the pushes for a call are a vector and every jump target is a block of one `match`. The jump
-/// tables and the byte map are copied from `00e4da08`, `00e4da34`, `00e4da50` and `00e4da70`;
+/// tables (`00e4da08`, `00e4da50` and `00e4da70`) and the byte map (`00e4da34`) are `match`es on the
+/// case value;
 /// the flags a branch tests are the integer flags the exe's compare, test, arithmetic or shift
 /// before it left.
 #[allow(unused_assignments, unused_variables, unused_mut, unused_parens)]
@@ -1347,7 +1342,19 @@ pub fn hk_gsk_get_closest_point(
                 }
                 0x00e4c9d1 => {
                     // 00e4c9d1: MOVZX EAX,byte ptr [EAX + 0xe4da34]
-                    eax = u32::from(BYTE_MAP[eax as usize]);
+                    eax = match eax {
+                        0 => 0,
+                        1 => 1,
+                        2 => 2,
+                        3 => 3,
+                        8 => 4,
+                        9 => 5,
+                        10 => 6,
+                        16 => 7,
+                        17 => 8,
+                        24 => 9,
+                        _ => 10,
+                    };
                     // 00e4c9d8: JMP dword ptr [EAX*0x4 + 0xe4da08]
                     pc = match eax {
                         0 => 0x00e4d699,

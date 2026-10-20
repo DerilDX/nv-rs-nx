@@ -51,13 +51,15 @@ fn forward_event(e: &mut Engine, world: u32, slot: u32, first: u32, other: u32) 
 
 // Translated from 00c9e610 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00c9e610 - the /GS cookie check (00ec408c) is not modeled, and the event block's uninitialised bytes are passed as zeros.
-/// `bhkWaterPhantomCallbackShape::phantomEnterEvent` (Xbox PDB): takes three words (the third
+/// `bhkWaterPhantomCallbackShape::phantomEnterEvent` (Xbox PDB): takes three stack words (the third
 /// is unused), finds the world object through the second collidable ([`event_world`]) and
 /// runs virtual slot 0x1C of the object at `world + 0x24` on the event block. The exe does
 /// not test the world object for 0 here: with no world object it reads address 0x24 and
 /// faults, which the translation reproduces as a memory panic.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn bhk_water_phantom_callback_shape_phantom_enter_event(
     e: &mut Engine,
+    _this: u32,
     first: u32,
     other: u32,
     _unused_3: u32,
@@ -68,13 +70,15 @@ pub fn bhk_water_phantom_callback_shape_phantom_enter_event(
 
 // Translated from 00c9e670 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00c9e670 - the /GS cookie check (00ec408c) is not modeled, and the event block's uninitialised bytes are passed as zeros.
-/// `bhkWaterPhantomCallbackShape::phantomLeaveEvent` (Xbox PDB): takes two words, finds the
+/// `bhkWaterPhantomCallbackShape::phantomLeaveEvent` (Xbox PDB): takes two stack words, finds the
 /// world object through the second collidable ([`event_world`]) and, when there is one, runs
 /// virtual slot 0x20 of the object at `world + 0x24` on the event block. Then, when the byte
 /// at `other + 0x18` is 1 and `other + offset` (the signed byte at `other + 0x10`) is not 0
 /// and the word at `+0xC` of it is not 0, clears bit 3 of the word at `+0x10` of that.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn bhk_water_phantom_callback_shape_phantom_leave_event(
     e: &mut Engine,
+    _this: u32,
     first: u32,
     other: u32,
 ) {
@@ -98,7 +102,7 @@ pub fn bhk_water_phantom_callback_shape_phantom_leave_event(
 
 // Translated from 00c9e700 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00c9e700 - the FS:[0] exception-unwinding frame and the /GS cookie check (00ec408c) are not modeled, and the ray-cast result block's uninitialised bytes are passed as zeros.
-/// `bhkWaterPhantomCallbackShape::castRayWithCollector` (Xbox PDB): takes `(first, other,
+/// `bhkWaterPhantomCallbackShape::castRayWithCollector` (Xbox PDB): takes the stack words `(first, other,
 /// collector)`. With the allocation-scope word set to 0x10 it reads the list `other + 0xC`;
 /// when the list exists, its word at `+8` is not 0, its first word (the entry) is not 0, the
 /// entry's word at `+0xC` is 0x1B and its word at `+0x10` (the shape) is not 0, it builds a
@@ -106,8 +110,10 @@ pub fn bhk_water_phantom_callback_shape_phantom_leave_event(
 /// 0x20 of the shape on `(flag byte, first, block)`, reads the flag with `00632c60` on the
 /// block and, when it is not 0, runs virtual slot 0 of the collector on `(other, block)`.
 /// The scope word is restored at the end.
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
 pub fn bhk_water_phantom_callback_shape_cast_ray_with_collector(
     e: &mut Engine,
+    _this: u32,
     first: u32,
     other: u32,
     collector: u32,
@@ -146,15 +152,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(
             0x00c9e610,
-            bhk_water_phantom_callback_shape_phantom_enter_event(u32, u32, u32)
+            bhk_water_phantom_callback_shape_phantom_enter_event(u32, u32, u32, u32)
         ),
         entry!(
             0x00c9e670,
-            bhk_water_phantom_callback_shape_phantom_leave_event(u32, u32)
+            bhk_water_phantom_callback_shape_phantom_leave_event(u32, u32, u32)
         ),
         entry!(
             0x00c9e700,
-            bhk_water_phantom_callback_shape_cast_ray_with_collector(u32, u32, u32)
+            bhk_water_phantom_callback_shape_cast_ray_with_collector(u32, u32, u32, u32)
         ),
     ]
 }
@@ -164,6 +170,9 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     /// Records of the sink callbacks: `(slot, this, first word, second word)`.
     type Seen = Rc<RefCell<Vec<(u32, u32, u32, u32)>>>;
@@ -203,7 +212,7 @@ mod tests {
     #[test]
     fn enter_event_forwards_to_slot_0x1c_of_the_sink() {
         let (mut e, other, seen) = setup();
-        e.call(0x00c9e610, &args![0x1111u32, other, 0x9999u32]);
+        e.call(0x00c9e610, &args![VCALL_THIS, 0x1111u32, other, 0x9999u32]);
         let seen = seen.borrow();
         assert_eq!(seen.len(), 1);
         assert_eq!((seen[0].0, seen[0].2, seen[0].3), (0x1c, 0x1111, other));
@@ -215,13 +224,13 @@ mod tests {
         let (mut e, other, _) = setup();
         let region = other - 0x20;
         e.mem.set_u32(region + 8, 0);
-        e.call(0x00c9e610, &args![0x1111u32, other, 0u32]);
+        e.call(0x00c9e610, &args![VCALL_THIS, 0x1111u32, other, 0u32]);
     }
 
     #[test]
     fn leave_event_forwards_to_slot_0x20_only_with_a_world_object() {
         let (mut e, other, seen) = setup();
-        e.call(0x00c9e670, &args![0x2222u32, other]);
+        e.call(0x00c9e670, &args![VCALL_THIS, 0x2222u32, other]);
         {
             let seen = seen.borrow();
             assert_eq!(seen.len(), 1);
@@ -229,7 +238,7 @@ mod tests {
         }
         let region = other - 0x20;
         e.mem.set_u32(region + 8, 0);
-        e.call(0x00c9e670, &args![0x2222u32, other]);
+        e.call(0x00c9e670, &args![VCALL_THIS, 0x2222u32, other]);
         assert_eq!(seen.borrow().len(), 1);
     }
 
@@ -243,10 +252,10 @@ mod tests {
         e.mem.set_u32(flagged + 0x10, 0xffff_ffff);
         e.mem.set_u32(region + 0xc, flagged);
         e.mem.set_u8(other + 0x18, 2);
-        e.call(0x00c9e670, &args![0u32, other]);
+        e.call(0x00c9e670, &args![VCALL_THIS, 0u32, other]);
         assert_eq!(e.mem.u32(flagged + 0x10), 0xffff_ffff);
         e.mem.set_u8(other + 0x18, 1);
-        e.call(0x00c9e670, &args![0u32, other]);
+        e.call(0x00c9e670, &args![VCALL_THIS, 0u32, other]);
         assert_eq!(e.mem.u32(flagged + 0x10), 0xffff_fff7);
     }
 
@@ -312,7 +321,7 @@ mod tests {
     #[test]
     fn cast_ray_builds_the_result_block_and_reports_a_hit_to_the_collector() {
         let (mut e, other, collector, scope, casts, reports) = cast_setup(1);
-        e.call(0x00c9e700, &args![0x7777u32, other, collector]);
+        e.call(0x00c9e700, &args![VCALL_THIS, 0x7777u32, other, collector]);
         let casts = casts.borrow();
         assert_eq!(casts.len(), 1);
         let cast = &casts[0];
@@ -332,7 +341,7 @@ mod tests {
     #[test]
     fn cast_ray_without_a_hit_does_not_call_the_collector() {
         let (mut e, other, collector, scope, casts, reports) = cast_setup(0);
-        e.call(0x00c9e700, &args![1u32, other, collector]);
+        e.call(0x00c9e700, &args![VCALL_THIS, 1u32, other, collector]);
         assert_eq!(casts.borrow().len(), 1);
         assert!(reports.borrow().is_empty());
         assert_eq!(e.mem.u32(scope), 0x33);
@@ -350,7 +359,7 @@ mod tests {
                 2 => e.mem.set_u32(entry + 0xc, 0x1a),
                 _ => e.mem.set_u32(entry + 0x10, 0),
             }
-            e.call(0x00c9e700, &args![1u32, other, collector]);
+            e.call(0x00c9e700, &args![VCALL_THIS, 1u32, other, collector]);
             assert!(casts.borrow().is_empty());
             assert_eq!(e.mem.u32(scope), 0x33);
         }

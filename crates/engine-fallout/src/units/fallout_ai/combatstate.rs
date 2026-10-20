@@ -3768,9 +3768,17 @@ pub fn fn_009a3810(e: &mut Engine, this: Ptr) {
     e.call(ARRAY_RELEASE_008454F0, &args![this, 1u32]);
 }
 
+// Translated from 009a3830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map. `cdecl`, two stack words: whether the 32-bit words the two pointers
+/// point to are equal (`SETZ AL`, the result is `AL`).
+pub fn fn_009a3830(e: &mut Engine, left: Ptr, right: Ptr) -> bool {
+    e.mem.u32(left.addr()) == e.mem.u32(right.addr())
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x009a_3830, fn_009a3830(Ptr, Ptr) -> bool),
         entry!(0x009a_3280, fn_009a3280(Ptr, u32) -> Ptr),
         entry!(
             0x006f2290,
@@ -5311,5 +5319,24 @@ mod array_destructor_tests {
     #[test]
     fn fn_009a3810_sets_the_vtable_then_releases_the_buffer() {
         check_array_destructor(0x009a_3810, ARRAY_VTABLE_0108E0A4, ARRAY_RELEASE_008454F0);
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    #[test]
+    fn at_009a3830_compares_the_words_the_pointers_point_to() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(4);
+        let b = e.mem.alloc(4);
+        e.mem.set_u32(a, 0x1234_5678);
+        e.mem.set_u32(b, 0x1234_5678);
+        assert!(e.call(0x009a_3830, &args![a, b]).bool());
+        e.mem.set_u32(b, 0x1234_5679);
+        assert!(!e.call(0x009a_3830, &args![a, b]).bool());
+        // The same pointer twice is trivially equal.
+        assert!(e.call(0x009a_3830, &args![a, a]).bool());
     }
 }

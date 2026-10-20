@@ -414,6 +414,29 @@ pub fn bhk_shape_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
     leave_scope(e, scope);
 }
 
+// Translated from 00c84f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (the class is unconfirmed): `this` in `ECX`, two stack words
+/// (`RET 8`): `selector` and `mask`. Unless `selector` is `0xffffffff` it follows the chain the
+/// virtual function at +0xcc gives (each answer is the next object; null or the same object ends
+/// it). Then it answers whether the word at `+0x10` of the last object, ANDed with `mask`, is
+/// non-zero, compared as the value 0 or 1 with `mask` itself. Only `AL` is set (`MOV AL, DL`):
+/// the upper bytes of `EAX` stay those of `mask`. Ghidra made no function here; it is called from
+/// 005dbc1c.
+pub fn fn_00c84f50(e: &mut Engine, this: u32, selector: u32, mask: u32) -> u32 {
+    let mut object = this;
+    if selector != 0xffff_ffff {
+        loop {
+            let next = e.vcall(object, 0xcc, &args![]).u32();
+            if next == 0 || next == object {
+                break;
+            }
+            object = next;
+        }
+    }
+    let masked_non_zero = u32::from(e.mem.u32(object + 0x10) & mask != 0);
+    (mask & 0xffff_ff00) | u32::from(masked_non_zero == mask)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -434,6 +457,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             bhk_shape_build_display_from_hk_geometry(Ptr, u32, Ptr, u32, u32)
         ),
         entry!(0x00c851c0, bhk_shape_get_viewer_strings(Ptr, Ptr)),
+        entry!(0x00c8_4f50, fn_00c84f50(u32, u32, u32) -> u32),
     ]
 }
 
@@ -1002,5 +1026,69 @@ mod tests {
         assert_eq!(e.mem.u32(base), 0x1111);
         assert_eq!(e.mem.u32(base + 4), 0x2222);
         assert_eq!(e.mem.u32(thread + SCOPE_WORD), 0x77);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    /// Objects whose virtual function at +0xcc answers the word at +0x20 (the next link).
+    fn linked_objects(e: &mut Engine, flags: &[u32]) -> Vec<u32> {
+        let vtable = e.mem.alloc(0xd0);
+        e.mem.set_u32(vtable + 0xcc, 0x0900_0004);
+        e.register_double(0x0900_0004, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x20),
+            ..Ret::default()
+        });
+        let objects: Vec<u32> = flags.iter().map(|_| e.mem.alloc(0x40)).collect();
+        for (i, object) in objects.iter().enumerate() {
+            e.mem.set_u32(*object, vtable);
+            e.mem.set_u32(*object + 0x10, flags[i]);
+            if i + 1 < objects.len() {
+                e.mem.set_u32(*object + 0x20, objects[i + 1]);
+            }
+        }
+        objects
+    }
+
+    /// The last object of the chain decides, unless the selector is `0xffffffff`.
+    #[test]
+    fn fn_00c84f50_tests_the_end_of_the_chain() {
+        let mut e = Engine::new();
+        let objects = linked_objects(&mut e, &[0, 0, 1]);
+        assert_eq!(e.call(0x00c8_4f50, &args![objects[0], 0u32, 1u32]).u32(), 1);
+        assert_eq!(
+            e.call(0x00c8_4f50, &args![objects[0], 0xffff_ffffu32, 1u32])
+                .u32(),
+            0
+        );
+    }
+
+    /// A mask other than 0 or 1 never equals the 0/1 answer; the upper bytes of `EAX` are the mask's.
+    #[test]
+    fn fn_00c84f50_keeps_the_upper_bytes_of_the_mask() {
+        let mut e = Engine::new();
+        let objects = linked_objects(&mut e, &[0x1ff]);
+        assert_eq!(
+            e.call(0x00c8_4f50, &args![objects[0], 0u32, 0x100u32])
+                .u32(),
+            0x100
+        );
+        assert_eq!(
+            e.call(0x00c8_4f50, &args![objects[0], 0u32, 0x2u32]).u32(),
+            0
+        );
+        // A mask of 0 gives "no bits set" == 0.
+        assert_eq!(e.call(0x00c8_4f50, &args![objects[0], 0u32, 0u32]).u32(), 1);
+    }
+
+    /// A link that points back at the object itself ends the chain.
+    #[test]
+    fn fn_00c84f50_stops_when_the_link_is_the_object_itself() {
+        let mut e = Engine::new();
+        let objects = linked_objects(&mut e, &[1, 0]);
+        e.mem.set_u32(objects[0] + 0x20, objects[0]);
+        assert_eq!(e.call(0x00c8_4f50, &args![objects[0], 0u32, 1u32]).u32(), 1);
     }
 }

@@ -97,9 +97,58 @@ pub fn fn_00d3fe10(e: &mut Engine, owner: u32, object: Ptr, receiver: u32, argum
     base + 0x40
 }
 
+// Translated from 00d3fd60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, three words `first`, `object`, `value`; descriptions, not confirmed): the
+/// function `00d400f0` stores at `+0xc` of the agent record it fills. Looks through the first
+/// `n` 4-byte slots of `object` (`n` is the byte at `object + 0x21`, the slot words start at
+/// `object + 2`) for the one whose 16-bit word equals the low 16 bits of `value`. When it finds
+/// slot `i` it calls `00db0900` on `object` with `i` (`thiscall`, one stack word), decrements the
+/// byte at `first + 2` and answers `first`. Otherwise it answers the number of slots it looked
+/// at, `n` (0 when `n` is 0).
+pub fn fn_00d3fd60(e: &mut Engine, first: Ptr, object: Ptr, value: u32) -> u32 {
+    let base = object.addr();
+    let count = u32::from(e.mem.u8(base.wrapping_add(0x21)));
+    if count == 0 {
+        return 0;
+    }
+    let wanted = value as u16;
+    let mut index = 0u32;
+    let mut slot = base.wrapping_add(2);
+    loop {
+        if e.mem.u16(slot) == wanted {
+            e.call(0x00db_0900, &args![object, index]);
+            let counter = e.mem.u8(first.addr().wrapping_add(2)).wrapping_sub(1);
+            e.mem.set_u8(first.addr().wrapping_add(2), counter);
+            return first.addr();
+        }
+        index += 1;
+        slot = slot.wrapping_add(4);
+        if index >= count {
+            return index;
+        }
+    }
+}
+
+// Translated from 00d3fde0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (the function `00d400f0` stores it at `+0x14` of the agent record it fills): a
+/// bare `RET`; no instruction reads a stack word and the exe has no direct caller, so it is
+/// declared without words. It does nothing.
+pub fn fn_00d3fde0(_e: &mut Engine) {}
+
+// Translated from 00d3fe70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (cdecl, four words; the function `00d400f0` stores it at `+4` of the agent record
+/// it fills): hands its four words unchanged to `00d3fe10` (cdecl) and answers what that
+/// answers.
+pub fn fn_00d3fe70(e: &mut Engine, owner: u32, object: Ptr, receiver: u32, argument: u32) -> u32 {
+    fn_00d3fe10(e, owner, object, receiver, argument)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d3fd60, fn_00d3fd60(Ptr, Ptr, u32) -> u32),
+        entry!(0x00d3fde0, fn_00d3fde0()),
+        entry!(0x00d3fe70, fn_00d3fe70(u32, Ptr, u32, u32) -> u32),
         entry!(0x00d3_fce0, fn_00d3fce0(Ptr)),
         entry!(0x00d3_fd00, fn_00d3fd00(Ptr)),
         entry!(0x00d3_fda0, fn_00d3fda0(u32, Ptr, u32) -> u32),
@@ -111,6 +160,98 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 #[cfg(test)]
 mod havok_a04_tests {
     use super::*;
+
+    /// An object holding `words` as the first slots (the slot words start at `+2`, 4 bytes
+    /// apart) with the slot count in the byte at `+0x21`.
+    fn slots_00d3fd60(e: &mut Engine, words: &[u16]) -> u32 {
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u8(object + 0x21, words.len() as u8);
+        for (index, word) in words.iter().enumerate() {
+            e.mem.set_u16(object + 2 + 4 * index as u32, *word);
+        }
+        object
+    }
+
+    #[test]
+    fn fn_00d3fd60_removes_the_slot_that_holds_the_value() {
+        let mut e = Engine::new();
+        let first = e.mem.alloc(8);
+        e.mem.set_u8(first + 2, 5);
+        let object = slots_00d3fd60(&mut e, &[0x11, 0x22, 0x33]);
+        e.register(0x00db_0900, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let answer = e
+            .call(0x00d3_fd60, &args![first, object, 0xffff_0022u32])
+            .u32();
+        assert_eq!(answer, first);
+        assert_eq!(e.mem.u8(first + 2), 4);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00db_0900)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x00db_0900, vec![object, 1])]);
+    }
+
+    #[test]
+    fn fn_00d3fd60_answers_the_slot_count_when_the_value_is_not_there() {
+        let mut e = Engine::new();
+        let first = e.mem.alloc(8);
+        e.mem.set_u8(first + 2, 5);
+        let object = slots_00d3fd60(&mut e, &[0x11, 0x22, 0x33]);
+        let answer = e.call(0x00d3_fd60, &args![first, object, 0x44u32]).u32();
+        assert_eq!(answer, 3);
+        assert_eq!(e.mem.u8(first + 2), 5);
+    }
+
+    #[test]
+    fn fn_00d3fd60_answers_zero_for_an_empty_object() {
+        let mut e = Engine::new();
+        let first = e.mem.alloc(8);
+        let object = slots_00d3fd60(&mut e, &[]);
+        assert_eq!(e.call(0x00d3_fd60, &args![first, object, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00d3fde0_does_nothing() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00d3_fde0, &args![]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00d3fe70_hands_its_four_words_to_00d3fe10() {
+        let mut e = Engine::new();
+        let owner = e.mem.alloc(8);
+        e.mem.set_u8(owner + 2, 7);
+        let object = e.mem.alloc(0x60);
+        e.mem.set_u8(object + 0x21, 1);
+        e.mem.set_u16(object + 2, 0x1234);
+        e.put_vtable(0x0900_0000, &[0, 0, 0, 0, 0, 0x0900_0100]);
+        let receiver = e.mem.alloc(8);
+        e.mem.set_u32(receiver, 0x0900_0000);
+        e.register(0x0900_0100, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let answer = e
+            .call(0x00d3_fe70, &args![owner, object, receiver, 0x99u32])
+            .u32();
+        assert_eq!(answer, object + 0x40);
+        assert_eq!(e.mem.u8(owner + 2), 0);
+        assert_eq!(e.mem.u8(object + 0x21), 0);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x0900_0100)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x0900_0100, vec![receiver, 0x1234, 0x99])]);
+    }
 
     #[test]
     fn fn_00d3fce0_fills_the_function_words() {

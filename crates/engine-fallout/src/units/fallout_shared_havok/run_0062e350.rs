@@ -25,13 +25,101 @@ pub fn fn_0062e3c0(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// `00626870(this)`: clears the array (calls `00626790` on its data and
+/// size, then stores 0 as the size at `+4`).
+const ARRAY_CLEAR: u32 = 0x0062_6870;
+/// `0062a100(this)`: the array's capacity, `word at +8 & 0x3fffffff`.
+const ARRAY_CAPACITY: u32 = 0x0062_a100;
+/// `0066db70(allocator, data, capacity)` (`RET 8`): calls the allocator's
+/// virtual function at `+0x10` with `data` and `capacity << 4` (the
+/// elements are 16 bytes).
+const ARRAY_DEALLOCATE: u32 = 0x0066_db70;
+/// The top bit of the capacity word at `+8`: the storage is not owned by
+/// the array and is not freed.
+const DONT_DEALLOCATE: u32 = 0x8000_0000;
+
+// Translated from 0062e350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears an array of 16-byte elements and gives its storage back to
+/// `allocator` (the layout is `hkArray`'s: data pointer at `+0`, size at
+/// `+4`, capacity and flags at `+8`; the exe does not name this function):
+/// clears it (`00626870`), and when the storage is owned (bit 31 of `+8`
+/// clear) hands the data and its capacity to `0066db70` with `allocator`.
+/// Then sets the data pointer to 0 and `+8` to `0x80000000`.
+pub fn fn_0062e350(e: &mut Engine, this: Ptr, allocator: u32) {
+    e.call(ARRAY_CLEAR, &args![this]);
+    if e.mem.u32(this.addr() + 8) & DONT_DEALLOCATE == 0 {
+        let capacity = e.call(ARRAY_CAPACITY, &args![this]).u32();
+        let data = e.mem.u32(this.addr());
+        e.call(ARRAY_DEALLOCATE, &args![allocator, data, capacity]);
+    }
+    e.mem.set_u32(this.addr(), 0);
+    e.mem.set_u32(this.addr() + 8, DONT_DEALLOCATE);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0062_e350, fn_0062e350(Ptr, u32)),
         entry!(0x0062_e3a0, fn_0062e3a0(Ptr, u32) -> u32),
         entry!(0x0062_e3b0, fn_0062e3b0(Ptr, u32) -> u32),
         entry!(0x0062_e3c0, fn_0062e3c0(Ptr, u32) -> u32),
     ]
+}
+
+#[cfg(test)]
+mod array_release_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(ARRAY_CLEAR, |_, _| Ret::default());
+        e.register(ARRAY_CAPACITY, |e, a| {
+            (e.mem.u32(a[0] + 8) & 0x3fff_ffff).into_ret()
+        });
+        e.register(ARRAY_DEALLOCATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn logged(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn owned_storage_goes_back_to_the_allocator() {
+        let mut e = engine();
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array, 0x8000);
+        e.mem.set_u32(array + 4, 3);
+        // Capacity 6; bit 30 (a flag the capacity mask drops) is set.
+        e.mem.set_u32(array + 8, 0x4000_0006);
+        e.call(0x0062_e350, &args![array, 0x5000u32]);
+        assert_eq!(logged(&e, ARRAY_CLEAR), vec![vec![array]]);
+        assert_eq!(logged(&e, ARRAY_CAPACITY), vec![vec![array]]);
+        assert_eq!(logged(&e, ARRAY_DEALLOCATE), vec![vec![0x5000, 0x8000, 6]]);
+        assert_eq!(e.mem.u32(array), 0);
+        assert_eq!(e.mem.u32(array + 8), 0x8000_0000);
+    }
+
+    #[test]
+    fn storage_the_array_does_not_own_is_not_freed() {
+        let mut e = engine();
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array, 0x8000);
+        e.mem.set_u32(array + 8, 0x8000_0008);
+        e.call(0x0062_e350, &args![array, 0x5000u32]);
+        assert_eq!(logged(&e, ARRAY_CLEAR).len(), 1);
+        assert!(logged(&e, ARRAY_CAPACITY).is_empty());
+        assert!(logged(&e, ARRAY_DEALLOCATE).is_empty());
+        assert_eq!(e.mem.u32(array), 0);
+        assert_eq!(e.mem.u32(array + 8), 0x8000_0000);
+    }
 }
 
 #[cfg(test)]

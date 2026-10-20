@@ -1699,9 +1699,22 @@ pub fn fn_004dcce0(e: &mut Engine, this: Ptr) -> u16 {
     e.call(CALLEE_00658930, &args![this.byte_add(0x450)]).u16()
 }
 
+// Translated from 004de290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`renderer.cpp`). `thiscall`, `RET 4`: when `this` is not null,
+/// copies the float argument to `+4` of it (`FLD`/`FSTP`, a signalling NaN comes out quiet);
+/// returns `this`.
+pub fn fn_004de290(e: &mut Engine, this: Ptr, value: f32) -> Ptr {
+    if !this.is_null() {
+        e.mem
+            .set_u32(this.addr().wrapping_add(4), x87_quiet_bits(value.to_bits()));
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004d_e290, fn_004de290(Ptr, f32) -> Ptr),
         entry!(0x004de2f0, fn_004de2f0(Ptr, u32, u8) -> Ptr),
         entry!(0x004de370, fn_004de370(Ptr, u32, u32) -> Ptr),
         entry!(0x004da4d0, renderer_kill(u8)),
@@ -3358,5 +3371,28 @@ mod tests {
         let inner: Vec<_> = log.iter().filter(|c| c.0 == CALLEE_00658930).collect();
         assert_eq!(inner.len(), 1);
         assert_eq!(inner[0].1, vec![0x4100 + 0x450]);
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    #[test]
+    fn at_004de290_stores_the_float_and_returns_this() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x004d_e290, &args![this, 1.5f32]).u32(), this);
+        assert_eq!(e.mem.u32(this + 4), 1.5f32.to_bits());
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        e.call(0x004d_e290, &args![this, f32::from_bits(0xff80_0001)]);
+        assert_eq!(e.mem.u32(this + 4), 0xffc0_0001);
+    }
+
+    #[test]
+    fn at_004de290_leaves_a_null_this_alone() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x004d_e290, &args![0u32, 1.5f32]).u32(), 0);
     }
 }

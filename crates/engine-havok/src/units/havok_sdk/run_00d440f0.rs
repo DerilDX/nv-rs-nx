@@ -155,9 +155,46 @@ pub fn fn_00d44310(e: &mut Engine, queue: Ptr) {
     });
 }
 
+/// Allocates `size` bytes the way the agent create functions do: the thread's memory router
+/// (`00c85750`) has the allocator at `+0x10`; its virtual slot `4` hands out the block, whose
+/// size goes into the 16-bit word at `+4`.
+fn allocate_agent_block(e: &mut Engine, size: u32) -> u32 {
+    let router = e.call(MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.mem.u32(router.wrapping_add(0x10));
+    let block = e.vcall(allocator, 4, &args![size]).u32();
+    e.mem.set_u16(block.wrapping_add(4), size as u16);
+    block
+}
+
+// Translated from 00d44280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `first`, `second`, `third`, `fourth`): a create
+/// function of the shape collection pair (code at `00d4435d` stores its address in an agent
+/// record). Allocates the 0x38-byte agent (`allocate_agent_block`) and runs the constructor
+/// `00d440f0` on it with the four words in this order. Answers what the constructor answers,
+/// the agent.
+pub fn fn_00d44280(e: &mut Engine, first: u32, second: u32, third: u32, fourth: u32) -> u32 {
+    let agent = allocate_agent_block(e, 0x38);
+    fn_00d440f0(e, Ptr::new(agent), first, second, third, fourth).addr()
+}
+
+// Translated from 00d442c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `first`, `second`, `third`, `fourth`): the create
+/// function of the flipped shape collection agent (code at `00d44323` stores its address in an
+/// agent record). Allocates the 0x38-byte agent (`allocate_agent_block`), runs the constructor
+/// `00d440f0` with the first two words exchanged (`second`, `first`, `third`, `fourth`) and
+/// stores the vtable `010ce8b0`. Answers the agent.
+pub fn fn_00d442c0(e: &mut Engine, first: u32, second: u32, third: u32, fourth: u32) -> u32 {
+    let agent = allocate_agent_block(e, 0x38);
+    fn_00d440f0(e, Ptr::new(agent), second, first, third, fourth);
+    e.mem.set_u32(agent, 0x010c_e8b0);
+    agent
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d44280, fn_00d44280(u32, u32, u32, u32) -> u32),
+        entry!(0x00d442c0, fn_00d442c0(u32, u32, u32, u32) -> u32),
         entry!(0x00d4_40f0, fn_00d440f0(Ptr, u32, u32, u32, u32) -> Ptr),
         entry!(0x00d4_4310, fn_00d44310(Ptr)),
     ]
@@ -168,6 +205,100 @@ mod havok_a04_tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The memory router (`00c85750`) answers an object whose `+0x10` is an allocator; the
+    /// allocator's slot 4 hands out `block` and records the size it was asked for.
+    fn install_allocator(e: &mut Engine, block: u32) -> std::rc::Rc<std::cell::RefCell<Vec<u32>>> {
+        let sizes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = std::rc::Rc::clone(&sizes);
+        e.map(block, 0x100);
+        e.put_vtable(0x0900_0000, &[0, 0x0900_0100]);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, 0x0900_0000);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register_double(0x0900_0100, move |_, a| {
+            seen.borrow_mut().push(a[1]);
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        sizes
+    }
+
+    /// A container with no keys (slot 4 answers 0, slot 8 answers `0xffffffff`) and two
+    /// sources whose first word is a holder; the holders' slot `0x10` answer the container.
+    /// Returns the two sources.
+    fn sources_00d44280(e: &mut Engine) -> (u32, u32) {
+        e.put_vtable(0x0900_0600, &[0, 0x0900_0620, 0x0900_0630]);
+        e.register(0x0900_0620, |_, _| Ret::default());
+        e.register(0x0900_0630, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        let container = e.mem.alloc(8);
+        e.mem.set_u32(container, 0x0900_0600);
+        let mut sources = Vec::new();
+        for (vtable, getter) in [(0x0900_0700, 0x0900_0710), (0x0900_0800, 0x0900_0810)] {
+            e.put_vtable(vtable, &[0, 0, 0, 0, getter]);
+            e.register_double(getter, move |_, _| Ret {
+                eax: container,
+                ..Ret::default()
+            });
+            let holder = e.mem.alloc(8);
+            e.mem.set_u32(holder, vtable);
+            let source = e.mem.alloc(0x10);
+            e.mem.set_u32(source, holder);
+            sources.push(source);
+        }
+        (sources[0], sources[1])
+    }
+
+    fn getter_calls_00d44280(e: &Engine, getter: u32) -> usize {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(called, _)| *called == getter)
+            .count()
+    }
+
+    #[test]
+    fn fn_00d44280_allocates_the_agent_and_runs_the_constructor_in_order() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        let (a, b) = sources_00d44280(&mut e);
+        e.call_log = Some(vec![]);
+        let agent = e.call(0x00d4_4280, &args![a, b, 0x33u32, 0x44u32]).u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x38]);
+        assert_eq!(e.mem.u16(agent + 4), 0x38);
+        assert_eq!(e.mem.u32(agent), 0x010c_f318);
+        assert_eq!(e.mem.u32(agent + 8), 0x44);
+        // The constructor walked the holder of the first source only.
+        assert_eq!(getter_calls_00d44280(&e, 0x0900_0710), 1);
+        assert_eq!(getter_calls_00d44280(&e, 0x0900_0810), 0);
+    }
+
+    #[test]
+    fn fn_00d442c0_exchanges_the_first_two_words_and_stores_the_flipped_vtable() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        let (a, b) = sources_00d44280(&mut e);
+        e.call_log = Some(vec![]);
+        let agent = e.call(0x00d4_42c0, &args![a, b, 0x33u32, 0x44u32]).u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x38]);
+        assert_eq!(e.mem.u32(agent), 0x010c_e8b0);
+        assert_eq!(e.mem.u32(agent + 8), 0x44);
+        assert_eq!(getter_calls_00d44280(&e, 0x0900_0710), 0);
+        assert_eq!(getter_calls_00d44280(&e, 0x0900_0810), 1);
+    }
 
     struct Scene {
         this: u32,

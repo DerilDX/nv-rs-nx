@@ -18,6 +18,11 @@ each function belongs to.
   against 1.4.0.525) at their addresses. Constants, strings, vtables and
   initial globals are therefore the game's own; nothing from the exe is in
   the repository. Tests run without the exe and set what they need.
+  The code section (`.text`) is not mapped (the Steam exe encrypts it): the
+  compiler's `switch` jump tables and byte maps are translated as ordinary
+  `match` arms on the case value (control flow), and the few data-like tables
+  that live there (colours, type names) as `match` arms too. No table is
+  copied into a constant array and none is read from the exe's code.
 - **Functions**: every translation is a typed Rust function and is also
   registered under its exe address in a uniform form (argument words,
   `this` first; see `abi.rs`). `e.call(addr, &args![...])` calls any
@@ -178,6 +183,22 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
      the closest match to x87 code (results can differ only in the last bit,
      in double-rounding cases). SSE code (`MOVSS`, `ADDSS`) computes in
      `f32`.
+   - x87 precision: the game's main thread runs at 24-bit precision once
+     Direct3D has created the renderer's device (control word `0x007F`;
+     `crate::x87`, "Precision control"), the other threads at 53-bit. A
+     translation whose results must match the exe on that thread does each
+     x87 `FADD`/`FSUB`/`FMUL`/`FDIV` (and the `P`/`R`/`I` forms) through
+     `x87_add`/`x87_sub`/`x87_mul`/`x87_div`, and `FSQRT` through
+     `x87_sqrt`, one call per instruction in the exe's order and operand
+     order, with the operands as the instruction sees them (`x87_load32`
+     for an `FLD dword`, `x87_load64` for an `FLD qword`, `x87_m32` for a
+     `float` memory operand, the plain `f64` for a `double` one,
+     `f64::from(i)` for `FILD`/`FIADD`), and
+     `x87_store32` at each `FSTP dword`. They round to the running thread's
+     precision, so the same translation is right on either thread. Where a
+     translation keeps plain `f64` arithmetic, `x87_round` rounds a value to
+     the current precision at one point (exact for an operation on floats
+     with round to nearest; see its comment).
 5. **Not translated**: C++ exception unwinding (`__CxxFrameHandler`
    states) and SEH frames are left out (say so if a function relies on
    them); the compiler-generated initializers and `atexit` destructors

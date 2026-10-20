@@ -2192,12 +2192,6 @@ fn merge_leaf(e: &mut Engine, leaf: u32, transform: u32, out: u32) {
     });
 }
 
-/// The case (an index into the jump table of `00ceff00`) of each shape type 1..=28; the
-/// cases 12 and 13 do nothing.
-const SHAPE_CASES: [u8; 28] = [
-    0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 7, 8, 13, 6, 9, 13, 13, 13, 13, 13, 10, 6, 6, 13, 13, 13, 11, 12,
-];
-
 // Translated from 00ceff00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpInertiaTensorComputer::computeRecursiveShapeVolumeMassProperties` (Xbox PDB name as the
 /// engine map lists it, without the class prefix): adds the mass properties of `shape`,
@@ -2226,7 +2220,25 @@ pub fn compute_recursive_shape_volume_mass_properties(
     if kind == 0 || kind > 28 {
         return;
     }
-    let case = SHAPE_CASES[kind as usize - 1];
+    // The compiler's switch on the shape type: the case of each type 1 to 28; the cases 12 and 13
+    // do nothing.
+    let case = match kind {
+        1 => 0,
+        2 => 1,
+        3 => 2,
+        4 => 3,
+        5 => 4,
+        6 => 5,
+        7..=10 | 14 | 22..=23 => 6,
+        11 => 7,
+        12 => 8,
+        13 | 16..=20 | 24..=26 => 13,
+        15 => 9,
+        21 => 10,
+        27 => 11,
+        28 => 12,
+        _ => unreachable!(),
+    };
     e.with_stack(0x1c0, |e, frame| {
         let base = frame.addr();
         let (leaf, first, second, third) = (base, base + 0x50, base + 0x60, base + 0x70);

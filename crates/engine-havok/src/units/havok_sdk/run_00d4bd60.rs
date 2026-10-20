@@ -93,6 +93,52 @@ pub fn fn_00d4bd60(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(me, 0x0102_e388);
 }
 
+// Translated from 00d4be30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fbf0ff): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `13939632` (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
+pub fn fn_00d4be30(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x1393_9632, &args![object.addr(), finishing]);
+    }
+}
+
+// Translated from 00d4be50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fbf109): cdecl with one stack word, `object`. Calls the object's virtual slot 0 with the one stack word 0 (no null check) and answers what it answers.
+pub fn fn_00d4be50(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00d4be90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fbf16f): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `13941296` (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
+pub fn fn_00d4be90(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x1394_1296, &args![object.addr(), finishing]);
+    }
+}
+
+// Translated from 00d4beb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fbf179): cdecl with one stack word, `object`. Calls the object's virtual slot 0 with the one stack word 0 (no null check) and answers what it answers.
+pub fn fn_00d4beb0(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00d4bef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address held in the static data word at 011b5668): cdecl with one stack word (never read); only returns.
+pub fn fn_00d4bef0(_e: &mut Engine, _unused_0: u32) {}
+
+// Translated from 00d4bf10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fbf24f): cdecl with two stack words, `object` and `finishing`. When `object` is not null, runs `14472064` (thiscall, `RET 4`) on `object` with the one stack word `finishing`.
+pub fn fn_00d4bf10(e: &mut Engine, object: Ptr, finishing: u32) {
+    if object.addr() != 0 {
+        e.call(0x1447_2064, &args![object.addr(), finishing]);
+    }
+}
+
+// Translated from 00d4bf30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB field name) of a class record whose class the engine map does not name (address stored by the code at 00fbf259): cdecl with one stack word, `object`. Calls the object's virtual slot 0 with the one stack word 0 (no null check) and answers what it answers.
+pub fn fn_00d4bf30(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -102,6 +148,13 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d4_be00, deleting_destructor_00d4be00(Ptr, u8) -> Ptr),
         entry!(0x00d4_bdf0, fn_00d4bdf0(Ptr, u32) -> u32),
         entry!(0x00d4_bd60, fn_00d4bd60(Ptr)),
+        entry!(0x00d4be30, fn_00d4be30(Ptr, u32)),
+        entry!(0x00d4be50, fn_00d4be50(Ptr) -> u32),
+        entry!(0x00d4be90, fn_00d4be90(Ptr, u32)),
+        entry!(0x00d4beb0, fn_00d4beb0(Ptr) -> u32),
+        entry!(0x00d4bef0, fn_00d4bef0(u32)),
+        entry!(0x00d4bf10, fn_00d4bf10(Ptr, u32)),
+        entry!(0x00d4bf30, fn_00d4bf30(Ptr) -> u32),
     ]
 }
 
@@ -367,5 +420,105 @@ mod havok_a04_tests {
             assert_eq!(e.mem.u32(this + 0x10), 0x010c_6fb0);
             assert_eq!(e.mem.u32(this), 0x0102_e388);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_a07_gap {
+    use super::*;
+
+    /// The argument words of every call to `address` in the engine's call log (which is taken).
+    fn calls_to(e: &mut Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(called, _)| *called == address)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    /// The address the doubled virtual slot 0 of [`object_with_slot_0`] answers at.
+    const SLOT_0_TARGET: u32 = 0x0900_0001;
+
+    /// An object whose vtable's slot 0 is a double answering 0x1234.
+    fn object_with_slot_0(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable, SLOT_0_TARGET);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object, vtable);
+        e.register(SLOT_0_TARGET, |_, _| Ret {
+            eax: 0x1234,
+            ..Ret::default()
+        });
+        object
+    }
+
+    #[test]
+    fn fn_00d4be30_runs_the_callee_unless_the_object_is_null() {
+        let mut e = Engine::new();
+        e.register(0x1393_9632, |_, _| Ret::default());
+        let object = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x00d4_be30, &args![0u32, 7u32]);
+        e.call(0x00d4_be30, &args![object, 7u32]);
+        assert_eq!(calls_to(&mut e, 0x1393_9632), vec![vec![object, 7]]);
+    }
+
+    #[test]
+    fn fn_00d4be50_calls_virtual_slot_0_with_zero() {
+        let mut e = Engine::new();
+        let object = object_with_slot_0(&mut e);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00d4_be50, &args![object]).u32(), 0x1234);
+        assert_eq!(calls_to(&mut e, SLOT_0_TARGET), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn fn_00d4be90_runs_the_callee_unless_the_object_is_null() {
+        let mut e = Engine::new();
+        e.register(0x1394_1296, |_, _| Ret::default());
+        let object = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x00d4_be90, &args![0u32, 7u32]);
+        e.call(0x00d4_be90, &args![object, 7u32]);
+        assert_eq!(calls_to(&mut e, 0x1394_1296), vec![vec![object, 7]]);
+    }
+
+    #[test]
+    fn fn_00d4beb0_calls_virtual_slot_0_with_zero() {
+        let mut e = Engine::new();
+        let object = object_with_slot_0(&mut e);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00d4_beb0, &args![object]).u32(), 0x1234);
+        assert_eq!(calls_to(&mut e, SLOT_0_TARGET), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn fn_00d4bef0_only_returns() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00d4_bef0, &args![0u32]).u32(), 0);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00d4bf10_runs_the_callee_unless_the_object_is_null() {
+        let mut e = Engine::new();
+        e.register(0x1447_2064, |_, _| Ret::default());
+        let object = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x00d4_bf10, &args![0u32, 7u32]);
+        e.call(0x00d4_bf10, &args![object, 7u32]);
+        assert_eq!(calls_to(&mut e, 0x1447_2064), vec![vec![object, 7]]);
+    }
+
+    #[test]
+    fn fn_00d4bf30_calls_virtual_slot_0_with_zero() {
+        let mut e = Engine::new();
+        let object = object_with_slot_0(&mut e);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00d4_bf30, &args![object]).u32(), 0x1234);
+        assert_eq!(calls_to(&mut e, SLOT_0_TARGET), vec![vec![object, 0]]);
     }
 }

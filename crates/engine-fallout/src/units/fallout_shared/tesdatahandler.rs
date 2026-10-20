@@ -68,9 +68,8 @@
 //!   `TESFile::GetTESForm` answers for a record) index a name table in the
 //!   exe at `0x01187004`; the `FORM_TYPE_*` constants are documented with the
 //!   record code that table gives (`FORM_TYPE_CELL` is `CELL`, ...). The
-//!   dispatch tables of `00467bd0` (`0x0046943c`) and `004695a0`
-//!   (`0x00469678`) are read off the exe and written as lists
-//!   ([`GENERIC_FORM_TYPES`], [`SAVE_SKIPPED_GROUP_TYPES`]).
+//!   switches of `00467bd0` and `004695a0` are written as `match`es
+//!   ([`is_generic_form_type`], `save_skipped_group_type`).
 //! - A pushed word that the decompiler hung on the wrong call is the rule
 //!   in this unit: `PUSH x; CALL getter; MOV ECX,EAX; CALL method` is
 //!   `method(getter(), x)` whenever the getter has a plain `RET`. The
@@ -658,16 +657,15 @@ const FORM_TYPE_DEFAULT_OBJECTS: u32 = 0x64;
 /// The types of reference records: `REFR`, `ACHR`, `ACRE`, `PMIS`, `PGRE`,
 /// `PBEA`, `PFLA` and `PCBE`.
 const REFERENCE_FORM_TYPES: [u32; 8] = [0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x69];
-/// The record types `fn_00467bd0` loads with the generic sequence (create
-/// the form when there is none, load it, add it to the data handler): the
-/// entries of its dispatch table (`0x0046943c`) that lead to that code.
-const GENERIC_FORM_TYPES: [u8; 66] = [
-    0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x10, 0x11, 0x12, 0x13, 0x14,
-    0x16, 0x17, 0x23, 0x30, 0x31, 0x33, 0x35, 0x36, 0x37, 0x47, 0x49, 0x4a, 0x4b, 0x4d, 0x4e, 0x4f,
-    0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x5a, 0x5b, 0x5d, 0x5e, 0x5f, 0x61, 0x62, 0x63,
-    0x65, 0x66, 0x68, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76,
-    0x77, 0x78,
-];
+/// Whether `fn_00467bd0` loads a record of `record_type` with the generic sequence (create the
+/// form when there is none, load it, add it to the data handler): the cases of its switch that
+/// lead to that code.
+fn is_generic_form_type(record_type: u32) -> bool {
+    matches!(
+        record_type,
+        0x04..=0x0e | 0x10..=0x14 | 0x16..=0x17 | 0x23 | 0x30..=0x31 | 0x33 | 0x35..=0x37 | 0x47 | 0x49..=0x4b | 0x4d..=0x4f | 0x51..=0x58 | 0x5a..=0x5b | 0x5d..=0x5f | 0x61..=0x63 | 0x65..=0x66 | 0x68 | 0x6a..=0x78
+    )
+}
 /// The exe's form type name table: 12-byte entries, the first word of each
 /// points to the record code (`"NONE"`, `"TES4"`, `"GRUP"`, `"GMST"`, ...).
 const FORM_TYPE_NAME_TABLE: u32 = 0x0118_7004;
@@ -4430,7 +4428,7 @@ fn register_loaded_form(e: &mut Engine, file: Ptr) {
         let form = e.call(FORM_BY_ID, &args![id]).u32();
         if form != 0 {
             let form_type = e.call(FORM_GET_TYPE, &args![form]).u32();
-            if !UNREGISTERED_EDITOR_ID_TYPES.contains(&form_type) {
+            if !editor_id_unregistered(form_type) {
                 let editor_id = e.vcall(form, FORM_VTABLE_GET_EDITOR_ID, &args![]).u32();
                 if editor_id != 0 && e.mem.u8(editor_id) != 0 {
                     let map = e.global::<u32>(EDITOR_ID_MAP);
@@ -4441,11 +4439,12 @@ fn register_loaded_form(e: &mut Engine, file: Ptr) {
     }
 }
 
-/// The form types whose editor ids `register_loaded_form` does not register
-/// (the entries of the exe's switch that lead out of the function):
-/// `NPC_`, `CREA` and the reference types and `PCBE`.
-const UNREGISTERED_EDITOR_ID_TYPES: [u32; 10] =
-    [0x2a, 0x2b, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x69];
+/// Whether `register_loaded_form` leaves the editor id of a form of type `form_type`
+/// unregistered (the cases of the exe's switch that lead out of the function): `NPC_`, `CREA` and
+/// the reference types and `PCBE`.
+fn editor_id_unregistered(form_type: u32) -> bool {
+    matches!(form_type, 0x2a..=0x2b | 0x3a..=0x40 | 0x69)
+}
 
 // Translated from 00467bb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `m_fileoffset` (`+0x264`) of a `TESFile` (Xbox PDB).
@@ -4476,7 +4475,7 @@ pub fn fn_00467bb0(e: &mut Engine, this: Ptr) -> u32 {
 /// (`00483870`, virtual `0x18`, `00483720`, virtual `0x14`). The load itself
 /// is one case per record type (`TES4`, `GMST`, `SKIL`, `NAVI`, `CELL`,
 /// `WRLD`, `LAND`, `NAVM`, `DIAL`, `INFO`, `IDLE` / `CPTH`, `AVIF`, `DOBJ`,
-/// the reference records and the generic types in [`GENERIC_FORM_TYPES`]);
+/// the reference records and the generic types ([`is_generic_form_type`]));
 /// every other type creates its form with `TESDataHandler::CreateFormOfType`
 /// (warnings disabled meanwhile), logs "FORMS: Unknown %s_ID in
 /// ConstructObject." if that fails, and puts a form it created into the
@@ -4754,7 +4753,7 @@ fn load_record(
             tes_data_handler_load_form(e, Ptr::new(manager), file);
             true
         }
-        t if t <= 0xff && GENERIC_FORM_TYPES.contains(&(t as u8)) => {
+        t if is_generic_form_type(t) => {
             if form == 0 {
                 let created = tes_data_handler_create_form_of_type(e, record_type as u8);
                 tes_data_handler_load_form(e, created, file);
@@ -5258,8 +5257,8 @@ pub fn fn_00469570(e: &mut Engine) -> bool {
 /// makes before skipping a group): true by default, and false when `header`
 /// is not null and its type word (`+0xC`) is 4, 5 or 9 (an unsigned compare:
 /// at least 4 and either at most 5 or 9) or, while a save game is loaded,
-/// the type `TESForm::GetFormTypeFromFormString(header +8)` is one of
-/// [`SAVE_SKIPPED_GROUP_TYPES`]. A file that is not null, is not a master
+/// the type `TESForm::GetFormTypeFromFormString(header +8)` satisfies
+/// `save_skipped_group_type`. A file that is not null, is not a master
 /// and is not read for the save game (`0x011de45c` with `0047c850`) is true
 /// without looking at the header. `this` is not read.
 pub fn fn_004695a0(e: &mut Engine, _this: Ptr<TESDataHandler>, file: Ptr, header: Ptr) -> bool {
@@ -5280,7 +5279,7 @@ pub fn fn_004695a0(e: &mut Engine, _this: Ptr<TESDataHandler>, file: Ptr, header
             if save_load != 0 && e.call(SAVE_LOAD_ACTIVE, &args![save_load]).bool() {
                 let label = e.mem.u32(header.addr() + 8);
                 let form_type = e.call(FORM_TYPE_FROM_STRING, &args![label]).u32();
-                if SAVE_SKIPPED_GROUP_TYPES.contains(&form_type) {
+                if save_skipped_group_type(form_type) {
                     loaded = false;
                 }
             }
@@ -5289,14 +5288,14 @@ pub fn fn_004695a0(e: &mut Engine, _this: Ptr<TESDataHandler>, file: Ptr, header
     loaded
 }
 
-/// The form type numbers (from the dispatch table at `0x00469670`) for which
-/// `fn_004695a0` says a group is not loaded while a save game is loaded.
-const SAVE_SKIPPED_GROUP_TYPES: [u32; 64] = [
-    0x03, 0x04, 0x05, 0x07, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
-    0x15, 0x16, 0x17, 0x1b, 0x1c, 0x1d, 0x20, 0x21, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2c, 0x2d, 0x2f,
-    0x30, 0x31, 0x33, 0x34, 0x35, 0x36, 0x37, 0x45, 0x46, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e,
-    0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x5b, 0x5c, 0x61, 0x66, 0x6f, 0x70,
-];
+/// Whether `fn_004695a0` says a group of the form type `form_type` is not loaded while a save
+/// game is loaded (the cases of the exe's switch that clear the answer).
+fn save_skipped_group_type(form_type: u32) -> bool {
+    matches!(
+        form_type,
+        0x03..=0x05 | 0x07 | 0x09..=0x17 | 0x1b..=0x1d | 0x20..=0x21 | 0x23..=0x27 | 0x2c..=0x2d | 0x2f..=0x31 | 0x33..=0x37 | 0x45..=0x46 | 0x48..=0x58 | 0x5b..=0x5c | 0x61 | 0x66 | 0x6f..=0x70
+    )
+}
 
 // Translated from 004696f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TESDataHandler::RemoveIDFromDataHandler` (Xbox PDB): lowers `iNextID` to

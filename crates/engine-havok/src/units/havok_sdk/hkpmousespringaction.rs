@@ -376,9 +376,164 @@ pub fn hkp_mouse_spring_action_set_mouse_position(e: &mut Engine, this: Ptr, pos
     }
 }
 
+use super::hkquaternion::{add_ps, load_vec, mul_ps, store_vec, sub_ps, Vec4};
+
+/// Callees of `applyAction`, all with `this` first: `hkVector4::setTransformedPos` (`00c7f640`,
+/// `this` = the result, `(transform, point)`), the entity function at `00ca86c0` (no map name; an
+/// answer of 0 means the entity own motion at +0xe0 is used, otherwise the answer is the motion),
+/// `hkMatrix3::setCrossSkewSymmetric` (`00cd4cc0`, `(vector)`), `hkMatrix3::setMul_ov2`
+/// (`00cd55b0`, `this` = the result, `(first, second)`), `hkMatrix3::sub` (`00cd5180`, `(other)`),
+/// `hkMatrix3::invert` (`00cd4f10`, `(epsilon)`, answers 0 on success), `hkpRigidBody::
+/// setLinearVelocity` (`005616d0`) and `setAngularVelocity` (`00561800`), the entity function at
+/// `00ca0c40` (no map name, `(point, result)`), `hkVector4::setMul3` (`00c7f750`, `this` = the
+/// result, `(matrix, vector)`), `hkpMotion::getMass` (`00c86430`, the mass in `ST0`) and
+/// `hkpEntity::activate` (`00c9c1d0`).
+const VECTOR_SET_TRANSFORMED_POS: u32 = 0x00c7_f640;
+const ENTITY_GET_MOTION_00CA86C0: u32 = 0x00ca_86c0;
+const MATRIX_SET_CROSS_SKEW_SYMMETRIC: u32 = 0x00cd_4cc0;
+const MATRIX_SET_MUL: u32 = 0x00cd_55b0;
+const MATRIX_SUB: u32 = 0x00cd_5180;
+const MATRIX_INVERT: u32 = 0x00cd_4f10;
+const RIGID_BODY_SET_LINEAR_VELOCITY: u32 = 0x0056_16d0;
+const RIGID_BODY_SET_ANGULAR_VELOCITY: u32 = 0x0056_1800;
+const ENTITY_POINT_QUERY_00CA0C40: u32 = 0x00ca_0c40;
+const VECTOR_SET_MUL3: u32 = 0x00c7_f750;
+const MOTION_GET_MASS: u32 = 0x00c8_6430;
+const ENTITY_ACTIVATE: u32 = 0x00c9_c1d0;
+/// `_CIsqrt` (`00ec6040`, the argument in `ST0`, a leading `f64`).
+const CI_SQRT: u32 = 0x00ec_6040;
+/// The singularity limit handed to `invert` (a `float` constant of the image) and the vector
+/// of four sign bits the impulse is negated with.
+const INVERT_EPSILON: u32 = 0x0106_c288;
+const NEGATION_MASK: u32 = 0x010c_44d0;
+
+// Translated from 00cbb1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMouseSpringAction::applyAction` (Xbox PDB), thiscall with one stack word, the step info
+/// (`+8` the time step, `+0xc` the inverse step in this build; read as floats): pulls the point
+/// of the body at `+0x20` (in body space) towards the mouse position at `+0x30`. The body is
+/// the entity at `+0x18`. With `P` the transformed point, `D = P - mouse position`, `R = P -
+/// centre of mass` (entity `+0x140`), `S` the float at `+0xcc` of the body motion (the motion
+/// from `00ca86c0` or the entity own at `+0xe0`), the matrix `S * I - (R x)(inertia)(R x)` style
+/// product is built with `setCrossSkewSymmetric`, the motion virtual function at `+0x28`
+/// (inertia), `setMul_ov2` (twice) and `sub`, and inverted; when `invert` answers non-zero
+/// nothing more happens. Otherwise both velocities of the entity are scaled by the object
+/// damping (`+0x4c`), `00ca0c40` fills `R` from `P`, the impulse is
+/// `inverse * (springDamping(+0x40) * R + (elasticity(+0x44) * step[0xc]) * D)` negated,
+/// limited to a length of `step[8] * mass * maxRelativeForce(+0x48)` through `_CIsqrt`, applied
+/// to the motion (virtual function `+0x50`, `(impulse, P)`) after `activate`, and every callback
+/// of the array at `+0x54` (size at `+0x58`) is called as `(this, step info, impulse)`.
+pub fn hkp_mouse_spring_action_apply_action(e: &mut Engine, this: Ptr, step: Ptr) {
+    let (this, step) = (this.addr(), step.addr());
+    // Locals of the exe frame, at their offsets from its base.
+    let frame = e.mem.alloc(0x180);
+    let at = |offset: u32| frame + offset;
+    let (impulse, point, relative, matrix_inverse, direction) =
+        (at(0x14), at(0x24), at(0x34), at(0x54), at(0x44));
+    let (difference, skew, product_a, inertia, product_b) =
+        (at(0xa4), at(0xb4), at(0xe4), at(0x114), at(0x144));
+    let entity = e.mem.u32(this + 0x18);
+    e.call(
+        VECTOR_SET_TRANSFORMED_POS,
+        &args![point, entity + 0xf0, this + 0x20],
+    );
+    let mouse = load_vec(e, this + 0x30);
+    let transformed = load_vec(e, point);
+    store_vec(e, difference, sub_ps(transformed, mouse));
+    let mut motion = e.call(ENTITY_GET_MOTION_00CA86C0, &args![entity]).u32();
+    if motion != 0 {
+        motion = e.call(ENTITY_GET_MOTION_00CA86C0, &args![entity]).u32();
+    } else {
+        motion = entity + 0xe0;
+    }
+    let fourth_lane = e.mem.u32(motion + 0xc0 + 0xc);
+    let centre = load_vec(e, entity + 0x140);
+    store_vec(e, relative, sub_ps(load_vec(e, point), centre));
+    e.call(MATRIX_SET_CROSS_SKEW_SYMMETRIC, &args![skew, relative]);
+    e.vcall(motion, 0x28, &args![inertia]);
+    // The diagonal matrix with the loaded float on its diagonal.
+    let diagonal = x87_quiet_bits(fourth_lane);
+    for (column, lanes) in [
+        (0u32, [diagonal, 0, 0, 0]),
+        (0x10, [0, diagonal, 0, 0]),
+        (0x20, [0, 0, diagonal, 0]),
+    ] {
+        for (lane, bits) in lanes.into_iter().enumerate() {
+            e.mem
+                .set_u32(matrix_inverse + column + 4 * lane as u32, bits);
+        }
+    }
+    e.call(MATRIX_SET_MUL, &args![product_a, skew, inertia]);
+    e.call(MATRIX_SET_MUL, &args![product_b, product_a, skew]);
+    e.call(MATRIX_SUB, &args![matrix_inverse, product_b]);
+    let epsilon = x87_quiet_bits(e.mem.u32(INVERT_EPSILON));
+    let failed = e.call(MATRIX_INVERT, &args![matrix_inverse, epsilon]).u32() != 0;
+    if failed {
+        e.mem.free(frame);
+        return;
+    }
+    let object_damping = e.mem.f32(this + 0x4c);
+    let linear = mul_ps([object_damping; 4], load_vec(e, entity + 0x1b0));
+    let linear_at = at(0x84);
+    store_vec(e, linear_at, linear);
+    e.call(RIGID_BODY_SET_LINEAR_VELOCITY, &args![entity, linear_at]);
+    let object_damping = e.mem.f32(this + 0x4c);
+    let angular = mul_ps([object_damping; 4], load_vec(e, entity + 0x1c0));
+    let angular_at = at(0x94);
+    store_vec(e, angular_at, angular);
+    e.call(RIGID_BODY_SET_ANGULAR_VELOCITY, &args![entity, angular_at]);
+    e.call(ENTITY_POINT_QUERY_00CA0C40, &args![entity, point, relative]);
+    let elasticity_step = f32::from_bits(x87_store32(x87_mul(
+        x87_load32(e.mem.u32(this + 0x44)),
+        x87_m32(e.mem.u32(step + 0xc)),
+    )));
+    let scaled_difference = mul_ps([elasticity_step; 4], load_vec(e, difference));
+    store_vec(e, direction, scaled_difference);
+    let spring_damping = e.mem.f32(this + 0x40);
+    let from_relative = mul_ps([spring_damping; 4], load_vec(e, relative));
+    store_vec(e, direction, add_ps(from_relative, scaled_difference));
+    e.call(VECTOR_SET_MUL3, &args![impulse, matrix_inverse, direction]);
+    let mask = load_vec(e, NEGATION_MASK).map(|lane| lane.to_bits());
+    let negated: Vec4 = {
+        let lanes = load_vec(e, impulse);
+        std::array::from_fn(|lane| f32::from_bits(lanes[lane].to_bits() ^ mask[lane]))
+    };
+    store_vec(e, impulse, negated);
+    let squares = mul_ps(negated, negated);
+    let length_squared = squares[2] + (squares[1] + squares[0]);
+    let mass = x87_store32(e.call(MOTION_GET_MASS, &args![motion]).f64());
+    let limit = x87_store32(x87_mul(
+        x87_mul(x87_load32(e.mem.u32(step + 8)), x87_m32(mass)),
+        x87_m32(e.mem.u32(this + 0x48)),
+    ));
+    let limit_loaded = x87_load32(limit);
+    let limit_squared = x87_mul(limit_loaded, limit_loaded);
+    // `FCOM`: only an ordered "longer than the limit" scales the impulse.
+    if x87_load32(length_squared.to_bits()) > limit_squared {
+        let root = x87_store32(
+            e.call(CI_SQRT, &args![x87_load32(length_squared.to_bits())])
+                .f64(),
+        );
+        let inverse = x87_store32(x87_div(1.0, x87_load32(root)));
+        let factor = f32::from_bits(x87_store32(x87_mul(x87_load32(inverse), x87_m32(limit))));
+        let lanes = load_vec(e, impulse);
+        store_vec(e, impulse, mul_ps([factor; 4], lanes));
+    }
+    e.call(ENTITY_ACTIVATE, &args![entity]);
+    e.vcall(entity + 0xe0, 0x50, &args![impulse, point]);
+    let mut index = 0u32;
+    while (index as i32) < (e.mem.u32(this + 0x58) as i32) {
+        let callbacks = e.mem.u32(this + 0x54);
+        let callback = e.mem.u32(callbacks.wrapping_add(index * 4));
+        e.call(callback, &args![this, step, impulse]);
+        index += 1;
+    }
+    e.mem.free(frame);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00cb_b1e0, hkp_mouse_spring_action_apply_action(Ptr, Ptr)),
         entry!(0x00cbb8a0, hkp_unary_action_get_class_type() -> u32),
         entry!(
             0x00cb_b1b0,
@@ -962,5 +1117,257 @@ mod tests {
             calls_to(&log, SPRING_SET_MOUSE_POSITION),
             vec![vec![action, 0x57]]
         );
+    }
+}
+
+#[cfg(test)]
+mod apply_action_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Seen = Rc<RefCell<Vec<(u32, Vec<u32>, Vec<f32>)>>>;
+
+    const MOTION_VTABLE: u32 = 0x0c00_0000;
+    const MOTION_INERTIA: u32 = 0x0c00_0100;
+    const MOTION_IMPULSE: u32 = 0x0c00_0110;
+    const CALLBACK: u32 = 0x0c00_0200;
+
+    /// Records a call's words and the four floats at the address in its word `at` (when given).
+    fn watch(e: &mut Engine, seen: &Seen, address: u32, at: Option<usize>, answer: Ret) {
+        let seen = Rc::clone(seen);
+        e.register_double(address, move |e, a| {
+            let floats = at
+                .map(|i| (0..4).map(|lane| e.mem.f32(a[i] + 4 * lane)).collect())
+                .unwrap_or_default();
+            seen.borrow_mut().push((address, a.to_vec(), floats));
+            answer
+        });
+    }
+
+    fn found(seen: &Seen, address: u32) -> Vec<(Vec<u32>, Vec<f32>)> {
+        seen.borrow()
+            .iter()
+            .filter(|(a, _, _)| *a == address)
+            .map(|(_, words, floats)| (words.clone(), floats.clone()))
+            .collect()
+    }
+
+    struct Scene {
+        e: Engine,
+        seen: Seen,
+        action: u32,
+        entity: u32,
+        step: u32,
+    }
+
+    fn scene(invert_answer: u32) -> Scene {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        let seen: Seen = Rc::new(RefCell::new(Vec::new()));
+        let entity = e.mem.alloc(0x300);
+        let action = e.mem.alloc(0x80);
+        let step = e.mem.alloc(0x20);
+        e.mem.set_u32(action + 0x18, entity);
+        e.mem.set_f32(action + 0x40, 2.0);
+        e.mem.set_f32(action + 0x44, 0.5);
+        e.mem.set_f32(action + 0x48, 1.0);
+        e.mem.set_f32(action + 0x4c, 0.5);
+        for (lane, value) in [0.5f32, 0.5, 0.5, 0.0].into_iter().enumerate() {
+            e.mem.set_f32(action + 0x30 + 4 * lane as u32, value);
+        }
+        e.mem.set_f32(step + 8, 0.5);
+        e.mem.set_f32(step + 0xc, 2.0);
+        for (lane, value) in [1.0f32, 2.0, 3.0, 0.0].into_iter().enumerate() {
+            e.mem.set_f32(entity + 0x1b0 + 4 * lane as u32, value);
+        }
+        e.mem.set_f32(entity + 0xe0 + 0xcc, 0.5);
+        e.mem.set_u32(entity + 0xe0, MOTION_VTABLE);
+        e.put_vtable(MOTION_VTABLE, &[0; 0x15]);
+        e.mem.set_u32(MOTION_VTABLE + 0x28, MOTION_INERTIA);
+        e.mem.set_u32(MOTION_VTABLE + 0x50, MOTION_IMPULSE);
+        e.mem.set_u32(INVERT_EPSILON, 0x33d6_bf95);
+        for lane in 0..4 {
+            e.mem.set_u32(NEGATION_MASK + 4 * lane, 0x8000_0000);
+        }
+        watch(&mut e, &seen, MOTION_INERTIA, None, Ret::default());
+        watch(&mut e, &seen, MOTION_IMPULSE, Some(1), Ret::default());
+        watch(
+            &mut e,
+            &seen,
+            ENTITY_GET_MOTION_00CA86C0,
+            None,
+            Ret::default(),
+        );
+        watch(
+            &mut e,
+            &seen,
+            MATRIX_SET_CROSS_SKEW_SYMMETRIC,
+            None,
+            Ret::default(),
+        );
+        watch(&mut e, &seen, MATRIX_SET_MUL, None, Ret::default());
+        watch(&mut e, &seen, MATRIX_SUB, Some(0), Ret::default());
+        watch(
+            &mut e,
+            &seen,
+            MATRIX_INVERT,
+            None,
+            Ret {
+                eax: invert_answer,
+                ..Ret::default()
+            },
+        );
+        watch(
+            &mut e,
+            &seen,
+            RIGID_BODY_SET_LINEAR_VELOCITY,
+            Some(1),
+            Ret::default(),
+        );
+        watch(
+            &mut e,
+            &seen,
+            RIGID_BODY_SET_ANGULAR_VELOCITY,
+            Some(1),
+            Ret::default(),
+        );
+        watch(&mut e, &seen, ENTITY_ACTIVATE, None, Ret::default());
+        watch(
+            &mut e,
+            &seen,
+            MOTION_GET_MASS,
+            None,
+            Ret {
+                st0: 2.0,
+                ..Ret::default()
+            },
+        );
+        let sqrt_seen = Rc::clone(&seen);
+        e.register_double(CI_SQRT, move |_, a| {
+            sqrt_seen
+                .borrow_mut()
+                .push((CI_SQRT, a.to_vec(), Vec::new()));
+            Ret {
+                st0: f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32).sqrt(),
+                ..Ret::default()
+            }
+        });
+        e.register(VECTOR_SET_TRANSFORMED_POS, |e, a| {
+            for (lane, value) in [1.0f32, 2.0, 3.0, 0.0].into_iter().enumerate() {
+                e.mem.set_f32(a[0] + 4 * lane as u32, value);
+            }
+            Ret::default()
+        });
+        e.register(ENTITY_POINT_QUERY_00CA0C40, |e, a| {
+            for lane in 0..3 {
+                e.mem.set_f32(a[2] + 4 * lane, 9.0);
+            }
+            e.mem.set_f32(a[2] + 12, 0.0);
+            Ret::default()
+        });
+        let direction_seen = Rc::clone(&seen);
+        e.register_double(VECTOR_SET_MUL3, move |e, a| {
+            let floats = (0..4).map(|lane| e.mem.f32(a[2] + 4 * lane)).collect();
+            direction_seen
+                .borrow_mut()
+                .push((VECTOR_SET_MUL3, a.to_vec(), floats));
+            // The impulse the inverse matrix gives: (3, 4, 0, 0).
+            for (lane, value) in [3.0f32, 4.0, 0.0, 0.0].into_iter().enumerate() {
+                e.mem.set_f32(a[0] + 4 * lane as u32, value);
+            }
+            Ret::default()
+        });
+        Scene {
+            e,
+            seen,
+            action,
+            entity,
+            step,
+        }
+    }
+
+    #[test]
+    fn applying_the_spring_limits_and_applies_the_impulse() {
+        let mut s = scene(0);
+        let callbacks = s.e.mem.alloc(8);
+        s.e.mem.set_u32(callbacks, CALLBACK);
+        s.e.mem.set_u32(s.action + 0x54, callbacks);
+        s.e.mem.set_u32(s.action + 0x58, 1);
+        let callback_seen = Rc::clone(&s.seen);
+        s.e.register_double(CALLBACK, move |e, a| {
+            let floats = (0..4).map(|lane| e.mem.f32(a[2] + 4 * lane)).collect();
+            callback_seen
+                .borrow_mut()
+                .push((CALLBACK, a.to_vec(), floats));
+            Ret::default()
+        });
+        s.e.call(0x00cb_b1e0, &args![s.action, s.step]);
+        let (entity, seen) = (s.entity, &s.seen);
+        // The body has no motion of its own from `00ca86c0` (answer 0): its embedded one is used.
+        assert_eq!(found(seen, ENTITY_GET_MOTION_00CA86C0).len(), 1);
+        assert_eq!(found(seen, MOTION_INERTIA).len(), 1);
+        // Both velocities are scaled by the object damping 0.5.
+        assert_eq!(found(seen, RIGID_BODY_SET_LINEAR_VELOCITY)[0].0[0], entity);
+        assert_eq!(
+            found(seen, RIGID_BODY_SET_LINEAR_VELOCITY)[0].1,
+            vec![0.5, 1.0, 1.5, 0.0]
+        );
+        // direction = 2 * R(9) + (0.5 * 2.0) * (P - mouse) = 18 + 0.5, 18 + 1.5, 18 + 2.5.
+        assert_eq!(
+            found(seen, VECTOR_SET_MUL3)[0].1,
+            vec![18.5, 19.5, 20.5, 0.0]
+        );
+        // The diagonal of the matrix is the float at +0xcc of the motion (0.5) when `sub` runs.
+        assert_eq!(found(seen, MATRIX_SUB)[0].0.len(), 2);
+        assert_eq!(found(seen, MATRIX_SUB)[0].1, vec![0.5, 0.0, 0.0, 0.0]);
+        // The impulse (3, 4) is negated and cut to the length limit 0.5 * 2 * 1 = 1: (-0.6, -0.8).
+        let impulse = &found(seen, MOTION_IMPULSE)[0];
+        assert_eq!(impulse.0[0], entity + 0xe0);
+        let expected = [-0.6f32, -0.8, 0.0, 0.0];
+        for lane in 0..4 {
+            assert!(
+                (impulse.1[lane] - expected[lane]).abs() < 1e-6,
+                "{:?}",
+                impulse.1
+            );
+        }
+        // The callbacks get the action, the step info and the impulse.
+        let called = found(seen, CALLBACK);
+        assert_eq!(called.len(), 1);
+        assert_eq!(called[0].0[..2], [s.action, s.step]);
+        assert_eq!(called[0].1, impulse.1);
+        // `activate` ran before the impulse; the epsilon was handed to `invert`.
+        let order: Vec<u32> = seen
+            .borrow()
+            .iter()
+            .map(|(a, _, _)| *a)
+            .filter(|a| [ENTITY_ACTIVATE, MOTION_IMPULSE, MATRIX_INVERT].contains(a))
+            .collect();
+        assert_eq!(order, vec![MATRIX_INVERT, ENTITY_ACTIVATE, MOTION_IMPULSE]);
+        assert_eq!(found(seen, MATRIX_INVERT)[0].0[1], 0x33d6_bf95);
+        // Squared length 25 against the squared limit 1: the root is taken once.
+        assert_eq!(found(seen, CI_SQRT).len(), 1);
+    }
+
+    #[test]
+    fn a_short_impulse_is_not_scaled() {
+        let mut s = scene(0);
+        // Limit 0.5 * 2 * 10 = 10 against a length of 5.
+        s.e.mem.set_f32(s.action + 0x48, 10.0);
+        s.e.call(0x00cb_b1e0, &args![s.action, s.step]);
+        let impulse = &found(&s.seen, MOTION_IMPULSE)[0];
+        assert_eq!(impulse.1, vec![-3.0, -4.0, 0.0, 0.0]);
+        assert!(found(&s.seen, CI_SQRT).is_empty());
+    }
+
+    #[test]
+    fn a_singular_matrix_stops_before_any_velocity_changes() {
+        let mut s = scene(1);
+        s.e.call(0x00cb_b1e0, &args![s.action, s.step]);
+        assert_eq!(found(&s.seen, MATRIX_INVERT).len(), 1);
+        assert!(found(&s.seen, RIGID_BODY_SET_LINEAR_VELOCITY).is_empty());
+        assert!(found(&s.seen, ENTITY_ACTIVATE).is_empty());
+        assert!(found(&s.seen, MOTION_IMPULSE).is_empty());
     }
 }

@@ -17,9 +17,36 @@ pub fn fn_00dfe9b0(e: &mut Engine) -> u32 {
     })
 }
 
+// Translated from 00dfe970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word `object`): calls the object's virtual function at
+/// vtable offset 0 (the destructor) with the one stack word 0 and answers what it answers. It is
+/// the cleanup function of a type-info record (word `+8`; `hkTypeInfoRegistry::cleanupLoadedObject`
+/// calls it with `(object)`): the start-up initializer at `00fc40d9` stores its address there.
+pub fn fn_00dfe970(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0, &args![0u32]).u32()
+}
+
+// Translated from 00dfe990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, two words `(object, extra)`): with a non-null `object`
+/// stores the vtable word 0x010e_5a58 in its first word and runs the constructor at `00cb0a70` on the
+/// member at `object + 8` with `extra` (`thiscall`, one stack word). Nothing is destroyed. It
+/// is the finish function of a type-info record (word `+4`): the start-up initializer at `00fc40cf`
+/// stores its address there.
+pub fn fn_00dfe990(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.is_null() {
+        return;
+    }
+    e.mem.set_u32(object.addr(), 0x010e_5a58);
+    e.call(0x00cb_0a70, &args![object.addr() + 8, extra]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00dfe9b0, fn_00dfe9b0() -> u32)]
+    vec![
+        entry!(0x00dfe970, fn_00dfe970(Ptr) -> u32),
+        entry!(0x00dfe990, fn_00dfe990(Ptr, u32)),
+        entry!(0x00dfe9b0, fn_00dfe9b0() -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -27,6 +54,60 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    #[test]
+    fn fn_00dfe970_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(8);
+        e.put_vtable(0x0900_0000, &[0x0900_0100]);
+        e.mem.set_u32(object, 0x0900_0000);
+        e.register(0x0900_0100, |_, a| Ret {
+            eax: a[0].wrapping_add(a[1]).wrapping_add(7),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x00df_e970, &args![object]).u32();
+        assert_eq!(answer, object + 7);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x0900_0100)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x0900_0100, vec![object, 0])]);
+    }
+
+    #[test]
+    fn fn_00dfe990_stores_the_vtable_and_constructs_the_member() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x40);
+        e.register(0x00cb_0a70, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00df_e990, &args![object, 0x55u32]);
+        assert_eq!(e.mem.u32(object), 0x010e_5a58);
+        let seen: Vec<_> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == 0x00cb_0a70)
+            .cloned()
+            .collect();
+        assert_eq!(seen, vec![(0x00cb_0a70, vec![object + 8, 0x55])]);
+    }
+
+    #[test]
+    fn fn_00dfe990_does_nothing_for_a_null_object() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.call(0x00df_e990, &args![0u32, 0x55u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
 
     /// What the probe saw on one call: `this`, the argument, the word `behind` bytes before `this`
     /// (the frame's vtable slot) and, when asked for, the `u32` at +0x20, `u16` at +0x24 and `u16`

@@ -729,6 +729,52 @@ pub fn fn_00df9840(e: &mut Engine, this: Ptr) -> u32 {
     eax
 }
 
+// Translated from 00df9880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: four stack words (cdecl, nothing popped), the first two never read
+/// (`_unused_0`, `_unused_1`): `source` and `target`. Copies the 0x80 bytes at `source` to
+/// `target` (eight blocks of four words). Then, by the byte at `source + 0`: for 0 or 1, when the
+/// signed count at `source + 0x28` is above the one at `source + 0x20`, stores the latter at
+/// `target + 0x28`, takes it off the count at `source + 0x28`, advances the pointer at
+/// `source + 0x24` by that many entries (0x50 bytes for kind 0, 0x40 bytes for kind 1, which also
+/// clears the word at `source + 0x30`) and answers 1; every other case answers 0. Ghidra made no function here; the address is an immediate operand at 00da348e.
+pub fn fn_00df9880(
+    e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+    source: u32,
+    target: u32,
+) -> u32 {
+    for block in 0..8u32 {
+        for word in 0..4u32 {
+            let value = e.mem.u32(source + 16 * block + 4 * word);
+            e.mem.set_u32(target + 16 * block + 4 * word, value);
+        }
+    }
+    let kind = e.mem.u8(source);
+    if kind != 0 && kind != 1 {
+        return 0;
+    }
+    let step = e.mem.u32(source + 0x20);
+    if (e.mem.u32(source + 0x28) as i32) <= (step as i32) {
+        return 0;
+    }
+    e.mem.set_u32(target + 0x28, step);
+    let remaining = e.mem.u32(source + 0x28).wrapping_sub(step);
+    e.mem.set_u32(source + 0x28, remaining);
+    if kind == 1 {
+        let advanced = e.mem.u32(source + 0x24).wrapping_add(step << 6);
+        e.mem.set_u32(source + 0x24, advanced);
+        e.mem.set_u32(source + 0x30, 0);
+    } else {
+        let advanced = e
+            .mem
+            .u32(source + 0x24)
+            .wrapping_add(step.wrapping_mul(5) << 4);
+        e.mem.set_u32(source + 0x24, advanced);
+    }
+    1
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -740,6 +786,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00df9ef0, fn_00df9ef0(Ptr, Ptr, Ptr, Ptr, Ptr)),
         entry!(0x00df9840, fn_00df9840(Ptr) -> u32),
         entry!(0x00df9fe0, fn_00df9fe0(Ptr, Ptr, Ptr) -> bool),
+        entry!(0x00df_9880, fn_00df9880(u32, u32, u32, u32) -> u32),
     ]
 }
 
@@ -1205,6 +1252,90 @@ mod completion_tests {
                 vec![INTERLOCKED_EXCHANGE_ADD, 0x7001, 1],
                 vec![SEMAPHORE_RELEASE, 0x7002, 1],
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    /// A source block of 0x80 bytes with a pattern, the kind byte, the step (+0x20), the data pointer
+    /// (+0x24), the count (+0x28) and a marker in the word at +0x30.
+    fn source_block(e: &mut Engine, kind: u8, step: u32, data: u32, count: u32) -> u32 {
+        let source = e.mem.alloc(0x80);
+        for word in 0..32u32 {
+            e.mem.set_u32(source + 4 * word, 0x1000 + word);
+        }
+        e.mem.set_u8(source, kind);
+        e.mem.set_u32(source + 0x20, step);
+        e.mem.set_u32(source + 0x24, data);
+        e.mem.set_u32(source + 0x28, count);
+        e.mem.set_u32(source + 0x30, 0xabcd);
+        source
+    }
+
+    #[test]
+    fn fn_00df9880_splits_a_kind_zero_job_by_eighty_byte_entries() {
+        let mut e = Engine::new();
+        let source = source_block(&mut e, 0, 3, 0x10000, 10);
+        let target = e.mem.alloc(0x80);
+        assert_eq!(
+            e.call(0x00df_9880, &args![0u32, 0u32, source, target])
+                .u32(),
+            1
+        );
+        // The copy is taken before the update, so the target's count word is the step.
+        assert_eq!(e.mem.u32(target + 0x28), 3);
+        assert_eq!(e.mem.u32(target + 0x24), 0x10000);
+        assert_eq!(e.mem.u32(target + 0x30), 0xabcd);
+        assert_eq!(e.mem.u32(target + 0x7c), 0x1000 + 31);
+        assert_eq!(e.mem.u32(source + 0x28), 7);
+        assert_eq!(e.mem.u32(source + 0x24), 0x10000 + 3 * 80);
+        assert_eq!(e.mem.u32(source + 0x30), 0xabcd);
+    }
+
+    #[test]
+    fn fn_00df9880_splits_a_kind_one_job_by_sixty_four_byte_entries() {
+        let mut e = Engine::new();
+        let source = source_block(&mut e, 1, 3, 0x10000, 10);
+        let target = e.mem.alloc(0x80);
+        assert_eq!(
+            e.call(0x00df_9880, &args![0u32, 0u32, source, target])
+                .u32(),
+            1
+        );
+        assert_eq!(e.mem.u32(target + 0x28), 3);
+        assert_eq!(e.mem.u32(source + 0x28), 7);
+        assert_eq!(e.mem.u32(source + 0x24), 0x10000 + 3 * 64);
+        assert_eq!(e.mem.u32(source + 0x30), 0);
+    }
+
+    /// A count that does not exceed the step, or another kind, answers 0 after the copy.
+    #[test]
+    fn fn_00df9880_answers_zero_when_nothing_is_left_to_split() {
+        let mut e = Engine::new();
+        let source = source_block(&mut e, 0, 10, 0x10000, 10);
+        let target = e.mem.alloc(0x80);
+        assert_eq!(
+            e.call(0x00df_9880, &args![0u32, 0u32, source, target])
+                .u32(),
+            0
+        );
+        assert_eq!(e.mem.u32(target + 4), 0x1001);
+        assert_eq!(e.mem.u32(source + 0x28), 10);
+        let other = source_block(&mut e, 2, 3, 0x10000, 10);
+        assert_eq!(
+            e.call(0x00df_9880, &args![0u32, 0u32, other, target]).u32(),
+            0
+        );
+        assert_eq!(e.mem.u32(other + 0x24), 0x10000);
+        // A negative count is below the step in the signed compare.
+        let negative = source_block(&mut e, 1, 3, 0x10000, 0xffff_fff0);
+        assert_eq!(
+            e.call(0x00df_9880, &args![0u32, 0u32, negative, target])
+                .u32(),
+            0
         );
     }
 }

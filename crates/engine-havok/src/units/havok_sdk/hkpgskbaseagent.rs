@@ -795,6 +795,17 @@ pub fn hkp_gsk_base_agent_get_closest_points(
     monitor_record(e, LABEL_END);
 }
 
+// Translated from 00dabeb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: `this` in `ECX` and one stack word that is never read (`RET 4`,
+/// `_unused_0`). Stores the float constant at `01012054` (through `FLD` / `FSTP`) at +0x18 and
+/// zeroes the 16 bytes at +0x20. Ghidra holds it in the body of `00d33770`, whose `+0x84`
+/// branch jumps here; it is also a vtable slot of `hkpPredGskfAgent` (`010cebb8`, slot 9).
+pub fn fn_00dabeb0(e: &mut Engine, this: u32, _unused_0: u32) {
+    let value: u32 = e.global(0x0101_2054);
+    e.mem.set_u32(this + 0x18, x87_quiet_bits(value));
+    e.mem.write(this + 0x20, &[0u8; 16]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -832,6 +843,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00da_c9e0,
             hkp_gsk_base_agent_get_closest_points(Ptr, Ptr, Ptr, Ptr, Ptr)
         ),
+        entry!(0x00da_beb0, fn_00dabeb0(u32, u32)),
     ]
 }
 
@@ -1472,5 +1484,36 @@ mod havok_agent_tests {
         e.call(0x00da_c9e0, &args![this, a, b, input, collector]);
         assert!(calls(&log, COLLECTOR_SLOT_4).is_empty());
         assert_eq!(monitor_used(&mut e), 0x18);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_00dabeb0_stores_the_constant_and_clears_sixteen_bytes() {
+        let mut e = Engine::new();
+        e.map(0x0101_2000, 0x1000);
+        e.set_global(0x0101_2054, 0.25f32);
+        let this = e.mem.alloc(0x40);
+        e.mem.write(this, &[0x55; 0x40]);
+        e.call(0x00da_beb0, &args![this, 0u32]);
+        assert_eq!(e.mem.f32(this + 0x18), 0.25);
+        assert_eq!(e.mem.bytes(this + 0x20, 16), vec![0u8; 16]);
+        assert_eq!(e.mem.u8(this + 0x17), 0x55);
+        assert_eq!(e.mem.u8(this + 0x1c), 0x55);
+        assert_eq!(e.mem.u8(this + 0x30), 0x55);
+    }
+
+    /// A signalling NaN constant is quieted by the `FLD` / `FSTP` pair.
+    #[test]
+    fn fn_00dabeb0_quiets_a_signalling_nan_constant() {
+        let mut e = Engine::new();
+        e.map(0x0101_2000, 0x1000);
+        e.set_global(0x0101_2054, 0x7f80_0001u32);
+        let this = e.mem.alloc(0x40);
+        e.call(0x00da_beb0, &args![this, 0u32]);
+        assert_eq!(e.mem.u32(this + 0x18), 0x7fc0_0001);
     }
 }

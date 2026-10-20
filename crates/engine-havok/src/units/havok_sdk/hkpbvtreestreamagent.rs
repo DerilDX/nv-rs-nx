@@ -950,9 +950,98 @@ pub fn hkp_bv_tree_stream_agent_process_collision(
     });
 }
 
+// Translated from 00d2df50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `input`, `contact_mgr`): a
+/// create function of the tree-stream pair (code at `00d2e71d` stores its address in an agent
+/// record). Allocates the 0x40-byte agent through the memory router's allocator
+/// (`allocate_agent`) and runs the `hkpBvTreeStreamAgent` constructor `00d2def0` on it with the
+/// four words in this order. Answers the agent.
+pub fn fn_00d2df50(e: &mut Engine, body_a: Ptr, body_b: Ptr, input: Ptr, contact_mgr: u32) -> u32 {
+    let agent = allocate_agent(e, 0x40);
+    fn_00d2def0(
+        e,
+        Ptr::new(agent),
+        body_a.addr(),
+        body_b.addr(),
+        input,
+        contact_mgr,
+    )
+    .addr()
+}
+
+// Translated from 00d2e680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `input`, `contact_mgr`): the
+/// create function of the symmetric tree-stream agent (code at `00d2e6e3` stores its address in
+/// an agent record). Allocates the 0x40-byte agent (`allocate_agent`), runs the constructor
+/// `00d2def0` with the two bodies in the other order (`body_b`, `body_a`, `input`,
+/// `contact_mgr`) and turns the agent into the symmetric one by storing the vtable
+/// `010ce874`. Answers the agent.
+pub fn fn_00d2e680(e: &mut Engine, body_a: Ptr, body_b: Ptr, input: Ptr, contact_mgr: u32) -> u32 {
+    let agent = allocate_agent(e, 0x40);
+    fn_00d2def0(
+        e,
+        Ptr::new(agent),
+        body_b.addr(),
+        body_a.addr(),
+        input,
+        contact_mgr,
+    );
+    e.mem.set_u32(agent, SYMMETRIC_VTABLE);
+    agent
+}
+
+// Translated from 00d2e7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, four words `body_a`, `body_b`, `input`, `contact_mgr`): the
+/// create function of the symmetric pair (code at `00d2e8f3` stores its address in an agent
+/// record), the counterpart of `fn_00d2e5a0` with the two bodies exchanged. Without a contact
+/// manager it makes the symmetric tree-stream agent (0x40 bytes, constructor `00d2def0` with
+/// `body_b`, `body_a`, `input`, 0, then the vtable `010ce874`). With one it asks the object at
+/// `input + 0x10` (slot `0xC`, with `(body_b, body_a, input)`): 0 and 2 make the same symmetric
+/// agent (with the contact manager); 1 makes the symmetric shape collection agent (0x38 bytes,
+/// constructor `00d440f0` with `(body_b, body_a, input, contact_mgr)`, then the vtable
+/// `010ce8b0`); any other answer makes nothing and answers 0. Answers the new agent.
+pub fn fn_00d2e7f0(e: &mut Engine, body_a: Ptr, body_b: Ptr, input: Ptr, contact_mgr: u32) -> u32 {
+    if contact_mgr == 0 {
+        let agent = allocate_agent(e, 0x40);
+        fn_00d2def0(e, Ptr::new(agent), body_b.addr(), body_a.addr(), input, 0);
+        e.mem.set_u32(agent, SYMMETRIC_VTABLE);
+        return agent;
+    }
+    let mediator = e.mem.u32(input.addr() + 0x10);
+    let kind = e.vcall(mediator, 0xc, &args![body_b, body_a, input]).u32();
+    match kind {
+        1 => {
+            let agent = allocate_agent(e, 0x38);
+            e.call(
+                SHAPE_COLLECTION_CONSTRUCTOR,
+                &args![agent, body_b, body_a, input, contact_mgr],
+            );
+            e.mem.set_u32(agent, 0x010c_e8b0);
+            agent
+        }
+        0 | 2 => {
+            let agent = allocate_agent(e, 0x40);
+            fn_00d2def0(
+                e,
+                Ptr::new(agent),
+                body_b.addr(),
+                body_a.addr(),
+                input,
+                contact_mgr,
+            );
+            e.mem.set_u32(agent, SYMMETRIC_VTABLE);
+            agent
+        }
+        _ => 0,
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00d2df50, fn_00d2df50(Ptr, Ptr, Ptr, u32) -> u32),
+        entry!(0x00d2e680, fn_00d2e680(Ptr, Ptr, Ptr, u32) -> u32),
+        entry!(0x00d2e7f0, fn_00d2e7f0(Ptr, Ptr, Ptr, u32) -> u32),
         entry!(
             0x00d2_dd30,
             hkp_bv_tree_stream_agent_get_penetrations(Ptr, Ptr, Ptr, Ptr, Ptr)
@@ -1056,6 +1145,166 @@ mod tests {
     };
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The memory router (`00c85750`) answers an object whose `+0x10` is an allocator; the
+    /// allocator's slot 4 hands out `block` and records the size it was asked for.
+    fn install_allocator(e: &mut Engine, block: u32) -> std::rc::Rc<std::cell::RefCell<Vec<u32>>> {
+        let sizes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = std::rc::Rc::clone(&sizes);
+        e.map(block, 0x100);
+        e.put_vtable(0x0900_0000, &[0, 0x0900_0100]);
+        let allocator = e.mem.alloc(8);
+        e.mem.set_u32(allocator, 0x0900_0000);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(MEMORY_ROUTER, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        e.register_double(0x0900_0100, move |_, a| {
+            seen.borrow_mut().push(a[1]);
+            Ret {
+                eax: block,
+                ..Ret::default()
+            }
+        });
+        sizes
+    }
+
+    /// An input whose word at `+0` is 0x77 and whose `+0x10` object answers `kind` from slot
+    /// `0xc`; the mediator's calls are logged.
+    fn input_for_00d2e7f0(e: &mut Engine, kind: u32) -> u32 {
+        let input = e.mem.alloc(0x40);
+        e.mem.set_u32(input, 0x77);
+        e.put_vtable(0x0900_0200, &[0, 0, 0, 0x0900_0300]);
+        let mediator = e.mem.alloc(8);
+        e.mem.set_u32(mediator, 0x0900_0200);
+        e.mem.set_u32(input + 0x10, mediator);
+        e.register_double(0x0900_0300, move |_, _| Ret {
+            eax: kind,
+            ..Ret::default()
+        });
+        input
+    }
+
+    fn calls_of_00d2e7f0(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(called, _)| *called == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00d2df50_allocates_the_agent_and_runs_the_constructor() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        e.register(STREAM_INIT, |_, _| Ret::default());
+        let input = e.mem.alloc(0x40);
+        e.mem.set_u32(input, 0x77);
+        let agent = e
+            .call(0x00d2_df50, &args![1u32, 2u32, input, 0x88u32])
+            .u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x40]);
+        assert_eq!(e.mem.u16(agent + 4), 0x40);
+        assert_eq!(e.mem.u32(agent), VTABLE);
+        assert_eq!(e.mem.u32(agent + 8), 0x88);
+        assert_eq!(e.mem.u32(agent + 0xc), 0x77);
+    }
+
+    #[test]
+    fn fn_00d2e680_makes_the_symmetric_agent() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        e.register(STREAM_INIT, |_, _| Ret::default());
+        let input = e.mem.alloc(0x40);
+        e.mem.set_u32(input, 0x77);
+        let agent = e
+            .call(0x00d2_e680, &args![1u32, 2u32, input, 0x88u32])
+            .u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x40]);
+        assert_eq!(e.mem.u16(agent + 4), 0x40);
+        assert_eq!(e.mem.u32(agent), SYMMETRIC_VTABLE);
+        assert_eq!(e.mem.u32(agent + 8), 0x88);
+        assert_eq!(e.mem.u32(agent + 0xc), 0x77);
+    }
+
+    #[test]
+    fn fn_00d2e7f0_without_a_contact_manager_makes_the_symmetric_agent() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        e.register(STREAM_INIT, |_, _| Ret::default());
+        let input = input_for_00d2e7f0(&mut e, 1);
+        e.call_log = Some(vec![]);
+        let agent = e.call(0x00d2_e7f0, &args![1u32, 2u32, input, 0u32]).u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x40]);
+        assert_eq!(e.mem.u32(agent), SYMMETRIC_VTABLE);
+        assert_eq!(e.mem.u32(agent + 8), 0);
+        // The mediator is not asked.
+        assert!(calls_of_00d2e7f0(&e, 0x0900_0300).is_empty());
+    }
+
+    #[test]
+    fn fn_00d2e7f0_makes_the_symmetric_agent_for_answers_zero_and_two() {
+        for kind in [0, 2] {
+            let mut e = Engine::new();
+            let sizes = install_allocator(&mut e, 0x0800_0000);
+            e.register(STREAM_INIT, |_, _| Ret::default());
+            let input = input_for_00d2e7f0(&mut e, kind);
+            e.call_log = Some(vec![]);
+            let agent = e
+                .call(0x00d2_e7f0, &args![1u32, 2u32, input, 0x88u32])
+                .u32();
+            assert_eq!(agent, 0x0800_0000);
+            assert_eq!(*sizes.borrow(), vec![0x40]);
+            assert_eq!(e.mem.u32(agent), SYMMETRIC_VTABLE);
+            assert_eq!(e.mem.u32(agent + 8), 0x88);
+            assert_eq!(
+                calls_of_00d2e7f0(&e, 0x0900_0300),
+                vec![vec![e.mem.u32(input + 0x10), 2, 1, input]]
+            );
+        }
+    }
+
+    #[test]
+    fn fn_00d2e7f0_makes_the_symmetric_shape_collection_agent_for_answer_one() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        e.register(SHAPE_COLLECTION_CONSTRUCTOR, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        let input = input_for_00d2e7f0(&mut e, 1);
+        e.call_log = Some(vec![]);
+        let agent = e
+            .call(0x00d2_e7f0, &args![1u32, 2u32, input, 0x88u32])
+            .u32();
+        assert_eq!(agent, 0x0800_0000);
+        assert_eq!(*sizes.borrow(), vec![0x38]);
+        assert_eq!(e.mem.u16(agent + 4), 0x38);
+        assert_eq!(e.mem.u32(agent), 0x010c_e8b0);
+        assert_eq!(
+            calls_of_00d2e7f0(&e, SHAPE_COLLECTION_CONSTRUCTOR),
+            vec![vec![agent, 2, 1, input, 0x88]]
+        );
+    }
+
+    #[test]
+    fn fn_00d2e7f0_makes_nothing_for_any_other_answer() {
+        let mut e = Engine::new();
+        let sizes = install_allocator(&mut e, 0x0800_0000);
+        let input = input_for_00d2e7f0(&mut e, 3);
+        let agent = e
+            .call(0x00d2_e7f0, &args![1u32, 2u32, input, 0x88u32])
+            .u32();
+        assert_eq!(agent, 0);
+        assert!(sizes.borrow().is_empty());
+    }
 
     /// Objects whose vtable slots log: the agent, the object a body word points to, a
     /// collector, the allocator and the dispatcher's mediator.

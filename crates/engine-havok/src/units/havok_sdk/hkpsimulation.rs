@@ -873,9 +873,61 @@ pub fn fn_00cf9480(e: &mut Engine, bodies: u32, count: i32, info: u32, callback:
     });
 }
 
+// Translated from 00cf8bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpSimulation::collide` (Xbox PDB), `__fastcall` on the simulation. Between profile records
+/// (`010cc568`, the begin label `integrate` also uses, and the end label): with a step in
+/// progress (the stage word at +0x28 not 0) answers `reCollideAfterStepFailure`. Otherwise
+/// builds the step info (see `make_step_info`) from `(+0x18, +0x18 + +0x1c)`, the sum taken by
+/// the x87 with `+0x1c` as a memory operand, and passes it to virtual slot `0x34`. When the
+/// global at `01269200` is 1 the stage word becomes 2 and 2 is answered. Otherwise the time at
+/// +0x18 gets `+0x1c` added, the post-collide callback (`00d014f0(world, step info)`, between
+/// profile records `010cc530` and the end label) fires when the world's word at +0x180 is set,
+/// the byte at +0x10 is set, the stage word cleared and 0 answered.
+pub fn hkp_simulation_collide(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    profile_record(e, PROFILE_INTEGRATE);
+    if e.mem.u32(base + 0x28) != 0 {
+        let result = hkp_simulation_re_collide_after_step_failure(e, this);
+        profile_record(e, PROFILE_END);
+        return result;
+    }
+    let start = x87_quiet(e.mem.f32(base + 0x18));
+    let end = x87_store32(x87_add(
+        x87_load32(e.mem.u32(base + 0x18)),
+        x87_m32(e.mem.u32(base + 0x1c)),
+    ));
+    let info = make_step_info(start, f32::from_bits(end));
+    e.with_stack(0x10, |e, step| {
+        store_step_info(e, step.addr(), info);
+        e.vcall(base, 0x34, &args![step]);
+        if e.global::<u32>(ABORT_FLAG) == 1 {
+            e.mem.set_u32(base + 0x28, 2);
+            profile_record(e, PROFILE_END);
+            return 2;
+        }
+        let time = x87_store32(x87_add(
+            x87_load32(e.mem.u32(base + 0x18)),
+            x87_m32(e.mem.u32(base + 0x1c)),
+        ));
+        let world = e.mem.u32(base + 0xc);
+        e.mem.set_u32(base + 0x18, time);
+        if e.mem.u32(world + 0x180) != 0 {
+            profile_record(e, PROFILE_POST_COLLIDE);
+            let world = e.mem.u32(base + 0xc);
+            e.call(FIRE_POST_COLLIDE_CALLBACK, &args![world, step]);
+            profile_record(e, PROFILE_END);
+        }
+        e.mem.set_u8(base + 0x10, 1);
+        e.mem.set_u32(base + 0x28, 0);
+        profile_record(e, PROFILE_END);
+        0
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00cf_8bc0, hkp_simulation_collide(Ptr) -> u32),
         entry!(0x00cf_8730, hkp_simulation_step_delta_time(Ptr, f32) -> u32),
         entry!(0x00cf_87c0, hkp_simulation_construct(Ptr, u32) -> Ptr),
         entry!(0x00cf_8820, hkp_simulation_re_collide_after_step_failure(Ptr) -> u32),
@@ -2070,5 +2122,151 @@ mod tests {
             assert_eq!(run.e.mem.f32(run.info + 8), 0.5);
             assert_eq!(run.e.mem.f32(run.limits + 4), 3.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod collide_tests {
+    use super::*;
+    use crate::units::havok_sdk::hkpsphereshape::{PROFILE_SLOT, TLS_GET_VALUE};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type EventLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// The double address standing for virtual slot `slot` (a byte offset) of a test simulation.
+    const SLOT_DOUBLES: u32 = 0x0900_1000;
+
+    struct Rig {
+        e: Engine,
+        stream: u32,
+        world: u32,
+        this: u32,
+        events: EventLog,
+    }
+
+    fn records(e: &Engine, stream: u32) -> Vec<u32> {
+        let end = e.mem.u32(stream + 4);
+        (stream + 0x20..end)
+            .step_by(12)
+            .map(|record| e.mem.u32(record))
+            .collect()
+    }
+
+    /// A simulation on a world with a post-collide callback pending, a profile stream with room
+    /// for five records, a double for slot `0x34` that logs the step info it is given and one
+    /// for the callback that logs the world and the step info.
+    fn rig(stage: u32) -> Rig {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.map(0x00fd_f000, 0x1000);
+        e.call_log = Some(Vec::new());
+        let stream = e.mem.alloc(0x80);
+        e.mem.set_u32(stream + 4, stream + 0x20);
+        e.mem.set_u32(stream + 0xc, stream + 0x20 + 5 * 12);
+        e.set_global(PROFILE_SLOT, 3u32);
+        e.register_double(TLS_GET_VALUE, move |_, _| Ret {
+            eax: stream,
+            ..Ret::default()
+        });
+        let world = e.mem.alloc(0x400);
+        e.mem.set_u32(world + 0x180, 1);
+        let table = 0x0900_0f00;
+        let slots: Vec<u32> = (0..16).map(|slot| SLOT_DOUBLES + 4 * slot).collect();
+        e.put_vtable(table, &slots);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this, table);
+        e.mem.set_u32(this + 0xc, world);
+        e.mem.set_f32(this + 0x14, 1.0);
+        e.mem.set_f32(this + 0x18, 2.0);
+        e.mem.set_f32(this + 0x1c, 0.5);
+        e.mem.set_u32(this + 0x28, stage);
+        e.mem.set_u8(this + 0x10, 0);
+        e.register_double(UPDATE_COLLISION_FILTER_ON_WORLD, |_, _| Ret::default());
+        let events: EventLog = Rc::new(RefCell::new(Vec::new()));
+        let slot_log = Rc::clone(&events);
+        e.register_double(SLOT_DOUBLES + 0x34, move |e, a| {
+            let mut entry = vec![0x34];
+            entry.extend((0..4).map(|word| e.mem.u32(a[1] + 4 * word)));
+            slot_log.borrow_mut().push(entry);
+            Ret::default()
+        });
+        let callback_log = Rc::clone(&events);
+        e.register_double(FIRE_POST_COLLIDE_CALLBACK, move |e, a| {
+            let mut entry = vec![a[0]];
+            entry.extend((0..4).map(|word| e.mem.u32(a[1] + 4 * word)));
+            callback_log.borrow_mut().push(entry);
+            Ret::default()
+        });
+        Rig {
+            e,
+            stream,
+            world,
+            this,
+            events,
+        }
+    }
+
+    fn bits(values: [f32; 4]) -> Vec<u32> {
+        values.map(f32::to_bits).to_vec()
+    }
+
+    #[test]
+    fn a_new_step_collides_and_fires_the_post_collide_callback() {
+        let mut r = rig(0);
+        assert_eq!(r.e.call(0x00cf_8bc0, &args![r.this]).u32(), 0);
+        let mut step = vec![0x34];
+        step.extend(bits([2.0, 2.5, 0.5, 2.0]));
+        let mut callback = vec![r.world];
+        callback.extend(bits([2.0, 2.5, 0.5, 2.0]));
+        assert_eq!(*r.events.borrow(), vec![step, callback]);
+        assert_eq!(r.e.mem.f32(r.this + 0x18), 2.5);
+        assert_eq!(r.e.mem.u8(r.this + 0x10), 1);
+        assert_eq!(r.e.mem.u32(r.this + 0x28), 0);
+        // The records: the begin label, the post-collide pair and the end of the call.
+        assert_eq!(
+            records(&r.e, r.stream),
+            vec![
+                PROFILE_INTEGRATE,
+                PROFILE_POST_COLLIDE,
+                PROFILE_END,
+                PROFILE_END
+            ]
+        );
+    }
+
+    #[test]
+    fn without_a_post_collide_callback_only_the_step_runs() {
+        let mut r = rig(0);
+        r.e.mem.set_u32(r.world + 0x180, 0);
+        assert_eq!(r.e.call(0x00cf_8bc0, &args![r.this]).u32(), 0);
+        assert_eq!(r.events.borrow().len(), 1);
+        assert_eq!(r.e.mem.f32(r.this + 0x18), 2.5);
+        assert_eq!(r.e.mem.u8(r.this + 0x10), 1);
+        assert_eq!(records(&r.e, r.stream).len(), 2);
+    }
+
+    #[test]
+    fn the_abort_flag_leaves_the_time_and_marks_the_step_as_failed() {
+        let mut r = rig(0);
+        r.e.set_global(ABORT_FLAG, 1u32);
+        assert_eq!(r.e.call(0x00cf_8bc0, &args![r.this]).u32(), 2);
+        assert_eq!(r.events.borrow().len(), 1);
+        assert_eq!(r.e.mem.u32(r.this + 0x28), 2);
+        assert_eq!(r.e.mem.f32(r.this + 0x18), 2.0);
+        assert_eq!(r.e.mem.u8(r.this + 0x10), 0);
+    }
+
+    #[test]
+    fn a_step_in_progress_is_re_collided() {
+        let mut r = rig(3);
+        assert_eq!(r.e.call(0x00cf_8bc0, &args![r.this]).u32(), 0);
+        // `reCollideAfterStepFailure` at stage 3 uses the two times (+0x14, +0x18).
+        let mut step = vec![0x34];
+        step.extend(bits([1.0, 2.0, 1.0, 1.0]));
+        assert_eq!(*r.events.borrow(), vec![step]);
+        assert_eq!(r.e.mem.u32(r.this + 0x28), 0);
+        assert_eq!(r.e.mem.f32(r.this + 0x18), 2.0);
+        assert_eq!(records(&r.e, r.stream)[0], PROFILE_INTEGRATE);
     }
 }

@@ -176,6 +176,46 @@ were not matched, such as a 23 KB block between `fallout/ai`'s last
 package and `BSMenu`'s `Tile`. More names (or the spot-checks below) will
 place them.
 
+### Functions Ghidra never created
+
+The map lists Ghidra's functions, and Ghidra made functions where its
+analysis followed calls. Code reached only from data (vtable slots, function
+tables, Havok's `hkSingletonInitNode` records, the `__cinit` table), from a
+pointer immediate (`push offset f`, `mov [x], offset f`) or from a tail
+jump in other such code never became a function, so the map and the ledger
+missed it. `ghidra_gaps.tsv` (committed here; address, size, unit,
+subsystem, evidence) lists it, and the ledger adds its rows to the map with
+`placed` = `gap`. It was made on 2026-10-18 from the unpacked exe: every
+relocation whose value lies in `.text` outside every map function (from
+`.rdata`/`.data`, or an immediate operand of a decoded instruction), every
+`CALL`/`JMP rel32` target of decoded code outside every function, iterated
+to a fixed point over the code found; each entry decodes as ordinary code
+up to a `RET`/`JMP` (its size runs to the last instruction before `int3`
+padding, a jump table or the next function), and the private Ghidra
+(read-only) answers no function at it. Left out: the C++ exception-handling
+code (12,270 unwind funclets and 30 catch blocks from the `FuncInfo`
+tables, 4,346 `__ehhandler` stubs), jump-table case labels and other
+targets of jumps from the function just before them (pieces of that
+function), and unreferenced code islands (dead code). The unit is the
+neighbours' unit when the map function before and after it share one,
+else their subsystem when they share one (the ledger then gives it a run
+unit), else none (`(unplaced)`). Gap functions do not change the map's run
+units: one without a unit joins the run before or after it, else gets its
+own.
+
+On 2026-10-18: 3,216 rows (8 of them inside the body Ghidra gave another
+function, as that function's tail-jump chunk, but also vtable slots or
+data targets): 1,436 dynamic initializers in the compiler tail (1,174
+already run from the initializer table), 786 in `Havok SDK` (the 15
+singleton creators among them; 354 are pointers that static initializers
+store), 439 in `BSShader` (mostly vtable slots, many of them
+this-adjusting thunks), 134 in `NiAnimation`, 103 in `NiMain` (`00a89cc0`,
+`00a8a280` and `00a8a5f0`, which pushes both, among them), 115 in
+`LIBCMT` and the rest in the other renderer and Gamebryo subsystems.
+Evidence (a row can have several): 1,437 `.rdata` table entries, 480
+vtable slots, 377 `.data` pointers, 573 pointer immediates, 314 pushed
+pointers, 26 calls and 25 tail jumps.
+
 The ledger gives every function without a unit one, on top of this map
 (the map itself is not changed):
 

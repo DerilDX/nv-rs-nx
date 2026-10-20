@@ -240,9 +240,29 @@ pub fn fn_00c741e0(e: &mut Engine, this: Ptr, info: Ptr) -> Ptr {
     this
 }
 
+/// The wind globals the listener reads (`bhkwindlistener.rs`): the strength `01267c14` and the
+/// phase `01267c18` (floats), and the strength limit `011b02dc` (float) the setter scales by.
+const WIND_STRENGTH: u32 = 0x0126_7c14;
+const WIND_PHASE: u32 = 0x0126_7c18;
+const WIND_STRENGTH_LIMIT: u32 = 0x011b_02dc;
+
+// Translated from 00c74550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Wind setter (no map name; cdecl with two float stack words, `strength` and `phase`): the wind
+/// strength global is the float at `011b02dc` times `strength` (x87, stored as float) and the
+/// phase global is `phase` copied through the x87 stack.
+pub fn fn_00c74550(e: &mut Engine, strength: f32, phase: f32) {
+    let limit = e.mem.u32(WIND_STRENGTH_LIMIT);
+    let product = x87_mul(x87_load32(limit), x87_m32(strength.to_bits()));
+    e.mem.set_u32(WIND_STRENGTH, x87_store32(product));
+    e.mem.set_u32(WIND_PHASE, x87_quiet_bits(phase.to_bits()));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00c741e0, fn_00c741e0(Ptr, Ptr) -> Ptr)]
+    vec![
+        entry!(0x00c741e0, fn_00c741e0(Ptr, Ptr) -> Ptr),
+        entry!(0x00c74550, fn_00c74550(f32, f32)),
+    ]
 }
 
 #[cfg(test)]
@@ -387,5 +407,20 @@ mod tests {
             assert_eq!(during.get(), 0x10);
             assert_eq!(e.mem.u32(scope), 0x77);
         }
+    }
+}
+
+#[cfg(test)]
+mod wind_setter_tests {
+    use super::*;
+
+    #[test]
+    fn the_wind_setter_scales_the_strength_by_the_limit() {
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0030_0000);
+        e.set_global(WIND_STRENGTH_LIMIT, 4.0f32);
+        e.call(0x00c7_4550, &args![0.5f32, 3.25f32]);
+        assert_eq!(e.global::<f32>(WIND_STRENGTH), 2.0);
+        assert_eq!(e.global::<f32>(WIND_PHASE), 3.25);
     }
 }

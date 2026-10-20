@@ -35,6 +35,16 @@ layout! {
     }
 }
 
+// Translated from 00d081f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a "less than" comparison for a sort, cdecl, two stack words (nothing
+/// popped): answers 1 when the word at +0x14 of the object at `a + 4` is below (unsigned) the same
+/// word of `b`, else 0 (`CMP` / `SBB` / `NEG`). Ghidra made no function here; the address is pushed at 00d0821b.
+pub fn fn_00d081f0(e: &mut Engine, a: u32, b: u32) -> u32 {
+    let a_object = e.mem.u32(a + 4);
+    let b_object = e.mem.u32(b + 4);
+    u32::from(e.mem.u32(a_object + 0x14) < e.mem.u32(b_object + 0x14))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -65,6 +75,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
                 Ptr<HkArrayBase>,
             )
         ),
+        entry!(0x00d0_81f0, fn_00d081f0(u32, u32) -> u32),
     ]
 }
 
@@ -298,5 +309,34 @@ mod a06_tests {
         let this = e.mem.alloc(0x60);
         let got = e.call(0x00d081d0, &args![this]).u32();
         assert_eq!(got, this + 0x50);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    fn linked_object(e: &mut Engine, key: u32) -> u32 {
+        let holder = e.mem.alloc(0x10);
+        let object = e.mem.alloc(0x20);
+        e.mem.set_u32(holder + 4, object);
+        e.mem.set_u32(object + 0x14, key);
+        holder
+    }
+
+    #[test]
+    fn fn_00d081f0_compares_the_keys_unsigned() {
+        let mut e = Engine::new();
+        for (a, b, expected) in [
+            (1, 2, 1),
+            (2, 1, 0),
+            (2, 2, 0),
+            (0xffff_ffff, 1, 0),
+            (1, 0xffff_ffff, 1),
+        ] {
+            let first = linked_object(&mut e, a);
+            let second = linked_object(&mut e, b);
+            assert_eq!(e.call(0x00d0_81f0, &args![first, second]).u32(), expected);
+        }
     }
 }

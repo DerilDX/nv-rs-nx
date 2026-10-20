@@ -78,6 +78,209 @@ pub fn fn_00dfb2d0(e: &mut Engine, this: Ptr, mode: u32) -> Ptr {
     this
 }
 
+// Translated from 00dfb250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpVehicleSuspensionSuspensionWheelParameters` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// an empty function (a lone `RET`) that does not read its word.
+pub fn hkp_vehicle_suspension_suspension_wheel_parameters_cleanup_loaded_object(
+    _e: &mut Engine,
+    _unused_0: u32,
+) {
+}
+
+// Translated from 00dfb270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpMoppBvTreeShape` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hkp_mopp_bv_tree_shape_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00dfb290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkpMoppBvTreeShape` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, runs `00dfb2d0` on it (thiscall, `this` = `object`, one word = the flag, the callee pops it); the callee is in this file.
+pub fn hkp_mopp_bv_tree_shape_finish_loaded_object(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        fn_00dfb2d0(e, object, flag);
+    }
+}
+
+// Translated from 00dfb350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkMeshSection` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// an empty function (a lone `RET`) that does not read its word.
+pub fn hk_mesh_section_cleanup_loaded_object(_e: &mut Engine, _unused_0: u32) {}
+
+// Translated from 00dfb370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkMeshSectionCinfo` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// an empty function (a lone `RET`) that does not read its word.
+pub fn hk_mesh_section_cinfo_cleanup_loaded_object(_e: &mut Engine, _unused_0: u32) {}
+
+// Translated from 00dfb390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkMemoryResourceHandleExternalLink` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, runs `00cb0a70` on `object` and then on `object + 4`, each with the flag (thiscall, the callee pops the word).
+pub fn hk_memory_resource_handle_external_link_finish_loaded_object(
+    e: &mut Engine,
+    object: Ptr,
+    flag: u32,
+) {
+    if !object.is_null() {
+        e.call(0x00cb_0a70, &args![object, flag]);
+        e.call(0x00cb_0a70, &args![object.addr() + 4, flag]);
+    }
+}
+
+// Translated from 00dfb3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkMemoryResourceHandle` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, calls `00e2ea20` on it (thiscall, `this` = `object`, one word = the flag, the callee pops it).
+pub fn hk_memory_resource_handle_finish_loaded_object(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        e.call(0x00e2_ea20, &args![object, flag]);
+    }
+}
+
+// Translated from 00dfb3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkMemoryResourceHandle` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hk_memory_resource_handle_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00dfb430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkMemoryResourceContainer` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, calls `00e2ebc0` on it (thiscall, `this` = `object`, one word = the flag, the callee pops it).
+pub fn hk_memory_resource_container_finish_loaded_object(e: &mut Engine, object: Ptr, flag: u32) {
+    if !object.is_null() {
+        e.call(0x00e2_ebc0, &args![object, flag]);
+    }
+}
+
+// Translated from 00dfb450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkMemoryResourceContainer` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hk_memory_resource_container_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00dfb490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkMemoryResourceHandleExternalLink` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// runs `00cb0c00` (no stack word) on `object + 4` and then on `object` (the second as a tail jump); no null check.
+pub fn hk_memory_resource_handle_external_link_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.call(0x00cb_0c00, &args![object.addr() + 4]);
+    e.call(0x00cb_0c00, &args![object]);
+}
+
+// Translated from 00dfb4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkaKeyFrameHierarchyUtilityControlData` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// an empty function (a lone `RET`) that reads neither word.
+pub fn hka_key_frame_hierarchy_utility_control_data_finish_loaded_object(
+    _e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+) {
+}
+
+// Translated from 00dfb4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkaKeyFrameHierarchyUtilityControlData` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// an empty function (a lone `RET`) that does not read its word.
+pub fn hka_key_frame_hierarchy_utility_control_data_cleanup_loaded_object(
+    _e: &mut Engine,
+    _unused_0: u32,
+) {
+}
+
+// Translated from 00dfb4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkaKeyFrameHierarchyUtility` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// an empty function (a lone `RET`) that does not read its word.
+pub fn hka_key_frame_hierarchy_utility_cleanup_loaded_object(_e: &mut Engine, _unused_0: u32) {}
+
+// Translated from 00dfb500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkaWaveletCompressedAnimationCompressionParams` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// an empty function (a lone `RET`) that does not read its word.
+pub fn hka_wavelet_compressed_animation_compression_params_cleanup_loaded_object(
+    _e: &mut Engine,
+    _unused_0: u32,
+) {
+}
+
+// Translated from 00dfb520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkaWaveletCompressedAnimationQuantizationFormat` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// an empty function (a lone `RET`) that reads neither word.
+pub fn hka_wavelet_compressed_animation_quantization_format_finish_loaded_object(
+    _e: &mut Engine,
+    _unused_0: u32,
+    _unused_1: u32,
+) {
+}
+
+// Translated from 00dfb530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkaWaveletCompressedAnimationQuantizationFormat` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// an empty function (a lone `RET`) that does not read its word.
+pub fn hka_wavelet_compressed_animation_quantization_format_cleanup_loaded_object(
+    _e: &mut Engine,
+    _unused_0: u32,
+) {
+}
+
+// Translated from 00dfb550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_cleanupLoadedObjectFunction` (Xbox PDB) of the type info record for `hkaWaveletCompressedAnimation` (reached only through that record). A cdecl function of one word: the loaded object.
+///
+/// What it does:
+/// calls the object's virtual function at vtable offset 0 with one word, 0 (no null check).
+pub fn hka_wavelet_compressed_animation_cleanup_loaded_object(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00dfb570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkTypeInfo::m_finishLoadedObjectFunction` (Xbox PDB) of the type info record for `hkaWaveletCompressedAnimation` (reached only through that record). A cdecl function of two words: the loaded object and the finish flag the registry passes.
+///
+/// What it does:
+/// when `object` is not null, stores the vtable address 0x010d_dc5c at `+0`, and when the flag is not zero runs `00e2fc10` on `object` (a tail jump, no stack word).
+pub fn hka_wavelet_compressed_animation_finish_loaded_object(
+    e: &mut Engine,
+    object: Ptr,
+    flag: u32,
+) {
+    if object.is_null() {
+        return;
+    }
+    e.mem.set_u32(object.addr(), 0x010d_dc5c);
+    if flag != 0 {
+        e.call(0x00e2_fc10, &args![object]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -86,6 +289,79 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00df_b460, fn_00dfb460() -> u32),
         entry!(0x00dfb590, return_constant_00dfb590() -> u32),
         entry!(0x00df_b2d0, fn_00dfb2d0(Ptr, u32) -> Ptr),
+        entry!(
+            0x00df_b250,
+            hkp_vehicle_suspension_suspension_wheel_parameters_cleanup_loaded_object(u32)
+        ),
+        entry!(
+            0x00df_b270,
+            hkp_mopp_bv_tree_shape_cleanup_loaded_object(Ptr)
+        ),
+        entry!(
+            0x00df_b290,
+            hkp_mopp_bv_tree_shape_finish_loaded_object(Ptr, u32)
+        ),
+        entry!(0x00df_b350, hk_mesh_section_cleanup_loaded_object(u32)),
+        entry!(
+            0x00df_b370,
+            hk_mesh_section_cinfo_cleanup_loaded_object(u32)
+        ),
+        entry!(
+            0x00df_b390,
+            hk_memory_resource_handle_external_link_finish_loaded_object(Ptr, u32)
+        ),
+        entry!(
+            0x00df_b3d0,
+            hk_memory_resource_handle_finish_loaded_object(Ptr, u32)
+        ),
+        entry!(
+            0x00df_b3f0,
+            hk_memory_resource_handle_cleanup_loaded_object(Ptr)
+        ),
+        entry!(
+            0x00df_b430,
+            hk_memory_resource_container_finish_loaded_object(Ptr, u32)
+        ),
+        entry!(
+            0x00df_b450,
+            hk_memory_resource_container_cleanup_loaded_object(Ptr)
+        ),
+        entry!(
+            0x00df_b490,
+            hk_memory_resource_handle_external_link_cleanup_loaded_object(Ptr)
+        ),
+        entry!(
+            0x00df_b4b0,
+            hka_key_frame_hierarchy_utility_control_data_finish_loaded_object(u32, u32)
+        ),
+        entry!(
+            0x00df_b4c0,
+            hka_key_frame_hierarchy_utility_control_data_cleanup_loaded_object(u32)
+        ),
+        entry!(
+            0x00df_b4e0,
+            hka_key_frame_hierarchy_utility_cleanup_loaded_object(u32)
+        ),
+        entry!(
+            0x00df_b500,
+            hka_wavelet_compressed_animation_compression_params_cleanup_loaded_object(u32)
+        ),
+        entry!(
+            0x00df_b520,
+            hka_wavelet_compressed_animation_quantization_format_finish_loaded_object(u32, u32)
+        ),
+        entry!(
+            0x00df_b530,
+            hka_wavelet_compressed_animation_quantization_format_cleanup_loaded_object(u32)
+        ),
+        entry!(
+            0x00df_b550,
+            hka_wavelet_compressed_animation_cleanup_loaded_object(Ptr)
+        ),
+        entry!(
+            0x00df_b570,
+            hka_wavelet_compressed_animation_finish_loaded_object(Ptr, u32)
+        ),
     ]
 }
 
@@ -263,5 +539,247 @@ mod tests_a05 {
         assert_eq!(e.mem.u32(this + 0x18), 0x108);
         assert_eq!(e.mem.u32(this + 0x1c), 0x109);
         assert_eq!(e.mem.u8(this + 0x10), 0);
+    }
+}
+
+#[cfg(test)]
+mod a04_type_info_callback_tests {
+    use crate::prelude::*;
+
+    fn calls_to(e: &Engine, address: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn hkp_vehicle_suspension_suspension_wheel_parameters_cleanup_loaded_object_does_nothing() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x1234_5678);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b250, &args![object]);
+        assert_eq!(e.mem.u32(object), 0x1234_5678);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hkp_mopp_bv_tree_shape_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_0004, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_0004);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b270, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_0004), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hkp_mopp_bv_tree_shape_finish_loaded_object_runs_the_constructor_chain_on_a_non_null_object()
+    {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x40);
+        e.call(0x00df_b290, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_0dac);
+        assert_eq!(e.mem.u32(object + 0x30), 0x010c_6fd0);
+        // A null object is left alone (nothing is written or read).
+        e.call(0x00df_b290, &args![0u32, 1u32]);
+    }
+
+    #[test]
+    fn hk_mesh_section_cleanup_loaded_object_does_nothing() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x1234_5678);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b350, &args![object]);
+        assert_eq!(e.mem.u32(object), 0x1234_5678);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hk_mesh_section_cinfo_cleanup_loaded_object_does_nothing() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x1234_5678);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b370, &args![object]);
+        assert_eq!(e.mem.u32(object), 0x1234_5678);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hk_memory_resource_handle_external_link_finish_loaded_object_runs_the_helper_on_both_members(
+    ) {
+        let mut e = Engine::new();
+        e.register(0x00cb_0a70, |_, _| Ret::default());
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b390, &args![0x5000u32, 9u32]);
+        assert_eq!(
+            calls_to(&e, 0x00cb_0a70),
+            vec![vec![0x5000, 9], vec![0x5004, 9]]
+        );
+        e.call(0x00df_b390, &args![0u32, 9u32]);
+        assert_eq!(calls_to(&e, 0x00cb_0a70).len(), 2);
+    }
+
+    #[test]
+    fn hk_memory_resource_handle_finish_loaded_object_calls_the_helper_for_a_non_null_object() {
+        let mut e = Engine::new();
+        e.register(0x00e2_ea20, |_, _| Ret::default());
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b3d0, &args![0x5000u32, 7u32]);
+        assert_eq!(calls_to(&e, 0x00e2_ea20), vec![vec![0x5000, 7]]);
+        e.call(0x00df_b3d0, &args![0u32, 7u32]);
+        assert_eq!(calls_to(&e, 0x00e2_ea20).len(), 1);
+    }
+
+    #[test]
+    fn hk_memory_resource_handle_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_0005, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_0005);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b3f0, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_0005), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hk_memory_resource_container_finish_loaded_object_calls_the_helper_for_a_non_null_object() {
+        let mut e = Engine::new();
+        e.register(0x00e2_ebc0, |_, _| Ret::default());
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b430, &args![0x5000u32, 7u32]);
+        assert_eq!(calls_to(&e, 0x00e2_ebc0), vec![vec![0x5000, 7]]);
+        e.call(0x00df_b430, &args![0u32, 7u32]);
+        assert_eq!(calls_to(&e, 0x00e2_ebc0).len(), 1);
+    }
+
+    #[test]
+    fn hk_memory_resource_container_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_0006, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_0006);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b450, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_0006), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hk_memory_resource_handle_external_link_cleanup_loaded_object_runs_the_helper_on_both_members(
+    ) {
+        let mut e = Engine::new();
+        e.register(0x00cb_0c00, |_, _| Ret::default());
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b490, &args![0x5000u32]);
+        assert_eq!(calls_to(&e, 0x00cb_0c00), vec![vec![0x5004], vec![0x5000]]);
+    }
+
+    #[test]
+    fn hka_key_frame_hierarchy_utility_control_data_finish_loaded_object_does_nothing() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x1234_5678);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b4b0, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x1234_5678);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hka_key_frame_hierarchy_utility_control_data_cleanup_loaded_object_does_nothing() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x1234_5678);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b4c0, &args![object]);
+        assert_eq!(e.mem.u32(object), 0x1234_5678);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hka_key_frame_hierarchy_utility_cleanup_loaded_object_does_nothing() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x1234_5678);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b4e0, &args![object]);
+        assert_eq!(e.mem.u32(object), 0x1234_5678);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hka_wavelet_compressed_animation_compression_params_cleanup_loaded_object_does_nothing() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x1234_5678);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b500, &args![object]);
+        assert_eq!(e.mem.u32(object), 0x1234_5678);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hka_wavelet_compressed_animation_quantization_format_finish_loaded_object_does_nothing() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x1234_5678);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b520, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object), 0x1234_5678);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hka_wavelet_compressed_animation_quantization_format_cleanup_loaded_object_does_nothing() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x1234_5678);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b530, &args![object]);
+        assert_eq!(e.mem.u32(object), 0x1234_5678);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hka_wavelet_compressed_animation_cleanup_loaded_object_calls_vtable_slot_zero_with_zero() {
+        let mut e = Engine::new();
+        e.register(0x0900_0007, |_, _| Ret::default());
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, 0x0900_0007);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b550, &args![object]);
+        assert_eq!(calls_to(&e, 0x0900_0007), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn hka_wavelet_compressed_animation_finish_loaded_object_stores_the_vtable_and_runs_the_helper_with_the_flag(
+    ) {
+        let mut e = Engine::new();
+        e.register(0x00e2_fc10, |_, _| Ret::default());
+        let object = e.mem.alloc(0x10);
+        e.call_log = Some(Vec::new());
+        e.call(0x00df_b570, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x010d_dc5c);
+        assert!(calls_to(&e, 0x00e2_fc10).is_empty());
+        e.call(0x00df_b570, &args![object, 1u32]);
+        assert_eq!(calls_to(&e, 0x00e2_fc10), vec![vec![object]]);
+        // A null object is left alone.
+        e.call(0x00df_b570, &args![0u32, 1u32]);
+        assert_eq!(calls_to(&e, 0x00e2_fc10).len(), 1);
     }
 }

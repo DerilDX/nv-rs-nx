@@ -137,10 +137,11 @@ pub fn hk_process_handler_scalar_deleting_destructor(e: &mut Engine, this: Ptr, 
 }
 
 // Translated from 00d60bf0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// No map name. Cdecl-like `RET 8`, two output pointers: stores the address `011b5d38` at
+/// No map name. A virtual method with `RET 8`, two output pointers on the stack: stores the address `011b5d38` at
 /// `commands` (the exe's data there holds the bytes `0xc2`, `0xc3`, the commands
 /// `consumeCommand` handles, checked in Ghidra) and the count 2 at `count`.
-pub fn fn_00d60bf0(e: &mut Engine, commands: u32, count: u32) {
+/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+pub fn fn_00d60bf0(e: &mut Engine, _this: u32, commands: u32, count: u32) {
     e.mem.set_u32(commands, CONSUMED_COMMANDS);
     e.mem.set_u32(count, 2);
 }
@@ -567,7 +568,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00d47c90, hk_command_router_scalar_deleting_destructor(Ptr, u8) -> Ptr),
         entry!(0x00d60bb0, hk_process_scalar_deleting_destructor(Ptr, u8) -> Ptr),
         entry!(0x00d60bd0, hk_process_handler_scalar_deleting_destructor(Ptr, u8) -> Ptr),
-        entry!(0x00d60bf0, fn_00d60bf0(u32, u32)),
+        entry!(0x00d60bf0, fn_00d60bf0(u32, u32, u32)),
         entry!(
             0x00d60c10,
             hk_server_process_handler_consume_command(u32, u8)
@@ -590,6 +591,9 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    /// The `this` word of the virtual calls: these functions never read `ECX`.
+    const VCALL_THIS: u32 = 0x7777_0000;
 
     type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
 
@@ -739,7 +743,7 @@ mod tests {
     fn fn_00d60bf0_gives_the_command_table_and_count() {
         let mut e = engine();
         let (table, count) = (e.mem.alloc(4), e.mem.alloc(4));
-        e.call(0x00d6_0bf0, &args![table, count]);
+        e.call(0x00d6_0bf0, &args![VCALL_THIS, table, count]);
         assert_eq!(e.mem.u32(table), CONSUMED_COMMANDS);
         assert_eq!(e.mem.u32(count), 2);
     }

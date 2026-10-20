@@ -369,6 +369,42 @@ pub fn hkp_phantom_display_viewer_post_simulation_callback(e: &mut Engine, this:
     profile_record(e, PROFILE_END);
 }
 
+// Translated from 00d66770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map (the viewer or process class of this unit is unconfirmed): a
+/// process creation function, the kind `hkProcessFactory::registerProcess` (`00dd9380`) is given.
+/// It takes one stack word, the process contexts (cdecl, nothing popped). Allocates 0x3c bytes through the memory router's allocator (`00c85750`; the
+/// virtual function at +4 of the object at router + 0x10), stores the size as a 16-bit word at +4,
+/// runs the constructor `00d66430` on the block with the contexts, and answers that object + 8 when it is not null, else null.
+/// Ghidra made no function here; the address is pushed at 00d66af6.
+pub fn fn_00d66770(e: &mut Engine, process_contexts: u32) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let block = e.vcall(allocator, 4, &args![0x3c]).u32();
+    e.mem.set_u16(block + 4, 0x3c);
+    let object = e.call(0x00d6_6430, &args![block, process_contexts]).u32();
+    if object != 0 {
+        object.wrapping_add(8)
+    } else {
+        0
+    }
+}
+// Translated from 00d66730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: cdecl, no stack words. Allocates 0x14 bytes through the memory
+/// router's allocator (`00c85750`; virtual function at +4 of the object at router + 0x10),
+/// stores the size as a 16-bit word at +4, the count 1 as a 16-bit word at +6, the vtable word `010d1c2c` at +0, two zero words at +8 and +0xc and `0x80000000` at +0x10 (an empty array that owns no storage). Returns the block. Ghidra made no function here; the address is stored in the data word at 011b5f44.
+pub fn fn_00d66730(e: &mut Engine) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.mem.u32(router + 0x10);
+    let block = e.vcall(allocator, 4, &args![0x14u32]).u32();
+    e.mem.set_u16(block + 4, 0x14);
+    e.mem.set_u16(block + 6, 1);
+    e.mem.set_u32(block, 0x010d_1c2c);
+    e.mem.set_u32(block + 8, 0);
+    e.mem.set_u32(block + 0xc, 0);
+    e.mem.set_u32(block + 0x10, 0x8000_0000);
+    block
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -380,6 +416,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00d667b0,
             hkp_phantom_display_viewer_post_simulation_callback(Ptr, Ptr)
         ),
+        entry!(0x00d6_6770, fn_00d66770(u32) -> u32),
+        entry!(0x00d6_6730, fn_00d66730() -> u32),
     ]
 }
 
@@ -967,5 +1005,87 @@ mod tests {
             vec![vec![t.s.heap, block, 5 * 4]]
         );
         assert_eq!(t.s.e.mem.u32(t.s.router), top);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// What the constructor double saw: its argument words and the size word at +4 of the block.
+    type ConstructorCall = (Vec<u32>, u16);
+
+    /// The slot of the allocator's vtable (offset 4) that allocates, as a test double.
+    const ALLOCATE_SLOT_DOUBLE: u32 = 0x0900_0001;
+
+    /// A memory router (`00c85750`) whose allocator allocates through a double that logs the
+    /// size it was asked for and answers a zeroed block.
+    fn allocator_engine() -> (Engine, Rc<RefCell<Vec<u32>>>) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x20);
+        e.mem.set_u32(vtable + 4, ALLOCATE_SLOT_DOUBLE);
+        let allocator = e.mem.alloc(0x10);
+        e.mem.set_u32(allocator, vtable);
+        let router = e.mem.alloc(0x20);
+        e.mem.set_u32(router + 0x10, allocator);
+        e.register_double(0x00c8_5750, move |_, _| Ret {
+            eax: router,
+            ..Ret::default()
+        });
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&sizes);
+        e.register_double(ALLOCATE_SLOT_DOUBLE, move |e, a| {
+            log.borrow_mut().push(a[1]);
+            Ret {
+                eax: e.mem.alloc(a[1]),
+                ..Ret::default()
+            }
+        });
+        (e, sizes)
+    }
+
+    /// The constructor sees the block with its size already stored; the answer is the object + 8.
+    #[test]
+    fn fn_00d66770_builds_the_object_and_answers_its_second_base() {
+        let (mut e, sizes) = allocator_engine();
+        let seen: Rc<RefCell<Vec<ConstructorCall>>> = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&seen);
+        e.register_double(0x00d6_6430, move |e, a| {
+            log.borrow_mut().push((a.to_vec(), e.mem.u16(a[0] + 4)));
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        let object = e.call(0x00d6_6770, &args![0x1234u32]).u32();
+        assert_eq!(*sizes.borrow(), vec![0x3c]);
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 1);
+        let block = seen[0].0[0];
+        assert_eq!(seen[0].0, vec![block, 0x1234]);
+        assert_eq!(seen[0].1, 0x3c);
+        assert_eq!(object, block + 8);
+    }
+
+    /// A constructor that answers null gives a null answer.
+    #[test]
+    fn fn_00d66770_answers_null_when_the_constructor_does() {
+        let (mut e, _) = allocator_engine();
+        e.register_double(0x00d6_6430, |_, _| Ret::default());
+        assert_eq!(e.call(0x00d6_6770, &args![0x1234u32]).u32(), 0);
+    }
+    #[test]
+    fn fn_00d66730_allocates_and_initialises_the_block() {
+        let (mut e, sizes) = allocator_engine();
+        let block = e.call(0x00d6_6730, &args![]).u32();
+        assert_eq!(*sizes.borrow(), vec![0x14]);
+        assert_eq!(e.mem.u16(block + 4), 0x14);
+        assert_eq!(e.mem.u16(block + 6), 1);
+        assert_eq!(e.mem.u32(block), 0x010d_1c2c);
+        assert_eq!(e.mem.u32(block + 8), 0);
+        assert_eq!(e.mem.u32(block + 0xc), 0);
+        assert_eq!(e.mem.u32(block + 0x10), 0x8000_0000);
     }
 }

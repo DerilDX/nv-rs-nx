@@ -28,9 +28,46 @@ pub fn fn_009e9bb0(e: &mut Engine, this: Ptr, first: u32, second: u32) -> Ptr {
     this
 }
 
+/// `009dad00` (the `ActorMover` constructor, as the decompiler names it): `thiscall`, `RET 4`.
+const ACTOR_MOVER_CONSTRUCTOR: u32 = 0x009d_ad00;
+/// `006815c0`: a function returning `this` (the compiler's empty `NiPoint3` and `NiMatrix3`
+/// default constructors, folded into one body).
+const EMPTY_CONSTRUCTOR: u32 = 0x0068_15c0;
+/// The vtable this constructor stores.
+const VTABLE_0109297C: u32 = 0x0109_297c;
+/// Three consecutive dwords copied to `+0x88`.
+const POINT_SOURCE: u32 = 0x011f_426c;
+/// The float stored at `+0x9c` (`FLD`/`FSTP`).
+const FLOAT_AT_9C: u32 = 0x0101_2054;
+
+// Translated from 009e9d00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 009e9d00 - the C++ exception-unwinding frame (FS:[0] chain, handler at 00f1bf58, state variable) is not translated
+/// Unnamed in the engine map. Constructor of a class derived from the `ActorMover` of
+/// `009dad00` (`thiscall`, `RET 4`, the word is passed on): runs that constructor, stores the
+/// vtable `0109297c`, constructs the member at `+0x88` with `006815c0` and fills it with the three
+/// dwords at `011f426c` (plain moves), clears `+0x94` and `+0x98`, and stores the float at
+/// `01012054` at `+0x9c` (`FLD`/`FSTP`). Returns `this`. The class name is unconfirmed.
+pub fn fn_009e9d00(e: &mut Engine, this: Ptr, base_argument: u32) -> Ptr {
+    let base = this.addr();
+    e.call(ACTOR_MOVER_CONSTRUCTOR, &args![this, base_argument]);
+    e.mem.set_u32(base, VTABLE_0109297C);
+    let member = base.wrapping_add(0x88);
+    e.call(EMPTY_CONSTRUCTOR, &args![member]);
+    for word in 0..3u32 {
+        let value = e.mem.u32(POINT_SOURCE + 4 * word);
+        e.mem.set_u32(member.wrapping_add(4 * word), value);
+    }
+    e.mem.set_u32(base.wrapping_add(0x94), 0);
+    let bits = x87_quiet_bits(e.mem.u32(FLOAT_AT_9C));
+    e.mem.set_u32(base.wrapping_add(0x9c), bits);
+    e.mem.set_u32(base.wrapping_add(0x98), 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x009e_9d00, fn_009e9d00(Ptr, u32) -> Ptr),
         entry!(0x009e_9c10, fn_009e9c10(Ptr)),
         entry!(0x009e_9bb0, fn_009e9bb0(Ptr, u32, u32) -> Ptr),
     ]
@@ -86,5 +123,62 @@ mod static_init_callee_tests {
         assert_eq!(e.call(0x009e_9bb0, &args![this, 8u32, 9u32]).u32(), this);
         assert_eq!(calls_to(&mut e, BASE_BODY_009E9C90), vec![vec![this, 8, 9]]);
         assert_eq!(e.mem.u32(this), VTABLE_009E9BB0);
+    }
+}
+
+#[cfg(test)]
+mod physics_work_ahead_tests {
+    use super::*;
+
+    #[test]
+    fn at_009e9d00_runs_the_base_constructor_then_fills_in_the_members() {
+        let mut e = Engine::new();
+        e.call_log = Some(vec![]);
+        e.map(POINT_SOURCE, 0x10);
+        e.map(FLOAT_AT_9C, 4);
+        e.mem.set_u32(POINT_SOURCE, 0x1111_1111);
+        e.mem.set_u32(POINT_SOURCE + 4, 0x2222_2222);
+        e.mem.set_u32(POINT_SOURCE + 8, 0x3333_3333);
+        e.mem.set_u32(FLOAT_AT_9C, (-1.0f32).to_bits());
+        e.register(ACTOR_MOVER_CONSTRUCTOR, |e, a| {
+            // The base constructor leaves its own vtable and some junk in the members.
+            e.mem.set_u32(a[0], 0x0aaa_0000);
+            e.mem.set_u32(a[0] + 0x94, 0x7777_7777);
+            e.mem.set_u32(a[0] + 0x98, 0x8888_8888);
+            a[0].into_ret()
+        });
+        e.register(EMPTY_CONSTRUCTOR, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(0xa8);
+        let result = e.call(0x009e_9d00, &args![this, 0x4242u32]).u32();
+        assert_eq!(result, this);
+        assert_eq!(e.mem.u32(this), VTABLE_0109297C);
+        assert_eq!(e.mem.u32(this + 0x88), 0x1111_1111);
+        assert_eq!(e.mem.u32(this + 0x8c), 0x2222_2222);
+        assert_eq!(e.mem.u32(this + 0x90), 0x3333_3333);
+        assert_eq!(e.mem.u32(this + 0x94), 0);
+        assert_eq!(e.mem.u32(this + 0x98), 0);
+        assert_eq!(e.mem.u32(this + 0x9c), (-1.0f32).to_bits());
+        let log = e.call_log.take().unwrap();
+        let order: Vec<(u32, Vec<u32>)> = log.into_iter().filter(|c| c.0 != 0x009e_9d00).collect();
+        assert_eq!(
+            order,
+            vec![
+                (ACTOR_MOVER_CONSTRUCTOR, vec![this, 0x4242]),
+                (EMPTY_CONSTRUCTOR, vec![this + 0x88]),
+            ]
+        );
+    }
+
+    #[test]
+    fn at_009e9d00_quiets_a_signalling_float() {
+        let mut e = Engine::new();
+        e.map(POINT_SOURCE, 0x10);
+        e.map(FLOAT_AT_9C, 4);
+        e.mem.set_u32(FLOAT_AT_9C, 0x7f80_0001);
+        e.register(ACTOR_MOVER_CONSTRUCTOR, |_, a| a[0].into_ret());
+        e.register(EMPTY_CONSTRUCTOR, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(0xa8);
+        e.call(0x009e_9d00, &args![this, 0u32]);
+        assert_eq!(e.mem.u32(this + 0x9c), 0x7fc0_0001);
     }
 }

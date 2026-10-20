@@ -64,9 +64,55 @@ pub fn actorpackage_clear(e: &mut Engine, this: Ptr) {
     e.mem.set_u32(base + 8, 0);
 }
 
+layout! {
+    /// `ActorPackage` (Xbox PDB, 0x18 bytes), the fields `MoveTo` uses; the PC offsets are
+    /// the ones the code reads and writes (`+0`, `+4`, `+0xc`, `+0x10`).
+    pub struct ActorPackage: 0x18 {
+        /// `pPackage` (Xbox PDB): `TESPackage*`.
+        0x00 pPackage: u32,
+        /// `pData` (Xbox PDB): `ActorPackageData*`.
+        0x04 pData: u32,
+        /// `iCurrentProcedureIndex` (Xbox PDB).
+        0x0C iCurrentProcedureIndex: i32,
+        /// `fPackageStartTime` (Xbox PDB).
+        0x10 fPackageStartTime: f32,
+    }
+}
+
+// Translated from 008c6130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorPackage::MoveTo` (Xbox PDB; `thiscall`, `RET 4`): `this` is the package that is
+/// moved out, `destination` the one that takes it (the word on the stack). Copies `+0`,
+/// `+4`, `+0xc` and the float at `+0x10` (`FLD`/`FSTP`, which quiets a signalling NaN) to
+/// `destination`, then resets `this` to the empty values: `+0` and `+4` to 0, `+0xc` to
+/// 0xffffffff and the float at `+0x10` to the float at `0x01012054` (read through memory,
+/// the same load and store). `+8` and `+0x14` are not touched.
+pub fn actor_package_move_to(
+    e: &mut Engine,
+    this: Ptr<ActorPackage>,
+    destination: Ptr<ActorPackage>,
+) {
+    let package = e.get(this, ActorPackage::pPackage);
+    e.set(destination, ActorPackage::pPackage, package);
+    let data = e.get(this, ActorPackage::pData);
+    e.set(destination, ActorPackage::pData, data);
+    let procedure = e.get(this, ActorPackage::iCurrentProcedureIndex);
+    e.set(destination, ActorPackage::iCurrentProcedureIndex, procedure);
+    let start_time = x87_quiet(e.get(this, ActorPackage::fPackageStartTime));
+    e.set(destination, ActorPackage::fPackageStartTime, start_time);
+    e.set(this, ActorPackage::pPackage, 0);
+    e.set(this, ActorPackage::pData, 0);
+    e.set(this, ActorPackage::iCurrentProcedureIndex, -1);
+    let empty_start_time = x87_quiet(e.global::<f32>(0x0101_2054));
+    e.set(this, ActorPackage::fPackageStartTime, empty_start_time);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x008c_6130,
+            actor_package_move_to(Ptr<ActorPackage>, Ptr<ActorPackage>)
+        ),
         entry!(0x008c5ef0, actorpackage_clear(Ptr)),
         entry!(0x008c6060, fn_008c6060(Ptr)),
     ]
@@ -218,5 +264,57 @@ mod movement_path_tests {
         e.call(0x008c_5ef0, &[record]);
         assert_eq!(*log.borrow(), [(0x0090_0100, vec![object, 1])]);
         assert_eq!(e.mem.u32(record + 4), 0);
+    }
+}
+
+#[cfg(test)]
+mod move_to_tests {
+    use super::*;
+
+    const EMPTY_START_TIME: u32 = 0x0101_2054;
+
+    fn fixture() -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.map(EMPTY_START_TIME, 4);
+        e.set_global(EMPTY_START_TIME, (-1.0f32).to_bits());
+        let from = e.mem.alloc(0x18);
+        let to = e.mem.alloc(0x18);
+        (e, from, to)
+    }
+
+    #[test]
+    fn moves_the_package_and_resets_the_source() {
+        let (mut e, from, to) = fixture();
+        e.mem.set_u32(from, 0x1111);
+        e.mem.set_u32(from + 4, 0x2222);
+        e.mem.set_u32(from + 8, 0x3333);
+        e.mem.set_u32(from + 0xc, 5);
+        e.mem.set_u32(from + 0x10, 12.5f32.to_bits());
+        e.mem.set_u32(from + 0x14, 0x4444);
+        e.mem.set_u32(to + 8, 0x7777);
+        e.mem.set_u32(to + 0x14, 0x8888);
+        e.call(0x008c_6130, &args![from, to]);
+        assert_eq!(e.mem.u32(to), 0x1111);
+        assert_eq!(e.mem.u32(to + 4), 0x2222);
+        assert_eq!(e.mem.u32(to + 8), 0x7777);
+        assert_eq!(e.mem.u32(to + 0xc), 5);
+        assert_eq!(f32::from_bits(e.mem.u32(to + 0x10)), 12.5);
+        assert_eq!(e.mem.u32(to + 0x14), 0x8888);
+        assert_eq!(e.mem.u32(from), 0);
+        assert_eq!(e.mem.u32(from + 4), 0);
+        assert_eq!(e.mem.u32(from + 8), 0x3333);
+        assert_eq!(e.mem.u32(from + 0xc), 0xffff_ffff);
+        assert_eq!(e.mem.u32(from + 0x10), (-1.0f32).to_bits());
+        assert_eq!(e.mem.u32(from + 0x14), 0x4444);
+    }
+
+    #[test]
+    fn quiets_signalling_nans_in_the_start_time() {
+        let (mut e, from, to) = fixture();
+        e.set_global(EMPTY_START_TIME, 0x7fa0_0003u32);
+        e.mem.set_u32(from + 0x10, 0xffa0_0001);
+        e.call(0x008c_6130, &args![from, to]);
+        assert_eq!(e.mem.u32(to + 0x10), 0xffe0_0001);
+        assert_eq!(e.mem.u32(from + 0x10), 0x7fe0_0003);
     }
 }

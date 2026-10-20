@@ -328,6 +328,14 @@ pub fn quick_sort_recursive_entities(e: &mut Engine, array: u32, first: i32, las
     }
 }
 
+// Translated from 00d0b5d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: a "less than" comparison for a sort, cdecl, two stack words (nothing
+/// popped): answers 1 when the word at +0xd4 of `a` is below (unsigned) the one of `b`, else 0
+/// (`CMP` / `SBB` / `NEG`). Ghidra made no function here; the address is pushed at 00d0b63f.
+pub fn fn_00d0b5d0(e: &mut Engine, a: u32, b: u32) -> u32 {
+    u32::from(e.mem.u32(a + 0xd4) < e.mem.u32(b + 0xd4))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -343,6 +351,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00e1_0760,
             quick_sort_recursive_entities(u32, i32, i32, u32)
         ),
+        entry!(0x00d0_b5d0, fn_00d0b5d0(u32, u32) -> u32),
     ]
 }
 
@@ -826,5 +835,28 @@ mod movement_tests {
             .map(|phantom| vec![world, *phantom])
             .collect();
         assert_eq!(calls_to(&log, ADD_PHANTOM), added);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+
+    #[test]
+    fn fn_00d0b5d0_compares_the_words_unsigned() {
+        let mut e = Engine::new();
+        for (a, b, expected) in [
+            (1, 2, 1),
+            (2, 1, 0),
+            (2, 2, 0),
+            (0xffff_ffff, 1, 0),
+            (1, 0xffff_ffff, 1),
+        ] {
+            let first = e.mem.alloc(0xe0);
+            let second = e.mem.alloc(0xe0);
+            e.mem.set_u32(first + 0xd4, a);
+            e.mem.set_u32(second + 0xd4, b);
+            assert_eq!(e.call(0x00d0_b5d0, &args![first, second]).u32(), expected);
+        }
     }
 }

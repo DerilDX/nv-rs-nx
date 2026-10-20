@@ -1185,41 +1185,6 @@ impl<'a> SolverMachine<'a> {
         hk_solver_solve_powered_chain(self.e, a, b, c, d, f);
     }
 }
-/// The switch table at `00d8cfa8`: the block each record type jumps to.
-const STEP_JACOBIANS_SWITCH: [u32; 32] = [
-    0x00d8_cf9e,
-    0x00d8_aaf0,
-    0x00d8_cf69,
-    0x00d8_ab09,
-    0x00d8_cf9d,
-    0x00d8_c1a0,
-    0x00d8_c2b2,
-    0x00d8_c3e0,
-    0x00d8_c794,
-    0x00d8_c643,
-    0x00d8_c96d,
-    0x00d8_cc51,
-    0x00d8_c0f0,
-    0x00d8_bcb1,
-    0x00d8_bbaf,
-    0x00d8_becd,
-    0x00d8_b071,
-    0x00d8_b071,
-    0x00d8_b18e,
-    0x00d8_b18e,
-    0x00d8_ab1f,
-    0x00d8_ab1f,
-    0x00d8_b942,
-    0x00d8_b5f0,
-    0x00d8_b421,
-    0x00d8_cde0,
-    0x00d8_cdfb,
-    0x00d8_ce72,
-    0x00d8_cf9d,
-    0x00d8_cf1c,
-    0x00d8_cf45,
-    0x00d8_cf71,
-];
 
 impl SolverMachine<'_> {
     /// The blocks of the function that starts at `0x00d8_aac0`, one arm per block.
@@ -1278,7 +1243,41 @@ impl SolverMachine<'_> {
                     block = 0x00d8_ab18;
                 }
                 0x00d8_ab18 => {
-                    block = STEP_JACOBIANS_SWITCH[self.eax as usize]; // JMP dword ptr [EAX*0x4 + 0xd8cfa8]
+                    block = match self.eax {
+                        0 => 0x00d8_cf9e,
+                        1 => 0x00d8_aaf0,
+                        2 => 0x00d8_cf69,
+                        3 => 0x00d8_ab09,
+                        4 => 0x00d8_cf9d,
+                        5 => 0x00d8_c1a0,
+                        6 => 0x00d8_c2b2,
+                        7 => 0x00d8_c3e0,
+                        8 => 0x00d8_c794,
+                        9 => 0x00d8_c643,
+                        10 => 0x00d8_c96d,
+                        11 => 0x00d8_cc51,
+                        12 => 0x00d8_c0f0,
+                        13 => 0x00d8_bcb1,
+                        14 => 0x00d8_bbaf,
+                        15 => 0x00d8_becd,
+                        16 => 0x00d8_b071,
+                        17 => 0x00d8_b071,
+                        18 => 0x00d8_b18e,
+                        19 => 0x00d8_b18e,
+                        20 => 0x00d8_ab1f,
+                        21 => 0x00d8_ab1f,
+                        22 => 0x00d8_b942,
+                        23 => 0x00d8_b5f0,
+                        24 => 0x00d8_b421,
+                        25 => 0x00d8_cde0,
+                        26 => 0x00d8_cdfb,
+                        27 => 0x00d8_ce72,
+                        28 => 0x00d8_cf9d,
+                        29 => 0x00d8_cf1c,
+                        30 => 0x00d8_cf45,
+                        31 => 0x00d8_cf71,
+                        _ => unreachable!(),
+                    }; // JMP dword ptr [EAX*0x4 + 0xd8cfa8]
                 }
                 0x00d8_ab1f => {
                     self.edx = self.e.mem.u32(self.esp.wrapping_add(0x4c)); // MOV EDX,dword ptr [ESP + 0x4c]
@@ -4290,42 +4289,6 @@ impl SolverMachine<'_> {
     }
 }
 
-/// The switch table at `00d92138`: the block each record type jumps to.
-const BY_THE_STEPS_SWITCH: [u32; 32] = [
-    0x00d9_212a,
-    0x00d8_fbe0,
-    0x00d9_20f5,
-    0x00d8_fbf9,
-    0x00d9_2129,
-    0x00d9_1320,
-    0x00d9_1430,
-    0x00d9_1560,
-    0x00d9_1920,
-    0x00d9_17c9,
-    0x00d9_1af9,
-    0x00d9_1ddd,
-    0x00d9_1271,
-    0x00d9_0e30,
-    0x00d9_0d29,
-    0x00d9_1058,
-    0x00d9_01dd,
-    0x00d9_01dd,
-    0x00d9_0304,
-    0x00d9_0304,
-    0x00d8_fc0f,
-    0x00d8_fc0f,
-    0x00d9_0abc,
-    0x00d9_076a,
-    0x00d9_0598,
-    0x00d9_1f6c,
-    0x00d9_1f87,
-    0x00d9_1ffe,
-    0x00d9_2129,
-    0x00d9_20a8,
-    0x00d9_20d1,
-    0x00d9_20fd,
-];
-
 impl SolverMachine<'_> {
     /// The blocks of the function that starts at `0x00d8_fb70`, one arm per block.
     fn run_by_the_steps(&mut self) -> u32 {
@@ -4432,7 +4395,41 @@ impl SolverMachine<'_> {
                     block = 0x00d8_fc08;
                 }
                 0x00d8_fc08 => {
-                    block = BY_THE_STEPS_SWITCH[self.eax as usize]; // JMP dword ptr [EAX*0x4 + 0xd92138]
+                    block = match self.eax {
+                        0 => 0x00d9_212a,
+                        1 => 0x00d8_fbe0,
+                        2 => 0x00d9_20f5,
+                        3 => 0x00d8_fbf9,
+                        4 => 0x00d9_2129,
+                        5 => 0x00d9_1320,
+                        6 => 0x00d9_1430,
+                        7 => 0x00d9_1560,
+                        8 => 0x00d9_1920,
+                        9 => 0x00d9_17c9,
+                        10 => 0x00d9_1af9,
+                        11 => 0x00d9_1ddd,
+                        12 => 0x00d9_1271,
+                        13 => 0x00d9_0e30,
+                        14 => 0x00d9_0d29,
+                        15 => 0x00d9_1058,
+                        16 => 0x00d9_01dd,
+                        17 => 0x00d9_01dd,
+                        18 => 0x00d9_0304,
+                        19 => 0x00d9_0304,
+                        20 => 0x00d8_fc0f,
+                        21 => 0x00d8_fc0f,
+                        22 => 0x00d9_0abc,
+                        23 => 0x00d9_076a,
+                        24 => 0x00d9_0598,
+                        25 => 0x00d9_1f6c,
+                        26 => 0x00d9_1f87,
+                        27 => 0x00d9_1ffe,
+                        28 => 0x00d9_2129,
+                        29 => 0x00d9_20a8,
+                        30 => 0x00d9_20d1,
+                        31 => 0x00d9_20fd,
+                        _ => unreachable!(),
+                    }; // JMP dword ptr [EAX*0x4 + 0xd92138]
                 }
                 0x00d8_fc0f => {
                     self.edx = self.e.mem.u32(self.esp.wrapping_add(0x4c)); // MOV EDX,dword ptr [ESP + 0x4c]

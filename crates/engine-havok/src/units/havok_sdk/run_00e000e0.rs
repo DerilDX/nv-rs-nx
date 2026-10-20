@@ -262,6 +262,323 @@ pub fn fn_00e006d0(e: &mut Engine, this: Ptr, mode: u32) -> Ptr {
     this
 }
 
+// Translated from 00e000a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc53d9.
+pub fn fn_00e000a0(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e000c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: two stack words `object` and `extra` (cdecl, nothing popped). When
+/// `object` is not null, runs `00d50c00` on it (`this` in `ECX`, `extra` pushed and popped by the
+/// callee); returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc53cf.
+pub fn fn_00e000c0(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        e.call(0x00d5_0c00, &args![object, extra]);
+    }
+}
+
+// Translated from 00e00100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5449.
+pub fn fn_00e00100(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: two stack words `object` and `mode` (cdecl, nothing popped). When
+/// `object` is not null it writes the vtable word `010c59f4` at its start; when `mode` is not zero it
+/// then stores the high 16 bits of the float 1.0 (`FLD1`, `FSTP` into the stack slot of the first
+/// argument, `SAR 16`), `0x3f80`, in the 16-bit word at `+0x11e`; and it ends with the vtable word
+/// `010c6cdc`. Returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc543f.
+pub fn fn_00e00120(e: &mut Engine, object: Ptr, mode: u32) {
+    let base = object.addr();
+    if base != 0 {
+        e.mem.set_u32(base, 0x010c_59f4);
+        if mode != 0 {
+            let one = 1.0f32.to_bits() as i32;
+            e.mem.set_u16(base + 0x11e, (one >> 16) as u16);
+        }
+        e.mem.set_u32(base, 0x010c_6cdc);
+    }
+}
+
+// Translated from 00e00160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc54b9.
+pub fn fn_00e00160(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010e81a4` at its
+/// start. It takes a second stack word, `_unused_1`, that it never reads (cdecl, nothing popped);
+/// `hkTypeInfoRegistry::finishLoadedObject` (`00d47900`) calls an entry's `+4` function with two words.
+/// Ghidra made no function here; the address is an immediate operand at 00fc54af.
+pub fn fn_00e00180(e: &mut Engine, object: Ptr, _unused_1: u32) {
+    if object.addr() != 0 {
+        e.mem.set_u32(object.addr(), 0x010e_81a4);
+    }
+}
+
+// Translated from 00e001a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5529.
+pub fn fn_00e001a0(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5599.
+pub fn fn_00e00220(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e002d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5609.
+pub fn fn_00e002d0(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e002f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: two stack words `object` and `mode` (cdecl, nothing popped). When
+/// `object` is not null it writes the vtable word `010c59f4` at its start; when `mode` is not zero it
+/// then stores the high 16 bits of the float 1.0 (`FLD1`, `FSTP` into the stack slot of the first
+/// argument, `SAR 16`), `0x3f80`, in the 16-bit word at `+0x11e`; and it ends with the vtable word
+/// `010c6ea4`. Returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc55ff.
+pub fn fn_00e002f0(e: &mut Engine, object: Ptr, mode: u32) {
+    let base = object.addr();
+    if base != 0 {
+        e.mem.set_u32(base, 0x010c_59f4);
+        if mode != 0 {
+            let one = 1.0f32.to_bits() as i32;
+            e.mem.set_u16(base + 0x11e, (one >> 16) as u16);
+        }
+        e.mem.set_u32(base, 0x010c_6ea4);
+    }
+}
+
+// Translated from 00e00330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5699.
+pub fn fn_00e00330(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010e83b4` at its
+/// start. It takes a second stack word, `_unused_1`, that it never reads (cdecl, nothing popped);
+/// `hkTypeInfoRegistry::finishLoadedObject` (`00d47900`) calls an entry's `+4` function with two words.
+/// Ghidra made no function here; the address is an immediate operand at 00fc568f.
+pub fn fn_00e00350(e: &mut Engine, object: Ptr, _unused_1: u32) {
+    if object.addr() != 0 {
+        e.mem.set_u32(object.addr(), 0x010e_83b4);
+    }
+}
+
+// Translated from 00e00370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5719.
+pub fn fn_00e00370(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: two stack words `object` and `extra` (cdecl, nothing popped). When
+/// `object` is not null, runs `00e003d0` on it (`this` in `ECX`, `extra` pushed and popped by the
+/// callee); returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc570f.
+pub fn fn_00e00390(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        fn_00e003d0(e, object, extra);
+    }
+}
+
+// Translated from 00e00430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5789.
+pub fn fn_00e00430(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: two stack words `object` and `mode` (cdecl, nothing popped). When
+/// `object` is not null it writes the vtable word `010c59f4` at its start; when `mode` is not zero it
+/// then stores the high 16 bits of the float 1.0 (`FLD1`, `FSTP` into the stack slot of the first
+/// argument, `SAR 16`), `0x3f80`, in the 16-bit word at `+0x11e`; and it ends with the vtable word
+/// `010c6dc4`. Returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc577f.
+pub fn fn_00e00450(e: &mut Engine, object: Ptr, mode: u32) {
+    let base = object.addr();
+    if base != 0 {
+        e.mem.set_u32(base, 0x010c_59f4);
+        if mode != 0 {
+            let one = 1.0f32.to_bits() as i32;
+            e.mem.set_u16(base + 0x11e, (one >> 16) as u16);
+        }
+        e.mem.set_u32(base, 0x010c_6dc4);
+    }
+}
+
+// Translated from 00e00490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5809.
+pub fn fn_00e00490(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e004b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: two stack words `object` and `extra` (cdecl, nothing popped). When
+/// `object` is not null, runs `00e004f0` on it (`this` in `ECX`, `extra` pushed and popped by the
+/// callee); returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc57ff.
+pub fn fn_00e004b0(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        fn_00e004f0(e, object, extra);
+    }
+}
+
+// Translated from 00e00550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5899.
+pub fn fn_00e00550(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: two stack words `object` and `mode` (cdecl, nothing popped); a
+/// constructor chain the compiler collapsed. When `object` is not null it writes the vtable word
+/// `010305a8` at its start, the word 0 at `+0xc` when `mode` is not zero, then the vtable word
+/// `010c749c`, and `0x3` at `+0xc` whatever `mode` is; returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc588f.
+pub fn fn_00e00570(e: &mut Engine, object: Ptr, mode: u32) {
+    let base = object.addr();
+    if base != 0 {
+        e.mem.set_u32(base, 0x0103_05a8);
+        if mode != 0 {
+            e.mem.set_u32(base + 0xc, 0);
+        }
+        e.mem.set_u32(base, 0x010c_749c);
+        e.mem.set_u32(base + 0xc, 0x3);
+    }
+}
+
+// Translated from 00e005b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5909.
+pub fn fn_00e005b0(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e005d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: two stack words `object` and `extra` (cdecl, nothing popped). When
+/// `object` is not null, runs `00e00610` on it (`this` in `ECX`, `extra` pushed and popped by the
+/// callee); returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc58ff.
+pub fn fn_00e005d0(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        fn_00e00610(e, object, extra);
+    }
+}
+
+// Translated from 00e00670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5979.
+pub fn fn_00e00670(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: two stack words `object` and `extra` (cdecl, nothing popped). When
+/// `object` is not null, runs `00e006d0` on it (`this` in `ECX`, `extra` pushed and popped by the
+/// callee); returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc596f.
+pub fn fn_00e00690(e: &mut Engine, object: Ptr, extra: u32) {
+    if object.addr() != 0 {
+        fn_00e006d0(e, object, extra);
+    }
+}
+
+// Translated from 00e00720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc59e9.
+pub fn fn_00e00720(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: two stack words `object` and `mode` (cdecl, nothing popped); a
+/// constructor chain the compiler collapsed. When `object` is not null it writes the vtable word
+/// `010305a8` at its start, the word 0 at `+0xc` when `mode` is not zero, then the vtable word
+/// `010cc41c`, the word `010c6fd0` at `+0x10`, and `0xf` at `+0xc` whatever `mode` is; returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc59df.
+pub fn fn_00e00740(e: &mut Engine, object: Ptr, mode: u32) {
+    let base = object.addr();
+    if base != 0 {
+        e.mem.set_u32(base, 0x0103_05a8);
+        if mode != 0 {
+            e.mem.set_u32(base + 0xc, 0);
+        }
+        e.mem.set_u32(base, 0x010c_c41c);
+        e.mem.set_u32(base + 0x10, 0x010c_6fd0);
+        e.mem.set_u32(base + 0xc, 0xf);
+    }
+}
+
+// Translated from 00e00790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5a59.
+pub fn fn_00e00790(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e007b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: two stack words `object` and `mode` (cdecl, nothing popped); a
+/// constructor chain the compiler collapsed. When `object` is not null it writes the vtable word
+/// `010305a8` at its start, the word 0 at `+0xc` when `mode` is not zero, then the vtable word
+/// `010cb5ac`, and `0x1` at `+0xc` whatever `mode` is; returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5a4f.
+pub fn fn_00e007b0(e: &mut Engine, object: Ptr, mode: u32) {
+    let base = object.addr();
+    if base != 0 {
+        e.mem.set_u32(base, 0x0103_05a8);
+        if mode != 0 {
+            e.mem.set_u32(base + 0xc, 0);
+        }
+        e.mem.set_u32(base, 0x010c_b5ac);
+        e.mem.set_u32(base + 0xc, 0x1);
+    }
+}
+
+// Translated from 00e007f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: one stack word `object` (cdecl, nothing popped). Calls the virtual
+/// function in slot 0 of `object`'s vtable on it (`this` in `ECX`) with the word 0, which the callee
+/// pops, and returns nothing. Ghidra made no function here; the address is an immediate operand at 00fc5ac9.
+pub fn fn_00e007f0(e: &mut Engine, object: Ptr) {
+    e.vcall(object.addr(), 0, &args![0u32]);
+}
+
+// Translated from 00e00810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No name in the engine map: when `object` is not null, writes the vtable word `010e8824` at its
+/// start. It takes a second stack word, `_unused_1`, that it never reads (cdecl, nothing popped);
+/// `hkTypeInfoRegistry::finishLoadedObject` (`00d47900`) calls an entry's `+4` function with two words.
+/// Ghidra made no function here; the address is an immediate operand at 00fc5abf.
+pub fn fn_00e00810(e: &mut Engine, object: Ptr, _unused_1: u32) {
+    if object.addr() != 0 {
+        e.mem.set_u32(object.addr(), 0x010e_8824);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -287,6 +604,36 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e0_04f0, fn_00e004f0(Ptr, u32) -> Ptr),
         entry!(0x00e0_0610, fn_00e00610(Ptr, u32) -> Ptr),
         entry!(0x00e0_06d0, fn_00e006d0(Ptr, u32) -> Ptr),
+        entry!(0x00e0_00a0, fn_00e000a0(Ptr)),
+        entry!(0x00e0_00c0, fn_00e000c0(Ptr, u32)),
+        entry!(0x00e0_0100, fn_00e00100(Ptr)),
+        entry!(0x00e0_0120, fn_00e00120(Ptr, u32)),
+        entry!(0x00e0_0160, fn_00e00160(Ptr)),
+        entry!(0x00e0_0180, fn_00e00180(Ptr, u32)),
+        entry!(0x00e0_01a0, fn_00e001a0(Ptr)),
+        entry!(0x00e0_0220, fn_00e00220(Ptr)),
+        entry!(0x00e0_02d0, fn_00e002d0(Ptr)),
+        entry!(0x00e0_02f0, fn_00e002f0(Ptr, u32)),
+        entry!(0x00e0_0330, fn_00e00330(Ptr)),
+        entry!(0x00e0_0350, fn_00e00350(Ptr, u32)),
+        entry!(0x00e0_0370, fn_00e00370(Ptr)),
+        entry!(0x00e0_0390, fn_00e00390(Ptr, u32)),
+        entry!(0x00e0_0430, fn_00e00430(Ptr)),
+        entry!(0x00e0_0450, fn_00e00450(Ptr, u32)),
+        entry!(0x00e0_0490, fn_00e00490(Ptr)),
+        entry!(0x00e0_04b0, fn_00e004b0(Ptr, u32)),
+        entry!(0x00e0_0550, fn_00e00550(Ptr)),
+        entry!(0x00e0_0570, fn_00e00570(Ptr, u32)),
+        entry!(0x00e0_05b0, fn_00e005b0(Ptr)),
+        entry!(0x00e0_05d0, fn_00e005d0(Ptr, u32)),
+        entry!(0x00e0_0670, fn_00e00670(Ptr)),
+        entry!(0x00e0_0690, fn_00e00690(Ptr, u32)),
+        entry!(0x00e0_0720, fn_00e00720(Ptr)),
+        entry!(0x00e0_0740, fn_00e00740(Ptr, u32)),
+        entry!(0x00e0_0790, fn_00e00790(Ptr)),
+        entry!(0x00e0_07b0, fn_00e007b0(Ptr, u32)),
+        entry!(0x00e0_07f0, fn_00e007f0(Ptr)),
+        entry!(0x00e0_0810, fn_00e00810(Ptr, u32)),
     ]
 }
 
@@ -669,5 +1016,293 @@ mod tests_a05 {
         e.call(0x00e0_06d0, &args![this, 5u32]);
         assert_eq!(e.mem.u32(this + 0xc), 8);
         assert_eq!(e.mem.u8(this + 0x10), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_a01 {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type CallLog = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    /// Address the tests give to a virtual function (slot 0 of the object's vtable).
+    const SLOT_DOUBLE: u32 = 0x0900_0011;
+
+    /// Double over `address` that logs the words of each call.
+    fn logging_double(e: &mut Engine, address: u32) -> CallLog {
+        let log: CallLog = Rc::default();
+        let seen = Rc::clone(&log);
+        e.register_double(address, move |_, a| {
+            seen.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        log
+    }
+
+    /// Slot 0 of the object's vtable is a double: it runs once with `(object, 0)`.
+    fn check_cleanup(address: u32) {
+        let mut e = Engine::new();
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, SLOT_DOUBLE);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        let log = logging_double(&mut e, SLOT_DOUBLE);
+        e.call(address, &args![object]);
+        assert_eq!(*log.borrow(), vec![vec![object, 0]]);
+    }
+
+    /// A null object writes nothing (a write at address 0 would stop the test); otherwise only the
+    /// first word of the object changes.
+    fn check_vtable_store(address: u32, vtable: u32) {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x20);
+        e.mem.write(object, &[0x77; 0x20]);
+        e.call(address, &args![0u32, 5u32]);
+        e.call(address, &args![object, 5u32]);
+        assert_eq!(e.mem.u32(object), vtable);
+        assert_eq!(e.mem.bytes(object + 4, 0x1c), vec![0x77; 0x1c]);
+    }
+
+    /// The callee runs only for a non-null object, with `(object, extra)`.
+    fn check_forward(address: u32, callee: u32) {
+        let mut e = Engine::new();
+        let log = logging_double(&mut e, callee);
+        e.call(address, &args![0u32, 7u32]);
+        assert!(log.borrow().is_empty());
+        e.call(address, &args![0x2000u32, 7u32]);
+        assert_eq!(*log.borrow(), vec![vec![0x2000, 7]]);
+    }
+
+    /// With either `mode` the object ends with the final vtable word, the extra words and `value`
+    /// at `+0xc`; the words around them stay as they were.
+    fn check_staged(address: u32, vtable: u32, extras: &[(u32, u32)], value: u32) {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x40);
+        e.call(address, &args![0u32, 1u32]);
+        for mode in [0u32, 1] {
+            e.mem.write(object, &[0x66; 0x40]);
+            e.call(address, &args![object, mode]);
+            assert_eq!(e.mem.u32(object), vtable);
+            assert_eq!(e.mem.u32(object + 0xc), value);
+            for offset in [4, 8, 0x10, 0x14, 0x18] {
+                let expected = extras
+                    .iter()
+                    .find(|(at, _)| *at == offset)
+                    .map_or(0x6666_6666, |(_, word)| *word);
+                assert_eq!(e.mem.u32(object + offset), expected);
+            }
+        }
+    }
+
+    /// The 16-bit word at `+0x11e` takes the high half of 1.0f only when `mode` is not zero; the
+    /// object ends with `vtable` either way.
+    fn check_half(address: u32, vtable: u32) {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x130);
+        e.call(address, &args![0u32, 1u32]);
+        e.mem.write(object, &[0x66; 0x130]);
+        e.call(address, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), vtable);
+        assert_eq!(e.mem.u16(object + 0x11e), 0x6666);
+        e.call(address, &args![object, 9u32]);
+        assert_eq!(e.mem.u32(object), vtable);
+        assert_eq!(e.mem.u16(object + 0x11e), 0x3f80);
+        assert_eq!(e.mem.u16(object + 0x11c), 0x6666);
+        assert_eq!(e.mem.u16(object + 0x120), 0x6666);
+    }
+
+    /// A constructor over the base constructor `00cd2c50` (a double): it runs only for a non-null
+    /// object, with `(object, extra)`, and the object then ends with `vtable` and the three empty
+    /// arrays (`0x80000000` in their last word) at `+0x8c`, `+0x98` and `tail`.
+    fn check_over_base(address: u32, vtable: u32, tail: u32) {
+        let mut e = Engine::new();
+        let log = logging_double(&mut e, 0x00cd_2c50);
+        let object = e.mem.alloc(0x170);
+        e.mem.write(object, &[0x55; 0x170]);
+        e.call(address, &args![0u32, 9u32]);
+        assert!(log.borrow().is_empty());
+        e.call(address, &args![object, 9u32]);
+        assert_eq!(*log.borrow(), vec![vec![object, 9]]);
+        assert_eq!(e.mem.u32(object), vtable);
+        for offset in [0x8c, 0x90, 0x98, 0x9c, tail, tail + 4] {
+            assert_eq!(e.mem.u32(object + offset), 0);
+        }
+        for offset in [0x94, 0xa0, tail + 8] {
+            assert_eq!(e.mem.u32(object + offset), 0x8000_0000);
+        }
+    }
+
+    #[test]
+    fn fn_00e000a0_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_00a0);
+    }
+
+    #[test]
+    fn fn_00e000c0_runs_the_constructor_on_a_non_null_object() {
+        check_forward(0x00e0_00c0, 0x00d5_0c00);
+    }
+
+    #[test]
+    fn fn_00e00100_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_0100);
+    }
+
+    #[test]
+    fn fn_00e00120_stores_the_half_float_one_only_when_mode_is_set() {
+        check_half(0x00e0_0120, 0x010c_6cdc);
+    }
+
+    #[test]
+    fn fn_00e00160_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_0160);
+    }
+
+    #[test]
+    fn fn_00e00180_stores_its_vtable_word() {
+        check_vtable_store(0x00e0_0180, 0x010e_81a4);
+    }
+
+    #[test]
+    fn fn_00e001a0_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_01a0);
+    }
+
+    #[test]
+    fn fn_00e00220_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_0220);
+    }
+
+    #[test]
+    fn fn_00e002d0_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_02d0);
+    }
+
+    #[test]
+    fn fn_00e002f0_stores_the_half_float_one_only_when_mode_is_set() {
+        check_half(0x00e0_02f0, 0x010c_6ea4);
+    }
+
+    #[test]
+    fn fn_00e00330_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_0330);
+    }
+
+    #[test]
+    fn fn_00e00350_stores_its_vtable_word() {
+        check_vtable_store(0x00e0_0350, 0x010e_83b4);
+    }
+
+    #[test]
+    fn fn_00e00370_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_0370);
+    }
+
+    #[test]
+    fn fn_00e00430_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_0430);
+    }
+
+    #[test]
+    fn fn_00e00450_stores_the_half_float_one_only_when_mode_is_set() {
+        check_half(0x00e0_0450, 0x010c_6dc4);
+    }
+
+    #[test]
+    fn fn_00e00490_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_0490);
+    }
+
+    #[test]
+    fn fn_00e00550_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_0550);
+    }
+
+    #[test]
+    fn fn_00e00570_writes_the_final_vtable_and_the_value() {
+        check_staged(0x00e0_0570, 0x010c_749c, &[], 0x3);
+    }
+
+    #[test]
+    fn fn_00e005b0_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_05b0);
+    }
+
+    #[test]
+    fn fn_00e00670_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_0670);
+    }
+
+    #[test]
+    fn fn_00e00720_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_0720);
+    }
+
+    #[test]
+    fn fn_00e00740_writes_the_final_vtable_and_the_value() {
+        check_staged(0x00e0_0740, 0x010c_c41c, &[(0x10, 0x010c_6fd0)], 0xf);
+    }
+
+    #[test]
+    fn fn_00e00790_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_0790);
+    }
+
+    #[test]
+    fn fn_00e007b0_writes_the_final_vtable_and_the_value() {
+        check_staged(0x00e0_07b0, 0x010c_b5ac, &[], 0x1);
+    }
+
+    #[test]
+    fn fn_00e007f0_calls_slot_zero_with_zero() {
+        check_cleanup(0x00e0_07f0);
+    }
+
+    #[test]
+    fn fn_00e00810_stores_its_vtable_word() {
+        check_vtable_store(0x00e0_0810, 0x010e_8824);
+    }
+
+    #[test]
+    fn fn_00e00390_constructs_over_the_base_for_a_non_null_object() {
+        check_over_base(0x00e0_0390, 0x010d_087c, 0x160);
+    }
+
+    #[test]
+    fn fn_00e004b0_constructs_over_the_base_for_a_non_null_object() {
+        check_over_base(0x00e0_04b0, 0x010c_c004, 0xd0);
+    }
+
+    #[test]
+    fn fn_00e005d0_runs_the_staged_constructor_for_a_non_null_object() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x20);
+        e.call(0x00e0_05d0, &args![0u32, 5u32]);
+        e.mem.write(object, &[0x66; 0x20]);
+        e.call(0x00e0_05d0, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x010c_e390);
+        assert_eq!(e.mem.u32(object + 0x10), 0x010c_e370);
+        assert_eq!(e.mem.u32(object + 0xc), 0x6666_6666);
+        assert_eq!(e.mem.u8(object + 0x15), 0x66);
+        e.call(0x00e0_05d0, &args![object, 5u32]);
+        assert_eq!(e.mem.u32(object + 0xc), 7);
+        assert_eq!(e.mem.u8(object + 0x15), 2);
+    }
+
+    #[test]
+    fn fn_00e00690_runs_the_staged_constructor_for_a_non_null_object() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x20);
+        e.call(0x00e0_0690, &args![0u32, 5u32]);
+        e.mem.write(object, &[0x66; 0x20]);
+        e.call(0x00e0_0690, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object), 0x010c_e404);
+        assert_eq!(e.mem.u32(object + 0x14), 0x010c_6fd0);
+        assert_eq!(e.mem.u32(object + 0xc), 0x6666_6666);
+        assert_eq!(e.mem.u8(object + 0x10), 0x66);
+        e.call(0x00e0_0690, &args![object, 5u32]);
+        assert_eq!(e.mem.u32(object + 0xc), 8);
+        assert_eq!(e.mem.u8(object + 0x10), 1);
     }
 }
