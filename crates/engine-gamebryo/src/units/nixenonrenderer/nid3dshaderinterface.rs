@@ -61,12 +61,122 @@ pub fn ni_d3d_shader_interface_initialize_shader_system(e: &mut Engine, renderer
     0
 }
 
+// Translated from 00e818d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderInterface::SetD3DRenderer` (engine map), `thiscall` with the renderer: keeps it
+/// at +0x18. With a renderer, the device held at +0x14 is released (its slot 8, `stdcall`) and
+/// replaced by the renderer's device (+0x288; counted through its slot 4 when not null), and
+/// the renderer's shader library (+0x8b8) is kept at +0x1c. Without one +0x1c is cleared, the
+/// held device released and +0x14 cleared.
+pub fn ni_d3d_shader_interface_set_d3d_renderer(e: &mut Engine, this: Ptr, renderer: u32) {
+    let base = this.addr();
+    e.mem.set_u32(base.wrapping_add(0x18), renderer);
+    if renderer != 0 {
+        let device = e.mem.u32(renderer.wrapping_add(0x288));
+        let held = e.mem.u32(base.wrapping_add(0x14));
+        if held != 0 {
+            e.vcall(held, 8, &args![]);
+        }
+        e.mem.set_u32(base.wrapping_add(0x14), device);
+        if device != 0 {
+            e.vcall(device, 4, &args![]);
+        }
+        let renderer = e.mem.u32(base.wrapping_add(0x18));
+        let library = e.mem.u32(renderer.wrapping_add(0x8b8));
+        e.mem.set_u32(base.wrapping_add(0x1c), library);
+        return;
+    }
+    let held = e.mem.u32(base.wrapping_add(0x14));
+    e.mem.set_u32(base.wrapping_add(0x1c), 0);
+    if held != 0 {
+        e.vcall(held, 8, &args![]);
+    }
+    e.mem.set_u32(base.wrapping_add(0x14), 0);
+}
+
+/// What `00e819f0` runs: the shader factory's clean-up `00aa0000` (no arguments) and the
+/// program factory's `00e92ec0` (unnamed, no arguments).
+const FACTORY_CLEAN_UP_00AA0000: u32 = 0x00aa_0000;
+const PROGRAM_FACTORY_00E92EC0: u32 = 0x00e9_2ec0;
+
+// Translated from 00e819f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nid3dshaderinterface.cpp`): the shader system's shut-down, no
+/// arguments, answers 0. When `00e91f10` answers an object: `00aa0000`, then the object's
+/// virtual slot 0x70 with 0. Then `00e7f920` and `00e7e8d0` with 0, the shader library global
+/// `0126f99c` cleared, `00e92ec0`, and `00e92f70`, `00e93f50`, `00e7eea0` with 0 (the same
+/// set-up calls `InitializeShaderSystem` makes with the renderer).
+pub fn fn_00e819f0(e: &mut Engine) -> u32 {
+    let object = e.call(GETTER_00E91F10, &args![]).u32();
+    if object != 0 {
+        e.call(FACTORY_CLEAN_UP_00AA0000, &args![]);
+        e.vcall(object, 0x70, &args![0u32]);
+    }
+    e.call(SET_UP_00E7F920, &args![0u32]);
+    e.call(SET_UP_00E7E8D0, &args![0u32]);
+    e.mem.set_u32(SHADER_LIBRARY_0126F99C, 0);
+    e.call(PROGRAM_FACTORY_00E92EC0, &args![]);
+    e.call(SET_UP_00E92F70, &args![0u32]);
+    e.call(SET_UP_00E93F50, &args![0u32]);
+    e.call(SET_UP_00E7EEA0, &args![0u32]);
+    0
+}
+
+/// The interface's table (`010ef39c`, RTTI `.?AVNiD3DShaderInterface@@`) and the `NiShader`
+/// base destructor `00a8f490` (unit `nishader.cpp`; `thiscall`, no stack words).
+const SHADER_INTERFACE_VTABLE_010EF39C: u32 = 0x010e_f39c;
+const NI_SHADER_DESTRUCT_00A8F490: u32 = 0x00a8_f490;
+
+// Translated from 00e81a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`nid3dshaderinterface.cpp`): the `NiD3DShaderInterface`
+/// destructor, `thiscall`, no stack words. Stores the table `010ef39c`, clears the renderer
+/// (+0x18) and the library (+0x1c), releases the held device (+0x14, slot 8) and clears it,
+/// then runs the `NiShader` destructor `00a8f490` (a tail jump).
+pub fn fn_00e81a50(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let held = e.mem.u32(base.wrapping_add(0x14));
+    e.mem.set_u32(base, SHADER_INTERFACE_VTABLE_010EF39C);
+    e.mem.set_u32(base.wrapping_add(0x18), 0);
+    e.mem.set_u32(base.wrapping_add(0x1c), 0);
+    if held != 0 {
+        e.vcall(held, 8, &args![]);
+    }
+    e.mem.set_u32(base.wrapping_add(0x14), 0);
+    e.call(NI_SHADER_DESTRUCT_00A8F490, &args![base]);
+}
+
+/// The renderer global (`011f4748`) and `NiShader::Initialize` (`00a8f3d0`, engine map;
+/// `thiscall`, no stack words).
+const RENDERER_011F4748: u32 = 0x011f_4748;
+const NI_SHADER_INITIALIZE_00A8F3D0: u32 = 0x00a8_f3d0;
+
+// Translated from 00e81a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderInterface::Initialize` (engine map), `thiscall`, no stack words. Without a
+/// renderer in `011f4748` answers 0 (the whole of EAX is the null global with AL cleared);
+/// otherwise sets it (`SetD3DRenderer`) and answers what `NiShader::Initialize` (`00a8f3d0`,
+/// a tail jump) answers.
+pub fn ni_d3d_shader_interface_initialize(e: &mut Engine, this: Ptr) -> u32 {
+    let renderer = e.mem.u32(RENDERER_011F4748);
+    if renderer == 0 {
+        return 0;
+    }
+    ni_d3d_shader_interface_set_d3d_renderer(e, this, renderer);
+    e.call(NI_SHADER_INITIALIZE_00A8F3D0, &args![this]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00e8_1940,
-        ni_d3d_shader_interface_initialize_shader_system(u32) -> u32
-    )]
+    vec![
+        entry!(
+            0x00e8_1940,
+            ni_d3d_shader_interface_initialize_shader_system(u32) -> u32
+        ),
+        entry!(
+            0x00e8_18d0,
+            ni_d3d_shader_interface_set_d3d_renderer(Ptr, u32)
+        ),
+        entry!(0x00e8_19f0, fn_00e819f0() -> u32),
+        entry!(0x00e8_1a50, fn_00e81a50(Ptr)),
+        entry!(0x00e8_1a90, ni_d3d_shader_interface_initialize(Ptr) -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -143,5 +253,144 @@ mod b000v_tests {
         e.call(0x00e8_1940, &args![renderer]);
         assert!(calls(&e, PROGRAM_FACTORY_CONSTRUCT_00E93AD0).is_empty());
         assert_eq!(calls(&e, REPORT_00A29680).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod b052_tests {
+    use super::*;
+
+    const ADD_REF: u32 = 0x0e20_0004;
+    const RELEASE: u32 = 0x0e20_0008;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// An engine with a counted device (`AddRef`/`Release` doubles) and a renderer holding it.
+    fn rig() -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        e.register(ADD_REF, |_, _| Ret::default());
+        e.register(RELEASE, |_, _| Ret::default());
+        e.put_vtable(0x0e21_0000, &[0, ADD_REF, RELEASE]);
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(device, 0x0e21_0000);
+        let renderer = e.mem.alloc(0x900);
+        e.mem.set_u32(renderer + 0x288, device);
+        e.mem.set_u32(renderer + 0x8b8, 0x4444);
+        (e, renderer, device)
+    }
+
+    #[test]
+    fn set_d3d_renderer_swaps_the_device_and_keeps_the_library() {
+        let (mut e, renderer, device) = rig();
+        let this = e.mem.alloc(0x24);
+        let old = e.mem.alloc(4);
+        e.mem.set_u32(old, 0x0e21_0000);
+        e.mem.set_u32(this + 0x14, old);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_18d0, &args![this, renderer]);
+        assert_eq!(calls(&e, RELEASE), vec![vec![old]]);
+        assert_eq!(calls(&e, ADD_REF), vec![vec![device]]);
+        assert_eq!(e.mem.u32(this + 0x14), device);
+        assert_eq!(e.mem.u32(this + 0x18), renderer);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x4444);
+        // No renderer: everything cleared and the device released.
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_18d0, &args![this, 0u32]);
+        assert_eq!(calls(&e, RELEASE), vec![vec![device]]);
+        assert_eq!(e.mem.bytes(this + 0x14, 0xc), vec![0; 0xc]);
+    }
+
+    #[test]
+    fn fn_00e819f0_shuts_the_system_down() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.mem.set_u32(SHADER_LIBRARY_0126F99C, 9);
+        let mut slots = vec![0u32; 0x1d];
+        slots[0x1c] = 0x0e22_0070;
+        e.put_vtable(0x0e23_0000, &slots);
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(object, 0x0e23_0000);
+        for no_op in [
+            FACTORY_CLEAN_UP_00AA0000,
+            0x0e22_0070,
+            SET_UP_00E7F920,
+            SET_UP_00E7E8D0,
+            PROGRAM_FACTORY_00E92EC0,
+            SET_UP_00E92F70,
+            SET_UP_00E93F50,
+            SET_UP_00E7EEA0,
+        ] {
+            e.register(no_op, |_, _| Ret::default());
+        }
+        e.register_double(GETTER_00E91F10, move |_, _| object.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e8_19f0, &args![]).u32(), 0);
+        let order: Vec<u32> = e
+            .call_log
+            .take()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .map(|c| c.0)
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                GETTER_00E91F10,
+                FACTORY_CLEAN_UP_00AA0000,
+                0x0e22_0070,
+                SET_UP_00E7F920,
+                SET_UP_00E7E8D0,
+                PROGRAM_FACTORY_00E92EC0,
+                SET_UP_00E92F70,
+                SET_UP_00E93F50,
+                SET_UP_00E7EEA0
+            ]
+        );
+        assert_eq!(e.mem.u32(SHADER_LIBRARY_0126F99C), 0);
+        // Without an object neither the clean-up nor the slot runs.
+        e.register(GETTER_00E91F10, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_19f0, &args![]);
+        assert!(calls(&e, FACTORY_CLEAN_UP_00AA0000).is_empty());
+    }
+
+    #[test]
+    fn fn_00e81a50_releases_and_runs_the_base_destructor() {
+        let (mut e, _, device) = rig();
+        e.register(NI_SHADER_DESTRUCT_00A8F490, |_, _| Ret::default());
+        let this = e.mem.alloc(0x24);
+        e.mem.set_u32(this + 0x14, device);
+        e.mem.set_u32(this + 0x18, 1);
+        e.mem.set_u32(this + 0x1c, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_1a50, &args![this]);
+        assert_eq!(calls(&e, RELEASE), vec![vec![device]]);
+        assert_eq!(calls(&e, NI_SHADER_DESTRUCT_00A8F490), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), SHADER_INTERFACE_VTABLE_010EF39C);
+        assert_eq!(e.mem.bytes(this + 0x14, 0xc), vec![0; 0xc]);
+    }
+
+    #[test]
+    fn initialize_needs_the_renderer() {
+        let (mut e, renderer, device) = rig();
+        e.map(0x011f_4000, 0x1000);
+        e.register(NI_SHADER_INITIALIZE_00A8F3D0, |_, _| 0x101u32.into_ret());
+        let this = e.mem.alloc(0x24);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e8_1a90, &args![this]).u32(), 0);
+        assert!(calls(&e, NI_SHADER_INITIALIZE_00A8F3D0).is_empty());
+        e.mem.set_u32(RENDERER_011F4748, renderer);
+        assert_eq!(e.call(0x00e8_1a90, &args![this]).u32(), 0x101);
+        assert_eq!(e.mem.u32(this + 0x14), device);
+        assert_eq!(calls(&e, NI_SHADER_INITIALIZE_00A8F3D0), vec![vec![this]]);
     }
 }

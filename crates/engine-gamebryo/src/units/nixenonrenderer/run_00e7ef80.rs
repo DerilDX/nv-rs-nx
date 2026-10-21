@@ -471,7 +471,132 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e7_f320, fn_00e7f320(Ptr)),
         entry!(0x00e7_f0a0, fn_00e7f0a0(u32) -> u32),
         entry!(0x00e7_f0f0, fn_00e7f0f0(Ptr, u32) -> Ptr),
+        entry!(0x00e7_f050, fn_00e7f050(Ptr, u32) -> Ptr),
+        entry!(0x00e7_f070, fn_00e7f070(Ptr)),
+        entry!(0x00e7_f610, fn_00e7f610()),
+        entry!(0x00e7_f750, fn_00e7f750(u32)),
+        entry!(0x00e7_f790, fn_00e7f790(Ptr)),
+        entry!(0x00e7_f7c0, fn_00e7f7c0() -> u32),
     ]
+}
+
+/// The memory manager's free (`00aa4060`, `thiscall` on `011f6238`, the block), the Ni array
+/// free `00aa1490` (`cdecl`: block, element size) and the free `00aa10f0` (`cdecl`, one word).
+const MEMORY_MANAGER_FREE: u32 = 0x00aa_4060;
+const NI_ARRAY_FREE_00AA1490: u32 = 0x00aa_1490;
+const FREE_00AA10F0: u32 = 0x00aa_10f0;
+
+// Translated from 00e7f050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): the scalar deleting destructor of the entry
+/// pool's 0xc-byte block, `thiscall` with the flags: the destructor `00e7f070`, then with bit
+/// 0 set the block given back to the memory manager (`00aa4060`). Answers `this`.
+pub fn fn_00e7f050(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00e7f070(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, this]);
+    }
+    this
+}
+
+// Translated from 00e7f070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): the destructor of the entry pool's 0xc-byte
+/// block, `thiscall`, no stack words: its 0x10-byte entries freed (`00aa1490` with the array
+/// at +0), then the next block of the chain (+8), when there is one, destroyed the same way
+/// and given back to the memory manager.
+pub fn fn_00e7f070(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let entries = e.mem.u32(base);
+    e.call(NI_ARRAY_FREE_00AA1490, &args![entries, 0x10u32]);
+    let next = e.mem.u32(base.wrapping_add(8));
+    if next != 0 {
+        fn_00e7f070(e, Ptr::new(next));
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, next]);
+    }
+}
+
+// Translated from 00e7f610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`), no arguments: frees the two render-state pools
+/// `fn_00e7f2b0` made. The block pool (`0126f718`): its count (+8) cleared, its chain (+0xc)
+/// destroyed (`00e7f790`) and given back to the memory manager, its set's array (+0) freed
+/// (`00aa10f0`) and the pool given back. The entry pool (`0126f71c`): the same, its chain's
+/// first block destroyed as `00e7f070` inlines it (its entries freed, a next block deleted
+/// through `00e7f050` with 1).
+pub fn fn_00e7f610(e: &mut Engine) {
+    let pool = e.mem.u32(BLOCK_POOL_0126F718);
+    if pool != 0 {
+        let chain = e.mem.u32(pool.wrapping_add(0xc));
+        e.mem.set_u32(pool.wrapping_add(8), 0);
+        if chain != 0 {
+            fn_00e7f790(e, Ptr::new(chain));
+            e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, chain]);
+        }
+        let elements = e.mem.u32(pool);
+        e.call(FREE_00AA10F0, &args![elements]);
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, pool]);
+    }
+    let pool = e.mem.u32(ENTRY_POOL_0126F71C);
+    if pool != 0 {
+        let chain = e.mem.u32(pool.wrapping_add(0xc));
+        e.mem.set_u32(pool.wrapping_add(8), 0);
+        if chain != 0 {
+            let entries = e.mem.u32(chain);
+            e.call(NI_ARRAY_FREE_00AA1490, &args![entries, 0x10u32]);
+            let next = e.mem.u32(chain.wrapping_add(8));
+            if next != 0 {
+                fn_00e7f050(e, Ptr::new(next), 1);
+            }
+            e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, chain]);
+        }
+        let elements = e.mem.u32(pool);
+        e.call(FREE_00AA10F0, &args![elements]);
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, pool]);
+    }
+}
+
+// Translated from 00e7f750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): `operator delete[]` of an array of 0x14-byte
+/// render-state blocks made by `00e7f0a0`, `cdecl` with the array (the count is the word
+/// before it). Nothing for a null array; otherwise each block from the last to the first is
+/// cleaned up (`00e7f320`; the count runs down as a signed number, so a count of 0 runs none)
+/// and the allocation, from the count word, freed (`00aa1490` with 0x14).
+pub fn fn_00e7f750(e: &mut Engine, array: u32) {
+    if array == 0 {
+        return;
+    }
+    let count = e.mem.u32(array.wrapping_sub(4));
+    let mut block = array.wrapping_add(count.wrapping_mul(0x14));
+    let mut left = count.wrapping_sub(1);
+    while (left as i32) >= 0 {
+        block = block.wrapping_sub(0x14);
+        fn_00e7f320(e, Ptr::new(block));
+        left = left.wrapping_sub(1);
+    }
+    e.call(
+        NI_ARRAY_FREE_00AA1490,
+        &args![array.wrapping_sub(4), 0x14u32],
+    );
+}
+
+// Translated from 00e7f790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`): the destructor of the block pool's 0xc-byte
+/// block, `thiscall`, no stack words: its blocks deleted (`00e7f750` with the array at +0),
+/// then the next block of the chain (+8), when there is one, destroyed the same way and given
+/// back to the memory manager.
+pub fn fn_00e7f790(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let blocks = e.mem.u32(base);
+    fn_00e7f750(e, blocks);
+    let next = e.mem.u32(base.wrapping_add(8));
+    if next != 0 {
+        fn_00e7f790(e, Ptr::new(next));
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, next]);
+    }
+}
+
+// Translated from 00e7f7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7ef80`), no arguments: answers the word at `0126f728`.
+pub fn fn_00e7f7c0(e: &mut Engine) -> u32 {
+    e.mem.u32(0x0126_f728)
 }
 
 #[cfg(test)]
@@ -914,5 +1039,167 @@ mod b000p_tests {
             calls(&e, NI_ARRAY_ALLOCATE_00AA1420).last().unwrap(),
             &vec![u32::MAX]
         );
+    }
+}
+
+#[cfg(test)]
+mod b052_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        for no_op in [
+            MEMORY_MANAGER_FREE,
+            NI_ARRAY_FREE_00AA1490,
+            FREE_00AA10F0,
+            POOL_ADD_UNIQUE_00E7EC00,
+            SET_REALLOC_00A311E0,
+        ] {
+            e.register(no_op, |_, _| Ret::default());
+        }
+        e
+    }
+
+    /// A chain of two 0xc-byte pool blocks with arrays 0xa100 and 0xa200.
+    fn chain(e: &mut Engine) -> (u32, u32) {
+        let (first, second) = (e.mem.alloc(0xc), e.mem.alloc(0xc));
+        e.mem.set_u32(first, 0xa100);
+        e.mem.set_u32(first + 8, second);
+        e.mem.set_u32(second, 0xa200);
+        (first, second)
+    }
+
+    #[test]
+    fn entry_block_destructors_free_the_chain() {
+        let mut e = engine();
+        let (first, second) = chain(&mut e);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e7_f050, &args![first, 1u32]).u32(), first);
+        assert_eq!(
+            calls(&e, NI_ARRAY_FREE_00AA1490),
+            vec![vec![0xa100, 0x10], vec![0xa200, 0x10]]
+        );
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_FREE),
+            vec![
+                vec![MEMORY_MANAGER_OBJECT, second],
+                vec![MEMORY_MANAGER_OBJECT, first]
+            ]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_f050, &args![second, 0u32]);
+        assert!(calls(&e, MEMORY_MANAGER_FREE).is_empty());
+        assert_eq!(calls(&e, NI_ARRAY_FREE_00AA1490).len(), 1);
+    }
+
+    #[test]
+    fn fn_00e7f750_cleans_up_each_block_last_first() {
+        let mut e = engine();
+        let pool = e.mem.alloc(0x18);
+        e.mem.set_u32(ENTRY_POOL_0126F71C, pool);
+        let allocation = e.mem.alloc(4 + 2 * 0x14);
+        e.mem.set_u32(allocation, 2);
+        let array = allocation + 4;
+        // Each block holds one entry in its first list, so its clean-up gives it back.
+        let mut entries = vec![];
+        for index in 0..2u32 {
+            let entry = e.mem.alloc(0x10);
+            e.mem.set_u32(array + 0x14 * index + 8, entry);
+            entries.push(entry);
+        }
+        let elements = e.mem.alloc(0x10);
+        e.mem.set_u32(pool, elements);
+        e.mem.set_u32(pool + 4, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_f750, &args![array]);
+        assert_eq!(e.mem.u32(elements), entries[1]);
+        assert_eq!(e.mem.u32(elements + 4), entries[0]);
+        assert_eq!(
+            calls(&e, NI_ARRAY_FREE_00AA1490),
+            vec![vec![allocation, 0x14]]
+        );
+        // A count of 0: nothing cleaned up; a null array: nothing at all.
+        e.mem.set_u32(allocation, 0);
+        e.call(0x00e7_f750, &args![array]);
+        assert_eq!(e.mem.u32(pool + 8), 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_f750, &args![0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00e7f790_deletes_each_blocks_array() {
+        let mut e = engine();
+        let (first, second) = chain(&mut e);
+        // Empty arrays (count 0) behind each block's array pointer.
+        for block in [first, second] {
+            let allocation = e.mem.alloc(4);
+            e.mem.set_u32(block, allocation + 4);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_f790, &args![first]);
+        assert_eq!(calls(&e, NI_ARRAY_FREE_00AA1490).len(), 2);
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_FREE),
+            vec![vec![MEMORY_MANAGER_OBJECT, second]]
+        );
+    }
+
+    #[test]
+    fn fn_00e7f610_frees_both_pools() {
+        let mut e = engine();
+        let (block_pool, entry_pool) = (e.mem.alloc(0x18), e.mem.alloc(0x18));
+        e.mem.set_u32(BLOCK_POOL_0126F718, block_pool);
+        e.mem.set_u32(ENTRY_POOL_0126F71C, entry_pool);
+        let block_chain = e.mem.alloc(0xc);
+        e.mem.set_u32(block_chain, 0);
+        e.mem.set_u32(block_pool, 0xb100);
+        e.mem.set_u32(block_pool + 8, 3);
+        e.mem.set_u32(block_pool + 0xc, block_chain);
+        let (first, second) = chain(&mut e);
+        e.mem.set_u32(entry_pool, 0xe100);
+        e.mem.set_u32(entry_pool + 8, 5);
+        e.mem.set_u32(entry_pool + 0xc, first);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_f610, &args![]);
+        assert_eq!(e.mem.u32(block_pool + 8), 0);
+        assert_eq!(e.mem.u32(entry_pool + 8), 0);
+        assert_eq!(calls(&e, FREE_00AA10F0), vec![vec![0xb100], vec![0xe100]]);
+        assert_eq!(
+            calls(&e, NI_ARRAY_FREE_00AA1490),
+            vec![vec![0xa100, 0x10], vec![0xa200, 0x10]]
+        );
+        let freed: Vec<u32> = calls(&e, MEMORY_MANAGER_FREE)
+            .iter()
+            .map(|w| w[1])
+            .collect();
+        assert_eq!(
+            freed,
+            vec![block_chain, block_pool, second, first, entry_pool]
+        );
+        // Without pools: nothing.
+        e.mem.set_u32(BLOCK_POOL_0126F718, 0);
+        e.mem.set_u32(ENTRY_POOL_0126F71C, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_f610, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00e7f7c0_reads_the_word() {
+        let mut e = engine();
+        e.mem.set_u32(0x0126_f728, 0x1234);
+        assert_eq!(e.call(0x00e7_f7c0, &args![]).u32(), 0x1234);
     }
 }

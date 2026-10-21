@@ -563,9 +563,171 @@ pub fn fn_00e7f850(e: &mut Engine, value: u32) {
     e.mem.set_u32(PASS_LIMIT_011BF560, value);
 }
 
+/// `NiD3DRenderStateGroup::RestoreRenderStates` (`00e7ef40`, `thiscall` on the group, no
+/// stack words).
+const RESTORE_RENDER_STATES_00E7EF40: u32 = 0x00e7_ef40;
+/// The memory manager's array free (`00aa1490`, cdecl: the block and the element size) and
+/// its sized free (`00aa1460`, cdecl: the block and the size).
+const FREE_ARRAY_00AA1490: u32 = 0x00aa_1490;
+const FREE_SIZED_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00e7f7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DPass::PostProcessRenderingPass` (Xbox PDB), `thiscall` with one stack word it does
+/// not read: restores the render states of the pass's group (+0x30,
+/// `NiD3DRenderStateGroup::RestoreRenderStates`) when there is one, and answers 0.
+pub fn ni_d3d_pass_post_process_rendering_pass(
+    e: &mut Engine,
+    this: Ptr<NiD3DPass>,
+    _unused_1: u32,
+) -> u32 {
+    let group = e.get(this, NiD3DPass::m_pkRenderStateGroup);
+    if group != 0 {
+        e.call(RESTORE_RENDER_STATES_00E7EF40, &args![group]);
+    }
+    0
+}
+
+// Translated from 00e7f900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dpass.cpp`): the scalar deleting destructor of the
+/// chain node `00e7fc80` destroys (`thiscall`, one word of flags): `00e7fc80`, then with flag
+/// bit 0 the node goes back to the memory manager (`00aa4060` on `011f6238`). Answers `this`.
+pub fn fn_00e7f900(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
+    fn_00e7fc80(e, this);
+    if flags & 1 != 0 {
+        e.call(
+            MEMORY_MANAGER_DEALLOCATE,
+            &args![MEMORY_MANAGER_OBJECT, this],
+        );
+    }
+    this
+}
+
+// Translated from 00e7fc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dpass.cpp`): the destructor of a chain node
+/// (`thiscall`, no stack words). The array at +0 (its count in the word before it) is freed:
+/// with a count of 0 the block goes back to the memory manager (`00aa4060` on `011f6238`),
+/// otherwise the first element's virtual slot 0 runs with 3 (the vector deleting
+/// destructor). The next node (+8) is destroyed the same way and freed to the memory manager.
+pub fn fn_00e7fc80(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let array = e.mem.u32(base);
+    if array != 0 {
+        if e.mem.u32(array.wrapping_sub(4)) == 0 {
+            e.call(
+                MEMORY_MANAGER_DEALLOCATE,
+                &args![MEMORY_MANAGER_OBJECT, array.wrapping_sub(4)],
+            );
+        } else {
+            e.vcall(array, 0, &args![3u32]);
+        }
+    }
+    let next = e.mem.u32(base.wrapping_add(8));
+    if next != 0 {
+        fn_00e7fc80(e, Ptr::new(next));
+        e.call(
+            MEMORY_MANAGER_DEALLOCATE,
+            &args![MEMORY_MANAGER_OBJECT, next],
+        );
+    }
+}
+
+/// `NiPointer<T>` let go without clearing the slot (the destructor's member destructors):
+/// the count at +4 goes down (`InterlockedDecrement`), deleting through slot 4 at 0.
+fn release_pointer(e: &mut Engine, slot: u32) {
+    let object = e.mem.u32(slot);
+    if object != 0 {
+        let left = e
+            .call(IMPORT_INTERLOCKED_DECREMENT, &args![object.wrapping_add(4)])
+            .u32();
+        if left == 0 {
+            e.vcall(object, 4, &args![]);
+        }
+    }
+}
+
+// Translated from 00e7fea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dpass.cpp`): `NiD3DPass`'s destructor body
+/// (`thiscall`, no stack words). Its virtual table, the render-state group (+0x30) released
+/// (`00e7f6b0`), `m_spPixelConstantMap` (+0x34) cleared, the strings at +0x38, +0x3c, +0x40
+/// freed (`00aa10f0`), +0x44 and +0x48 cleared, the strings at +0x50, +0x54, +0x58 freed,
+/// +0x5c cleared, the stage array (+0x20) cleared (`00e7fc30`) and +0x14..+0x1c cleared; then
+/// the member destructors let go of +0x5c, +0x48, +0x44 and +0x34 (all null by then), and the
+/// stage array gets its base virtual table and its block freed (`00e7fcd0`).
+pub fn fn_00e7fea0(e: &mut Engine, this: Ptr<NiD3DPass>) {
+    let base = this.addr();
+    let group = e.get(this, NiD3DPass::m_pkRenderStateGroup);
+    e.mem.set_u32(base, PASS_VTABLE_010EF364);
+    e.call(RELEASE_RENDER_STATES_00E7F6B0, &args![group]);
+    clear_pointer(e, base + 0x34);
+    for offset in [0x38u32, 0x3c, 0x40] {
+        let text = e.mem.u32(base + offset);
+        e.call(FREE_00AA10F0, &args![text]);
+    }
+    clear_pointer(e, base + 0x44);
+    clear_pointer(e, base + 0x48);
+    for offset in [0x50u32, 0x54, 0x58] {
+        let text = e.mem.u32(base + offset);
+        e.call(FREE_00AA10F0, &args![text]);
+    }
+    clear_pointer(e, base + 0x5c);
+    fn_00e7fc30(e, Ptr::new(base + 0x20));
+    e.set(this, NiD3DPass::m_uiCurrentStage, 0);
+    e.set(this, NiD3DPass::m_uiStageCount, 0);
+    e.set(this, NiD3DPass::m_uiTexturesPerPass, 0);
+    for offset in [0x5cu32, 0x48, 0x44, 0x34] {
+        release_pointer(e, base + offset);
+    }
+    let stages = e.get(this, NiD3DPass::m_kStages_m_pBase);
+    e.mem.set_u32(base + 0x20, STAGE_ARRAY_BASE_VTABLE_010EF35C);
+    fn_00e7fcd0(e, Ptr::new(stages));
+}
+
+// Translated from 00e80080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DPass`'s vector deleting destructor (`thiscall`, one word of flags). With flag bit 1,
+/// `this` is an array whose count is the word before it: each pass from the last down is
+/// destroyed (`00e7fea0`) and, with bit 0, the block (from the count word) freed
+/// (`00aa1490` with 0x68); answers the block. Otherwise the one pass is destroyed and, with
+/// bit 0, freed (`00aa1460` with 0x68); answers `this`.
+pub fn ni_d3d_pass_vector_deleting_destructor(e: &mut Engine, this: Ptr, flags: u8) -> u32 {
+    let base = this.addr();
+    if flags & 2 != 0 {
+        let block = base.wrapping_sub(4);
+        let mut left = e.mem.u32(block);
+        let mut pass = base.wrapping_add(left.wrapping_mul(0x68));
+        loop {
+            left = left.wrapping_sub(1);
+            if (left as i32) < 0 {
+                break;
+            }
+            pass = pass.wrapping_sub(0x68);
+            fn_00e7fea0(e, Ptr::new(pass));
+        }
+        if flags & 1 != 0 {
+            e.call(FREE_ARRAY_00AA1490, &args![block, 0x68u32]);
+        }
+        return block;
+    }
+    fn_00e7fea0(e, Ptr::new(base));
+    if flags & 1 != 0 {
+        e.call(FREE_SIZED_00AA1460, &args![base, 0x68u32]);
+    }
+    base
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00e7_f7d0,
+            ni_d3d_pass_post_process_rendering_pass(Ptr<NiD3DPass>, u32) -> u32
+        ),
+        entry!(0x00e7_f900, fn_00e7f900(Ptr, u8) -> Ptr),
+        entry!(0x00e7_fc80, fn_00e7fc80(Ptr)),
+        entry!(0x00e7_fea0, fn_00e7fea0(Ptr<NiD3DPass>)),
+        entry!(
+            0x00e8_0080,
+            ni_d3d_pass_vector_deleting_destructor(Ptr, u8) -> u32
+        ),
         entry!(0x00e7_f920, fn_00e7f920(u32)),
         entry!(0x00e7_f830, fn_00e7f830(u32)),
         entry!(0x00e7_f840, fn_00e7f840(u32)),
@@ -1093,5 +1255,170 @@ mod b000w_tests {
         assert_eq!(e.mem.u32(PASS_LIMIT_011BF558), 8);
         assert_eq!(e.mem.u32(PASS_LIMIT_011BF55C), 4);
         assert_eq!(e.mem.u32(PASS_LIMIT_011BF560), 16);
+    }
+}
+
+#[cfg(test)]
+mod b049_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn post_process_rendering_pass_restores_the_group_states() {
+        let mut e = Engine::new();
+        e.register(RESTORE_RENDER_STATES_00E7EF40, |_, _| Ret::default());
+        let pass: Ptr<NiD3DPass> = e.new_object();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e7_f7d0, &args![pass, 9u32]).u32(), 0);
+        assert!(calls_to(&e, RESTORE_RENDER_STATES_00E7EF40).is_empty());
+        e.set(pass, NiD3DPass::m_pkRenderStateGroup, 0x4440);
+        assert_eq!(e.call(0x00e7_f7d0, &args![pass, 9u32]).u32(), 0);
+        assert_eq!(
+            calls_to(&e, RESTORE_RENDER_STATES_00E7EF40),
+            vec![vec![0x4440]]
+        );
+    }
+
+    /// A chain of two nodes: the first holds an array of count 0, the second an array of
+    /// count 2 whose element's vtable at 0x7000 has its slot 0 at 0x7100.
+    fn chain_engine() -> (Engine, u32, u32, u32, u32) {
+        let mut e = Engine::new();
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        e.put_vtable(0x7000, &[0x7100]);
+        e.register(0x7100, |_, _| Ret::default());
+        let empty = e.mem.alloc(8) + 4;
+        let counted = e.mem.alloc(12) + 4;
+        e.mem.set_u32(counted - 4, 2);
+        e.mem.set_u32(counted, 0x7000);
+        let second = e.mem.alloc(12);
+        e.mem.set_u32(second, counted);
+        let first = e.mem.alloc(12);
+        e.mem.set_u32(first, empty);
+        e.mem.set_u32(first + 8, second);
+        (e, first, second, empty, counted)
+    }
+
+    #[test]
+    fn fn_00e7fc80_frees_the_arrays_down_the_chain() {
+        let (mut e, first, second, empty, counted) = chain_engine();
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_fc80, &args![first]);
+        assert_eq!(calls_to(&e, 0x7100), vec![vec![counted, 3]]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![
+                vec![MEMORY_MANAGER_OBJECT, empty - 4],
+                vec![MEMORY_MANAGER_OBJECT, second]
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00e7f900_frees_only_with_flag_bit_0() {
+        let (mut e, _, second, _, _) = chain_engine();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e7_f900, &args![second, 0u32]).u32(), second);
+        assert_eq!(calls_to(&e, 0x7100).len(), 1);
+        assert!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_f900, &args![second, 1u32]);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER_OBJECT, second]]
+        );
+    }
+
+    /// A pass with a pixel shader at +0x44 counted once (vtable 0x7000, slot 4 at 0x7104),
+    /// strings at +0x38 and +0x50, a group at +0x30 and a stage array.
+    fn pass_engine() -> (Engine, Ptr<NiD3DPass>, u32) {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let left = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], left);
+            left.into_ret()
+        });
+        e.put_vtable(0x7000, &[0x7100, 0x7104]);
+        e.register(0x7104, |_, _| Ret::default());
+        e.register(RELEASE_RENDER_STATES_00E7F6B0, |_, _| Ret::default());
+        e.register(FREE_00AA10F0, |_, _| Ret::default());
+        e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+        let pass: Ptr<NiD3DPass> = e.new_object();
+        let shader = e.mem.alloc(8);
+        e.mem.set_u32(shader, 0x7000);
+        e.mem.set_u32(shader + 4, 1);
+        let base = pass.addr();
+        e.mem.set_u32(base + 0x44, shader);
+        e.mem.set_u32(base + 0x38, 0x3838);
+        e.mem.set_u32(base + 0x50, 0x5050);
+        e.set(pass, NiD3DPass::m_pkRenderStateGroup, 0x3030);
+        e.set(pass, NiD3DPass::m_uiStageCount, 3);
+        // A stage array with no elements.
+        let stages = e.mem.alloc(4) + 4;
+        e.set(pass, NiD3DPass::m_kStages_m_pBase, stages);
+        (e, pass, shader)
+    }
+
+    #[test]
+    fn fn_00e7fea0_destroys_the_pass() {
+        let (mut e, pass, shader) = pass_engine();
+        let base = pass.addr();
+        let stages = e.get(pass, NiD3DPass::m_kStages_m_pBase);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_fea0, &args![pass]);
+        assert_eq!(e.mem.u32(base), PASS_VTABLE_010EF364);
+        assert_eq!(
+            calls_to(&e, RELEASE_RENDER_STATES_00E7F6B0),
+            vec![vec![0x3030]]
+        );
+        assert_eq!(calls_to(&e, 0x7104), vec![vec![shader]]);
+        assert_eq!(e.mem.u32(base + 0x44), 0);
+        let texts: Vec<u32> = calls_to(&e, FREE_00AA10F0).iter().map(|c| c[0]).collect();
+        assert_eq!(texts, vec![0x3838, 0, 0, 0x5050, 0, 0]);
+        assert_eq!(e.get(pass, NiD3DPass::m_uiStageCount), 0);
+        assert_eq!(e.mem.u32(base + 0x20), STAGE_ARRAY_BASE_VTABLE_010EF35C);
+        assert_eq!(
+            calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER_OBJECT, stages - 4]]
+        );
+    }
+
+    #[test]
+    fn vector_deleting_destructor_handles_one_pass_or_an_array() {
+        let (mut e, pass, _) = pass_engine();
+        e.register(FREE_SIZED_00AA1460, |_, _| Ret::default());
+        e.register(FREE_ARRAY_00AA1490, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let back = e.call(0x00e8_0080, &args![pass, 1u32]).u32();
+        assert_eq!(back, pass.addr());
+        assert_eq!(
+            calls_to(&e, FREE_SIZED_00AA1460),
+            vec![vec![pass.addr(), 0x68]]
+        );
+        // An array of two passes (count word first): both destroyed, last first.
+        let block = e.mem.alloc(4 + 2 * 0x68);
+        e.mem.set_u32(block, 2);
+        for i in 0..2u32 {
+            let stages = e.mem.alloc(4) + 4;
+            e.mem.set_u32(block + 4 + i * 0x68 + 0x24, stages);
+            e.mem.set_u32(block + 4 + i * 0x68 + 0x30, 0x10 + i);
+        }
+        e.call_log = Some(vec![]);
+        let back = e.call(0x00e8_0080, &args![block + 4, 3u32]).u32();
+        assert_eq!(back, block);
+        assert_eq!(
+            calls_to(&e, RELEASE_RENDER_STATES_00E7F6B0),
+            vec![vec![0x11], vec![0x10]]
+        );
+        assert_eq!(calls_to(&e, FREE_ARRAY_00AA1490), vec![vec![block, 0x68]]);
+        assert!(calls_to(&e, FREE_SIZED_00AA1460).is_empty());
     }
 }

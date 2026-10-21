@@ -159,9 +159,79 @@ pub fn fn_00e7a8b0(e: &mut Engine, format: u32, depth: Ptr, stencil: Ptr) {
     e.mem.set_u32(stencil.addr(), stencil_bits);
 }
 
+/// `00aa10f0` (`cdecl`, one word): the Ni free.
+const NI_FREE: u32 = 0x00aa_10f0;
+/// `00aa1460` (`cdecl`, two words: block, size): the Ni sized delete.
+const NI_SIZED_DELETE: u32 = 0x00aa_1460;
+/// The vtable-like word `fn_00e7a6a0` stores at `+4` of each object before freeing it.
+const PART_VTABLE_010EE890: u32 = 0x010e_e890;
+
+// Translated from 00e7a6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, no arguments): tears down what `fn_00e7a860` built.
+/// For each index below the outer table's 16-bit count at `+0xa` (re-read after each object
+/// freed) the word at that index of the table's array (`+4`) is an object; a non-null one has
+/// the entries of its array (`+8`, count the 16-bit word at `+0xe`) cleared, its words `+0xe`
+/// and `+0x10` set to 0, `010ee890` stored at `+4`, its array freed (`00aa10f0`) and itself
+/// freed with size 0x14 (`00aa1460`). Then the table's own entries (count `+0xa`) are
+/// cleared, its words `+0xc` and `+0xa` set to 0, and, when the table pointer `0126f550` is
+/// not null, its vtable slot 0 is called with 1.
+pub fn fn_00e7a6a0(e: &mut Engine) {
+    let mut table = e.mem.u32(OUTER_TABLE_SLOT);
+    let mut index = 0u32;
+    if e.mem.u16(table + 0xa) != 0 {
+        loop {
+            let entries = e.mem.u32(table + 4);
+            let object = e.mem.u32(entries.wrapping_add(index.wrapping_mul(4)));
+            if object != 0 {
+                let mut inner = 0u16;
+                if e.mem.u16(object + 0xe) != 0 {
+                    loop {
+                        let array = e.mem.u32(object + 8);
+                        e.mem.set_u32(array.wrapping_add(u32::from(inner) * 4), 0);
+                        inner = inner.wrapping_add(1);
+                        if inner >= e.mem.u16(object + 0xe) {
+                            break;
+                        }
+                    }
+                }
+                e.mem.set_u16(object + 0xe, 0);
+                e.mem.set_u16(object + 0x10, 0);
+                let array = e.mem.u32(object + 8);
+                e.mem.set_u32(object + 4, PART_VTABLE_010EE890);
+                e.call(NI_FREE, &args![array]);
+                e.call(NI_SIZED_DELETE, &args![object, 0x14u32]);
+                table = e.mem.u32(OUTER_TABLE_SLOT);
+            }
+            index = index.wrapping_add(1);
+            if index >= u32::from(e.mem.u16(table + 0xa)) {
+                break;
+            }
+        }
+    }
+    let mut cleared = 0u16;
+    if e.mem.u16(table + 0xa) != 0 {
+        loop {
+            let entries = e.mem.u32(table + 4);
+            e.mem
+                .set_u32(entries.wrapping_add(u32::from(cleared) * 4), 0);
+            cleared = cleared.wrapping_add(1);
+            if cleared >= e.mem.u16(table + 0xa) {
+                break;
+            }
+        }
+    }
+    e.mem.set_u16(table + 0xc, 0);
+    e.mem.set_u16(table + 0xa, 0);
+    let holder = e.mem.u32(OUTER_TABLE_SLOT);
+    if holder != 0 {
+        e.vcall(holder, 0, &args![1u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_a6a0, fn_00e7a6a0()),
         entry!(0x00e7_a640, fn_00e7a640(Ptr) -> Ptr),
         entry!(0x00e7_a760, fn_00e7a760() -> bool),
         entry!(0x00e7_a860, fn_00e7a860() -> bool),
@@ -311,5 +381,76 @@ mod b000y_tests {
         }
         e.call(0x00e7_a8b0, &args![0x51u32, depth, stencil]);
         assert_eq!((e.mem.u32(depth), e.mem.u32(stencil)), (0, 0));
+    }
+}
+
+#[cfg(test)]
+mod b053_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e7a6a0_frees_every_object_then_the_table() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.register(NI_FREE, |_, _| Ret::default());
+        e.register(NI_SIZED_DELETE, |_, _| Ret::default());
+        e.register(0x0e00_1000, |_, _| Ret::default());
+        e.put_vtable(0x0e00_0000, &[0x0e00_1000]);
+        let table = e.mem.alloc(0x10);
+        let entries = e.mem.alloc(0xc);
+        e.mem.set_u32(table, 0x0e00_0000);
+        e.mem.set_u32(table + 4, entries);
+        e.mem.set_u16(table + 0xa, 3);
+        e.mem.set_u16(table + 0xc, 3);
+        let object = e.mem.alloc(0x14);
+        let array = e.mem.alloc(8);
+        e.mem.set_u32(array, 7);
+        e.mem.set_u32(array + 4, 8);
+        e.mem.set_u32(object + 8, array);
+        e.mem.set_u16(object + 0xe, 2);
+        e.mem.set_u16(object + 0x10, 2);
+        e.mem.set_u32(entries, object);
+        e.mem.set_u32(entries + 4, 0);
+        e.mem.set_u32(entries + 8, object);
+        e.mem.set_u32(OUTER_TABLE_SLOT, table);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_a6a0, &args![]);
+        assert_eq!((e.mem.u32(array), e.mem.u32(array + 4)), (0, 0));
+        assert_eq!(e.mem.u16(object + 0xe), 0);
+        assert_eq!(e.mem.u16(object + 0x10), 0);
+        assert_eq!(e.mem.u32(object + 4), PART_VTABLE_010EE890);
+        assert_eq!(e.mem.u32(entries), 0);
+        assert_eq!(e.mem.u32(entries + 8), 0);
+        assert_eq!(e.mem.u16(table + 0xa), 0);
+        assert_eq!(e.mem.u16(table + 0xc), 0);
+        let log = e.call_log.take().unwrap();
+        let of = |addr: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|(a, _)| *a == addr)
+                .map(|(_, w)| w.clone())
+                .collect()
+        };
+        // Both non-null entries (the same object twice here) are freed.
+        assert_eq!(of(NI_FREE), vec![vec![array], vec![array]]);
+        assert_eq!(of(NI_SIZED_DELETE), vec![vec![object, 0x14]; 2]);
+        assert_eq!(of(0x0e00_1000), vec![vec![table, 1]]);
+    }
+
+    #[test]
+    fn fn_00e7a6a0_with_an_empty_table_only_releases_it() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.register(0x0e00_1000, |_, _| Ret::default());
+        e.put_vtable(0x0e00_0000, &[0x0e00_1000]);
+        let table = e.mem.alloc(0x10);
+        e.mem.set_u32(table, 0x0e00_0000);
+        e.mem.set_u16(table + 0xc, 5);
+        e.mem.set_u32(OUTER_TABLE_SLOT, table);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_a6a0, &args![]);
+        assert_eq!(e.mem.u16(table + 0xc), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[1], (0x0e00_1000, vec![table, 1]));
     }
 }

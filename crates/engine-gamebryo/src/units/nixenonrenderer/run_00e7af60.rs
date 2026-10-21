@@ -57,7 +57,69 @@ pub fn fn_00e7b0f0(
 
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e7_b0f0, fn_00e7b0f0(Ptr, u32, u32, u32, u32) -> u32)]
+    vec![
+        entry!(0x00e7_b0f0, fn_00e7b0f0(Ptr, u32, u32, u32, u32) -> u32),
+        entry!(0x00e7_b040, fn_00e7b040(Ptr)),
+    ]
+}
+
+/// What `00e7b040` uses: the Ni free `00aa1460` (`cdecl`: block, size), the map's two tables
+/// (`010eec7c`, then `010eec54`), the map clean-up `00b601a0` (unnamed; `thiscall`, no stack
+/// words) and the free `00aa10f0` (`cdecl`, one word).
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+const MAP_VTABLE_010EEC7C: u32 = 0x010e_ec7c;
+const MAP_BASE_VTABLE_010EEC54: u32 = 0x010e_ec54;
+const MAP_CLEAN_UP_00B601A0: u32 = 0x00b6_01a0;
+const FREE_00AA10F0: u32 = 0x00aa_10f0;
+
+// Translated from 00e7b040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7af60`), `thiscall`, no stack words: empties and undoes
+/// the pointer map at +8 (`NiTMapBase`: bucket count +4, buckets +8; nodes: next +0, key +4,
+/// value +8). Each node's value (0x48 bytes) is freed (`00aa1460`, no null check) after the
+/// next node is found (its next, or the first bucket after the key's, the map's slot 4 giving
+/// the key's bucket). Then the map's table `010eec7c`, `00b601a0`, its base table `010eec54`,
+/// `00b601a0`, and its buckets freed (`00aa10f0`).
+pub fn fn_00e7b040(e: &mut Engine, this: Ptr) {
+    let map = this.addr().wrapping_add(8);
+    let count = e.mem.u32(map.wrapping_add(4));
+    let buckets = e.mem.u32(map.wrapping_add(8));
+    let mut node = 0u32;
+    for index in 0..count {
+        let first = e.mem.u32(buckets.wrapping_add(index.wrapping_mul(4)));
+        if first != 0 {
+            node = first;
+            break;
+        }
+    }
+    while node != 0 {
+        let next = e.mem.u32(node);
+        let value = e.mem.u32(node.wrapping_add(8));
+        node = if next != 0 {
+            next
+        } else {
+            let key = e.mem.u32(node.wrapping_add(4));
+            let mut index = e.vcall(map, 4, &args![key]).u32().wrapping_add(1);
+            let count = e.mem.u32(map.wrapping_add(4));
+            let mut found = 0;
+            while index < count {
+                let buckets = e.mem.u32(map.wrapping_add(8));
+                let bucket = e.mem.u32(buckets.wrapping_add(index.wrapping_mul(4)));
+                if bucket != 0 {
+                    found = bucket;
+                    break;
+                }
+                index += 1;
+            }
+            found
+        };
+        e.call(NI_FREE_00AA1460, &args![value, 0x48u32]);
+    }
+    e.mem.set_u32(map, MAP_VTABLE_010EEC7C);
+    e.call(MAP_CLEAN_UP_00B601A0, &args![map]);
+    e.mem.set_u32(map, MAP_BASE_VTABLE_010EEC54);
+    e.call(MAP_CLEAN_UP_00B601A0, &args![map]);
+    let buckets = e.mem.u32(map.wrapping_add(8));
+    e.call(FREE_00AA10F0, &args![buckets]);
 }
 
 #[cfg(test)]
@@ -105,5 +167,55 @@ mod b000w_tests {
                 .u32(),
             0
         );
+    }
+}
+
+#[cfg(test)]
+mod b052_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e7b040_frees_the_values_and_undoes_the_map() {
+        let mut e = Engine::new();
+        for no_op in [NI_FREE_00AA1460, MAP_CLEAN_UP_00B601A0, FREE_00AA10F0] {
+            e.register(no_op, |_, _| Ret::default());
+        }
+        e.register(0x0ec0_0004, |_, a| a[1].into_ret());
+        e.put_vtable(0x0ec1_0000, &[0, 0x0ec0_0004]);
+        let this = e.mem.alloc(0x14);
+        let buckets = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 8, 0x0ec1_0000);
+        e.mem.set_u32(this + 0xc, 4);
+        e.mem.set_u32(this + 0x10, buckets);
+        // Bucket 0: two chained nodes; bucket 2: one node (key 2).
+        let nodes: Vec<u32> = (0..3).map(|_| e.mem.alloc(0xc)).collect();
+        e.mem.set_u32(nodes[0], nodes[1]);
+        e.mem.set_u32(nodes[1] + 4, 0);
+        e.mem.set_u32(nodes[2] + 4, 2);
+        for (index, node) in nodes.iter().enumerate() {
+            e.mem.set_u32(node + 8, 0x100 + index as u32);
+        }
+        e.mem.set_u32(buckets, nodes[0]);
+        e.mem.set_u32(buckets + 8, nodes[2]);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_b040, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let freed: Vec<Vec<u32>> = log
+            .iter()
+            .filter(|(a, _)| *a == NI_FREE_00AA1460)
+            .map(|(_, w)| w.clone())
+            .collect();
+        assert_eq!(
+            freed,
+            vec![vec![0x100, 0x48], vec![0x101, 0x48], vec![0x102, 0x48]]
+        );
+        let cleaned: Vec<u32> = log
+            .iter()
+            .filter(|(a, _)| *a == MAP_CLEAN_UP_00B601A0)
+            .map(|(_, w)| w[0])
+            .collect();
+        assert_eq!(cleaned, vec![this + 8, this + 8]);
+        assert!(log.contains(&(FREE_00AA10F0, vec![buckets])));
+        assert_eq!(e.mem.u32(this + 8), MAP_BASE_VTABLE_010EEC54);
     }
 }

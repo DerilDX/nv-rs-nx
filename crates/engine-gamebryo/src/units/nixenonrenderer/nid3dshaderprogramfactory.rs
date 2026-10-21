@@ -105,6 +105,437 @@ pub fn ni_d3d_shader_program_factory_register_shader_creator(
     true
 }
 
+/// `NiD3DShaderProgramFactory`'s single instance (`GetInstance`, `00e92eb0`,
+/// returns it).
+const FACTORY_INSTANCE: u32 = 0x0126_fa10;
+/// The Gamebryo `free` (`run_00aa1010.rs`), cdecl (block).
+const NI_FREE: u32 = 0x00aa_10f0;
+/// The sized Gamebryo free (`run_00aa1380.rs`), cdecl (block, size).
+const NI_FREE_SIZED: u32 = 0x00aa_1460;
+/// The memory manager's free (`00aa4060`), thiscall on `011f6238` (block).
+const MEMORY_MANAGER_FREE: u32 = 0x00aa_4060;
+/// `_strcpy_s` (engine map), cdecl (destination, size, source).
+const STRCPY_S: u32 = 0x00ec_65a6;
+/// The map's `RemoveAll` (`run_00b601a0.rs`), thiscall.
+const MAP_REMOVE_ALL: u32 = 0x00b6_01a0;
+/// The map's `GetNext` (thiscall: position, key, value out words), `RET 0xC`.
+const MAP_GET_NEXT: u32 = 0x00b5_7f20;
+/// The map's `RemoveAt` (`run_00e91fd0.rs`), thiscall (key), `RET 4`.
+const MAP_REMOVE_AT: u32 = 0x00e9_1fd0;
+/// The list's `RemoveHead` (`run_00b5fd60.rs`), thiscall.
+const LIST_REMOVE_HEAD: u32 = 0x00b6_02d0;
+/// The list's `RemoveTail` (`run_00e7cd50.rs`), thiscall.
+const LIST_REMOVE_TAIL: u32 = 0x00e7_d5b0;
+/// The node allocator's deallocate (`run_0045cb90.rs`), thiscall on the
+/// allocator (node), `RET 4`.
+const NODE_DEALLOCATE: u32 = 0x0045_cee0;
+/// Imported `InterlockedDecrement` (import slot).
+const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+/// Vtables (RTTI) of the vertex shader, pixel shader and creator maps:
+/// their `NiTStringTemplateMap`, `NiTPointerMap` and `NiTMapBase` levels.
+const VERTEX_TEMPLATE_MAP_VTABLE: u32 = 0x010f_0e30;
+const VERTEX_POINTER_MAP_VTABLE: u32 = 0x010f_0e10;
+const PIXEL_TEMPLATE_MAP_VTABLE: u32 = 0x010f_0e90;
+const PIXEL_POINTER_MAP_VTABLE: u32 = 0x010f_0e70;
+const CREATOR_TEMPLATE_MAP_VTABLE: u32 = 0x010f_0ef0;
+const CREATOR_POINTER_MAP_VTABLE: u32 = 0x010f_0ed0;
+const CREATOR_MAP_BASE_VTABLE: u32 = 0x010f_0eb0;
+
+// Translated from 00ae7f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerListBase<NiTPointerAllocator<unsigned int>,char *>::RemoveHead`
+/// (engine map): unlinks the head node (the next one becomes the head with
+/// no previous link, or the tail is cleared when there is none), takes its
+/// element and clears it, gives the node back to the allocator (`0045cee0`
+/// on +8) and counts one less. Returns the element.
+pub fn ni_t_pointer_list_base_remove_head(
+    e: &mut Engine,
+    this: Ptr<crate::types::NiTPointerList>,
+) -> u32 {
+    use crate::types::NiTPointerList;
+    let node = e.get(this, NiTPointerList::m_pkHead);
+    let head = e.get(this, NiTPointerList::m_pkHead);
+    let next = e.mem.u32(head);
+    e.set(this, NiTPointerList::m_pkHead, next);
+    if e.get(this, NiTPointerList::m_pkHead) != 0 {
+        let head = e.get(this, NiTPointerList::m_pkHead);
+        e.mem.set_u32(head + 4, 0);
+    } else {
+        e.set(this, NiTPointerList::m_pkTail, 0);
+    }
+    let element = e.mem.u32(node + 8);
+    e.mem.set_u32(node + 8, 0);
+    e.call(NODE_DEALLOCATE, &args![this.addr() + 8, node]);
+    let count = e.get(this, NiTPointerList::m_uiCount);
+    e.set(this, NiTPointerList::m_uiCount, count.wrapping_sub(1));
+    element
+}
+
+// Translated from 00e92ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: deletes the factory instance (`0126fa10`,
+/// vtable slot 0 with 1) when there is one and clears it.
+pub fn fn_00e92ec0(e: &mut Engine) {
+    let instance = e.global::<u32>(FACTORY_INSTANCE);
+    if instance != 0 {
+        e.vcall(instance, 0, &args![1u32]);
+    }
+    e.set_global(FACTORY_INSTANCE, 0u32);
+}
+
+// Translated from 00e93000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderProgramFactory::GetNextProgramDirectory` (engine map):
+/// with a node at `*position`, moves `*position` to the next node and
+/// returns the node's element (the directory); else 0.
+pub fn ni_d3d_shader_program_factory_get_next_program_directory(
+    e: &mut Engine,
+    position: u32,
+) -> u32 {
+    let node = e.mem.u32(position);
+    if node == 0 {
+        return 0;
+    }
+    let next = e.mem.u32(node);
+    e.mem.set_u32(position, next);
+    e.mem.u32(node + 8)
+}
+
+// Translated from 00e93260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl): removes every entry of the creator map
+/// (`0126fa14`) whose value is `creator`: from the first non-empty bucket,
+/// `GetNext` (`00b57f20`) gives each key and value and `RemoveAt`
+/// (`00e91fd0`) removes the matching keys.
+pub fn fn_00e93260(e: &mut Engine, creator: u32) {
+    let map = e.mem.u32(CREATOR_MAP_SLOT);
+    if map == 0 {
+        return;
+    }
+    let size = e.mem.u32(map + 4);
+    let mut first = 0u32;
+    let mut index = 0u32;
+    while index < size {
+        let buckets = e.mem.u32(map + 8);
+        let bucket = e.mem.u32(buckets + 4 * index);
+        if bucket != 0 {
+            first = bucket;
+            break;
+        }
+        index += 1;
+    }
+    if first == 0 {
+        return;
+    }
+    // The locals: the position, the key and the value.
+    e.with_stack(0xc, |e, locals| {
+        let value_slot = locals.addr();
+        let key_slot = locals.addr() + 4;
+        let position = locals.addr() + 8;
+        e.mem.set_u32(position, first);
+        loop {
+            let map = e.mem.u32(CREATOR_MAP_SLOT);
+            e.mem.set_u32(key_slot, 0);
+            e.mem.set_u32(value_slot, 0);
+            e.call(MAP_GET_NEXT, &args![map, position, key_slot, value_slot]);
+            if e.mem.u32(value_slot) == creator {
+                let key = e.mem.u32(key_slot);
+                let map = e.mem.u32(CREATOR_MAP_SLOT);
+                e.call(MAP_REMOVE_AT, &args![map, key]);
+            }
+            if e.mem.u32(position) == 0 {
+                break;
+            }
+        }
+    });
+}
+
+// Translated from 00e933d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: empties the creator map (`0126fa14`,
+/// `00b601a0`), deletes it (vtable slot 0 with 1) when there is one and
+/// clears it.
+pub fn fn_00e933d0(e: &mut Engine) {
+    let map = e.mem.u32(CREATOR_MAP_SLOT);
+    e.call(MAP_REMOVE_ALL, &args![map]);
+    let map = e.mem.u32(CREATOR_MAP_SLOT);
+    if map != 0 {
+        e.vcall(map, 0, &args![1u32]);
+    }
+    e.mem.set_u32(CREATOR_MAP_SLOT, 0);
+}
+
+/// The destructor body the three `NiTStringTemplateMap` instances share:
+/// the template vtable; with the copy flag (+0x10) every key string of
+/// every bucket's items freed; the pointer-map vtable and `RemoveAll`; the
+/// map-base vtable and `RemoveAll` again; the bucket array (+8) freed.
+fn string_template_map_destruct(e: &mut Engine, this: Ptr, vtables: [u32; 3]) {
+    let base = this.addr();
+    e.mem.set_u32(base, vtables[0]);
+    if e.mem.u8(base + 0x10) != 0 {
+        let mut index = 0u32;
+        while index < e.mem.u32(base + 4) {
+            let buckets = e.mem.u32(base + 8);
+            let mut item = e.mem.u32(buckets + 4 * index);
+            while item != 0 {
+                let key = e.mem.u32(item + 4);
+                item = e.mem.u32(item);
+                e.call(NI_FREE, &args![key]);
+            }
+            index += 1;
+        }
+    }
+    e.mem.set_u32(base, vtables[1]);
+    e.call(MAP_REMOVE_ALL, &args![base]);
+    e.mem.set_u32(base, vtables[2]);
+    e.call(MAP_REMOVE_ALL, &args![base]);
+    let buckets = e.mem.u32(base + 8);
+    e.call(NI_FREE, &args![buckets]);
+}
+
+// Translated from 00e93400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTStringTemplateMap<NiTPointerMap<const char *, NiD3DVertexShader
+/// *>, ...>` destructor (RTTI of the vtables it stores): see
+/// `string_template_map_destruct`.
+pub fn fn_00e93400(e: &mut Engine, this: Ptr) {
+    string_template_map_destruct(
+        e,
+        this,
+        [
+            VERTEX_TEMPLATE_MAP_VTABLE,
+            VERTEX_POINTER_MAP_VTABLE,
+            FIRST_MAP_BASE_VTABLE,
+        ],
+    );
+}
+
+// Translated from 00e93470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The string map's `SetValue` (unnamed in the engine map): with the copy
+/// flag (+0x10) the item's key (+4) becomes a copy of `key` (`strlen + 1`
+/// bytes from `00aa1070`, `_strcpy_s`), else `key` itself; the item's value
+/// (+8) becomes `value`.
+pub fn fn_00e93470(e: &mut Engine, this: Ptr, item: u32, key: u32, value: u32) {
+    if e.mem.u8(this.addr() + 0x10) == 0 {
+        e.mem.set_u32(item + 4, key);
+        e.mem.set_u32(item + 8, value);
+        return;
+    }
+    let mut length = 0u32;
+    while e.mem.u8(key.wrapping_add(length)) != 0 {
+        length += 1;
+    }
+    let size = length + 1;
+    let copy = e.call(ALLOCATE_BLOCK, &args![size]).u32();
+    e.mem.set_u32(item + 4, copy);
+    e.call(STRCPY_S, &args![copy, size, key]);
+    e.mem.set_u32(item + 8, value);
+}
+
+// Translated from 00e934d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTStringTemplateMap<NiTPointerMap<const char *, NiD3DPixelShader
+/// *>, ...>` destructor: see `string_template_map_destruct`.
+pub fn fn_00e934d0(e: &mut Engine, this: Ptr) {
+    string_template_map_destruct(
+        e,
+        this,
+        [
+            PIXEL_TEMPLATE_MAP_VTABLE,
+            PIXEL_POINTER_MAP_VTABLE,
+            SECOND_MAP_BASE_VTABLE,
+        ],
+    );
+}
+
+// Translated from 00e93540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTStringTemplateMap<NiTPointerMap<const char *,
+/// NiD3DShaderProgramCreator *>, ...>` destructor: see
+/// `string_template_map_destruct`.
+pub fn fn_00e93540(e: &mut Engine, this: Ptr) {
+    string_template_map_destruct(
+        e,
+        this,
+        [
+            CREATOR_TEMPLATE_MAP_VTABLE,
+            CREATOR_POINTER_MAP_VTABLE,
+            CREATOR_MAP_BASE_VTABLE,
+        ],
+    );
+}
+
+// Translated from 00e935b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The string map's `ClearValue` (unnamed in the engine map): with the copy
+/// flag (+0x10), frees the item's key (+4).
+pub fn fn_00e935b0(e: &mut Engine, this: Ptr, item: u32) {
+    if e.mem.u8(this.addr() + 0x10) != 0 {
+        let key = e.mem.u32(item + 4);
+        e.call(NI_FREE, &args![key]);
+    }
+}
+
+/// A scalar deleting destructor's tail: with bit 0 of `flags` the object
+/// freed through the memory manager.
+fn free_if_flagged(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, this]);
+    }
+    this
+}
+
+// Translated from 00e93650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTStringTemplateMap<..., NiD3DVertexShader *>::scalar deleting
+/// destructor` (engine map): `00e93400`, then the object freed with bit 0
+/// of `flags`. Returns `this`.
+pub fn fn_00e93650(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00e93400(e, this);
+    free_if_flagged(e, this, flags)
+}
+
+// Translated from 00e936f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTStringTemplateMap<..., NiD3DPixelShader *>::scalar deleting
+/// destructor` (engine map): `00e934d0`, then the object freed with bit 0
+/// of `flags`. Returns `this`.
+pub fn fn_00e936f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00e934d0(e, this);
+    free_if_flagged(e, this, flags)
+}
+
+/// `00e93790` and `00e937c0`: with a factory instance and a non-null
+/// `shader`, removes the shader's name (its vtable +0x50) from the
+/// factory's map at `map_offset` when both exist.
+fn remove_shader_name(e: &mut Engine, shader: u32, map_offset: u32) {
+    if e.global::<u32>(FACTORY_INSTANCE) == 0 || shader == 0 {
+        return;
+    }
+    let name = e.vcall(shader, 0x50, &args![]).u32();
+    if name == 0 {
+        return;
+    }
+    let instance = e.global::<u32>(FACTORY_INSTANCE);
+    let map = e.mem.u32(instance + map_offset);
+    if map != 0 {
+        e.call(MAP_REMOVE_AT, &args![map, name]);
+    }
+}
+
+// Translated from 00e93790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl): removes the vertex shader's name from
+/// the factory's vertex shader map (+0x14).
+pub fn fn_00e93790(e: &mut Engine, shader: u32) {
+    remove_shader_name(e, shader, 0x14);
+}
+
+// Translated from 00e937c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl): removes the pixel shader's name from
+/// the factory's pixel shader map (+0x18).
+pub fn fn_00e937c0(e: &mut Engine, shader: u32) {
+    remove_shader_name(e, shader, 0x18);
+}
+
+// Translated from 00e93ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTStringTemplateMap<..., NiD3DShaderProgramCreator *>::scalar deleting
+/// destructor` (engine map): `00e93540`, then the object freed with bit 0
+/// of `flags`. Returns `this`.
+pub fn fn_00e93ab0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00e93540(e, this);
+    free_if_flagged(e, this, flags)
+}
+
+// Translated from 00e93cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderProgramFactory::RemoveAllProgramDirectories` (engine map):
+/// for each node of the directory list (+8), takes its directory; a non-null
+/// one is looked up in the list from the head and its node removed (the
+/// head through `RemoveHead`, the tail through `RemoveTail`, any other one
+/// unlinked here and pushed back on the shared node pool under its lock,
+/// the count dropping by one), then the directory string is freed.
+pub fn ni_d3d_shader_program_factory_remove_all_program_directories(e: &mut Engine, this: Ptr) {
+    let list = this.addr() + 8;
+    let mut node = e.mem.u32(list);
+    while node != 0 {
+        let directory = e.mem.u32(node + 8);
+        node = e.mem.u32(node);
+        if directory == 0 {
+            continue;
+        }
+        let head = e.mem.u32(list);
+        let mut cursor = head;
+        let mut found = 0u32;
+        while cursor != 0 {
+            let candidate = cursor;
+            cursor = e.mem.u32(cursor);
+            if directory == e.mem.u32(candidate + 8) {
+                found = candidate;
+                break;
+            }
+        }
+        if found != 0 {
+            if found == head {
+                e.call(LIST_REMOVE_HEAD, &args![list]);
+            } else if found == e.mem.u32(list + 4) {
+                e.call(LIST_REMOVE_TAIL, &args![list]);
+            } else {
+                let previous = e.mem.u32(found + 4);
+                let next = e.mem.u32(found);
+                if previous != 0 {
+                    e.mem.set_u32(previous, next);
+                }
+                if next != 0 {
+                    e.mem.set_u32(next + 4, previous);
+                }
+                e.mem.set_u32(found + 8, 0);
+                e.call(LOCK_ENTER, &args![NODE_POOL_LOCK, 0u32]);
+                e.mem.set_u32(found + 4, 0);
+                let free = e.mem.u32(NODE_POOL_FREE_LIST);
+                e.mem.set_u32(found, free);
+                let count = e.mem.u32(NODE_POOL_LOCK_COUNT).wrapping_sub(1);
+                e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
+                e.mem.set_u32(NODE_POOL_FREE_LIST, found);
+                if count == 0 {
+                    e.mem.set_u32(NODE_POOL_LOCK, 0);
+                }
+                let remaining = e.mem.u32(list + 8);
+                e.mem.set_u32(list + 8, remaining.wrapping_sub(1));
+            }
+        }
+        e.call(NI_FREE, &args![directory]);
+    }
+}
+
+// Translated from 00e93e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderProgramFactory::~NiD3DShaderProgramFactory` (engine map):
+/// the vertex and pixel shader maps (+0x14, +0x18) emptied and deleted
+/// (vtable slot 0 with 1) when they exist, the program directories removed
+/// and the list emptied (`00b71300`), then the `NiRefObject` vtable and one
+/// live object less (`011f4400`).
+pub fn ni_d3d_shader_program_factory_destruct(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, PROGRAM_FACTORY_VTABLE);
+    for offset in [0x14, 0x18] {
+        let map = e.mem.u32(base + offset);
+        if map != 0 {
+            e.call(MAP_REMOVE_ALL, &args![map]);
+        }
+        let map = e.mem.u32(base + offset);
+        if map != 0 {
+            e.vcall(map, 0, &args![1u32]);
+        }
+    }
+    ni_d3d_shader_program_factory_remove_all_program_directories(e, this);
+    ni_t_pointer_list_base_remove_all(e, Ptr::new(base + 8));
+    e.mem.set_u32(base, NI_REF_OBJECT_VTABLE);
+    e.call(INTERLOCKED_DECREMENT, &args![OBJECT_COUNT_011F4400]);
+}
+
+// Translated from 00e93f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderProgramFactory::scalar deleting destructor` (engine map): the
+/// destructor, then with bit 0 of `flags` the 0x1C bytes freed
+/// (`00aa1460`). Returns `this`.
+pub fn ni_d3d_shader_program_factory_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    ni_d3d_shader_program_factory_destruct(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_SIZED, &args![this, 0x1cu32]);
+    }
+    this
+}
+
 /// The program factory's renderer globals (`0126fa1c` the renderer, `0126fa18` its device,
 /// counted with the device's `AddRef`/`Release`, slots 4 and 8, `0126fa20` its shader
 /// library word, the renderer's +0x8b8).
@@ -203,8 +634,6 @@ pub fn fn_00e93ad0(e: &mut Engine, this: Ptr) -> Ptr {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x00e9_2f70, fn_00e92f70(u32)),
-        entry!(0x00e9_3ad0, fn_00e93ad0(Ptr) -> Ptr),
         entry!(
             0x00e9_3d80,
             ni_d3d_shader_program_factory_create_shader_creator_map()
@@ -215,6 +644,32 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00b7_1300,
             ni_t_pointer_list_base_remove_all(Ptr<crate::types::NiTPointerList>)
         ),
+        entry!(
+            0x00ae_7f90,
+            ni_t_pointer_list_base_remove_head(Ptr<crate::types::NiTPointerList>) -> u32
+        ),
+        entry!(0x00e9_2ec0, fn_00e92ec0()),
+        entry!(0x00e9_2f70, fn_00e92f70(u32)),
+        entry!(0x00e9_3000, ni_d3d_shader_program_factory_get_next_program_directory(u32) -> u32),
+        entry!(0x00e9_3260, fn_00e93260(u32)),
+        entry!(0x00e9_33d0, fn_00e933d0()),
+        entry!(0x00e9_3400, fn_00e93400(Ptr)),
+        entry!(0x00e9_3470, fn_00e93470(Ptr, u32, u32, u32)),
+        entry!(0x00e9_34d0, fn_00e934d0(Ptr)),
+        entry!(0x00e9_3540, fn_00e93540(Ptr)),
+        entry!(0x00e9_35b0, fn_00e935b0(Ptr, u32)),
+        entry!(0x00e9_3650, fn_00e93650(Ptr, u32) -> Ptr),
+        entry!(0x00e9_36f0, fn_00e936f0(Ptr, u32) -> Ptr),
+        entry!(0x00e9_3790, fn_00e93790(u32)),
+        entry!(0x00e9_37c0, fn_00e937c0(u32)),
+        entry!(0x00e9_3ab0, fn_00e93ab0(Ptr, u32) -> Ptr),
+        entry!(0x00e9_3ad0, fn_00e93ad0(Ptr) -> Ptr),
+        entry!(
+            0x00e9_3cc0,
+            ni_d3d_shader_program_factory_remove_all_program_directories(Ptr)
+        ),
+        entry!(0x00e9_3e00, ni_d3d_shader_program_factory_destruct(Ptr)),
+        entry!(0x00e9_3f30, ni_d3d_shader_program_factory_scalar_deleting_destructor(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -423,6 +878,368 @@ mod start_up_tests {
     fn refuses_a_null_name() {
         let mut e = engine();
         assert!(!e.call(0x00e9_3e70, &args![0u32, 1u32]).bool());
+    }
+}
+
+#[cfg(test)]
+mod factory_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn eax(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn stub(e: &mut Engine, addrs: &[u32]) {
+        for &addr in addrs {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.map(0x011c_5000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        e
+    }
+
+    /// An object whose vtable has the test functions `0x7000 + slot`.
+    fn object(e: &mut Engine) -> u32 {
+        let slots: Vec<u32> = (0..0x18).map(|slot| 0x0000_7000 + 4 * slot).collect();
+        e.put_vtable(0x0f00_0000, &slots);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, 0x0f00_0000);
+        object
+    }
+
+    #[test]
+    fn remove_head_unlinks_the_first_node() {
+        let mut e = engine();
+        stub(&mut e, &[NODE_DEALLOCATE]);
+        let list = e.mem.alloc(0xc);
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 8, 0x11);
+        e.mem.set_u32(second + 4, first);
+        e.mem.set_u32(second + 8, 0x22);
+        e.mem.set_u32(list, first);
+        e.mem.set_u32(list + 4, second);
+        e.mem.set_u32(list + 8, 2);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00ae_7f90, &args![list]).u32(), 0x11);
+        assert_eq!(e.mem.u32(list), second);
+        assert_eq!(e.mem.u32(second + 4), 0);
+        assert_eq!(e.mem.u32(first + 8), 0);
+        assert_eq!(e.mem.u32(list + 8), 1);
+        assert_eq!(calls_to(&e, NODE_DEALLOCATE), vec![vec![list + 8, first]]);
+        assert_eq!(e.call(0x00ae_7f90, &args![list]).u32(), 0x22);
+        assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (0, 0));
+        assert_eq!(e.mem.u32(list + 8), 0);
+    }
+
+    #[test]
+    fn fn_00e92ec0_deletes_the_instance() {
+        let mut e = engine();
+        let instance = object(&mut e);
+        stub(&mut e, &[0x0000_7000]);
+        e.set_global(FACTORY_INSTANCE, instance);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_2ec0, &args![]);
+        assert_eq!(calls_to(&e, 0x0000_7000), vec![vec![instance, 1]]);
+        assert_eq!(e.global::<u32>(FACTORY_INSTANCE), 0);
+        e.call(0x00e9_2ec0, &args![]);
+        assert_eq!(calls_to(&e, 0x0000_7000).len(), 1);
+    }
+
+    #[test]
+    fn fn_00e92f70_keeps_the_renderer_and_its_device() {
+        let mut e = engine();
+        let old = object(&mut e);
+        let device = object(&mut e);
+        stub(&mut e, &[0x0000_7004, 0x0000_7008]);
+        let renderer = e.mem.alloc(0x900);
+        e.mem.set_u32(renderer + 0x288, device);
+        e.mem.set_u32(renderer + 0x8b8, 0x55);
+        e.set_global(FACTORY_DEVICE_0126FA18, old);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_2f70, &args![renderer]);
+        assert_eq!(e.global::<u32>(FACTORY_RENDERER_0126FA1C), renderer);
+        assert_eq!(e.global::<u32>(FACTORY_DEVICE_0126FA18), device);
+        assert_eq!(e.global::<u32>(FACTORY_LIBRARY_0126FA20), 0x55);
+        assert_eq!(calls_to(&e, 0x0000_7008), vec![vec![old]]);
+        assert_eq!(calls_to(&e, 0x0000_7004), vec![vec![device]]);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_2f70, &args![0u32]);
+        assert_eq!(e.global::<u32>(FACTORY_RENDERER_0126FA1C), 0);
+        assert_eq!(e.global::<u32>(FACTORY_DEVICE_0126FA18), 0);
+        assert_eq!(e.global::<u32>(FACTORY_LIBRARY_0126FA20), 0);
+        assert_eq!(calls_to(&e, 0x0000_7008), vec![vec![device]]);
+    }
+
+    #[test]
+    fn get_next_program_directory_steps_the_position() {
+        let mut e = engine();
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(node, 0x4444);
+        e.mem.set_u32(node + 8, 0x5555);
+        let position = e.mem.alloc(4);
+        e.mem.set_u32(position, node);
+        assert_eq!(e.call(0x00e9_3000, &args![position]).u32(), 0x5555);
+        assert_eq!(e.mem.u32(position), 0x4444);
+        e.mem.set_u32(position, 0);
+        assert_eq!(e.call(0x00e9_3000, &args![position]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00e93260_removes_the_creator_entries() {
+        let mut e = engine();
+        stub(&mut e, &[MAP_REMOVE_AT]);
+        // Three entries in turn: (1, creator), (2, other), (3, creator).
+        let mut step = 0u32;
+        e.register_double(MAP_GET_NEXT, move |e, a| {
+            step += 1;
+            e.mem.set_u32(a[2], step);
+            e.mem.set_u32(a[3], if step == 2 { 0x99 } else { 0x77 });
+            e.mem
+                .set_u32(a[1], if step == 3 { 0 } else { 0x1000 + step });
+            Ret::default()
+        });
+        let map = e.mem.alloc(0x14);
+        let buckets = e.mem.alloc(0xc);
+        e.mem.set_u32(map + 4, 3);
+        e.mem.set_u32(map + 8, buckets);
+        e.mem.set_u32(buckets + 8, 0x1000);
+        e.mem.set_u32(CREATOR_MAP_SLOT, map);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_3260, &args![0x77u32]);
+        assert_eq!(calls_to(&e, MAP_GET_NEXT).len(), 3);
+        assert_eq!(
+            calls_to(&e, MAP_REMOVE_AT),
+            vec![vec![map, 1], vec![map, 3]]
+        );
+        // An empty map asks nothing.
+        e.mem.set_u32(buckets + 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_3260, &args![0x77u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_00e933d0_destroys_the_creator_map() {
+        let mut e = engine();
+        let map = object(&mut e);
+        stub(&mut e, &[MAP_REMOVE_ALL, 0x0000_7000]);
+        e.mem.set_u32(CREATOR_MAP_SLOT, map);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_33d0, &args![]);
+        assert_eq!(calls_to(&e, MAP_REMOVE_ALL), vec![vec![map]]);
+        assert_eq!(calls_to(&e, 0x0000_7000), vec![vec![map, 1]]);
+        assert_eq!(e.mem.u32(CREATOR_MAP_SLOT), 0);
+    }
+
+    fn string_map(e: &mut Engine, copies: bool) -> (u32, u32) {
+        let map = e.mem.alloc(0x14);
+        let buckets = e.mem.alloc(8);
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 4, 0x6001);
+        e.mem.set_u32(second + 4, 0x6002);
+        e.mem.set_u32(buckets + 4, first);
+        e.mem.set_u32(map + 4, 2);
+        e.mem.set_u32(map + 8, buckets);
+        e.mem.set_u8(map + 0x10, u8::from(copies));
+        (map, buckets)
+    }
+
+    #[test]
+    fn string_map_destructors_free_the_copied_keys() {
+        for (address, deleting, vtable) in [
+            (0x00e9_3400u32, 0x00e9_3650u32, FIRST_MAP_BASE_VTABLE),
+            (0x00e9_34d0, 0x00e9_36f0, SECOND_MAP_BASE_VTABLE),
+            (0x00e9_3540, 0x00e9_3ab0, CREATOR_MAP_BASE_VTABLE),
+        ] {
+            let mut e = engine();
+            stub(&mut e, &[NI_FREE, MAP_REMOVE_ALL, MEMORY_MANAGER_FREE]);
+            let (map, buckets) = string_map(&mut e, true);
+            e.call_log = Some(vec![]);
+            e.call(address, &args![map]);
+            assert_eq!(e.mem.u32(map), vtable);
+            assert_eq!(
+                calls_to(&e, NI_FREE),
+                vec![vec![0x6001], vec![0x6002], vec![buckets]]
+            );
+            assert_eq!(calls_to(&e, MAP_REMOVE_ALL), vec![vec![map], vec![map]]);
+            let (map, buckets) = string_map(&mut e, false);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(deleting, &args![map, 1u32]).u32(), map);
+            assert_eq!(calls_to(&e, NI_FREE), vec![vec![buckets]]);
+            assert_eq!(
+                calls_to(&e, MEMORY_MANAGER_FREE),
+                vec![vec![MEMORY_MANAGER_OBJECT, map]]
+            );
+            e.call_log = Some(vec![]);
+            e.call(deleting, &args![map, 0u32]);
+            assert!(calls_to(&e, MEMORY_MANAGER_FREE).is_empty());
+        }
+    }
+
+    #[test]
+    fn set_and_clear_value_copy_keys_with_the_flag() {
+        let mut e = engine();
+        e.register(ALLOCATE_BLOCK, |_, _| eax(0x8800));
+        stub(&mut e, &[STRCPY_S, NI_FREE]);
+        let map = e.mem.alloc(0x14);
+        let item = e.mem.alloc(0xc);
+        let key = e.mem.alloc(8);
+        e.mem.set_cstr(key, b"abc");
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_3470, &args![map, item, key, 0x99u32]);
+        assert_eq!((e.mem.u32(item + 4), e.mem.u32(item + 8)), (key, 0x99));
+        e.call(0x00e9_35b0, &args![map, item]);
+        assert!(e.call_log.as_ref().unwrap().len() == 2);
+        e.mem.set_u8(map + 0x10, 1);
+        e.call(0x00e9_3470, &args![map, item, key, 0x98u32]);
+        assert_eq!(calls_to(&e, ALLOCATE_BLOCK), vec![vec![4]]);
+        assert_eq!(calls_to(&e, STRCPY_S), vec![vec![0x8800, 4, key]]);
+        assert_eq!((e.mem.u32(item + 4), e.mem.u32(item + 8)), (0x8800, 0x98));
+        e.call(0x00e9_35b0, &args![map, item]);
+        assert_eq!(calls_to(&e, NI_FREE), vec![vec![0x8800]]);
+    }
+
+    #[test]
+    fn shader_names_leave_their_maps() {
+        let mut e = engine();
+        let shader = object(&mut e);
+        e.register(0x0000_7050, |_, _| eax(0x6100));
+        stub(&mut e, &[MAP_REMOVE_AT]);
+        let instance = e.mem.alloc(0x1c);
+        e.mem.set_u32(instance + 0x14, 0x4100);
+        e.mem.set_u32(instance + 0x18, 0x4200);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_3790, &args![shader]);
+        assert!(calls_to(&e, 0x0000_7050).is_empty());
+        e.set_global(FACTORY_INSTANCE, instance);
+        e.call(0x00e9_3790, &args![shader]);
+        e.call(0x00e9_37c0, &args![shader]);
+        e.call(0x00e9_37c0, &args![0u32]);
+        assert_eq!(
+            calls_to(&e, MAP_REMOVE_AT),
+            vec![vec![0x4100, 0x6100], vec![0x4200, 0x6100]]
+        );
+        e.mem.set_u32(instance + 0x18, 0);
+        e.call(0x00e9_37c0, &args![shader]);
+        assert_eq!(calls_to(&e, MAP_REMOVE_AT).len(), 2);
+    }
+
+    #[test]
+    fn constructor_makes_both_maps() {
+        let mut e = engine();
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| eax(e.mem.alloc(a[1])));
+        e.register(ALLOCATE_BLOCK, |_, _| eax(0x9900));
+        stub(&mut e, &[MEMSET, IMPORT_INTERLOCKED_INCREMENT]);
+        let this = e.mem.alloc(0x1c);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e9_3ad0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), PROGRAM_FACTORY_VTABLE);
+        assert_eq!(
+            calls_to(&e, IMPORT_INTERLOCKED_INCREMENT),
+            vec![vec![OBJECT_COUNT_011F4400]]
+        );
+        let vertex = e.mem.u32(this + 0x14);
+        let pixel = e.mem.u32(this + 0x18);
+        assert_eq!(e.mem.u32(vertex), FIRST_MAP_VTABLE);
+        assert_eq!(e.mem.u32(pixel), SECOND_MAP_VTABLE);
+        assert_eq!(e.mem.u32(vertex + 4), 0x3b);
+        assert_eq!(e.mem.u32(vertex + 8), 0x9900);
+        assert_eq!(e.mem.u8(pixel + 0x10), 0);
+        assert_eq!(calls_to(&e, MEMSET), vec![vec![0x9900, 0, 0xec]; 2]);
+        // Failed allocations leave null maps.
+        e.register(MEMORY_MANAGER_ALLOCATE, |_, _| eax(0));
+        e.call(0x00e9_3ad0, &args![this]);
+        assert_eq!((e.mem.u32(this + 0x14), e.mem.u32(this + 0x18)), (0, 0));
+    }
+
+    #[test]
+    fn remove_all_program_directories_frees_each_directory() {
+        let mut e = engine();
+        stub(
+            &mut e,
+            &[LIST_REMOVE_HEAD, LIST_REMOVE_TAIL, NI_FREE, LOCK_ENTER],
+        );
+        e.mem.set_u32(NODE_POOL_LOCK_COUNT, 2);
+        let this = e.mem.alloc(0x1c);
+        let nodes: Vec<u32> = (0..4).map(|_| e.mem.alloc(0xc)).collect();
+        for (index, &node) in nodes.iter().enumerate() {
+            e.mem
+                .set_u32(node, nodes.get(index + 1).copied().unwrap_or(0));
+            e.mem
+                .set_u32(node + 4, if index == 0 { 0 } else { nodes[index - 1] });
+            e.mem
+                .set_u32(node + 8, if index == 2 { 0 } else { 0x6000 + index as u32 });
+        }
+        e.mem.set_u32(this + 8, nodes[0]);
+        e.mem.set_u32(this + 0xc, nodes[3]);
+        e.mem.set_u32(this + 0x10, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_3cc0, &args![this]);
+        assert_eq!(calls_to(&e, LIST_REMOVE_HEAD), vec![vec![this + 8]]);
+        // The second node is in the middle: unlinked here.
+        assert_eq!(calls_to(&e, LOCK_ENTER), vec![vec![NODE_POOL_LOCK, 0]]);
+        assert_eq!(e.mem.u32(NODE_POOL_FREE_LIST), nodes[1]);
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK_COUNT), 1);
+        assert_eq!(e.mem.u32(this + 0x10), 3);
+        assert_eq!(calls_to(&e, LIST_REMOVE_TAIL), vec![vec![this + 8]]);
+        assert_eq!(
+            calls_to(&e, NI_FREE),
+            vec![vec![0x6000], vec![0x6001], vec![0x6003]]
+        );
+    }
+
+    #[test]
+    fn destructor_and_deleting_destructor() {
+        let mut e = engine();
+        let map = object(&mut e);
+        stub(
+            &mut e,
+            &[
+                MAP_REMOVE_ALL,
+                0x0000_7000,
+                INTERLOCKED_DECREMENT,
+                NI_FREE_SIZED,
+            ],
+        );
+        let this = e.mem.alloc(0x1c);
+        e.mem.set_u32(this + 0x18, map);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e9_3f30, &args![this, 1u32]).u32(), this);
+        assert_eq!(calls_to(&e, MAP_REMOVE_ALL), vec![vec![map]]);
+        assert_eq!(calls_to(&e, 0x0000_7000), vec![vec![map, 1]]);
+        assert_eq!(e.mem.u32(this), NI_REF_OBJECT_VTABLE);
+        assert_eq!(
+            calls_to(&e, INTERLOCKED_DECREMENT),
+            vec![vec![OBJECT_COUNT_011F4400]]
+        );
+        assert_eq!(calls_to(&e, NI_FREE_SIZED), vec![vec![this, 0x1c]]);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_3f30, &args![this, 0u32]);
+        assert!(calls_to(&e, NI_FREE_SIZED).is_empty());
+        e.call(0x00e9_3e00, &args![this]);
+        assert_eq!(calls_to(&e, INTERLOCKED_DECREMENT).len(), 2);
     }
 }
 

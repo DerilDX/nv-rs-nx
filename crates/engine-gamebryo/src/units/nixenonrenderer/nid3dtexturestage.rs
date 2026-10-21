@@ -78,11 +78,38 @@ pub fn fn_00e7eb50(e: &mut Engine, this: Ptr, growth: u32) {
     pool_add_block(e, this.addr(), growth, block, 0x68);
 }
 
+/// The sampler-state setter `00e890c0` (unit `run_00e88fc0`; `thiscall` on the stage's state
+/// block, four words: state, value and two bytes) and the filter table it reads (`0126f050`,
+/// 12 bytes per filter mode: the words for sampler states 6, 5 and 7).
+const SET_SAMPLER_STATE_00E890C0: u32 = 0x00e8_90c0;
+const FILTER_TABLE_0126F050: u32 = 0x0126_f050;
+
+// Translated from 00e7def0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DTextureStage::SetFilterMode` (engine map), `thiscall` with the filter mode: the
+/// state block at +0x10 gets sampler states 5, 6 and 7 (`00e890c0` with 0 and 0) from the
+/// mode's row of the table at `0126f050` (its words +4, +0 and +8, each read again before its
+/// call), then the mode is stored at +0. The row's three words also go to the function's own
+/// stack slots, which nothing reads.
+pub fn ni_d3d_texture_stage_set_filter_mode(e: &mut Engine, this: Ptr, mode: u32) {
+    let base = this.addr();
+    let row = FILTER_TABLE_0126F050.wrapping_add(mode.wrapping_mul(0xc));
+    for (state, offset) in [(5u32, 4u32), (6, 0), (7, 8)] {
+        let value = e.mem.u32(row.wrapping_add(offset));
+        let block = e.mem.u32(base.wrapping_add(0x10));
+        e.call(
+            SET_SAMPLER_STATE_00E890C0,
+            &args![block, state, value, 0u32, 0u32],
+        );
+    }
+    e.mem.set_u32(base, mode);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e7_edf0, ni_d3d_texture_stage_create_new_stage(Ptr)),
         entry!(0x00e7_eb50, fn_00e7eb50(Ptr, u32)),
+        entry!(0x00e7_def0, ni_d3d_texture_stage_set_filter_mode(Ptr, u32)),
     ]
 }
 
@@ -189,5 +216,41 @@ mod pool_grow_tests {
         assert_eq!(e.mem.u32(pool + 8), 1);
         let elements = e.mem.u32(pool);
         assert_eq!(e.mem.u32(elements), stages);
+    }
+}
+
+#[cfg(test)]
+mod b052_tests {
+    use super::*;
+
+    #[test]
+    fn set_filter_mode_sets_three_sampler_states() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.register(SET_SAMPLER_STATE_00E890C0, |_, _| Ret::default());
+        // Row 2: words 0x60, 0x50, 0x70 at +0, +4, +8.
+        let row = FILTER_TABLE_0126F050 + 2 * 0xc;
+        e.mem.set_u32(row, 0x60);
+        e.mem.set_u32(row + 4, 0x50);
+        e.mem.set_u32(row + 8, 0x70);
+        let this = e.mem.alloc(0x14);
+        e.mem.set_u32(this + 0x10, 0x7700);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_def0, &args![this, 2u32]);
+        let log = e.call_log.take().unwrap();
+        let sets: Vec<Vec<u32>> = log
+            .iter()
+            .filter(|(a, _)| *a == SET_SAMPLER_STATE_00E890C0)
+            .map(|(_, w)| w.clone())
+            .collect();
+        assert_eq!(
+            sets,
+            vec![
+                vec![0x7700, 5, 0x50, 0, 0],
+                vec![0x7700, 6, 0x60, 0, 0],
+                vec![0x7700, 7, 0x70, 0, 0]
+            ]
+        );
+        assert_eq!(e.mem.u32(this), 2);
     }
 }

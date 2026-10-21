@@ -122,7 +122,503 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e7_8c60, fn_00e78c60(Ptr, Ptr, u32, u32) -> bool),
         entry!(0x00e7_6320, fn_00e76320(Ptr) -> Ptr),
+        entry!(0x00e7_8bd0, fn_00e78bd0(Ptr) -> Ptr),
+        entry!(0x00e7_8be0, fn_00e78be0(Ptr)),
+        entry!(0x00e7_8f80, fn_00e78f80(u32) -> u32),
+        entry!(0x00e7_9d00, fn_00e79d00(u32) -> u32),
+        entry!(
+            0x00e7_a200,
+            fn_00e7a200(Ptr, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(
+            0x00e7_a5e0,
+            ni_t_primitive_array_packer_entry_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
+}
+
+// Translated from 00e78bd0 (PC disassembly, FalloutNV.exe 1.4.0.525)
+/// The stream constructor the `vector constructor iterator` runs on each 16-byte stream of
+/// `00e78c60` (code Ghidra made no function of), `thiscall`, no stack words: clears the byte +0
+/// and the words +4, +8 and +0xc. Answers `this`.
+pub fn fn_00e78bd0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u8(base, 0);
+    for offset in [4u32, 8, 0xc] {
+        e.mem.set_u32(base.wrapping_add(offset), 0);
+    }
+    this
+}
+
+/// The declaration's table (`010ee7cc`, RTTI `.?AVNiD3DShaderDeclaration@@`), the Ni array
+/// free `00aa1490` (`cdecl`: block, element size) and the base destructor `00ee88d0` (no unit
+/// in the engine map; `thiscall`, no stack words).
+const D3D_DECLARATION_VTABLE_010EE7CC: u32 = 0x010e_e7cc;
+const NI_ARRAY_FREE_00AA1490: u32 = 0x00aa_1490;
+const BASE_DESTRUCT_00EE88D0: u32 = 0x00ee_88d0;
+
+// Translated from 00e78be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`): the `NiD3DShaderDeclaration`
+/// destructor, `thiscall`, no stack words. Stores the class's table; with streams (+0x24) each
+/// stream (16 bytes; the count +0x20 read again each time) whose address is not null has its
+/// entries (+8) freed (`00aa1490` with 0x1c), then the streams (with 0x10). Clears +0x24 and
+/// the renderer +8, releases the device (+0x10, slot 8, `stdcall`; no null check), clears it and
+/// runs the base destructor `00ee88d0` (a tail jump).
+pub fn fn_00e78be0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, D3D_DECLARATION_VTABLE_010EE7CC);
+    if e.mem.u32(base.wrapping_add(0x24)) != 0 {
+        let mut index = 0u32;
+        let mut offset = 0u32;
+        while index < e.mem.u32(base.wrapping_add(0x20)) {
+            let stream = e.mem.u32(base.wrapping_add(0x24)).wrapping_add(offset);
+            if stream != 0 {
+                let entries = e.mem.u32(stream.wrapping_add(8));
+                e.call(NI_ARRAY_FREE_00AA1490, &args![entries, 0x1cu32]);
+            }
+            index += 1;
+            offset = offset.wrapping_add(0x10);
+        }
+        let streams = e.mem.u32(base.wrapping_add(0x24));
+        e.call(NI_ARRAY_FREE_00AA1490, &args![streams, 0x10u32]);
+    }
+    let device = e.mem.u32(base.wrapping_add(0x10));
+    e.mem.set_u32(base.wrapping_add(0x24), 0);
+    e.mem.set_u32(base.wrapping_add(8), 0);
+    e.vcall(device, 8, &args![]);
+    e.mem.set_u32(base.wrapping_add(0x10), 0);
+    e.call(BASE_DESTRUCT_00EE88D0, &args![base]);
+}
+
+/// `memset` (`00ec61c0`) and `memcpy` (`00ec44d0`), both `cdecl`.
+const MEMSET: u32 = 0x00ec_61c0;
+const MEMCPY: u32 = 0x00ec_44d0;
+
+/// The packer entry the pack handlers take (`NiD3DShaderDeclaration::NiPackerEntry`, built on
+/// the stack by `00e7a200`): +8 the 16-bit vertex count, +0xc the 16-bit index array (or 0),
+/// +0x10 the source, +0x14 the element size, +0x18 the source stride, +0x1c the size written
+/// per vertex, +0x20 the destination stride, +0x2c the destination.
+fn vertex_count(e: &Engine, entry: u32) -> u16 {
+    e.mem.u16(entry.wrapping_add(8))
+}
+
+// Translated from 00e78f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`): the plain-copy pack handler,
+/// `cdecl` with the packer entry. Without a source each vertex's slot is zeroed (`memset` with
+/// the size per vertex). With an index array each vertex copies the indexed source element
+/// (`memcpy` of the element size from the source plus index times the source stride). Without
+/// one, elements of 8, 12 and 16 bytes are copied word by word (strides and sizes read once;
+/// the answer is the count times the size per vertex) and any other size through `memcpy`.
+/// The destination steps by its stride; answers the bytes written (the size per vertex for
+/// each vertex).
+pub fn fn_00e78f80(e: &mut Engine, entry: u32) -> u32 {
+    let mut source = e.mem.u32(entry.wrapping_add(0x10));
+    let index = e.mem.u32(entry.wrapping_add(0xc));
+    let mut destination = e.mem.u32(entry.wrapping_add(0x2c));
+    let mut total = 0u32;
+    if source == 0 {
+        let mut vertex = 0u16;
+        while vertex < vertex_count(e, entry) {
+            let size = e.mem.u32(entry.wrapping_add(0x1c));
+            e.call(MEMSET, &args![destination, 0u32, size]);
+            let stride = e.mem.u32(entry.wrapping_add(0x20));
+            destination = destination.wrapping_add(stride);
+            let size = e.mem.u32(entry.wrapping_add(0x1c));
+            total = total.wrapping_add(size);
+            vertex = vertex.wrapping_add(1);
+        }
+        return total;
+    }
+    if index != 0 {
+        let mut vertex = 0u16;
+        while vertex < vertex_count(e, entry) {
+            let size = e.mem.u32(entry.wrapping_add(0x14));
+            let element = u32::from(e.mem.u16(index.wrapping_add(u32::from(vertex) * 2)));
+            let stride = e.mem.u32(entry.wrapping_add(0x18));
+            let from = element.wrapping_mul(stride).wrapping_add(source);
+            vertex = vertex.wrapping_add(1);
+            e.call(MEMCPY, &args![destination, from, size]);
+            let step = e.mem.u32(entry.wrapping_add(0x20));
+            destination = destination.wrapping_add(step);
+            let written = e.mem.u32(entry.wrapping_add(0x1c));
+            total = total.wrapping_add(written);
+        }
+        return total;
+    }
+    let per_vertex = e.mem.u32(entry.wrapping_add(0x1c));
+    let size = e.mem.u32(entry.wrapping_add(0x14));
+    let step = e.mem.u32(entry.wrapping_add(0x20));
+    let source_stride = e.mem.u32(entry.wrapping_add(0x18));
+    let count = u32::from(vertex_count(e, entry));
+    let words = match size {
+        8 => 2u32,
+        0xc => 3,
+        0x10 => 4,
+        _ => {
+            let mut vertex = 0u32;
+            while vertex < u32::from(vertex_count(e, entry)) {
+                let size = e.mem.u32(entry.wrapping_add(0x14));
+                e.call(MEMCPY, &args![destination, source, size]);
+                destination = destination.wrapping_add(step);
+                total = total.wrapping_add(per_vertex);
+                vertex += 1;
+                source = source.wrapping_add(source_stride);
+            }
+            return total;
+        }
+    };
+    if count == 0 {
+        return 0;
+    }
+    for _ in 0..count {
+        for word in 0..words {
+            let value = e.mem.u32(source.wrapping_add(4 * word));
+            e.mem.set_u32(destination.wrapping_add(4 * word), value);
+        }
+        source = source.wrapping_add(source_stride);
+        destination = destination.wrapping_add(step);
+    }
+    count.wrapping_mul(per_vertex)
+}
+
+/// The colour pack handler's constants: `255.0` as a `float` (`01023cd8`, the colour written
+/// without a source) and as a `double` (`0101e568`, the scale of each channel).
+const WHITE_CHANNEL_01023CD8: u32 = 0x0102_3cd8;
+const CHANNEL_SCALE_0101E568: u32 = 0x0101_e568;
+
+/// One channel of the colour pack: the float at `bits` (`FLD dword`) times the scale
+/// (`FMUL qword`), stored as a float and loaded again, then `FISTP`.
+fn channel(bits: u32, scale: f64) -> u32 {
+    let stored = x87_store32(x87_mul(x87_load32(bits), scale));
+    crate::x87::fistp(x87_load32(stored)) as u32
+}
+
+/// Four channels packed as the code does (`SHL 8` and `OR` of the whole words).
+fn pack_channels(alpha: u32, red: u32, green: u32, blue: u32) -> u32 {
+    (((((alpha << 8) | red) << 8) | green) << 8) | blue
+}
+
+// Translated from 00e79d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`): the colour pack handler,
+/// `cdecl` with the packer entry: each vertex's colour as one word, alpha, red, green and blue
+/// (the high byte down) from the four floats of the source element times 255.0 (`0101e568`,
+/// each product stored as a float and rounded by `FISTP`; with the 16-bit +4 equal to 3 the
+/// alpha is 1.0), the element indexed through the 16-bit index array when there is one. Without
+/// a source every vertex gets the four channels of the float 255.0 at `01023cd8`. The
+/// destination steps by its stride; answers the bytes written (the size per vertex for each
+/// vertex).
+pub fn fn_00e79d00(e: &mut Engine, entry: u32) -> u32 {
+    let mut source = e.mem.u32(entry.wrapping_add(0x10));
+    let index = e.mem.u32(entry.wrapping_add(0xc));
+    let mut destination = e.mem.u32(entry.wrapping_add(0x2c));
+    let mut total = 0u32;
+    if source == 0 {
+        if vertex_count(e, entry) == 0 {
+            return 0;
+        }
+        // `FLD` then four `FST`/`FSTP` of the same value into the four channel locals.
+        let white = x87_store32(x87_load32(e.mem.u32(WHITE_CHANNEL_01023CD8)));
+        let mut vertex = 0u16;
+        loop {
+            let value = |bits: u32| crate::x87::fistp(x87_load32(bits)) as u32;
+            let packed = pack_channels(value(white), value(white), value(white), value(white));
+            vertex = vertex.wrapping_add(1);
+            e.mem.set_u32(destination, packed);
+            let step = e.mem.u32(entry.wrapping_add(0x20));
+            destination = destination.wrapping_add(step);
+            let written = e.mem.u32(entry.wrapping_add(0x1c));
+            total = total.wrapping_add(written);
+            if vertex >= vertex_count(e, entry) {
+                return total;
+            }
+        }
+    }
+    let components = e.mem.u16(entry.wrapping_add(4));
+    let scale = f64::from_bits(e.mem.u64(CHANNEL_SCALE_0101E568));
+    let mut vertex = 0u16;
+    while vertex < vertex_count(e, entry) {
+        let element = if index != 0 {
+            let at = u32::from(e.mem.u16(index.wrapping_add(u32::from(vertex) * 2)));
+            let stride = e.mem.u32(entry.wrapping_add(0x18));
+            at.wrapping_mul(stride).wrapping_add(source)
+        } else {
+            source
+        };
+        // `FLD1` or `FLD dword [+0xc]`, `FSTP dword` to a local, then the channel.
+        let alpha_bits = if components == 3 {
+            x87_store32(1.0)
+        } else {
+            x87_store32(x87_load32(e.mem.u32(element.wrapping_add(0xc))))
+        };
+        let alpha = channel(alpha_bits, scale);
+        let red = channel(e.mem.u32(element), scale);
+        let green = channel(e.mem.u32(element.wrapping_add(4)), scale);
+        let blue = channel(e.mem.u32(element.wrapping_add(8)), scale);
+        e.mem
+            .set_u32(destination, pack_channels(alpha, red, green, blue));
+        if index == 0 {
+            let stride = e.mem.u32(entry.wrapping_add(0x18));
+            source = source.wrapping_add(stride);
+        }
+        let step = e.mem.u32(entry.wrapping_add(0x20));
+        destination = destination.wrapping_add(step);
+        let written = e.mem.u32(entry.wrapping_add(0x1c));
+        total = total.wrapping_add(written);
+        vertex = vertex.wrapping_add(1);
+    }
+    total
+}
+
+/// What `00e7a200` reads: the size each type writes per vertex (words at `0126f508`), the
+/// handler tables (`0126f550`, its +4: per type a table whose +8 lists the handlers by format),
+/// `NiGeometryData::GetTextureSet` (`00a66960`, engine map; `thiscall`, the set) and the
+/// additional-data lookup `00a72720` (unit `niadditionalgeometrydata.cpp`; `stdcall`, seven
+/// words: the stream and the addresses of the source, format, a byte, the data, the element
+/// size and the stride; answers a byte).
+const WRITE_SIZES_0126F508: u32 = 0x0126_f508;
+const HANDLER_TABLES_0126F550: u32 = 0x0126_f550;
+const GET_TEXTURE_SET_00A66960: u32 = 0x00a6_6960;
+const ADDITIONAL_DATA_00A72720: u32 = 0x00a7_2720;
+
+/// The source, element size, stride and format a declaration entry's usage picks.
+struct Picked {
+    source: u32,
+    size: u32,
+    stride: u32,
+    format: u32,
+}
+
+// Translated from 00e7a200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderdeclaration.cpp`): packs one declaration entry
+/// of a vertex stream, `thiscall` with nine words (`this` and the third word not read): the
+/// vertex count (low 16 bits), the geometry data, a word never read, the skin partition, the
+/// declaration entry, the destination stride, the destination, a byte and a word for the
+/// handler. 0 for an entry of type 0x11 (unused). The type (4 with usage 2 counts as 5) picks
+/// the size per vertex (`0126f508`) and the handler table (`0126f550` +4; none: 0). The usage
+/// (+8) picks the source: -1 none (0); 0 the vertices (+0x20, 12 bytes, format 3); 1 the
+/// partition's +8 by its 16-bit +0x24 (1 to 3 floats: formats 1 to 3, 4 floats in 12 of a
+/// 16-byte stride: format 3; none for a null partition); 2 the partition's +0x10 (null: 0) by the
+/// same (bytes, formats 0x19 to 0x1c); 3 the normals (+0x24, 12 bytes, 3); 4 the colours (+0x28,
+/// 16 bytes, 4); 5 to 12 texture set `usage - 5` (`00a66960`, 8 bytes, 2); 13 and 14 the
+/// binormals and tangents after the normals (the normals + count * 0x18 or * 0xc, when there are
+/// normals and the data's 16-bit +0xc has any of the bits 0xf000; else none), 12 bytes, 3; a
+/// negative usage asks `00a72720` (failing: no source, format 0). The handler for the format
+/// then runs (`cdecl`) on a packer entry built on the stack (type, format, count, index array
+/// from the partition's +0xc unless usage 1 or 2 or no partition, source, size, stride, size per
+/// vertex, destination stride, the last word, the byte, destination) and its result is
+/// answered; 0 without a handler or a source.
+// Translation incomplete: 00e7a200 - usages 15 and up, and partitions whose 16-bit +0x24 is not 1 to 4 for usages 1 and 2, leave the source, element size or stride words uninitialized on the game's stack; the translation has 0 there (and the byte's upper three bytes in the packer entry are stack contents too).
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00e7a200(
+    e: &mut Engine,
+    _this: Ptr,
+    count: u32,
+    geometry: u32,
+    _unused_3: u32,
+    partition: u32,
+    declaration_entry: u32,
+    destination_stride: u32,
+    destination: u32,
+    flag: u32,
+    last: u32,
+) -> u32 {
+    let entry_type = e.mem.u32(declaration_entry.wrapping_add(0xc));
+    if entry_type == 0x11 {
+        return 0;
+    }
+    let mut kind = entry_type;
+    if kind == 4 && e.mem.u32(declaration_entry.wrapping_add(8)) == 2 {
+        kind = 5;
+    }
+    let write_size = e
+        .mem
+        .u32(WRITE_SIZES_0126F508.wrapping_add(kind.wrapping_mul(4)));
+    let tables = e.mem.u32(HANDLER_TABLES_0126F550);
+    let tables = e.mem.u32(tables.wrapping_add(4));
+    let handlers = e.mem.u32(tables.wrapping_add(kind.wrapping_mul(4)));
+    if handlers == 0 {
+        return 0;
+    }
+    let usage = e.mem.u32(declaration_entry.wrapping_add(8));
+    let fixed = |source: u32, size: u32, format: u32| Picked {
+        source,
+        size,
+        stride: size,
+        format,
+    };
+    // The words the game leaves as they were on its stack keep 0 here, the format its first
+    // argument (the slot it reuses).
+    let unset = |source: u32| Picked {
+        source,
+        size: 0,
+        stride: 0,
+        format: count,
+    };
+    let after_normals = |e: &mut Engine, element: u32| {
+        let normals = e.mem.u32(geometry.wrapping_add(0x24));
+        let source = if normals != 0 && e.mem.u16(geometry.wrapping_add(0xc)) & 0xf000 != 0 {
+            let vertices = u32::from(e.mem.u16(geometry.wrapping_add(8)));
+            normals.wrapping_add(vertices.wrapping_mul(element))
+        } else {
+            0
+        };
+        fixed(source, 0xc, 3)
+    };
+    let picked = match usage.wrapping_add(1) {
+        0 => return 0,
+        1 => {
+            let source = e.mem.u32(geometry.wrapping_add(0x20));
+            fixed(source, 0xc, 3)
+        }
+        2 => {
+            if partition == 0 {
+                return 0;
+            }
+            let source = e.mem.u32(partition.wrapping_add(8));
+            match e.mem.u16(partition.wrapping_add(0x24)) {
+                1 => fixed(source, 4, 1),
+                2 => fixed(source, 8, 2),
+                3 => fixed(source, 0xc, 3),
+                4 => Picked {
+                    source,
+                    size: 0xc,
+                    stride: 0x10,
+                    format: 3,
+                },
+                _ => unset(source),
+            }
+        }
+        3 => {
+            if partition == 0 {
+                return 0;
+            }
+            let source = e.mem.u32(partition.wrapping_add(0x10));
+            if source == 0 {
+                return 0;
+            }
+            match e.mem.u16(partition.wrapping_add(0x24)) {
+                1 => fixed(source, 1, 0x19),
+                2 => fixed(source, 2, 0x1a),
+                3 => fixed(source, 3, 0x1b),
+                4 => fixed(source, 4, 0x1c),
+                _ => unset(source),
+            }
+        }
+        4 => {
+            let source = e.mem.u32(geometry.wrapping_add(0x24));
+            fixed(source, 0xc, 3)
+        }
+        5 => {
+            let source = e.mem.u32(geometry.wrapping_add(0x28));
+            fixed(source, 0x10, 4)
+        }
+        6..=13 => {
+            let set = usage.wrapping_sub(5) & 0xffff;
+            let source = e
+                .call(GET_TEXTURE_SET_00A66960, &args![geometry, set])
+                .u32();
+            fixed(source, 8, 2)
+        }
+        14 => after_normals(e, 0x18),
+        15 => after_normals(e, 0xc),
+        _ if (usage as i32) < 0 => e.with_stack(0x18, |e, slots| {
+            // The argument slots the lookup writes through: the destination word (the
+            // source it answers), the first argument (the format), the byte and the geometry
+            // data, then the element size and the stride.
+            let slots = slots.addr();
+            e.mem.set_u32(slots, destination);
+            e.mem.set_u32(slots + 4, count);
+            e.mem.set_u32(slots + 8, flag);
+            e.mem.set_u32(slots + 0xc, geometry);
+            let found = e
+                .call(
+                    ADDITIONAL_DATA_00A72720,
+                    &args![
+                        usage & 0x7fff_ffff,
+                        slots,
+                        slots + 4,
+                        slots + 8,
+                        slots + 0xc,
+                        slots + 0x10,
+                        slots + 0x14
+                    ],
+                )
+                .bool();
+            if found {
+                Picked {
+                    source: e.mem.u32(slots),
+                    size: e.mem.u32(slots + 0x10),
+                    stride: e.mem.u32(slots + 0x14),
+                    format: e.mem.u32(slots + 4),
+                }
+            } else {
+                fixed(0, 0, 0)
+            }
+        }),
+        _ => Picked {
+            source: 0,
+            size: 0,
+            stride: 0,
+            format: count,
+        },
+    };
+    let list = e.mem.u32(handlers.wrapping_add(8));
+    let handler = e.mem.u32(list.wrapping_add(picked.format.wrapping_mul(4)));
+    if handler == 0 {
+        return 0;
+    }
+    let usage = e.mem.u32(declaration_entry.wrapping_add(8));
+    let indices = if partition == 0 || usage == 1 || usage == 2 {
+        0
+    } else {
+        e.mem.u32(partition.wrapping_add(0xc))
+    };
+    if picked.source == 0 {
+        return 0;
+    }
+    e.with_stack(0x30, |e, packer| {
+        let packer = packer.addr();
+        e.mem.set_u32(packer, kind);
+        e.mem.set_u32(packer + 4, picked.format);
+        e.mem.set_u16(packer + 8, count as u16);
+        e.mem.set_u32(packer + 0xc, indices);
+        e.mem.set_u32(packer + 0x10, picked.source);
+        e.mem.set_u32(packer + 0x14, picked.size);
+        e.mem.set_u32(packer + 0x18, picked.stride);
+        e.mem.set_u32(packer + 0x1c, write_size);
+        e.mem.set_u32(packer + 0x20, destination_stride);
+        e.mem.set_u32(packer + 0x24, last);
+        e.mem.set_u8(packer + 0x28, flag as u8);
+        e.mem.set_u32(packer + 0x2c, destination);
+        e.call(handler, &args![packer]).u32()
+    })
+}
+
+/// The array's table (`010ee888`), the free `00aa10f0` (`cdecl`, one word) and the memory
+/// manager's free (`00aa4060`, `thiscall` on `011f6238`, the block).
+const PACKER_ARRAY_VTABLE_010EE888: u32 = 0x010e_e888;
+const FREE_00AA10F0: u32 = 0x00aa_10f0;
+const MEMORY_MANAGER_OBJECT: u32 = 0x011f_6238;
+const MEMORY_MANAGER_FREE: u32 = 0x00aa_4060;
+
+// Translated from 00e7a5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPrimitiveArray<NiD3DShaderDeclaration::NiPackerEntry *>`'s scalar deleting destructor
+/// (engine map), `thiscall` with the flags: the array's table stored, its data (+4) freed
+/// (`00aa10f0`), then with bit 0 set the array given back to the memory manager. Answers
+/// `this`.
+pub fn ni_t_primitive_array_packer_entry_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    let base = this.addr();
+    let data = e.mem.u32(base.wrapping_add(4));
+    e.mem.set_u32(base, PACKER_ARRAY_VTABLE_010EE888);
+    e.call(FREE_00AA10F0, &args![data]);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_FREE, &args![MEMORY_MANAGER_OBJECT, base]);
+    }
+    this
 }
 
 #[cfg(test)]
@@ -239,5 +735,365 @@ mod entry_tests {
         let words: Vec<u32> = (0..7).map(|i| e.mem.u32(this + 4 * i)).collect();
         assert_eq!(words, vec![0, 0, 0xffff_ffff, 0x11, 0, 0, 0]);
         assert_eq!(e.mem.u32(this + 0x1c), 0xcccc_cccc);
+    }
+}
+
+#[cfg(test)]
+mod b052_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// A packer entry: `count` vertices, source, index array, element size, source stride,
+    /// size per vertex, destination stride and destination.
+    #[allow(clippy::too_many_arguments)]
+    fn packer(
+        e: &mut Engine,
+        count: u16,
+        source: u32,
+        index: u32,
+        size: u32,
+        stride: u32,
+        per_vertex: u32,
+        step: u32,
+        destination: u32,
+    ) -> u32 {
+        let entry = e.mem.alloc(0x30);
+        e.mem.set_u16(entry + 8, count);
+        e.mem.set_u32(entry + 0xc, index);
+        e.mem.set_u32(entry + 0x10, source);
+        e.mem.set_u32(entry + 0x14, size);
+        e.mem.set_u32(entry + 0x18, stride);
+        e.mem.set_u32(entry + 0x1c, per_vertex);
+        e.mem.set_u32(entry + 0x20, step);
+        e.mem.set_u32(entry + 0x2c, destination);
+        entry
+    }
+
+    #[test]
+    fn fn_00e78bd0_clears_the_stream() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x14);
+        e.mem.write(this, &[0xcc; 0x14]);
+        assert_eq!(e.call(0x00e7_8bd0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u8(this), 0);
+        assert_eq!(e.mem.bytes(this + 1, 3), vec![0xcc; 3]);
+        assert_eq!(e.mem.bytes(this + 4, 0xc), vec![0; 0xc]);
+        assert_eq!(e.mem.u32(this + 0x10), 0xcccc_cccc);
+    }
+
+    #[test]
+    fn fn_00e78be0_frees_the_streams_and_releases_the_device() {
+        let mut e = Engine::new();
+        for no_op in [NI_ARRAY_FREE_00AA1490, BASE_DESTRUCT_00EE88D0, 0x0e90_0008] {
+            e.register(no_op, |_, _| Ret::default());
+        }
+        e.put_vtable(0x0e91_0000, &[0, 0, 0x0e90_0008]);
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(device, 0x0e91_0000);
+        let streams = e.mem.alloc(0x20);
+        e.mem.set_u32(streams + 8, 0x5100);
+        e.mem.set_u32(streams + 0x18, 0x5200);
+        let this = e.mem.alloc(0x2c);
+        e.mem.set_u32(this + 8, 0x77);
+        e.mem.set_u32(this + 0x10, device);
+        e.mem.set_u32(this + 0x20, 2);
+        e.mem.set_u32(this + 0x24, streams);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_8be0, &args![this]);
+        assert_eq!(
+            calls(&e, NI_ARRAY_FREE_00AA1490),
+            vec![vec![0x5100, 0x1c], vec![0x5200, 0x1c], vec![streams, 0x10]]
+        );
+        assert_eq!(calls(&e, 0x0e90_0008), vec![vec![device]]);
+        assert_eq!(calls(&e, BASE_DESTRUCT_00EE88D0), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this), D3D_DECLARATION_VTABLE_010EE7CC);
+        for offset in [8, 0x10, 0x24] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+    }
+
+    #[test]
+    fn fn_00e78f80_copies_by_size() {
+        let mut e = Engine::new();
+        e.register(MEMSET, |_, _| Ret::default());
+        e.register(MEMCPY, |_, _| Ret::default());
+        let source = e.mem.alloc(0x40);
+        for word in 0..0x10u32 {
+            e.mem.set_u32(source + 4 * word, 0x100 + word);
+        }
+        // 12-byte elements, source stride 0x10, destination stride 0x14: word copies.
+        let destination = e.mem.alloc(0x40);
+        let entry = packer(&mut e, 2, source, 0, 0xc, 0x10, 0x18, 0x14, destination);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e7_8f80, &args![entry]).u32(), 0x30);
+        assert_eq!(e.mem.u32(destination), 0x100);
+        assert_eq!(e.mem.u32(destination + 8), 0x102);
+        assert_eq!(e.mem.u32(destination + 0xc), 0);
+        assert_eq!(e.mem.u32(destination + 0x14), 0x104);
+        assert_eq!(e.mem.u32(destination + 0x1c), 0x106);
+        assert!(calls(&e, MEMCPY).is_empty());
+        // Another size goes through memcpy.
+        let entry = packer(&mut e, 2, source, 0, 6, 0x10, 0x18, 0x14, destination);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e7_8f80, &args![entry]).u32(), 0x30);
+        assert_eq!(
+            calls(&e, MEMCPY),
+            vec![
+                vec![destination, source, 6],
+                vec![destination + 0x14, source + 0x10, 6]
+            ]
+        );
+        // An index array: the indexed elements.
+        let index = e.mem.alloc(4);
+        e.mem.set_u16(index, 3);
+        e.mem.set_u16(index + 2, 1);
+        let entry = packer(&mut e, 2, source, index, 8, 0x10, 0x18, 0x14, destination);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e7_8f80, &args![entry]).u32(), 0x30);
+        assert_eq!(
+            calls(&e, MEMCPY),
+            vec![
+                vec![destination, source + 0x30, 8],
+                vec![destination + 0x14, source + 0x10, 8]
+            ]
+        );
+        // No source: zeroed slots.
+        let entry = packer(&mut e, 3, 0, 0, 8, 0x10, 0x18, 0x14, destination);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e7_8f80, &args![entry]).u32(), 0x48);
+        assert_eq!(calls(&e, MEMSET)[2], vec![destination + 0x28, 0, 0x18]);
+        // No vertices.
+        let entry = packer(&mut e, 0, source, 0, 0x10, 0x10, 0x18, 0x14, destination);
+        assert_eq!(e.call(0x00e7_8f80, &args![entry]).u32(), 0);
+    }
+
+    fn colour_engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0102_3000, 0x1000);
+        e.map(0x0101_e000, 0x1000);
+        e.mem.set_u32(WHITE_CHANNEL_01023CD8, 255f32.to_bits());
+        e.mem.set_u64(CHANNEL_SCALE_0101E568, 255f64.to_bits());
+        e
+    }
+
+    #[test]
+    fn fn_00e79d00_packs_colours() {
+        let mut e = colour_engine();
+        let source = e.mem.alloc(0x20);
+        for (index, value) in [1.0f32, 0.5, 0.0, 0.25, 0.2, 0.4, 0.6, 0.8]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u32(source + 4 * index as u32, value.to_bits());
+        }
+        let destination = e.mem.alloc(0x10);
+        let entry = packer(&mut e, 2, source, 0, 0x10, 0x10, 4, 8, destination);
+        e.mem.set_u16(entry + 4, 4);
+        assert_eq!(e.call(0x00e7_9d00, &args![entry]).u32(), 8);
+        // 0.25 * 255 = 63.75 -> 64; 0.5 * 255 = 127.5 -> 128 (to even).
+        assert_eq!(e.mem.u32(destination), 0x40ff_8000);
+        // 0.8 * 255 = 204; 0.2 -> 51, 0.4 -> 102, 0.6 -> 153.
+        assert_eq!(e.mem.u32(destination + 8), 0xcc33_6699);
+        // Three components: alpha 255; through an index array.
+        let index = e.mem.alloc(2);
+        e.mem.set_u16(index, 1);
+        let entry = packer(&mut e, 1, source, index, 0x10, 0x10, 4, 8, destination);
+        e.mem.set_u16(entry + 4, 3);
+        assert_eq!(e.call(0x00e7_9d00, &args![entry]).u32(), 4);
+        assert_eq!(e.mem.u32(destination), 0xff33_6699);
+        // No source: white.
+        let entry = packer(&mut e, 2, 0, 0, 0x10, 0x10, 4, 8, destination);
+        assert_eq!(e.call(0x00e7_9d00, &args![entry]).u32(), 8);
+        assert_eq!(e.mem.u32(destination), 0xffff_ffff);
+        assert_eq!(e.mem.u32(destination + 8), 0xffff_ffff);
+        let entry = packer(&mut e, 0, 0, 0, 0x10, 0x10, 4, 8, destination);
+        assert_eq!(e.call(0x00e7_9d00, &args![entry]).u32(), 0);
+    }
+
+    const HANDLER: u32 = 0x0e92_0000;
+
+    /// Type 2 has a handler table whose format 3 entry is `HANDLER` (which answers the
+    /// packer entry's address and records nothing else) and writes 0xc bytes per vertex.
+    fn pack_engine() -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        e.register(HANDLER, |e, a| {
+            let packer = a[0];
+            let fields: Vec<u32> = (0..12).map(|i| e.mem.u32(packer + 4 * i)).collect();
+            let copy = e.mem.alloc(0x30);
+            for (index, field) in fields.into_iter().enumerate() {
+                e.mem.set_u32(copy + 4 * index as u32, field);
+            }
+            copy.into_ret()
+        });
+        let formats = e.mem.alloc(0x80);
+        for format in [1u32, 2, 3, 4, 0x19] {
+            e.mem.set_u32(formats + 4 * format, HANDLER);
+        }
+        let handlers = e.mem.alloc(0xc);
+        e.mem.set_u32(handlers + 8, formats);
+        let per_type = e.mem.alloc(0x50);
+        for kind in [2u32, 5] {
+            e.mem.set_u32(per_type + 4 * kind, handlers);
+        }
+        let tables = e.mem.alloc(8);
+        e.mem.set_u32(tables + 4, per_type);
+        e.mem.set_u32(HANDLER_TABLES_0126F550, tables);
+        e.mem.set_u32(WRITE_SIZES_0126F508 + 8, 0xc);
+        e.mem.set_u32(WRITE_SIZES_0126F508 + 0x14, 0x10);
+        let geometry = e.mem.alloc(0x30);
+        e.mem.set_u16(geometry + 8, 10);
+        e.mem.set_u32(geometry + 0x20, 0x2000);
+        e.mem.set_u32(geometry + 0x24, 0x2400);
+        e.mem.set_u32(geometry + 0x28, 0x2800);
+        (e, geometry)
+    }
+
+    fn declaration(e: &mut Engine, usage: u32, kind: u32) -> u32 {
+        let entry = e.mem.alloc(0x1c);
+        e.mem.set_u32(entry + 8, usage);
+        e.mem.set_u32(entry + 0xc, kind);
+        entry
+    }
+
+    /// The packer entry the handler saw: (type, format, count word, index, source, size,
+    /// stride, per vertex, step, last, byte word, destination).
+    fn pack(e: &mut Engine, geometry: u32, partition: u32, entry: u32) -> Option<Vec<u32>> {
+        let copy = e
+            .call(
+                0x00e7_a200,
+                &args![
+                    0u32, 7u32, geometry, 0u32, partition, entry, 0x20u32, 0x9000u32, 0x15u32,
+                    0x99u32
+                ],
+            )
+            .u32();
+        if copy == 0 {
+            return None;
+        }
+        Some((0..12).map(|i| e.mem.u32(copy + 4 * i)).collect())
+    }
+
+    #[test]
+    fn fn_00e7a200_packs_the_vertices_and_normals() {
+        let (mut e, geometry) = pack_engine();
+        let entry = declaration(&mut e, 0, 2);
+        assert_eq!(
+            pack(&mut e, geometry, 0, entry).unwrap(),
+            vec![2, 3, 7, 0, 0x2000, 0xc, 0xc, 0xc, 0x20, 0x99, 0x15, 0x9000]
+        );
+        // Normals with a partition: its index array.
+        let partition = e.mem.alloc(0x28);
+        e.mem.set_u32(partition + 0xc, 0x4c00);
+        let entry = declaration(&mut e, 3, 2);
+        let seen = pack(&mut e, geometry, partition, entry).unwrap();
+        assert_eq!((seen[3], seen[4]), (0x4c00, 0x2400));
+        // Binormals: after the normals, only with the 0xf000 bits.
+        let entry = declaration(&mut e, 13, 2);
+        assert_eq!(pack(&mut e, geometry, 0, entry), None);
+        e.mem.set_u16(geometry + 0xc, 0x1000);
+        assert_eq!(
+            pack(&mut e, geometry, 0, entry).unwrap()[4],
+            0x2400 + 10 * 0x18
+        );
+        let entry = declaration(&mut e, 14, 2);
+        assert_eq!(
+            pack(&mut e, geometry, 0, entry).unwrap()[4],
+            0x2400 + 10 * 0xc
+        );
+    }
+
+    #[test]
+    fn fn_00e7a200_picks_by_usage() {
+        let (mut e, geometry) = pack_engine();
+        // Unused type, no handler table, usage -1: nothing.
+        let entry = declaration(&mut e, 0, 0x11);
+        assert_eq!(pack(&mut e, geometry, 0, entry), None);
+        let entry = declaration(&mut e, 0, 3);
+        assert_eq!(pack(&mut e, geometry, 0, entry), None);
+        let entry = declaration(&mut e, 0xffff_ffff, 2);
+        assert_eq!(pack(&mut e, geometry, 0, entry), None);
+        // Colours: format 4 and 16 bytes; type 4 with usage 2 counts as type 5.
+        let entry = declaration(&mut e, 4, 2);
+        let seen = pack(&mut e, geometry, 0, entry).unwrap();
+        assert_eq!((seen[1], seen[4], seen[5]), (4, 0x2800, 0x10));
+        // Usage 1: the partition's weights by its count; no index array.
+        let partition = e.mem.alloc(0x28);
+        e.mem.set_u32(partition + 8, 0x4800);
+        e.mem.set_u32(partition + 0xc, 0x4c00);
+        e.mem.set_u16(partition + 0x24, 2);
+        let entry = declaration(&mut e, 1, 2);
+        let seen = pack(&mut e, geometry, partition, entry).unwrap();
+        assert_eq!(seen[..7].to_vec(), vec![2, 2, 7, 0, 0x4800, 8, 8]);
+        e.mem.set_u16(partition + 0x24, 4);
+        let seen = pack(&mut e, geometry, partition, entry).unwrap();
+        assert_eq!((seen[1], seen[5], seen[6]), (3, 0xc, 0x10));
+        assert_eq!(pack(&mut e, geometry, 0, entry), None);
+        // Usage 2 (type 4, so type 5): the partition's bytes, format 0x19.
+        e.mem.set_u16(partition + 0x24, 1);
+        e.mem.set_u32(partition + 0x10, 0x4100);
+        let entry = declaration(&mut e, 2, 4);
+        let seen = pack(&mut e, geometry, partition, entry).unwrap();
+        assert_eq!(seen[..8].to_vec(), vec![5, 0x19, 7, 0, 0x4100, 1, 1, 0x10]);
+        e.mem.set_u32(partition + 0x10, 0);
+        assert_eq!(pack(&mut e, geometry, partition, entry), None);
+    }
+
+    #[test]
+    fn fn_00e7a200_texture_sets_and_additional_data() {
+        let (mut e, geometry) = pack_engine();
+        e.register(GET_TEXTURE_SET_00A66960, |_, a| (0x3000 + a[1]).into_ret());
+        let entry = declaration(&mut e, 7, 2);
+        e.call_log = Some(vec![]);
+        let seen = pack(&mut e, geometry, 0, entry).unwrap();
+        assert_eq!((seen[1], seen[4], seen[5]), (2, 0x3002, 8));
+        assert_eq!(calls(&e, GET_TEXTURE_SET_00A66960), vec![vec![geometry, 2]]);
+        // A negative usage asks the additional data, which answers the source, format, size
+        // and stride through its slots.
+        e.register(ADDITIONAL_DATA_00A72720, |e, a| {
+            assert_eq!(a[0], 5);
+            assert_eq!(e.mem.u32(a[1]), 0x9000);
+            assert_eq!(e.mem.u32(a[2]), 7);
+            e.mem.set_u32(a[1], 0x6000);
+            e.mem.set_u32(a[2], 1);
+            e.mem.set_u32(a[5], 4);
+            e.mem.set_u32(a[6], 0x14);
+            1u32.into_ret()
+        });
+        let entry = declaration(&mut e, 0x8000_0005, 2);
+        let seen = pack(&mut e, geometry, 0, entry).unwrap();
+        assert_eq!(seen[..7].to_vec(), vec![2, 1, 7, 0, 0x6000, 4, 0x14]);
+        assert_eq!(seen[11], 0x9000);
+        e.register(ADDITIONAL_DATA_00A72720, |_, _| 0u32.into_ret());
+        assert_eq!(pack(&mut e, geometry, 0, entry), None);
+    }
+
+    #[test]
+    fn packer_array_destructor() {
+        let mut e = Engine::new();
+        e.register(FREE_00AA10F0, |_, _| Ret::default());
+        e.register(MEMORY_MANAGER_FREE, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 4, 0x7400);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e7_a5e0, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), PACKER_ARRAY_VTABLE_010EE888);
+        assert_eq!(calls(&e, FREE_00AA10F0), vec![vec![0x7400]]);
+        assert_eq!(
+            calls(&e, MEMORY_MANAGER_FREE),
+            vec![vec![MEMORY_MANAGER_OBJECT, this]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_a5e0, &args![this, 0u32]);
+        assert!(calls(&e, MEMORY_MANAGER_FREE).is_empty());
     }
 }

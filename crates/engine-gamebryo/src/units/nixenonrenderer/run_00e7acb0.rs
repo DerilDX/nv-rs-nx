@@ -301,3 +301,59 @@ mod b000x_tests {
         assert_eq!(choose(&mut e, this, 24, 8), 0);
     }
 }
+
+#[cfg(test)]
+mod b048_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e7ade0_picks_the_closest_usable_depth_format() {
+        let mut e = Engine::new();
+        e.map(DEPTH_FORMATS_011BF140, 0x24);
+        for i in 0..9u32 {
+            e.set_global(DEPTH_FORMATS_011BF140 + 4 * i, 0x50 + i);
+        }
+        let record = e.mem.alloc(0x48);
+        // Usable: formats 1, 3 and 5.
+        for i in [1u32, 3, 5] {
+            e.mem.set_u8(record + 0x24 + 4 * i, 1);
+        }
+        e.register_double(MAP_GET_AT_00A53C30, move |e, a| {
+            if a[1] == 7 {
+                e.mem.set_u32(a[2], record);
+                1u32.into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        // Sizes: format 0x51 (24, 8), 0x53 (32, 0), 0x55 (16, 8).
+        e.register(FORMAT_BITS_00E7A8B0, |e, a| {
+            let (first, second) = match a[0] {
+                0x51 => (24, 8),
+                0x53 => (32, 0),
+                _ => (16, 8),
+            };
+            e.mem.set_u32(a[1], first);
+            e.mem.set_u32(a[2], second);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x20);
+        assert_eq!(
+            e.call(0x00e7_ade0, &args![this, 7u32, 24i32, 8i32]).u32(),
+            0x51
+        );
+        assert_eq!(
+            e.call(0x00e7_ade0, &args![this, 7u32, 32i32, 0i32]).u32(),
+            0x53
+        );
+        // A tie keeps the later format.
+        assert_eq!(
+            e.call(0x00e7_ade0, &args![this, 7u32, 20i32, 8i32]).u32(),
+            0x55
+        );
+        assert_eq!(
+            e.call(0x00e7_ade0, &args![this, 8u32, 24i32, 8i32]).u32(),
+            0
+        );
+    }
+}

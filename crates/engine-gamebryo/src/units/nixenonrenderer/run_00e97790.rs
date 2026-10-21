@@ -96,7 +96,28 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e9_78a0, fn_00e978a0(u32, u32) -> u32),
         entry!(0x00e9_7790, fn_00e97790(Ptr, u32, u32) -> Ptr),
+        entry!(0x00e9_7870, fn_00e97870(Ptr, u32) -> Ptr),
     ]
+}
+
+/// The base destructor `00e989c0` (unnamed; `thiscall`, no stack words) and the Ni free
+/// `00aa1460` (`cdecl`: block, size).
+const BASE_DESTRUCT_00E989C0: u32 = 0x00e9_89c0;
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00e97870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e97790`): the scalar deleting destructor of the object
+/// `00e97790` builds, `thiscall` with one word (the flags). Stores the table `010f1550`, runs
+/// the base destructor `00e989c0` and, with bit 0 of the flags set, frees the 0x8c bytes
+/// (`00aa1460`). Answers `this`.
+pub fn fn_00e97870(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let base = this.addr();
+    e.mem.set_u32(base, VTABLE_010F1550);
+    e.call(BASE_DESTRUCT_00E989C0, &args![base]);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_00AA1460, &args![base, 0x8cu32]);
+    }
+    this
 }
 
 #[cfg(test)]
@@ -225,5 +246,31 @@ mod b000x_tests {
             construct(&mut e, &size, 0, 5, 0),
             (0x400, UNSET, UNSET, UNSET, UNSET, UNSET, 0)
         );
+    }
+}
+
+#[cfg(test)]
+mod b052_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e97870_destroys_and_frees_with_bit_0() {
+        let mut e = Engine::new();
+        e.register(BASE_DESTRUCT_00E989C0, |e, a| {
+            // Runs after the table is stored.
+            assert_eq!(e.mem.u32(a[0]), VTABLE_010F1550);
+            Ret::default()
+        });
+        e.register(NI_FREE_00AA1460, |_, _| Ret::default());
+        let this = e.mem.alloc(0x8c);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00e9_7870, &args![this, 3u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(BASE_DESTRUCT_00E989C0, vec![this])));
+        assert!(log.contains(&(NI_FREE_00AA1460, vec![this, 0x8c])));
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_7870, &args![this, 2u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(!log.iter().any(|(a, _)| *a == NI_FREE_00AA1460));
     }
 }

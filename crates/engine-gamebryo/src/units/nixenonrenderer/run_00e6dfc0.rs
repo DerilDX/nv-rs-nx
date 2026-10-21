@@ -106,9 +106,70 @@ pub fn fn_00e6dfc0(e: &mut Engine, this: Ptr, block: Ptr, _unused_2: u32, resour
     }
 }
 
+/// The imported `InterlockedIncrement` / `InterlockedDecrement` (import slots).
+const IMPORT_INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+const IMPORT_INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+
+// Translated from 00e6e630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e6dfc0`): an `NiTPointerMap` step with an `NiPointer`
+/// value (the map's `GetNext`), `thiscall` with three words: the address of the iterator (an
+/// item: next +0, key +4, value +8), of the key and of the value. The key is copied out; the
+/// value word gets an `NiPointer` assignment of the item's value (unless it holds it already:
+/// the old one's count down through `InterlockedDecrement` and deleted at zero, the new one
+/// stored and counted up when not null). The iterator moves to the item's next one; at the end
+/// of a bucket to the first item of the next non-empty bucket after the item's (the map's hash
+/// of the key, virtual slot 4, plus one; the bucket count and array read once), or null.
+pub fn fn_00e6e630(e: &mut Engine, this: Ptr, iterator: Ptr, key: Ptr, value: Ptr) {
+    let map = this.addr();
+    let item = e.mem.u32(iterator.addr());
+    let item_key = e.mem.u32(item.wrapping_add(4));
+    e.mem.set_u32(key.addr(), item_key);
+    let held = e.mem.u32(value.addr());
+    if held != e.mem.u32(item.wrapping_add(8)) {
+        if held != 0
+            && e.call(IMPORT_INTERLOCKED_DECREMENT, &args![held.wrapping_add(4)])
+                .u32()
+                == 0
+        {
+            e.vcall(held, 4, &args![]);
+        }
+        let item_value = e.mem.u32(item.wrapping_add(8));
+        e.mem.set_u32(value.addr(), item_value);
+        if item_value != 0 {
+            e.call(
+                IMPORT_INTERLOCKED_INCREMENT,
+                &args![item_value.wrapping_add(4)],
+            );
+        }
+    }
+    let next = e.mem.u32(item);
+    if next != 0 {
+        e.mem.set_u32(iterator.addr(), next);
+        return;
+    }
+    let item_key = e.mem.u32(item.wrapping_add(4));
+    let mut bucket = e.vcall(map, 4, &args![item_key]).u32().wrapping_add(1);
+    let size = e.mem.u32(map.wrapping_add(4));
+    if bucket < size {
+        let buckets = e.mem.u32(map.wrapping_add(8));
+        while bucket < size {
+            let first = e.mem.u32(buckets.wrapping_add(bucket.wrapping_mul(4)));
+            if first != 0 {
+                e.mem.set_u32(iterator.addr(), first);
+                return;
+            }
+            bucket += 1;
+        }
+    }
+    e.mem.set_u32(iterator.addr(), 0);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00e6_dfc0, fn_00e6dfc0(Ptr, Ptr, u32, u32))]
+    vec![
+        entry!(0x00e6_dfc0, fn_00e6dfc0(Ptr, Ptr, u32, u32)),
+        entry!(0x00e6_e630, fn_00e6e630(Ptr, Ptr, Ptr, Ptr)),
+    ]
 }
 
 #[cfg(test)]
@@ -165,5 +226,84 @@ mod b000w_tests {
         assert_eq!(checks[0], &vec![direct3d, 0, 1, 0x16, 0, 3, 0x1100]);
         // The old entry 0 was freed.
         assert!(log.contains(&(MEMORY_DEALLOCATE, vec![MEMORY_MANAGER, 0x7777])));
+    }
+}
+
+#[cfg(test)]
+mod b051_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00e6e630_steps_through_the_buckets() {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(0x7004, |_, _| Ret::default());
+        // The hash is the key's low two bits.
+        e.register(0x7104, |_, a| (a[1] & 3).into_ret());
+        e.put_vtable(0x6000, &[0, 0x7004]);
+        e.put_vtable(0x6100, &[0, 0x7104]);
+        e.call_log = Some(vec![]);
+        let value = |e: &mut Engine| {
+            let object = e.mem.alloc(8);
+            e.mem.set_u32(object, 0x6000);
+            e.mem.set_u32(object + 4, 1);
+            object
+        };
+        let map = e.mem.alloc(0x10);
+        let buckets = e.mem.alloc(0x10);
+        let items = [e.mem.alloc(0xc), e.mem.alloc(0xc), e.mem.alloc(0xc)];
+        let values = [value(&mut e), value(&mut e)];
+        // Bucket 0: item 0 (key 4) then item 1 (key 8); bucket 3: item 2 (key 3).
+        e.mem.set_u32(items[0], items[1]);
+        e.mem.set_u32(items[0] + 4, 4);
+        e.mem.set_u32(items[0] + 8, values[0]);
+        e.mem.set_u32(items[1] + 4, 8);
+        e.mem.set_u32(items[1] + 8, values[1]);
+        e.mem.set_u32(items[2] + 4, 3);
+        e.mem.set_u32(buckets, items[0]);
+        e.mem.set_u32(buckets + 0xc, items[2]);
+        e.mem.set_u32(map, 0x6100);
+        e.mem.set_u32(map + 4, 4);
+        e.mem.set_u32(map + 8, buckets);
+        let iterator = e.mem.alloc(4);
+        let key = e.mem.alloc(4);
+        let held = e.mem.alloc(4);
+        e.mem.set_u32(iterator, items[0]);
+        e.call(0x00e6_e630, &args![map, iterator, key, held]);
+        assert_eq!(e.mem.u32(key), 4);
+        assert_eq!(e.mem.u32(held), values[0]);
+        assert_eq!(e.mem.u32(values[0] + 4), 2);
+        assert_eq!(e.mem.u32(iterator), items[1]);
+        assert!(calls(&e, 0x7104).is_empty());
+        e.call(0x00e6_e630, &args![map, iterator, key, held]);
+        assert_eq!(e.mem.u32(held), values[1]);
+        assert_eq!(e.mem.u32(values[0] + 4), 1);
+        assert_eq!(e.mem.u32(iterator), items[2]);
+        assert_eq!(calls(&e, 0x7104), vec![vec![map, 8]]);
+        // The last item: its value (null) replaces the held one, which is deleted.
+        e.mem.set_u32(values[1] + 4, 1);
+        e.call(0x00e6_e630, &args![map, iterator, key, held]);
+        assert_eq!(e.mem.u32(held), 0);
+        assert_eq!(calls(&e, 0x7004), vec![vec![values[1]]]);
+        assert_eq!(e.mem.u32(iterator), 0);
     }
 }

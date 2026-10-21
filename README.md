@@ -76,7 +76,7 @@ plugins, Linux and macOS, and VR.
 ## Progress
 
 <p align="center">
-  <img src="docs/media/progress.svg" alt="Engine port progress: 80.2% of the original program's functions covered" width="100%">
+  <img src="docs/media/progress.svg" alt="Engine port progress: 81.0% of the original program's functions covered" width="100%">
 </p>
 
 The original game's systems switch over one at a time, each in its own
@@ -86,9 +86,9 @@ playable build:
 | :---: | --- | --- |
 | ✅ | **Foundations:** the map of the original program, the frame order, the engine running in play | Done (Build 42) |
 | 🔨 | **Movement and physics:** how walking, jumping and collisions feel | In progress: all 9,011 Havok functions translated (739 of them still have a marked untranslated part, mostly C++ exception frames), physics about 98%; wiring the game's own physics into play is under way: on the play-build branch the game's own start-up (NiInit, Main::Main, the scene graph) now runs |
-| 🔨 | **Animation and faces** | Started: about a third translated |
-| ⬜ | **Audio:** sounds, music and the radio | About two-thirds translated |
-| 🔨 | **Graphics:** lighting, weather and effects matching the original | Started: trees (SpeedTree) translated; the game's own renderer is being translated to run on our own Direct3D 9 layer ([ADR-0007](docs/adr/0007-renderer-translated-on-own-d3d9-layer.md)); about 30% done |
+| 🔨 | **Animation and faces** | Started: over a third translated |
+| ⬜ | **Audio:** sounds, music and the radio | Nearly three-quarters translated |
+| 🔨 | **Graphics:** lighting, weather and effects matching the original | Started: trees (SpeedTree) translated; the game's own renderer is being translated to run on our own Direct3D 9 layer ([ADR-0007](docs/adr/0007-renderer-translated-on-own-d3d9-layer.md)); nearly 40% done |
 | ⬜ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting and minigames | About three-quarters translated, not yet switched on |
 | ⬜ | **Saves and the open world:** original saves, world streaming | Planned |
 

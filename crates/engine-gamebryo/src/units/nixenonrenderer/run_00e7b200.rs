@@ -652,9 +652,123 @@ pub fn fn_00e7b7d0(
     this
 }
 
+/// The display-format record's destructor (`00e7b040`, `thiscall`), the pointer lists'
+/// `RemoveAll` (`00b71300` for the device's format list, `004ed900` for a mode's refresh
+/// list; `thiscall`) and the free (`00aa10f0`, `cdecl`, a block).
+const DISPLAY_FORMAT_INFO_DESTRUCT: u32 = 0x00e7_b040;
+const FORMAT_LIST_REMOVE_ALL: u32 = 0x00b7_1300;
+const REFRESH_LIST_REMOVE_ALL: u32 = 0x004e_d900;
+const FREE_00AA10F0: u32 = 0x00aa_10f0;
+/// `IDirect3D9::GetAdapterCount` (slot 4).
+const GET_ADAPTER_COUNT: u32 = 0x10;
+/// The size of an adapter description (`fn_00e7b7d0`'s object).
+const ADAPTER_DESC_SIZE: u32 = 0x468;
+
+// Translated from 00e7b550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7b200`): the device description's destructor
+/// (`thiscall`, no stack words). Destroys and frees (0x18 bytes) each display-format record
+/// of the list at +0x134, then jumps to the list's `RemoveAll` (`00b71300`).
+pub fn fn_00e7b550(e: &mut Engine, this: Ptr) {
+    let list = this.addr().wrapping_add(DEVICE_FORMATS);
+    let mut node = e.mem.u32(list);
+    while node != 0 {
+        let record = e.mem.u32(node.wrapping_add(8));
+        node = e.mem.u32(node);
+        if record != 0 {
+            e.call(DISPLAY_FORMAT_INFO_DESTRUCT, &args![record]);
+            e.call(SIZED_DELETE, &args![record, DISPLAY_FORMAT_INFO_SIZE]);
+        }
+    }
+    e.call(FORMAT_LIST_REMOVE_ALL, &args![list]);
+}
+
+// Translated from 00e7bb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7b200`): the adapter description's destructor
+/// (`thiscall`, no stack words). Each mode record of the array at +0x450 (count `m_usSize`,
+/// read again each step) has its refresh list (+0x10) emptied (`004ed900`) and is freed
+/// (0x1C bytes); both device descriptions are destroyed ([`fn_00e7b550`]) and freed (0x144
+/// bytes); the array gets its base vtable back and its elements are freed (`00aa10f0`).
+pub fn fn_00e7bb50(e: &mut Engine, this: Ptr) {
+    let t = this.addr();
+    let modes: Ptr<NiTArray> = Ptr::new(t.wrapping_add(ADAPTER_MODES));
+    let mut index = 0u32;
+    if e.get(modes, NiTArray::m_usSize) != 0 {
+        loop {
+            let elements = e.get(modes, NiTArray::m_pBase);
+            let record = e.mem.u32(elements.wrapping_add(index * 4));
+            if record != 0 {
+                e.call(REFRESH_LIST_REMOVE_ALL, &args![record.wrapping_add(0x10)]);
+                e.call(SIZED_DELETE, &args![record, MODE_DESC_SIZE]);
+            }
+            index += 1;
+            if index >= u32::from(e.get(modes, NiTArray::m_usSize)) {
+                break;
+            }
+        }
+    }
+    for field in [ADAPTER_DEVICE_1, ADAPTER_DEVICE_2] {
+        let device = e.mem.u32(t.wrapping_add(field));
+        if device != 0 {
+            fn_00e7b550(e, Ptr::new(device));
+            e.call(SIZED_DELETE, &args![device, DEVICE_DESC_SIZE]);
+        }
+    }
+    let elements = e.get(modes, NiTArray::m_pBase);
+    e.mem.set_u32(modes.addr(), ARRAY_BASE_VTABLE);
+    e.call(FREE_00AA10F0, &args![elements]);
+}
+
+// Translated from 00e7bbf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7b200`): fills the adapter list (`thiscall`, two words:
+/// the `IDirect3D9` and the format list passed on). Stores the adapter count at +0, sizes the
+/// array at +4 to it (`00a90180`) and, for each adapter, stores a new adapter description
+/// (0x468 bytes, [`fn_00e7b7d0`] with the Direct3D object, the adapter and the list; 0 when
+/// the allocation failed) at its index, keeping the array's used size (grown to index + 1)
+/// and non-null count as the exe's inlined set-at does.
+pub fn fn_00e7bbf0(e: &mut Engine, this: Ptr, direct3d: u32, formats: Ptr<NiTPointerList>) {
+    let t = this.addr();
+    let count = e.vcall(direct3d, GET_ADAPTER_COUNT, &args![]).u32();
+    e.mem.set_u32(t, count);
+    let array: Ptr<NiTArray> = Ptr::new(t.wrapping_add(4));
+    e.call(ARRAY_SET_SIZE, &args![array, count]);
+    let mut index = 0u32;
+    while index < e.mem.u32(t) {
+        let block = e.call(NEW_OBJECT, &args![ADAPTER_DESC_SIZE]).u32();
+        let desc = if block != 0 {
+            fn_00e7b7d0(e, Ptr::new(block), direct3d, index, formats).addr()
+        } else {
+            0
+        };
+        let size = u32::from(e.get(array, NiTArray::m_usSize));
+        let elements = e.get(array, NiTArray::m_pBase);
+        let slot = elements.wrapping_add(index * 4);
+        if index >= size {
+            e.set(array, NiTArray::m_usSize, (index + 1) as u16);
+            if desc != 0 {
+                let used = e.get(array, NiTArray::m_usESize).wrapping_add(1);
+                e.set(array, NiTArray::m_usESize, used);
+            }
+        } else if desc != 0 {
+            if e.mem.u32(slot) == 0 {
+                let used = e.get(array, NiTArray::m_usESize).wrapping_add(1);
+                e.set(array, NiTArray::m_usESize, used);
+            }
+        } else if e.mem.u32(slot) != 0 {
+            let used = e.get(array, NiTArray::m_usESize).wrapping_add(0xffff);
+            e.set(array, NiTArray::m_usESize, used);
+        }
+        let elements = e.get(array, NiTArray::m_pBase);
+        e.mem.set_u32(elements.wrapping_add(index * 4), desc);
+        index += 1;
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e7_b550, fn_00e7b550(Ptr)),
+        entry!(0x00e7_bb50, fn_00e7bb50(Ptr)),
+        entry!(0x00e7_bbf0, fn_00e7bbf0(Ptr, u32, Ptr<NiTPointerList>)),
         entry!(
             0x00e7_b260,
             fn_00e7b260(Ptr, u32, u32, u32, u32, u8, u8) -> Ptr
@@ -993,5 +1107,117 @@ mod b000s_tests {
         assert_eq!(e.mem.u16(modes + 0xc), 0x21);
         let last = e.mem.u32(e.mem.u32(modes + 4) + 4 * 0x20);
         assert_eq!(e.mem.u32(last), 640 + 0x20);
+    }
+}
+
+#[cfg(test)]
+mod b048_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn nop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    #[test]
+    fn device_and_adapter_destructors_free_their_records() {
+        let mut e = Engine::new();
+        for a in [
+            DISPLAY_FORMAT_INFO_DESTRUCT,
+            FORMAT_LIST_REMOVE_ALL,
+            REFRESH_LIST_REMOVE_ALL,
+            SIZED_DELETE,
+            FREE_00AA10F0,
+        ] {
+            e.register(a, nop);
+        }
+        let device = e.mem.alloc(DEVICE_DESC_SIZE);
+        let n2 = e.mem.alloc(12);
+        let n1 = e.mem.alloc(12);
+        e.mem.set_u32(n1, n2);
+        e.mem.set_u32(n1 + 8, 0xf1);
+        e.mem.set_u32(n2 + 8, 0);
+        e.mem.set_u32(device + DEVICE_FORMATS, n1);
+        let adapter = e.mem.alloc(ADAPTER_DESC_SIZE);
+        let elements = e.mem.alloc(12);
+        let mode = e.mem.alloc(MODE_DESC_SIZE);
+        e.mem.set_u32(elements, mode);
+        e.mem.set_u32(elements + 8, 0);
+        e.mem.set_u32(adapter + ADAPTER_MODES + 4, elements);
+        e.mem.set_u16(adapter + ADAPTER_MODES + 0xa, 2);
+        e.mem.set_u32(adapter + ADAPTER_DEVICE_2, device);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_bb50, &args![adapter]);
+        assert_eq!(calls(&e, REFRESH_LIST_REMOVE_ALL), vec![vec![mode + 0x10]]);
+        assert_eq!(calls(&e, DISPLAY_FORMAT_INFO_DESTRUCT), vec![vec![0xf1]]);
+        assert_eq!(
+            calls(&e, FORMAT_LIST_REMOVE_ALL),
+            vec![vec![device + DEVICE_FORMATS]]
+        );
+        assert_eq!(
+            calls(&e, SIZED_DELETE),
+            vec![
+                vec![mode, MODE_DESC_SIZE],
+                vec![0xf1, DISPLAY_FORMAT_INFO_SIZE],
+                vec![device, DEVICE_DESC_SIZE]
+            ]
+        );
+        assert_eq!(e.mem.u32(adapter + ADAPTER_MODES), ARRAY_BASE_VTABLE);
+        assert_eq!(calls(&e, FREE_00AA10F0), vec![vec![elements]]);
+    }
+
+    #[test]
+    fn adapter_list_holds_one_description_per_adapter() {
+        let mut e = Engine::new();
+        let table: Vec<u32> = (0..0x10).map(|n| 0x6100_0000 + 4 * n).collect();
+        e.put_vtable(0x6000, &table);
+        let direct3d = e.mem.alloc(8);
+        e.mem.set_u32(direct3d, 0x6000);
+        e.register(0x6100_0000 + GET_ADAPTER_COUNT, |_, _| 2u32.into_ret());
+        e.register(ARRAY_SET_SIZE, |e, a| {
+            let elements = e.mem.alloc(4 * a[1]);
+            e.mem.set_u32(a[0] + 4, elements);
+            Ret::default()
+        });
+        // The first description's allocation fails, the second's works; the device
+        // descriptions inside it are not allocated.
+        let mut first = true;
+        e.register_double(NEW_OBJECT, move |e, a| {
+            let p = if a[0] != ADAPTER_DESC_SIZE || first {
+                0
+            } else {
+                e.mem.alloc(a[0])
+            };
+            if a[0] == ADAPTER_DESC_SIZE {
+                first = false;
+            }
+            p.into_ret()
+        });
+        e.register(ALLOCATE_00AA1070, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(0x6100_0000 + GET_ADAPTER_IDENTIFIER, |_, _| 0u32.into_ret());
+        e.register(0x6100_0000 + GET_ADAPTER_DISPLAY_MODE, |_, _| {
+            0x8000_0000u32.into_ret()
+        });
+        e.register(0x6100_0000 + GET_ADAPTER_MODE_COUNT, |_, _| 0u32.into_ret());
+        let this = e.mem.alloc(0x14);
+        let formats = e.mem.alloc(0x0c);
+        e.call(0x00e7_bbf0, &args![this, direct3d, formats]);
+        assert_eq!(e.mem.u32(this), 2);
+        let elements = e.mem.u32(this + 8);
+        assert_eq!(e.mem.u32(elements), 0);
+        let desc = e.mem.u32(elements + 4);
+        assert_ne!(desc, 0);
+        assert_eq!(e.mem.u32(desc), 1);
+        assert_eq!(e.mem.u16(this + 0xe), 2);
+        assert_eq!(e.mem.u16(this + 0x10), 1);
     }
 }

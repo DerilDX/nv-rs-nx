@@ -277,12 +277,62 @@ pub fn fn_00e7c1e0(e: &mut Engine, format: u32, pixel_format: Ptr) {
     e.mem.set_u32(target.wrapping_add(0x10), 0);
 }
 
+/// What the two destructors below use: the adapter description clean-up `00e7bb50` (unnamed;
+/// `thiscall`, no stack words), the sized free `00aa1460` (`cdecl`: block, size), the free
+/// `00aa10f0` (`cdecl`, a block), the array table stored at +4 (RTTI
+/// `NiTArray<NiDX9AdapterDesc *, NiTMallocInterface<NiDX9AdapterDesc *>>`), the
+/// `NiD3DDefaultShader` table and the shader base destructor `00e806c0` (`nid3dshader.cpp`;
+/// `thiscall`, no stack words).
+const ADAPTER_DESC_CLEAN_UP_00E7BB50: u32 = 0x00e7_bb50;
+const FREE_00AA1460: u32 = 0x00aa_1460;
+const FREE_00AA10F0: u32 = 0x00aa_10f0;
+const ADAPTER_DESC_ARRAY_VTABLE: u32 = 0x010e_ec4c;
+const NI_D3D_DEFAULT_SHADER_VTABLE: u32 = 0x010e_ecac;
+const SHADER_DOWN_00E806C0: u32 = 0x00e8_06c0;
+
+// Translated from 00e7bcd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7bcd0`), `thiscall`: frees the adapter descriptions of
+/// the array at +4 (data at +8, the 16-bit count at +0xe read again for each step): each one
+/// set gets `00e7bb50` and its 0x468 bytes freed (`00aa1460`). Then the array's table
+/// (`NiTArray<NiDX9AdapterDesc *, ...>`) goes to +4 and its data is freed (`00aa10f0`).
+pub fn fn_00e7bcd0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let mut index = 0u32;
+    while index < u32::from(e.mem.u16(base.wrapping_add(0xe))) {
+        let data = e.mem.u32(base.wrapping_add(8));
+        let desc = e.mem.u32(data.wrapping_add(index.wrapping_mul(4)));
+        if desc != 0 {
+            e.call(ADAPTER_DESC_CLEAN_UP_00E7BB50, &args![desc]);
+            e.call(FREE_00AA1460, &args![desc, 0x468u32]);
+        }
+        index += 1;
+    }
+    let data = e.mem.u32(base.wrapping_add(8));
+    e.mem
+        .set_u32(base.wrapping_add(4), ADAPTER_DESC_ARRAY_VTABLE);
+    e.call(FREE_00AA10F0, &args![data]);
+}
+
+// Translated from 00e7c540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00e7bcd0`): the `NiD3DDefaultShader` destructor (the RTTI
+/// of the table it stores), `thiscall`: its table, the block at +0x50 freed (`00aa10f0`), then
+/// the shader base destructor (`00e806c0`, a tail jump).
+pub fn fn_00e7c540(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let block = e.mem.u32(base.wrapping_add(0x50));
+    e.mem.set_u32(base, NI_D3D_DEFAULT_SHADER_VTABLE);
+    e.call(FREE_00AA10F0, &args![block]);
+    e.call(SHADER_DOWN_00E806C0, &args![base]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e7_c500, fn_00e7c500(u32) -> u32),
         entry!(0x00e7_bd20, fn_00e7bd20(Ptr) -> u32),
         entry!(0x00e7_c1e0, fn_00e7c1e0(u32, Ptr)),
+        entry!(0x00e7_bcd0, fn_00e7bcd0(Ptr)),
+        entry!(0x00e7_c540, fn_00e7c540(Ptr)),
     ]
 }
 
@@ -506,5 +556,67 @@ mod b000x_tests {
         for format in [0xffff_fff0u32, 0x13, 0x76, 0x3154_5845, 0x3454_5844] {
             assert_eq!(pixel_format_record_00e7c1e0(format), 0x011a_b020);
         }
+    }
+}
+
+#[cfg(test)]
+mod b051_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for no_op in [
+            ADAPTER_DESC_CLEAN_UP_00E7BB50,
+            FREE_00AA1460,
+            FREE_00AA10F0,
+            SHADER_DOWN_00E806C0,
+        ] {
+            e.register(no_op, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn fn_00e7bcd0_frees_each_adapter_description() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x10);
+        let data = e.mem.alloc(0xc);
+        e.mem.set_u32(data, 0x111);
+        e.mem.set_u32(data + 8, 0x333);
+        e.mem.set_u32(this + 8, data);
+        e.mem.set_u16(this + 0xe, 3);
+        e.call(0x00e7_bcd0, &args![this]);
+        assert_eq!(
+            calls(&e, ADAPTER_DESC_CLEAN_UP_00E7BB50),
+            vec![vec![0x111], vec![0x333]]
+        );
+        assert_eq!(
+            calls(&e, FREE_00AA1460),
+            vec![vec![0x111, 0x468], vec![0x333, 0x468]]
+        );
+        assert_eq!(e.mem.u32(this + 4), ADAPTER_DESC_ARRAY_VTABLE);
+        assert_eq!(calls(&e, FREE_00AA10F0), vec![vec![data]]);
+    }
+
+    #[test]
+    fn fn_00e7c540_frees_its_block_and_goes_down() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x54);
+        e.mem.set_u32(this + 0x50, 0x777);
+        e.call(0x00e7_c540, &args![this]);
+        assert_eq!(e.mem.u32(this), NI_D3D_DEFAULT_SHADER_VTABLE);
+        assert_eq!(calls(&e, FREE_00AA10F0), vec![vec![0x777]]);
+        assert_eq!(calls(&e, SHADER_DOWN_00E806C0), vec![vec![this]]);
     }
 }

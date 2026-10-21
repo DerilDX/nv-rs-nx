@@ -1604,6 +1604,1190 @@ pub fn fn_00b4f710(
     e.set_global(COPIED_FLAG_011F91A4, copied);
 }
 
+/// The floats `00b4f300` writes: the rectangle's centre (x, y) and half
+/// extents (x, y).
+const VIEWPORT_CENTRE_X_011F95F4: u32 = 0x011f_95f4;
+const VIEWPORT_CENTRE_Y_011F95F8: u32 = 0x011f_95f8;
+const VIEWPORT_HALF_WIDTH_011F95FC: u32 = 0x011f_95fc;
+const VIEWPORT_HALF_HEIGHT_011F9600: u32 = 0x011f_9600;
+/// Thiscall on the object at `011f91ac` (word), `RET 4`: keeps the word at
+/// its +0xAC.
+const KEEP_VALUE_00B8CAD0: u32 = 0x00b8_cad0;
+/// The index `00b4f450` keeps, and its two tables of function words with
+/// the selected entries (entry 0 when the selected one is null).
+const SELECTED_INDEX_011F91B8: u32 = 0x011f_91b8;
+const FIRST_TABLE_011F9F80: u32 = 0x011f_9f80;
+const FIRST_SELECTED_011F9F3C: u32 = 0x011f_9f3c;
+const SECOND_TABLE_011F9F40: u32 = 0x011f_9f40;
+const SECOND_SELECTED_011F9F38: u32 = 0x011f_9f38;
+/// The second reference-counted global `BSShaderManager` keeps next to the
+/// accumulator (`011f95f0`).
+const SECOND_ACCUMULATOR_011F95F0: u32 = 0x011f_95f0;
+/// `_strcpy_s`, `strrchr` and the formatted print (`sprintf_s`-like) the
+/// texture name code calls, cdecl.
+const STRCPY_S: u32 = 0x00ec_65a6;
+const STRRCHR: u32 = 0x00ec_6e30;
+/// `"data"`, `"Data\%s%s%s"` and `"%s%s%s"`.
+const DATA_PREFIX_010A9470: u32 = 0x010a_9470;
+const DATA_FORMAT_010A9464: u32 = 0x010a_9464;
+const PLAIN_FORMAT_0104F208: u32 = 0x0104_f208;
+/// `ImageSpaceTexture::GetTexture` and `ImageSpaceTexture::ReturnRenderedTexture`
+/// (engine map), thiscall on the texture at `011f91ac` + 0x204.
+const IMAGE_SPACE_TEXTURE_GET_TEXTURE: u32 = 0x00ba_3780;
+const IMAGE_SPACE_TEXTURE_RETURN_RENDERED: u32 = 0x00ba_39a0;
+/// The index `00b540f0` steps through the accumulator array.
+const ACCUMULATOR_INDEX_011F9168: u32 = 0x011f_9168;
+/// `NiAVObject::GetProperty` (engine map), thiscall (property type), `RET 4`.
+const GET_PROPERTY: u32 = 0x00a5_9d30;
+/// `NiAVObject::RemoveProperty_ov2` (engine map), thiscall (type), `RET 4`.
+const REMOVE_PROPERTY: u32 = 0x00a5_b230;
+/// `NiAVObject::AttachProperty` (engine map), thiscall (property), `RET 4`.
+const ATTACH_PROPERTY: u32 = 0x0043_9410;
+/// `NiAVObject::UpdateProperties` (engine map), thiscall.
+const UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+/// The object-type function `SetObjectType` and `PrepareObject` call when
+/// it is set (`011f91ec`, cdecl (object)).
+const OBJECT_TYPE_FUNCTION_011F91EC: u32 = 0x011f_91ec;
+/// The debug shader the debug-shader set-up keeps (`011f956c`).
+const DEBUG_SHADER_011F956C: u32 = 0x011f_956c;
+/// `DebugShader::CreateShader` (engine map).
+const DEBUG_SHADER_CREATE: u32 = 0x00bd_23f0;
+/// Thiscall on the debug shader (word), `RET 4`.
+const DEBUG_SHADER_00BD1CF0: u32 = 0x00bd_1cf0;
+/// Thiscall on the object at `011f91ac` (index, two out words), `RET 0xC`.
+const QUERY_00B97900: u32 = 0x00b9_7900;
+/// The renderer object `PrepareGeometry` asks last (`011f4748`).
+const RENDERER_OBJECT_011F4748: u32 = 0x011f_4748;
+/// RTTI records `PrepareGeometry` compares a shader's vtable slot +8 with.
+const SHADER_RTTI_012021B8: u32 = 0x0120_21b8;
+const SHADER_RTTI_01200508: u32 = 0x0120_0508;
+const SHADER_RTTI_01202040: u32 = 0x0120_2040;
+/// `"ERROR: %s does not have a shader property. "`.
+const NO_SHADER_PROPERTY_010ADA44: u32 = 0x010a_da44;
+/// The set-up's float (`0102f0f8`) passed to `00b54000`.
+const DEFAULT_VALUE_0102F0F8: u32 = 0x0102_f0f8;
+/// `"Shader %i is leaking. ..."`.
+const SHADER_LEAKING_010AD6E8: u32 = 0x010a_d6e8;
+/// The object the shut-down stops (`00ba2d80`, `run_00ba2d40.rs`): the
+/// rendering task threads.
+const RENDER_THREADS_01200088: u32 = 0x0120_0088;
+const STOP_RENDER_THREADS: u32 = 0x00ba_2d80;
+/// `NiMaterialProperty::NiMaterialProperty` (engine map), thiscall.
+const MATERIAL_PROPERTY_CONSTRUCT: u32 = 0x00a7_5650;
+/// Thiscall on an object (property), `RET 4` (`run_00653e50.rs`).
+const OBJECT_00654640: u32 = 0x0065_4640;
+/// The 0x10-byte scope object `CloneMaterialPropertyRecurse` keeps on its
+/// stack: its constructor (`bipedanim.rs`), thiscall (word), `RET 4`.
+const SCOPE_CONSTRUCT_004AD0C0: u32 = 0x004a_d0c0;
+
+/// Releases the reference-counted object in `global` and clears it, when
+/// there is one.
+fn release_global(e: &mut Engine, global: u32) {
+    let object = e.global::<u32>(global);
+    if object != 0 {
+        release_ni_pointer(e, object);
+        e.set_global(global, 0u32);
+    }
+}
+
+// Translated from 00b4f300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl): from the rectangle at `rect` (left,
+/// top, right, bottom), the half extents `(right - left) / 2` and `(top -
+/// bottom) / 2` (integer division) as floats into `011f95fc` and
+/// `011f9600`, and the centre `left + half width`, `bottom + half height`
+/// into `011f95f4` and `011f95f8`.
+pub fn fn_00b4f300(e: &mut Engine, rect: u32) {
+    let left = e.mem.i32(rect);
+    let half_width = e.mem.i32(rect + 8).wrapping_sub(left) / 2;
+    let half_height = e.mem.i32(rect + 4).wrapping_sub(e.mem.i32(rect + 0xc)) / 2;
+    let width_bits = x87_store32(f64::from(half_width));
+    let centre_x = x87_add(f64::from(left), x87_load32(width_bits));
+    e.set_global(VIEWPORT_CENTRE_X_011F95F4, x87_store32(centre_x));
+    let height_bits = x87_store32(f64::from(half_height));
+    let bottom = f64::from(e.mem.i32(rect + 0xc));
+    let centre_y = x87_add(bottom, x87_load32(height_bits));
+    e.set_global(VIEWPORT_CENTRE_Y_011F95F8, x87_store32(centre_y));
+    e.set_global(VIEWPORT_HALF_WIDTH_011F95FC, width_bits);
+    e.set_global(VIEWPORT_HALF_HEIGHT_011F9600, height_bits);
+}
+
+// Translated from 00b4f430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl): `00b8cad0(word)` on the object at
+/// `011f91ac`.
+pub fn fn_00b4f430(e: &mut Engine, word: u32) {
+    let object = e.global::<u32>(OBJECT_011F91AC);
+    e.call(KEEP_VALUE_00B8CAD0, &args![object, word]);
+}
+
+// Translated from 00b4f450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl): keeps `index` (`011f91b8`) and
+/// selects entry `index` of the two function tables (`011f9f80` into
+/// `011f9f3c`, `011f9f40` into `011f9f38`), each falling back to its entry
+/// 0 when null.
+pub fn fn_00b4f450(e: &mut Engine, index: u32) {
+    let first = e
+        .mem
+        .u32(FIRST_TABLE_011F9F80.wrapping_add(index.wrapping_mul(4)));
+    e.set_global(SELECTED_INDEX_011F91B8, index);
+    e.set_global(FIRST_SELECTED_011F9F3C, first);
+    if first == 0 {
+        let fallback = e.global::<u32>(FIRST_TABLE_011F9F80);
+        e.set_global(FIRST_SELECTED_011F9F3C, fallback);
+    }
+    let second = e
+        .mem
+        .u32(SECOND_TABLE_011F9F40.wrapping_add(index.wrapping_mul(4)));
+    e.set_global(SECOND_SELECTED_011F9F38, second);
+    if second == 0 {
+        let fallback = e.global::<u32>(SECOND_TABLE_011F9F40);
+        e.set_global(SECOND_SELECTED_011F9F38, fallback);
+    }
+}
+
+// Translated from 00b4f5d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the word at `011f95f0`.
+pub fn fn_00b4f5d0(e: &mut Engine) -> u32 {
+    e.global::<u32>(SECOND_ACCUMULATOR_011F95F0)
+}
+
+// Translated from 00b4f5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b4f5e0 - the /GS cookie check (00ec408c) is not translated.
+/// `BSShaderManager::GetModifiedTextureFilename` (engine map; cdecl): copies
+/// `source` into a 0x104-byte buffer and clears `destination[0]`; with an
+/// extension (the last `'.'`), keeps up to 0xA bytes of it, cuts the name at
+/// the last `'_'` (unless that is before the last `'\'`) and at the
+/// extension, and writes `name`, `suffix` and the extension into
+/// `destination` (0x104 bytes) as `"Data\%s%s%s"` when `prefix_data` is
+/// set and the name is relative (not starting `'\'` nor with `':'` second)
+/// and does not start with `"data"` (`_strnicmp`, 4), else as `"%s%s%s"`.
+pub fn bs_shader_manager_get_modified_texture_filename(
+    e: &mut Engine,
+    destination: u32,
+    source: u32,
+    suffix: u32,
+    prefix_data: u8,
+) {
+    // The locals: the suffix word (+0), the extension (+4, 0xA bytes) and
+    // the name (+0x10, 0x104 bytes).
+    e.with_stack(0x114, |e, locals| {
+        let base = locals.addr();
+        let extension = base + 4;
+        let name = base + 0x10;
+        e.call(STRCPY_S, &args![name, 0x104u32, source]);
+        e.mem.set_u32(base, suffix);
+        e.mem.set_u8(destination, 0);
+        let dot = e.call(STRRCHR, &args![name, 0x2eu32]).u32();
+        let slash = e.call(STRRCHR, &args![name, 0x5cu32]).u32();
+        let mut underscore = e.call(STRRCHR, &args![name, 0x5fu32]).u32();
+        if slash != 0 && underscore != 0 && underscore < slash {
+            underscore = 0;
+        }
+        if dot == 0 {
+            return;
+        }
+        e.call(STRCPY_S, &args![extension, 0xau32, dot]);
+        if underscore != 0 {
+            e.mem.set_u8(underscore, 0);
+        }
+        e.mem.set_u8(dot, 0);
+        let format = if prefix_data != 0
+            && e.mem.u8(name) != 0x5c
+            && e.mem.u8(name + 1) != 0x3a
+            && e.call(STRNICMP, &args![name, DATA_PREFIX_010A9470, 4u32])
+                .u32()
+                != 0
+        {
+            DATA_FORMAT_010A9464
+        } else {
+            PLAIN_FORMAT_0104F208
+        };
+        let suffix = e.mem.u32(base);
+        e.call(
+            FORMAT_00406D00,
+            &args![destination, 0x104u32, format, name, suffix, extension],
+        );
+    });
+}
+
+// Translated from 00b54090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `ImageSpaceTexture::GetTexture` on the
+/// texture at +0x204 of the object at `011f91ac` (a jump); its result.
+pub fn fn_00b54090(e: &mut Engine) -> u32 {
+    let object = e.global::<u32>(OBJECT_011F91AC);
+    e.call(
+        IMAGE_SPACE_TEXTURE_GET_TEXTURE,
+        &args![object.wrapping_add(0x204)],
+    )
+    .u32()
+}
+
+// Translated from 00b540b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `ImageSpaceTexture::ReturnRenderedTexture` on
+/// the texture at +0x204 of the object at `011f91ac` (a jump); its `EAX`.
+pub fn fn_00b540b0(e: &mut Engine) -> u32 {
+    let object = e.global::<u32>(OBJECT_011F91AC);
+    e.call(
+        IMAGE_SPACE_TEXTURE_RETURN_RENDERED,
+        &args![object.wrapping_add(0x204)],
+    )
+    .u32()
+}
+
+// Translated from 00b540f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the next accumulator of the array at
+/// `011f9170` (index `011f9168`, counted up).
+pub fn fn_00b540f0(e: &mut Engine) -> u32 {
+    let index = e.global::<u32>(ACCUMULATOR_INDEX_011F9168);
+    let array = e.global::<u32>(ACCUMULATOR_ARRAY_011F9170);
+    let slot = array.wrapping_add(index.wrapping_mul(4));
+    e.set_global(ACCUMULATOR_INDEX_011F9168, index.wrapping_add(1));
+    e.mem.u32(slot)
+}
+
+// Translated from 00b54280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: resets the shader manager's state: its flags
+/// and words to their defaults (among them `011f91d8` = 0x2F and
+/// `011f91f8` = `00b4f2e0`), releases the 0x23 shaders of `011f9548`, the
+/// textures `011f950c` to `011f9544` and `011f95d4` and the accumulator
+/// `011f95ec`, passes the float at `0102f0f8` to `00b54000`, sets the four
+/// floats `011f9184` to `011f9190` to `1.0` and clears `011f91ac`.
+/// Returns `this` (not otherwise used).
+pub fn fn_00b54280(e: &mut Engine, this: Ptr) -> Ptr {
+    for (address, value) in [(0x011f_9308u32, 0u8), (0x011f_9200, 0), (0x011f_91df, 1)] {
+        e.set_global(address, value);
+    }
+    e.set_global(0x011f_91e4u32, 0u32);
+    e.set_global(0x011f_91e0u32, 0u32);
+    e.set_global(0x011f_91deu32, 1u8);
+    e.set_global(0x011f_91ddu32, 0u8);
+    e.set_global(SHADER_FLAGS_011F91D8, 0x2fu32);
+    e.set_global(0x011f_91f8u32, 0x00b4_f2e0u32);
+    e.set_global(0x011f_91f0u32, 0u32);
+    e.set_global(OBJECT_TYPE_FUNCTION_011F91EC, 0u32);
+    e.set_global(0x011f_91c7u32, 1u8);
+    e.set_global(SET_UP_DONE_011F91C6, 0u8);
+    e.set_global(0x011f_91c5u32, 0u8);
+    e.set_global(0x011f_91a7u32, 0u8);
+    e.set_global(PROFILE_SETTING_011F91C0, 0u32);
+    e.set_global(PROFILE_SETTING_011F91BC, 0u32);
+    e.set_global(0x011f_91a5u32, 1u8);
+    let mut slot = SHADER_TABLE_011F9548;
+    while (slot as i32) < (TEXTURE_011F95D4 as i32) {
+        let shader = e.mem.u32(slot);
+        if shader != 0 {
+            release_ni_pointer(e, shader);
+            e.mem.set_u32(slot, 0);
+        }
+        slot += 4;
+    }
+    for global in [
+        0x011f_950c,
+        TEXTURE_011F9514,
+        TEXTURE_011F9510,
+        TEXTURE_011F9518,
+        TEXTURE_011F951C,
+        TEXTURE_011F9520,
+        TEXTURE_011F9524,
+        TEXTURE_011F9528,
+        TEXTURE_011F952C,
+        TEXTURE_011F9530,
+        TEXTURE_011F9534,
+        TEXTURE_011F9538,
+        TEXTURE_011F953C,
+        TEXTURE_011F9540,
+        TEXTURE_011F9544,
+        TEXTURE_011F95D4,
+    ] {
+        release_global(e, global);
+    }
+    e.set_global(0x011f_91c4u32, 0u8);
+    e.set_global(0x011a_d80cu32, 1u8);
+    e.set_global(0x011f_91dcu32, 0u8);
+    e.set_global(COPIED_FLAG_011F91A4, 1u8);
+    e.set_global(0x011f_9178u32, 0u32);
+    release_global(e, ACCUMULATOR);
+    e.set_global(0x011f_9181u32, 0u8);
+    let value = x87_quiet_bits(e.global::<u32>(DEFAULT_VALUE_0102F0F8));
+    fn_00b54000(e, f32::from_bits(value));
+    for address in [0x011f_9190u32, 0x011f_918c, 0x011f_9188, 0x011f_9184] {
+        e.set_global(address, 1.0f32);
+    }
+    e.set_global(0x011f_91a3u32, 0u8);
+    e.set_global(0x011f_9182u32, 0u8);
+    e.set_global(0x011f_9180u32, 0u8);
+    e.set_global(0x011f_917cu32, 0u32);
+    e.set_global(VERSION_3_BOTH_011F94A4, 0u8);
+    e.set_global(SHADER_1D_SELECT_011F94A6, 0u8);
+    e.set_global(OBJECT_011F91AC, 0u32);
+    this
+}
+
+// Translated from 00b54620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (the accumulator pointer's constructor the
+/// set-up passes to the array helper): clears the word at `this`.
+pub fn fn_00b54620(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0);
+}
+
+// Translated from 00b54630 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b54630 - the /GS cookie check (00ec408c) is not translated.
+/// Unnamed in the engine map (cdecl): the shader manager's shut-down. With
+/// `full` set: runs `00b62a20`, `00b59940`, `00ba50d0`, `00bc0940` and
+/// `00bc4610`; releases the textures `011f950c` to `011f9544` and
+/// `011f95d4`; clears `011f917c`; destroys the objects at `011f91ac`
+/// (`00b97690`) and `011f91a8` (`00b6f0b0`) and frees them; releases the
+/// accumulator `011f95ec` and the 0x23 shaders of `011f9548` (formatting a
+/// leak message into a local buffer for each one still referenced
+/// elsewhere); frees the holder at `011f94bc` (releasing its string unless
+/// it is the empty one); clears `011f91c6`; stops the rendering threads
+/// (`00ba2d80`), runs `00a29680` and releases `011f95f0`. Always: releases
+/// `011f9508` and `011f95d8` (clearing `011f91e0`), and every accumulator
+/// of the array at `011f9170` (`011f916c` of them), then destroys the array
+/// (an `operator new[]` block: its count before it).
+pub fn fn_00b54630(e: &mut Engine, full: u8) {
+    if full != 0 {
+        for address in [
+            0x00b6_2a20u32,
+            0x00b5_9940,
+            0x00ba_50d0,
+            0x00bc_0940,
+            0x00bc_4610,
+        ] {
+            e.call(address, &args![]);
+        }
+        for global in [
+            0x011f_950c,
+            TEXTURE_011F9510,
+            TEXTURE_011F9514,
+            TEXTURE_011F9518,
+            TEXTURE_011F951C,
+            TEXTURE_011F9520,
+            TEXTURE_011F9524,
+            TEXTURE_011F9528,
+            TEXTURE_011F952C,
+            TEXTURE_011F9530,
+            TEXTURE_011F9534,
+            TEXTURE_011F9538,
+            TEXTURE_011F953C,
+            TEXTURE_011F9540,
+            TEXTURE_011F9544,
+            TEXTURE_011F95D4,
+        ] {
+            release_global(e, global);
+        }
+        e.set_global(0x011f_917cu32, 0u32);
+        let object = e.global::<u32>(OBJECT_011F91AC);
+        if object != 0 {
+            e.call(0x00b9_7690, &args![object]);
+            e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, object]);
+            e.set_global(OBJECT_011F91AC, 0u32);
+        }
+        let object = e.global::<u32>(OBJECT_011F91A8);
+        if object != 0 {
+            e.call(0x00b6_f0b0, &args![object]);
+            e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, object]);
+            e.set_global(OBJECT_011F91A8, 0u32);
+        }
+        release_global(e, ACCUMULATOR);
+        e.with_stack(0x100, |e, buffer| {
+            for index in 0..0x23u32 {
+                let slot = SHADER_TABLE_011F9548 + 4 * index;
+                let shader = e.mem.u32(slot);
+                if shader == 0 {
+                    continue;
+                }
+                let count = e.mem.u32(shader + 4);
+                if count > 1 {
+                    e.call(
+                        FORMAT_00406D00,
+                        &args![buffer, 0xffu32, SHADER_LEAKING_010AD6E8, index, count],
+                    );
+                }
+                let shader = e.mem.u32(slot);
+                if shader != 0 {
+                    release_ni_pointer(e, shader);
+                    e.mem.set_u32(slot, 0);
+                }
+            }
+        });
+        let holder = e.global::<u32>(HOLDER_011F94BC);
+        if holder != 0 {
+            let name = e.mem.u32(holder);
+            if name != e.global::<u32>(FIXED_STRING_NONE) {
+                e.call(IMPORT_INTERLOCKED_DECREMENT, &args![name.wrapping_sub(8)]);
+            }
+            e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, holder]);
+        }
+        e.set_global(HOLDER_011F94BC, 0u32);
+        e.set_global(SET_UP_DONE_011F91C6, 0u8);
+        e.call(STOP_RENDER_THREADS, &args![RENDER_THREADS_01200088]);
+        e.call(0x00a2_9680, &args![]);
+        release_global(e, SECOND_ACCUMULATOR_011F95F0);
+    }
+    release_global(e, GLOBAL_011F9508);
+    e.set_global(0x011f_91e0u32, 0u32);
+    release_global(e, 0x011f_95d8);
+    let mut array = e.global::<u32>(ACCUMULATOR_ARRAY_011F9170);
+    let mut index = 0u32;
+    while index < e.global::<u32>(ACCUMULATOR_COUNT_011F916C) {
+        let slot = array.wrapping_add(4 * index);
+        let accumulator = e.mem.u32(slot);
+        if accumulator != 0 {
+            release_ni_pointer(e, accumulator);
+            e.mem.set_u32(slot, 0);
+            array = e.global::<u32>(ACCUMULATOR_ARRAY_011F9170);
+        }
+        index += 1;
+    }
+    if array != 0 {
+        let count = e.mem.u32(array - 4);
+        e.call(0x00ec_5fce, &args![array, 4u32, count, 0x0045_cec0u32]);
+        e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, array - 4]);
+    }
+}
+
+// Translated from 00b54ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderManager::SetAccumulator` (engine map; cdecl): `accumulator`
+/// into the reference-counted global `011f95ec`.
+pub fn bs_shader_manager_set_accumulator(e: &mut Engine, accumulator: u32) {
+    assign_global(e, ACCUMULATOR, accumulator);
+}
+
+// Translated from 00b54b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl): `object` into the reference-counted
+/// global `011f95f0`.
+pub fn fn_00b54b10(e: &mut Engine, object: u32) {
+    assign_global(e, SECOND_ACCUMULATOR_011F95F0, object);
+}
+
+// Translated from 00b55360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderManager::SetObjectTypeRecurse` (engine map; cdecl): for
+/// geometry (vtable +0x18), `NiAVObject::GetProperty(3)` (nothing more:
+/// the result is not used); for a node (vtable +0xC), recurses into each
+/// non-null child (`+0xA0`, `+0xA6` of them) with `object_type`.
+pub fn bs_shader_manager_set_object_type_recurse(e: &mut Engine, object: u32, object_type: u32) {
+    if object == 0 {
+        return;
+    }
+    if e.vcall(object, 0x18, &args![]).u32() != 0 {
+        e.call(GET_PROPERTY, &args![object, 3u32]);
+        return;
+    }
+    if e.vcall(object, 0xc, &args![]).u32() == 0 {
+        return;
+    }
+    let mut index = 0u32;
+    while index < u32::from(e.mem.u16(object + 0xa6)) {
+        let children = e.mem.u32(object + 0xa0);
+        let child = e.mem.u32(children + 4 * index);
+        if child != 0 {
+            bs_shader_manager_set_object_type_recurse(e, child, object_type);
+        }
+        index += 1;
+    }
+}
+
+// Translated from 00b55480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl): for geometry, when both its property 2
+/// and its shader property (3) exist and the shader property's flags (+0x20)
+/// have bit 29, sets property 2's word +0x34 to `value`; for a node (the
+/// object vtable +0xC answers), recurses into its non-null children.
+pub fn fn_00b55480(e: &mut Engine, object: u32, value: u32) {
+    if object == 0 {
+        return;
+    }
+    if e.vcall(object, 0x18, &args![]).u32() != 0 {
+        let first = e.call(GET_PROPERTY, &args![object, 2u32]).u32();
+        let shader_property = e.call(GET_PROPERTY, &args![object, 3u32]).u32();
+        if first != 0
+            && shader_property != 0
+            && e.mem.u32(shader_property + 0x20) & 0x2000_0000 != 0
+        {
+            e.mem.set_u32(first + 0x34, value);
+        }
+        return;
+    }
+    let node = e.vcall(object, 0xc, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let count = u32::from(e.mem.u16(node + 0xa6));
+    for index in 0..count {
+        let children = e.mem.u32(node + 0xa0);
+        let child = e.mem.u32(children + 4 * index);
+        if child != 0 {
+            fn_00b55480(e, child, value);
+        }
+    }
+}
+
+// Translated from 00b55520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderManager::GetFogProperty` (engine map; cdecl): the fog property
+/// (+0x134) of shadow scene node `index` (`011f91c8`).
+pub fn bs_shader_manager_get_fog_property(e: &mut Engine, index: u32) -> u32 {
+    let node = e
+        .mem
+        .u32(SHADOW_SCENE_NODES.wrapping_add(index.wrapping_mul(4)));
+    e.mem.u32(node + 0x134)
+}
+
+// Translated from 00b55a10 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b55a10 - the C++ exception frame (FS:[0] chain, unwind state 0 around the creation) is not translated.
+/// Unnamed in the engine map: with a renderer (`011f9508`), makes the debug
+/// shader (`DebugShader::CreateShader`, with the thread block's allocation
+/// context at 5, restored after) into `011f956c` when there is none, then
+/// runs `00bd1cf0(0)` on it when it exists.
+pub fn fn_00b55a10(e: &mut Engine) {
+    if e.global::<u32>(GLOBAL_011F9508) == 0 {
+        return;
+    }
+    if e.global::<u32>(DEBUG_SHADER_011F956C) == 0 {
+        let context = e.tls() + TLS_CONTEXT;
+        let saved = e.mem.u32(context);
+        e.mem.set_u32(context, 5);
+        let shader = e.call(DEBUG_SHADER_CREATE, &args![]).u32();
+        e.call(
+            NI_POINTER_ASSIGN_00A5F860,
+            &args![DEBUG_SHADER_011F956C, shader],
+        );
+        e.mem.set_u32(context, saved);
+        if e.global::<u32>(DEBUG_SHADER_011F956C) == 0 {
+            return;
+        }
+    }
+    let shader = e.global::<u32>(DEBUG_SHADER_011F956C);
+    e.call(DEBUG_SHADER_00BD1CF0, &args![shader, 0u32]);
+}
+
+// Translated from 00b55ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl): `00b97900(index, &second, &third)` on
+/// the object at `011f91ac` (the two words' stack slots), then the
+/// renderer's object at +0x8B8 gets its vtable +0xDC with `(stage, 0)` for
+/// the stages 0 to 7.
+pub fn fn_00b55ac0(e: &mut Engine, index: u32, second: u32, third: u32) {
+    e.with_stack(8, |e, slots| {
+        e.mem.set_u32(slots.addr(), second);
+        e.mem.set_u32(slots.addr() + 4, third);
+        let object = e.global::<u32>(OBJECT_011F91AC);
+        e.call(
+            QUERY_00B97900,
+            &args![object, index, slots.addr(), slots.addr() + 4],
+        );
+    });
+    for stage in 0..8u32 {
+        let renderer = e.global::<u32>(GLOBAL_011F9508);
+        let state = e.mem.u32(renderer + 0x8b8);
+        e.vcall(state, 0xdc, &args![stage, 0u32]);
+    }
+}
+
+/// The object type from the function at `011f91ec` (cdecl (object)), or 0
+/// when it is not set.
+fn object_type(e: &mut Engine, object: u32) -> u32 {
+    let function = e.global::<u32>(OBJECT_TYPE_FUNCTION_011F91EC);
+    if function != 0 {
+        e.call(function, &args![object]).u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 00b55b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderManager::SetObjectType` (engine map; cdecl): for a non-null
+/// `object`, `SetObjectTypeRecurse` with the type from `011f91ec`.
+pub fn bs_shader_manager_set_object_type(e: &mut Engine, object: u32) {
+    if object != 0 {
+        let kind = object_type(e, object);
+        bs_shader_manager_set_object_type_recurse(e, object, kind);
+    }
+}
+
+// Translated from 00b579e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b579e0 - the /GS cookie check (00ec408c) is not translated.
+/// `BSShaderManager::PrepareGeometry` (engine map; cdecl, `geometry`, its
+/// object type (not read), `force` and `skip`). Without a usable shader
+/// property (property 3, its word +0x1C not -1) formats the "does not have
+/// a shader property" message into a local buffer and returns. Otherwise
+/// the property's vtable +0xB0 `(geometry, 0, 1)` may give a replacement,
+/// which takes the old one's place (removed, attached, and when its vtable
+/// +0x8C answers at most 7, assigned to the geometry's slot +0x9C + 4 *
+/// that). Without a shader number (+0x58) the property is removed;
+/// otherwise the shader (`GetShader`) goes to the geometry's +0xC0 and gets
+/// it (vtable +0x50); the low bits of the geometry's properties byte
+/// (+0xB8, +0x38) get 0x33, 4 for the shader class `01202040` and 8 with
+/// `force` or that class. Unless `skip` (or-ed with "the shader is one of
+/// `012021b8`/`01200508`, or the geometry's vtable +0x30 answers") is set,
+/// the renderer object at `011f4748` is told (vtable +0xEC: geometry, 0x12,
+/// 4, the shader's vtable +0x118 for geometry and property).
+pub fn bs_shader_manager_prepare_geometry(
+    e: &mut Engine,
+    geometry: u32,
+    _unused_2: u32,
+    force: u8,
+    skip: u8,
+) {
+    let mut skip = skip;
+    let found = e.call(GET_PROPERTY, &args![geometry, 3u32]).u32();
+    let mut property = if found != 0 && e.mem.u32(found + 0x1c).wrapping_add(1) != 0 {
+        found
+    } else {
+        0
+    };
+    if property == 0 {
+        let name = e.mem.u32(geometry + 8);
+        e.with_stack(0x3e8, |e, buffer| {
+            e.call(
+                FORMAT_00406D00,
+                &args![buffer, 0x3e8u32, NO_SHADER_PROPERTY_010ADA44, name],
+            );
+        });
+        return;
+    }
+    let replacement = e.vcall(property, 0xb0, &args![geometry, 0u32, 1u32]).u32();
+    if replacement != 0 {
+        e.call(REMOVE_PROPERTY, &args![geometry, 3u32]);
+        property = replacement;
+        e.call(ATTACH_PROPERTY, &args![geometry, replacement]);
+        if e.vcall(replacement, 0x8c, &args![]).i32() <= 7 {
+            let slot = e.vcall(replacement, 0x8c, &args![]).u32();
+            e.call(
+                NI_POINTER_ASSIGN_0066B0D0,
+                &args![
+                    geometry
+                        .wrapping_add(slot.wrapping_mul(4))
+                        .wrapping_add(0x9c),
+                    replacement
+                ],
+            );
+        }
+    }
+    let shader_number = e.mem.u32(property + 0x58);
+    if shader_number == 0 {
+        e.call(REMOVE_PROPERTY, &args![geometry, 3u32]);
+        return;
+    }
+    let shader = bs_shader_manager_get_shader(e, shader_number).addr();
+    e.mem.set_u32(geometry + 0xc0, shader);
+    e.vcall(shader, 0x50, &args![geometry]);
+    let first_class = e.vcall(shader, 8, &args![]).u32() == SHADER_RTTI_012021B8;
+    let second_class = e.vcall(shader, 8, &args![]).u32() == SHADER_RTTI_01200508;
+    let flag = if second_class || first_class {
+        1
+    } else {
+        u8::from(e.vcall(geometry, 0x30, &args![]).u32() != 0)
+    };
+    skip |= flag;
+    let third_class = e.vcall(shader, 8, &args![]).u32() == SHADER_RTTI_01202040;
+    let properties = e.mem.u32(geometry + 0xb8);
+    let low = e.mem.u8(properties + 0x38) | 0x33;
+    let forced = if force != 0 || third_class { 8 } else { 0 };
+    let class_bit = if third_class { 4 } else { 0 };
+    e.mem.set_u8(properties + 0x38, class_bit | forced | low);
+    if skip != 0 {
+        return;
+    }
+    let renderer = e.global::<u32>(RENDERER_OBJECT_011F4748);
+    let renderer_vtable = e.mem.u32(renderer);
+    let state = e.vcall(shader, 0x118, &args![geometry, property]).u32();
+    let target = e.mem.u32(renderer_vtable + 0xec);
+    e.call(target, &args![renderer, geometry, 0x12u32, 4u32, state]);
+}
+
+// Translated from 00b57bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderManager::PrepareObjectRecurse` (engine map; cdecl): geometry
+/// goes to `PrepareGeometry`, a node's non-null children recurse; anything
+/// else is left.
+pub fn bs_shader_manager_prepare_object_recurse(
+    e: &mut Engine,
+    object: u32,
+    object_type: u32,
+    force: u8,
+    skip: u8,
+) {
+    if e.vcall(object, 0xc, &args![]).u32() == 0 && e.vcall(object, 0x18, &args![]).u32() == 0 {
+        return;
+    }
+    if e.vcall(object, 0x18, &args![]).u32() != 0 {
+        bs_shader_manager_prepare_geometry(e, object, object_type, force, skip);
+        return;
+    }
+    let mut index = 0u32;
+    while index < u32::from(e.mem.u16(object + 0xa6)) {
+        let children = e.mem.u32(object + 0xa0);
+        let child = e.mem.u32(children + 4 * index);
+        if child != 0 {
+            bs_shader_manager_prepare_object_recurse(e, child, object_type, force, skip);
+        }
+        index += 1;
+    }
+}
+
+// Translated from 00b57c60 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b57c60 - the C++ exception frame (FS:[0] chain, unwind states 0 to 2 around the clone) is not translated.
+/// `BSShaderManager::CloneMaterialPropertyRecurse` (engine map; cdecl): for
+/// an object with a material property (property 2, held with a reference):
+/// `00654640` with it, a stack scope object (`004ad0c0(0x101)`), then the
+/// property itself when its word +0xC is set, else a new
+/// `NiMaterialProperty` (0x4C bytes) with its colours (+0x1C to +0x30, the
+/// emissive block from +0x34 or +0x28) and floats (+0x38 to +0x40) copied
+/// and its revision (+0x44) stepped once per change, attached to the
+/// object; the scope's two objects are deleted. Then a node's children
+/// recurse, and the reference is released.
+pub fn bs_shader_manager_clone_material_property_recurse(e: &mut Engine, object: u32) {
+    if object == 0 {
+        return;
+    }
+    let property = e.call(GET_PROPERTY, &args![object, 2u32]).u32();
+    if property != 0 {
+        e.call(IMPORT_INTERLOCKED_INCREMENT, &args![property + 4]);
+        e.call(OBJECT_00654640, &args![object, property]);
+        e.with_stack(0x10, |e, scope| {
+            let scope = scope.addr();
+            e.call(SCOPE_CONSTRUCT_004AD0C0, &args![scope, 0x101u32]);
+            let attached = if e.mem.u32(property + 0xc) != 0 {
+                property
+            } else {
+                let block = e.call(NEW_OBJECT, &args![0x4cu32]).u32();
+                let copy = if block != 0 {
+                    e.call(MATERIAL_PROPERTY_CONSTRUCT, &args![block]).u32()
+                } else {
+                    0
+                };
+                for offset in [0x1c, 0x20] {
+                    let word = e.mem.u32(property + offset);
+                    e.mem.set_u32(copy + offset, word);
+                }
+                let word = e.mem.u32(property + 0x24);
+                let revision = e.mem.u32(copy + 0x44).wrapping_add(1);
+                e.mem.set_u32(copy + 0x44, revision);
+                e.mem.set_u32(copy + 0x24, word);
+                let emissive = if e.mem.u32(property + 0x34) != 0 {
+                    e.mem.u32(property + 0x34)
+                } else {
+                    property + 0x28
+                };
+                for word in 0..3 {
+                    let value = e.mem.u32(emissive + 4 * word);
+                    e.mem.set_u32(copy + 0x28 + 4 * word, value);
+                }
+                let mut revision = revision.wrapping_add(1);
+                e.mem.set_u32(copy + 0x44, revision);
+                for offset in [0x40, 0x38, 0x3c] {
+                    let value = x87_quiet_bits(e.mem.u32(property + offset));
+                    revision = revision.wrapping_add(1);
+                    e.mem.set_u32(copy + 0x44, revision);
+                    e.mem.set_u32(copy + offset, value);
+                }
+                copy
+            };
+            e.call(ATTACH_PROPERTY, &args![object, attached]);
+            for offset in [0, 4] {
+                let held = e.mem.u32(scope + offset);
+                if held != 0 {
+                    e.vcall(held, 0, &args![1u32]);
+                }
+            }
+        });
+    }
+    let node = e.vcall(object, 0xc, &args![]).u32();
+    if node != 0 {
+        let count = u32::from(e.mem.u16(node + 0xa6));
+        for index in 0..count {
+            let children = e.mem.u32(node + 0xa0);
+            let child = e.mem.u32(children + 4 * index);
+            if child != 0 {
+                bs_shader_manager_clone_material_property_recurse(e, child);
+            }
+        }
+    }
+    if property != 0 {
+        release_ni_pointer(e, property);
+    }
+}
+
+// Translated from 00b57e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderManager::PrepareObject` (engine map; cdecl): updates the
+/// object's properties (`NiAVObject::UpdateProperties`), then
+/// `PrepareObjectRecurse` with the type from `011f91ec`, `force` and `skip`.
+pub fn bs_shader_manager_prepare_object(e: &mut Engine, object: u32, force: u8, skip: u8) {
+    e.call(UPDATE_PROPERTIES, &args![object]);
+    let kind = object_type(e, object);
+    bs_shader_manager_prepare_object_recurse(e, object, kind, force, skip);
+}
+
+/// `"STBB"`, the prefix `CreateTangentSpaceSimple` compares the name with
+/// (the result is not used).
+const STBB_0102BF34: u32 = 0x0102_bf34;
+/// `"Tangent space (binormal & tangent vectors)"`, the extra data's name.
+const TANGENT_SPACE_NAME_010AD7A8: u32 = 0x010a_d7a8;
+/// The message formatted when the geometry has no normals.
+const NO_NORMALS_MESSAGE_010AD730: u32 = 0x010a_d730;
+/// Thiscall on a new 0x14-byte block (word), `RET 4`: the object
+/// `CreateTangentSpaceSimple` answers.
+const TANGENT_DATA_CONSTRUCT: u32 = 0x00b6_6810;
+/// `NiObjectNET::GetExtraData` / `RemoveExtraData` (engine map), thiscall
+/// (address of the name), `RET 4`.
+const GET_EXTRA_DATA: u32 = 0x00a5_bdd0;
+const REMOVE_EXTRA_DATA: u32 = 0x00a5_be90;
+/// `NiTriStripsData::GetStripLists` (engine map), thiscall.
+const GET_STRIP_LISTS: u32 = 0x00a7_5f10;
+/// Thiscall on a vector (`bgsdecalmanager.rs`): normalizes it.
+const NORMALIZE_004A0C10: u32 = 0x004a_0c10;
+/// `NiGeometryData::ReplaceData` (engine map), thiscall (count, vertices,
+/// normals, colours, texture coordinates, flags, word), `RET 0x1C`.
+const REPLACE_DATA: u32 = 0x00a6_6bb0;
+/// `_memcpy` and `_memset` (engine map), cdecl.
+const MEMCPY_00EC44D0: u32 = 0x00ec_44d0;
+const MEMSET_00EC61C0: u32 = 0x00ec_61c0;
+
+/// `count * 12` as the code's `MUL`/`SETO`/`NEG`/`OR` computes it: all
+/// ones on overflow.
+fn twelve_times(count: u32) -> u32 {
+    count.checked_mul(0xc).unwrap_or(u32::MAX)
+}
+
+/// A float's bits through `FLD dword` and `FSTP dword` of an x87 result.
+fn store(value: f64) -> u32 {
+    x87_store32(value)
+}
+
+/// `FLD dword` of the float at `address`.
+fn load(e: &Engine, address: u32) -> f64 {
+    x87_load32(e.mem.u32(address))
+}
+
+/// A float memory operand at `address`.
+fn operand(e: &Engine, address: u32) -> f64 {
+    x87_m32(e.mem.u32(address))
+}
+
+// Translated from 00b54b60 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b54b60 - the C++ exception frame (FS:[0] chain, unwind states 0 to 2 around the names) and the /GS cookie check (00ec408c) are not translated.
+/// `BSShaderManager::CreateTangentSpaceSimple` (engine map; cdecl). Makes a
+/// 0x14-byte object (`00b66810(1)`). When the geometry has the tangent
+/// space extra data, the object gets two copies of its two halves (+0xC the
+/// second, +0x10 the first, 12 bytes per vertex), the extra data is removed
+/// and the object is returned. Otherwise, for a triangle shape (vtable
+/// +0x1C) with normals, it sums each triangle's tangent and binormal
+/// (from the positions and texture coordinates, through `1 / (du1 * dv2 -
+/// du2 * dv1)`) into each of its three vertices (strips read with the
+/// flipped winding every other triangle; degenerate triangles skipped),
+/// makes each vertex's tangent orthogonal to its normal and the binormal
+/// their cross product (both normalized, `004a0c10`), hands the geometry
+/// data the normals followed by the binormals and tangents
+/// (`NiGeometryData::ReplaceData`), frees the old normals and the work
+/// buffer, deletes the object and returns 0. Without normals a message is
+/// formatted into a local buffer and 0 returned (the object kept).
+pub fn bs_shader_manager_create_tangent_space_simple(e: &mut Engine, geometry: u32) -> u32 {
+    let name = e.mem.u32(geometry + 8);
+    if name != 0 {
+        e.call(STRNICMP, &args![name, STBB_0102BF34, 4u32]);
+    }
+    let block = e.call(NEW_OBJECT, &args![0x14u32]).u32();
+    let object = if block != 0 {
+        e.call(TANGENT_DATA_CONSTRUCT, &args![block, 1u32]).u32()
+    } else {
+        0
+    };
+    let existing = e.with_stack(4, |e, slot| {
+        let fixed = e
+            .call(FIXED_STRING_MAKE, &args![TANGENT_SPACE_NAME_010AD7A8])
+            .u32();
+        e.mem.set_u32(slot.addr(), fixed);
+        let found = e.call(GET_EXTRA_DATA, &args![geometry, slot]).u32();
+        let fixed = e.mem.u32(slot.addr());
+        release_fixed_string(e, fixed);
+        found
+    });
+    if existing != 0 {
+        let data = e.mem.u32(geometry + 0xb8);
+        let count = u32::from(e.mem.u16(data + 8));
+        let first = e.mem.u32(existing + 0xc);
+        let size = count * 12;
+        let second = first.wrapping_add(size);
+        let copy = e
+            .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, twelve_times(count)])
+            .u32();
+        e.mem.set_u32(object + 0xc, copy);
+        let copy = e
+            .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, twelve_times(count)])
+            .u32();
+        e.mem.set_u32(object + 0x10, copy);
+        let destination = e.mem.u32(object + 0xc);
+        e.call(MEMCPY_00EC44D0, &args![destination, second, size]);
+        let destination = e.mem.u32(object + 0x10);
+        e.call(MEMCPY_00EC44D0, &args![destination, first, size]);
+        e.with_stack(4, |e, slot| {
+            let fixed = e
+                .call(FIXED_STRING_MAKE, &args![TANGENT_SPACE_NAME_010AD7A8])
+                .u32();
+            e.mem.set_u32(slot.addr(), fixed);
+            e.call(REMOVE_EXTRA_DATA, &args![geometry, slot]);
+            let fixed = e.mem.u32(slot.addr());
+            release_fixed_string(e, fixed);
+        });
+        return object;
+    }
+    if e.vcall(geometry, 0x1c, &args![]).u32() == 0 {
+        return 0;
+    }
+    let shape = e.vcall(geometry, 0x1c, &args![]).u32();
+    let data = e.mem.u32(shape + 0xb8);
+    let triangles = e.mem.u16(data + 0x40);
+    let normals = e.mem.u32(data + 0x24);
+    let count = u32::from(e.mem.u16(data + 8));
+    let vertices = e.mem.u32(data + 0x20);
+    let coordinates = e.mem.u32(data + 0x2c);
+    let strips = e.vcall(shape, 0x20, &args![]).u32() != 0;
+    let mut strip = 0u32;
+    if strips {
+        let data = e.mem.u32(shape + 0xb8);
+        strip = e.call(GET_STRIP_LISTS, &args![data]).u32();
+    }
+    if normals == 0 {
+        e.with_stack(0x100, |e, buffer| {
+            e.call(
+                FORMAT_00406D00,
+                &args![buffer, 0xffu32, NO_NORMALS_MESSAGE_010AD730],
+            );
+        });
+        return 0;
+    }
+    let sums = e
+        .call(
+            MEMORY_ALLOCATE,
+            &args![MEMORY_MANAGER, twelve_times(count * 2)],
+        )
+        .u32();
+    let binormal_sums = sums.wrapping_add(count * 12);
+    e.call(MEMSET_00EC61C0, &args![sums, 0u32, count * 24]);
+    let output = e
+        .call(
+            MEMORY_ALLOCATE,
+            &args![MEMORY_MANAGER, twelve_times(count * 3)],
+        )
+        .u32();
+    e.call(MEMCPY_00EC44D0, &args![output, normals, count * 12]);
+    let binormals_out = output.wrapping_add(count * 12);
+    let tangents_out = output.wrapping_add(count * 24);
+    // The locals the triangle's indices are read into (words; the
+    // triangle query writes their low halves).
+    e.with_stack(0xc, |e, indices| {
+        let slot0 = indices.addr();
+        let slot1 = slot0 + 4;
+        let slot2 = slot0 + 8;
+        let mut flip = false;
+        let mut triangle = 0u32;
+        let mut cursor = strip.wrapping_add(4);
+        if triangles == 0 {
+            return;
+        }
+        loop {
+            if strips {
+                let a = u32::from(e.mem.u16(cursor.wrapping_sub(4)));
+                let b = u32::from(e.mem.u16(cursor.wrapping_sub(2)));
+                let c = u32::from(e.mem.u16(cursor));
+                e.mem.set_u32(slot0, a);
+                e.mem.set_u32(slot1, b);
+                e.mem.set_u32(slot2, c);
+                if flip {
+                    e.mem.set_u32(slot2, a);
+                    e.mem.set_u32(slot0, c);
+                }
+                flip = !flip;
+            } else {
+                let data = e.mem.u32(shape + 0xb8);
+                e.vcall(data, 0xac, &args![triangle, slot0, slot1, slot2]);
+            }
+            let i0 = e.mem.u16(slot0);
+            let i1 = e.mem.u16(slot1);
+            let i2 = e.mem.u16(slot2);
+            if i0 != i1 && i1 != i2 && i0 != i2 {
+                add_triangle(
+                    e,
+                    [u32::from(i0), u32::from(i1), u32::from(i2)],
+                    vertices,
+                    coordinates,
+                    sums,
+                    binormal_sums,
+                );
+            }
+            cursor = cursor.wrapping_add(2);
+            triangle = triangle.wrapping_add(1);
+            if triangle as u16 >= triangles {
+                break;
+            }
+        }
+    });
+    for index in 0..count {
+        let normal = normals + 12 * index;
+        let sum = sums + 12 * index;
+        let tangent = tangents_out + 12 * index;
+        let binormal = binormals_out + 12 * index;
+        let along = x87_add(
+            x87_add(
+                x87_mul(load(e, normal), operand(e, sum)),
+                x87_mul(load(e, normal + 4), operand(e, sum + 4)),
+            ),
+            x87_mul(load(e, normal + 8), operand(e, sum + 8)),
+        );
+        let along = x87_load32(store(along));
+        let part_x = store(x87_mul(load(e, normal), along));
+        let part_y = store(x87_mul(load(e, normal + 4), along));
+        let part_z = store(x87_mul(along, operand(e, normal + 8)));
+        let tangent_x = store(x87_sub(load(e, sum), x87_m32(part_x)));
+        let tangent_y = store(x87_sub(load(e, sum + 4), x87_m32(part_y)));
+        let tangent_z = store(x87_sub(load(e, sum + 8), x87_m32(part_z)));
+        e.mem.set_u32(tangent, tangent_x);
+        e.mem.set_u32(tangent + 4, tangent_y);
+        e.mem.set_u32(tangent + 8, tangent_z);
+        let cross_x = store(x87_sub(
+            x87_mul(load(e, tangent + 8), operand(e, normal + 4)),
+            x87_mul(load(e, normal + 8), operand(e, tangent + 4)),
+        ));
+        let cross_y = store(x87_sub(
+            x87_mul(load(e, normal + 8), operand(e, tangent)),
+            x87_mul(load(e, tangent + 8), operand(e, normal)),
+        ));
+        let cross_z = store(x87_sub(
+            x87_mul(load(e, normal), operand(e, tangent + 4)),
+            x87_mul(load(e, normal + 4), operand(e, tangent)),
+        ));
+        e.mem.set_u32(binormal, cross_x);
+        e.mem.set_u32(binormal + 4, cross_y);
+        e.mem.set_u32(binormal + 8, cross_z);
+        e.call(NORMALIZE_004A0C10, &args![tangent]);
+        e.call(NORMALIZE_004A0C10, &args![binormal]);
+    }
+    e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, sums]);
+    let data = e.mem.u32(geometry + 0xb8);
+    let old_normals = e.mem.u32(data + 0x24);
+    e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, old_normals]);
+    let flags = u32::from(e.mem.u16(data + 0xc) & 1);
+    let coordinates = e.mem.u32(data + 0x2c);
+    let colours = e.mem.u32(data + 0x28);
+    let vertices = e.mem.u32(data + 0x20);
+    e.call(
+        REPLACE_DATA,
+        &args![
+            data,
+            count,
+            vertices,
+            output,
+            colours,
+            coordinates,
+            flags,
+            0x1000u32
+        ],
+    );
+    if object != 0 {
+        e.vcall(object, 0, &args![1u32]);
+    }
+    0
+}
+
+/// One triangle of `CreateTangentSpaceSimple`: its tangent and binormal
+/// from the edge vectors and texture coordinate differences (in the code's
+/// x87 order, each stored as a `float`), added to the sums of its three
+/// vertices.
+fn add_triangle(
+    e: &mut Engine,
+    [i0, i1, i2]: [u32; 3],
+    vertices: u32,
+    coordinates: u32,
+    sums: u32,
+    binormal_sums: u32,
+) {
+    let v0 = vertices + 12 * i0;
+    let v1 = vertices + 12 * i1;
+    let v2 = vertices + 12 * i2;
+    let edge = |e: &Engine, to: u32, offset: u32| {
+        store(x87_sub(load(e, to + offset), operand(e, v0 + offset)))
+    };
+    let e1x = edge(e, v1, 0);
+    let e2x = edge(e, v2, 0);
+    let e1y = edge(e, v1, 4);
+    let e2y = edge(e, v2, 4);
+    let e1z = edge(e, v1, 8);
+    let e2z = edge(e, v2, 8);
+    let uv0 = coordinates + 8 * i0;
+    let uv1 = coordinates + 8 * i1;
+    let uv2 = coordinates + 8 * i2;
+    let du1 = x87_load32(store(x87_sub(load(e, uv1), operand(e, uv0))));
+    let du2 = x87_load32(store(x87_sub(load(e, uv2), operand(e, uv0))));
+    let dv1 = x87_load32(store(x87_sub(load(e, uv1 + 4), operand(e, uv0 + 4))));
+    let dv2 = x87_load32(store(x87_sub(load(e, uv2 + 4), operand(e, uv0 + 4))));
+    let determinant = x87_sub(x87_mul(dv2, du1), x87_mul(dv1, du2));
+    let inverse = x87_load32(store(x87_div(1.0, determinant)));
+    let tangent_x = store(x87_mul(
+        x87_sub(x87_mul(dv2, x87_m32(e1x)), x87_mul(dv1, x87_m32(e2x))),
+        inverse,
+    ));
+    let tangent_y = store(x87_mul(
+        x87_sub(x87_mul(dv2, x87_m32(e1y)), x87_mul(dv1, x87_m32(e2y))),
+        inverse,
+    ));
+    let e1z = x87_load32(e1z);
+    let e2z = x87_load32(e2z);
+    let tangent_z = store(x87_mul(
+        x87_sub(x87_mul(dv2, e1z), x87_mul(dv1, e2z)),
+        inverse,
+    ));
+    let binormal_x = store(x87_mul(
+        x87_sub(x87_mul(du1, x87_m32(e2x)), x87_mul(du2, x87_m32(e1x))),
+        inverse,
+    ));
+    let binormal_y = store(x87_mul(
+        x87_sub(x87_mul(du1, x87_m32(e2y)), x87_mul(du2, x87_m32(e1y))),
+        inverse,
+    ));
+    let binormal_z = store(x87_mul(
+        inverse,
+        x87_sub(x87_mul(e2z, du1), x87_mul(du2, e1z)),
+    ));
+    let tangent = [tangent_x, tangent_y, tangent_z].map(x87_load32);
+    let binormal = [binormal_x, binormal_y, binormal_z].map(x87_load32);
+    // The x87 form of each addition, as the code orders its operands:
+    // `ValueAndOperand` is `FLD value; FADD [sum]`, `SumAndValue` loads the
+    // sum and adds the value into it, `ValueAndSum` loads the sum and adds
+    // it into the value's register.
+    use Addition::{SumAndValue as S, ValueAndOperand as A, ValueAndSum as C};
+    let t0 = sums + 12 * i0;
+    let t1 = sums + 12 * i1;
+    let t2 = sums + 12 * i2;
+    for (at, modes) in [(t0, [A, S, S]), (t1, [A, S, A]), (t2, [C, A, A])] {
+        for axis in 0..3 {
+            add_to(e, at + 4 * axis as u32, tangent[axis], modes[axis]);
+        }
+    }
+    let b0 = binormal_sums + 12 * i0;
+    let b1 = binormal_sums + 12 * i1;
+    let b2 = binormal_sums + 12 * i2;
+    for (at, modes) in [(b0, [S, A, S]), (b1, [S, A, S]), (b2, [C, A, A])] {
+        for axis in 0..3 {
+            add_to(e, at + 4 * axis as u32, binormal[axis], modes[axis]);
+        }
+    }
+}
+
+/// How one sum of `CreateTangentSpaceSimple` is added (see `add_to`).
+#[derive(Clone, Copy)]
+enum Addition {
+    ValueAndOperand,
+    SumAndValue,
+    ValueAndSum,
+}
+
+/// The float at `at` plus `value`, stored back as a `float`.
+fn add_to(e: &mut Engine, at: u32, value: f64, mode: Addition) {
+    let sum = match mode {
+        Addition::ValueAndOperand => x87_add(value, operand(e, at)),
+        Addition::SumAndValue => x87_add(load(e, at), value),
+        Addition::ValueAndSum => x87_add(value, load(e, at)),
+    };
+    e.mem.set_u32(at, store(sum));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1628,6 +2812,45 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b5_7420, fn_00b57420()),
         entry!(0x00b4_f380, fn_00b4f380(u8) -> u32),
         entry!(0x00b4_f3e0, fn_00b4f3e0() -> u32),
+        entry!(0x00b4_f300, fn_00b4f300(u32)),
+        entry!(0x00b4_f430, fn_00b4f430(u32)),
+        entry!(0x00b4_f450, fn_00b4f450(u32)),
+        entry!(0x00b4_f5d0, fn_00b4f5d0() -> u32),
+        entry!(
+            0x00b4_f5e0,
+            bs_shader_manager_get_modified_texture_filename(u32, u32, u32, u8)
+        ),
+        entry!(0x00b5_4090, fn_00b54090() -> u32),
+        entry!(0x00b5_40b0, fn_00b540b0() -> u32),
+        entry!(0x00b5_40f0, fn_00b540f0() -> u32),
+        entry!(0x00b5_4280, fn_00b54280(Ptr) -> Ptr),
+        entry!(0x00b5_4620, fn_00b54620(Ptr)),
+        entry!(0x00b5_4630, fn_00b54630(u8)),
+        entry!(0x00b5_4ac0, bs_shader_manager_set_accumulator(u32)),
+        entry!(0x00b5_4b10, fn_00b54b10(u32)),
+        entry!(0x00b5_4b60, bs_shader_manager_create_tangent_space_simple(u32) -> u32),
+        entry!(
+            0x00b5_5360,
+            bs_shader_manager_set_object_type_recurse(u32, u32)
+        ),
+        entry!(0x00b5_5480, fn_00b55480(u32, u32)),
+        entry!(0x00b5_5520, bs_shader_manager_get_fog_property(u32) -> u32),
+        entry!(0x00b5_5a10, fn_00b55a10()),
+        entry!(0x00b5_5ac0, fn_00b55ac0(u32, u32, u32)),
+        entry!(0x00b5_5b80, bs_shader_manager_set_object_type(u32)),
+        entry!(
+            0x00b5_79e0,
+            bs_shader_manager_prepare_geometry(u32, u32, u8, u8)
+        ),
+        entry!(
+            0x00b5_7bd0,
+            bs_shader_manager_prepare_object_recurse(u32, u32, u8, u8)
+        ),
+        entry!(
+            0x00b5_7c60,
+            bs_shader_manager_clone_material_property_recurse(u32)
+        ),
+        entry!(0x00b5_7e30, bs_shader_manager_prepare_object(u32, u8, u8)),
     ]
 }
 
@@ -2861,5 +4084,878 @@ mod b000s_tests {
         configure(&mut e, (0x300, 0x300), 0, OTHER, 0);
         assert_eq!(e.global::<u8>(KEPT_FLAG_011AD80E), 0);
         assert_eq!(e.global::<u8>(COPIED_FLAG_011F91A4), 7);
+    }
+}
+
+#[cfg(test)]
+mod b047_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    fn eax(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn stub(e: &mut Engine, addrs: &[u32]) {
+        for &addr in addrs {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
+
+    /// An engine with the manager's globals mapped, the interlocked imports
+    /// counting for real and the memory manager allocating.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for page in [
+            0x011f_9000u32,
+            0x011f_a000,
+            0x011a_d000,
+            0x0102_f000,
+            0x0109_b000,
+            0x0120_0000,
+            0x011f_4000,
+            0x0101_1000,
+            0x0102_3000,
+            0x010a_d000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let value = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], value);
+            eax(value)
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let value = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], value);
+            eax(value)
+        });
+        e.register(MEMORY_ALLOCATE, |e, a| eax(e.mem.alloc(a[1].max(4))));
+        stub(&mut e, &[MEMORY_DEALLOCATE]);
+        e
+    }
+
+    /// A reference-counted object (count `count`) whose vtable has the test
+    /// functions `0x7000 + slot`.
+    fn object(e: &mut Engine, count: u32) -> u32 {
+        let slots: Vec<u32> = (0..0x50).map(|slot| 0x0000_7000 + 4 * slot).collect();
+        e.put_vtable(0x0f00_0000, &slots);
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u32(object, 0x0f00_0000);
+        e.mem.set_u32(object + 4, count);
+        object
+    }
+
+    #[test]
+    fn fn_00b4f300_centres_the_rectangle() {
+        let mut e = engine();
+        let rect = e.mem.alloc(0x10);
+        for (offset, value) in [(0, 10i32), (4, 50), (8, 31), (0xc, 7)] {
+            e.mem.set_i32(rect + offset, value);
+        }
+        e.call(0x00b4_f300, &args![rect]);
+        // (31 - 10) / 2 = 10, (50 - 7) / 2 = 21.
+        assert_eq!(e.global::<f32>(VIEWPORT_HALF_WIDTH_011F95FC), 10.0);
+        assert_eq!(e.global::<f32>(VIEWPORT_HALF_HEIGHT_011F9600), 21.0);
+        assert_eq!(e.global::<f32>(VIEWPORT_CENTRE_X_011F95F4), 20.0);
+        assert_eq!(e.global::<f32>(VIEWPORT_CENTRE_Y_011F95F8), 28.0);
+        // Negative extents divide toward zero.
+        e.mem.set_i32(rect + 8, 5);
+        e.call(0x00b4_f300, &args![rect]);
+        assert_eq!(e.global::<f32>(VIEWPORT_HALF_WIDTH_011F95FC), -2.0);
+        assert_eq!(e.global::<f32>(VIEWPORT_CENTRE_X_011F95F4), 8.0);
+    }
+
+    #[test]
+    fn fn_00b4f430_passes_the_word_on() {
+        let mut e = engine();
+        stub(&mut e, &[KEEP_VALUE_00B8CAD0]);
+        e.set_global(OBJECT_011F91AC, 0x4400u32);
+        e.call_log = Some(vec![]);
+        e.call(0x00b4_f430, &args![9u32]);
+        assert_eq!(calls_to(&e, KEEP_VALUE_00B8CAD0), vec![vec![0x4400, 9]]);
+    }
+
+    #[test]
+    fn fn_00b4f450_selects_with_fallbacks() {
+        let mut e = engine();
+        e.set_global(FIRST_TABLE_011F9F80, 0x100u32);
+        e.set_global(FIRST_TABLE_011F9F80 + 8, 0x102u32);
+        e.set_global(SECOND_TABLE_011F9F40, 0x200u32);
+        e.call(0x00b4_f450, &args![2u32]);
+        assert_eq!(e.global::<u32>(SELECTED_INDEX_011F91B8), 2);
+        assert_eq!(e.global::<u32>(FIRST_SELECTED_011F9F3C), 0x102);
+        assert_eq!(e.global::<u32>(SECOND_SELECTED_011F9F38), 0x200);
+        e.set_global(SECOND_TABLE_011F9F40 + 4, 0x201u32);
+        e.call(0x00b4_f450, &args![1u32]);
+        assert_eq!(e.global::<u32>(FIRST_SELECTED_011F9F3C), 0x100);
+        assert_eq!(e.global::<u32>(SECOND_SELECTED_011F9F38), 0x201);
+    }
+
+    #[test]
+    fn small_getters_read_their_globals() {
+        let mut e = engine();
+        e.set_global(SECOND_ACCUMULATOR_011F95F0, 0x55u32);
+        assert_eq!(e.call(0x00b4_f5d0, &args![]).u32(), 0x55);
+        let node = e.mem.alloc(0x140);
+        e.mem.set_u32(node + 0x134, 0x77);
+        e.set_global(SHADOW_SCENE_NODES + 8, node);
+        assert_eq!(e.call(0x00b5_5520, &args![2u32]).u32(), 0x77);
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array + 4, 0x88);
+        e.set_global(ACCUMULATOR_ARRAY_011F9170, array);
+        e.set_global(ACCUMULATOR_INDEX_011F9168, 1u32);
+        assert_eq!(e.call(0x00b5_40f0, &args![]).u32(), 0x88);
+        assert_eq!(e.global::<u32>(ACCUMULATOR_INDEX_011F9168), 2);
+        let word = e.mem.alloc(4);
+        e.mem.set_u32(word, 5);
+        e.call(0x00b5_4620, &args![word]);
+        assert_eq!(e.mem.u32(word), 0);
+    }
+
+    #[test]
+    fn image_space_texture_jumps_use_the_texture_at_0x204() {
+        let mut e = engine();
+        e.register(IMAGE_SPACE_TEXTURE_GET_TEXTURE, |_, _| eax(0x66));
+        e.register(IMAGE_SPACE_TEXTURE_RETURN_RENDERED, |_, _| eax(1));
+        e.set_global(OBJECT_011F91AC, 0x4000u32);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b5_4090, &args![]).u32(), 0x66);
+        assert_eq!(e.call(0x00b5_40b0, &args![]).u32(), 1);
+        assert_eq!(
+            calls_to(&e, IMAGE_SPACE_TEXTURE_GET_TEXTURE),
+            vec![vec![0x4204]]
+        );
+        assert_eq!(
+            calls_to(&e, IMAGE_SPACE_TEXTURE_RETURN_RENDERED),
+            vec![vec![0x4204]]
+        );
+    }
+
+    fn filename_engine() -> Engine {
+        let mut e = engine();
+        e.register(STRCPY_S, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        e.register(STRRCHR, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            let found = text.iter().rposition(|&c| u32::from(c) == a[1]);
+            eax(found.map_or(0, |at| a[0] + at as u32))
+        });
+        e.register(STRNICMP, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            eax(u32::from(!text.to_ascii_lowercase().starts_with(b"data")))
+        });
+        e.register(FORMAT_00406D00, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn modified_texture_filename_cuts_the_name_and_picks_the_format() {
+        let mut e = filename_engine();
+        let destination = e.mem.alloc(0x104);
+        let source = e.mem.alloc(0x40);
+        e.mem.set_cstr(source, b"textures\\rock_d.dds");
+        e.mem.set_u8(destination, 0x41);
+        e.call_log = Some(vec![]);
+        e.call(0x00b4_f5e0, &args![destination, source, 0x5000u32, 1u32]);
+        assert_eq!(e.mem.u8(destination), 0);
+        let formats = calls_to(&e, FORMAT_00406D00);
+        assert_eq!(formats.len(), 1);
+        let call = &formats[0];
+        assert_eq!(call[..3], [destination, 0x104, DATA_FORMAT_010A9464]);
+        assert_eq!(e.mem.cstr(call[3]), b"textures\\rock".to_vec());
+        assert_eq!(call[4], 0x5000);
+        assert_eq!(e.mem.cstr(call[5]), b".dds".to_vec());
+
+        // Already under data, or without the prefix flag: the plain format.
+        e.mem.set_cstr(source, b"Data\\a.dds");
+        e.call_log = Some(vec![]);
+        e.call(0x00b4_f5e0, &args![destination, source, 0x5000u32, 1u32]);
+        assert_eq!(calls_to(&e, FORMAT_00406D00)[0][2], PLAIN_FORMAT_0104F208);
+        e.mem.set_cstr(source, b"x\\a_b.dds");
+        e.call_log = Some(vec![]);
+        e.call(0x00b4_f5e0, &args![destination, source, 0x5000u32, 0u32]);
+        let call = calls_to(&e, FORMAT_00406D00)[0].clone();
+        assert_eq!(call[2], PLAIN_FORMAT_0104F208);
+        assert_eq!(e.mem.cstr(call[3]), b"x\\a".to_vec());
+        // An underscore before the last backslash stays.
+        e.mem.set_cstr(source, b"a_b\\c.dds");
+        e.call_log = Some(vec![]);
+        e.call(0x00b4_f5e0, &args![destination, source, 0x5000u32, 0u32]);
+        let call = calls_to(&e, FORMAT_00406D00)[0].clone();
+        assert_eq!(e.mem.cstr(call[3]), b"a_b\\c".to_vec());
+        // No extension: nothing formatted.
+        e.mem.set_cstr(source, b"plain");
+        e.call_log = Some(vec![]);
+        e.call(0x00b4_f5e0, &args![destination, source, 0x5000u32, 1u32]);
+        assert!(calls_to(&e, FORMAT_00406D00).is_empty());
+    }
+
+    #[test]
+    fn fn_00b54280_resets_and_releases() {
+        let mut e = engine();
+        e.map(FIRST_FACTOR, 8);
+        e.map(REFERENCE_ANGLE, 8);
+        e.set_global(FIRST_FACTOR, 0.5f64);
+        e.set_global(SECOND_FACTOR, 2.0f64);
+        e.set_global(REFERENCE_ANGLE, 3.0f64);
+        e.register(CRT_SIN, |_, _| Ret {
+            st0: 1.0,
+            ..Ret::default()
+        });
+        e.register(CRT_COS, |_, _| Ret {
+            st0: 1.0,
+            ..Ret::default()
+        });
+        stub(&mut e, &[0x0000_7004]);
+        let shader = object(&mut e, 1);
+        let texture = object(&mut e, 3);
+        e.set_global(SHADER_TABLE_011F9548 + 0x10, shader);
+        e.set_global(TEXTURE_011F9510, texture);
+        e.set_global(ACCUMULATOR, texture);
+        e.set_global(OBJECT_011F91AC, 0x99u32);
+        e.set_global(DEFAULT_VALUE_0102F0F8, 0.25f32);
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(4);
+        assert_eq!(e.call(0x00b5_4280, &args![this]).u32(), this);
+        assert_eq!(calls_to(&e, 0x0000_7004), vec![vec![shader]]);
+        assert_eq!(e.global::<u32>(SHADER_TABLE_011F9548 + 0x10), 0);
+        assert_eq!(e.global::<u32>(TEXTURE_011F9510), 0);
+        assert_eq!(e.global::<u32>(ACCUMULATOR), 0);
+        assert_eq!(e.mem.u32(texture + 4), 1);
+        assert_eq!(e.global::<u32>(SHADER_FLAGS_011F91D8), 0x2f);
+        assert_eq!(e.global::<u32>(0x011f_91f8), 0x00b4_f2e0);
+        assert_eq!(e.global::<f32>(0x011f_9184), 1.0);
+        assert_eq!(e.global::<f32>(0x011f_9190), 1.0);
+        assert_eq!(e.global::<u32>(OBJECT_011F91AC), 0);
+        assert_eq!(e.global::<u8>(0x011a_d80c), 1);
+        let sines = calls_to(&e, CRT_SIN);
+        assert_eq!(sines.len(), 2);
+    }
+
+    #[test]
+    fn fn_00b54630_shuts_everything_down() {
+        let mut e = engine();
+        let simple = [
+            0x00b6_2a20u32,
+            0x00b5_9940,
+            0x00ba_50d0,
+            0x00bc_0940,
+            0x00bc_4610,
+            0x00b9_7690,
+            0x00b6_f0b0,
+            FORMAT_00406D00,
+            STOP_RENDER_THREADS,
+            0x00a2_9680,
+            0x00ec_5fce,
+            0x0000_7004,
+        ];
+        stub(&mut e, &simple);
+        let leaking = object(&mut e, 3);
+        e.set_global(SHADER_TABLE_011F9548 + 4, leaking);
+        e.set_global(OBJECT_011F91AC, 0x4400u32);
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, 0x8008);
+        e.mem.map(0x8000, 0x10);
+        e.mem.set_u32(0x8000, 2);
+        e.set_global(HOLDER_011F94BC, holder);
+        let renderer = object(&mut e, 1);
+        e.set_global(GLOBAL_011F9508, renderer);
+        let accumulators = e.mem.alloc(0xc) + 4;
+        e.mem.set_u32(accumulators - 4, 2);
+        let accumulator = object(&mut e, 1);
+        e.mem.set_u32(accumulators + 4, accumulator);
+        e.set_global(ACCUMULATOR_ARRAY_011F9170, accumulators);
+        e.set_global(ACCUMULATOR_COUNT_011F916C, 2u32);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_4630, &args![1u32]);
+        let leak = calls_to(&e, FORMAT_00406D00);
+        assert_eq!(leak.len(), 1);
+        assert_eq!(leak[0][1..], [0xff, SHADER_LEAKING_010AD6E8, 1, 3]);
+        assert_eq!(e.global::<u32>(SHADER_TABLE_011F9548 + 4), 0);
+        assert_eq!(e.mem.u32(leaking + 4), 2);
+        assert_eq!(calls_to(&e, 0x00b9_7690), vec![vec![0x4400]]);
+        assert_eq!(e.global::<u32>(OBJECT_011F91AC), 0);
+        assert_eq!(e.mem.u32(0x8000), 1);
+        assert_eq!(e.global::<u32>(HOLDER_011F94BC), 0);
+        assert_eq!(
+            calls_to(&e, STOP_RENDER_THREADS),
+            vec![vec![RENDER_THREADS_01200088]]
+        );
+        assert_eq!(e.global::<u32>(GLOBAL_011F9508), 0);
+        assert_eq!(
+            calls_to(&e, 0x0000_7004),
+            vec![vec![renderer], vec![accumulator]]
+        );
+        assert_eq!(
+            calls_to(&e, 0x00ec_5fce),
+            vec![vec![accumulators, 4, 2, 0x0045_cec0]]
+        );
+        assert!(calls_to(&e, MEMORY_DEALLOCATE).contains(&vec![MEMORY_MANAGER, accumulators - 4]));
+
+        // Without the flag only the always-part runs.
+        e.set_global(ACCUMULATOR_ARRAY_011F9170, 0u32);
+        e.set_global(ACCUMULATOR_COUNT_011F916C, 0u32);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_4630, &args![0u32]);
+        assert!(calls_to(&e, 0x00b6_2a20).is_empty());
+        assert!(calls_to(&e, 0x00ec_5fce).is_empty());
+    }
+
+    #[test]
+    fn accumulator_setters_hold_references() {
+        let mut e = engine();
+        stub(&mut e, &[0x0000_7004]);
+        let first = object(&mut e, 0);
+        let second = object(&mut e, 0);
+        e.call(0x00b5_4ac0, &args![first]);
+        assert_eq!(e.global::<u32>(ACCUMULATOR), first);
+        assert_eq!(e.mem.u32(first + 4), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_4ac0, &args![second]);
+        assert_eq!(calls_to(&e, 0x0000_7004), vec![vec![first]]);
+        e.call(0x00b5_4b10, &args![second]);
+        assert_eq!(e.global::<u32>(SECOND_ACCUMULATOR_011F95F0), second);
+        assert_eq!(e.mem.u32(second + 4), 2);
+        e.call(0x00b5_4b10, &args![0u32]);
+        assert_eq!(e.global::<u32>(SECOND_ACCUMULATOR_011F95F0), 0);
+        assert_eq!(e.mem.u32(second + 4), 1);
+    }
+
+    /// A node (vtable +0xC answers it) with the given children.
+    fn node(e: &mut Engine, children: &[u32]) -> u32 {
+        let node = object(e, 1);
+        let list = e.mem.alloc(4 * children.len() as u32 + 4);
+        for (index, &child) in children.iter().enumerate() {
+            e.mem.set_u32(list + 4 * index as u32, child);
+        }
+        e.mem.set_u32(node + 0xa0, list);
+        e.mem.set_u16(node + 0xa6, children.len() as u16);
+        node
+    }
+
+    /// The vtable slots +0xC (node) and +0x18 (geometry): answers from
+    /// marker words at +0xF0 (node) and +0xF4 (geometry).
+    fn kind_slots(e: &mut Engine) {
+        e.register(0x0000_700c, |e, a| {
+            eax(if e.mem.u32(a[0] + 0xf0) != 0 { a[0] } else { 0 })
+        });
+        e.register(0x0000_7018, |e, a| eax(e.mem.u32(a[0] + 0xf4)));
+    }
+
+    fn geometry(e: &mut Engine) -> u32 {
+        let geometry = object(e, 1);
+        e.mem.set_u32(geometry + 0xf4, 1);
+        geometry
+    }
+
+    #[test]
+    fn set_object_type_walks_the_tree() {
+        let mut e = engine();
+        kind_slots(&mut e);
+        e.register(GET_PROPERTY, |_, _| eax(0));
+        let leaf = geometry(&mut e);
+        let root = node(&mut e, &[0, leaf]);
+        e.mem.set_u32(root + 0xf0, 1);
+        e.register(0x0000_9000, |_, _| eax(4));
+        e.set_global(OBJECT_TYPE_FUNCTION_011F91EC, 0x0000_9000u32);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_5b80, &args![root]);
+        assert_eq!(calls_to(&e, 0x0000_9000), vec![vec![root]]);
+        assert_eq!(calls_to(&e, GET_PROPERTY), vec![vec![leaf, 3]]);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_5b80, &args![0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        // Without the function the type is 0; neither node nor geometry: nothing.
+        e.set_global(OBJECT_TYPE_FUNCTION_011F91EC, 0u32);
+        let other = object(&mut e, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_5b80, &args![other]);
+        e.call(0x00b5_5360, &args![other, 9u32]);
+        assert!(calls_to(&e, GET_PROPERTY).is_empty());
+    }
+
+    #[test]
+    fn fn_00b55480_sets_the_word_on_flagged_geometry() {
+        let mut e = engine();
+        kind_slots(&mut e);
+        let first = e.mem.alloc(0x40);
+        let shader_property = e.mem.alloc(0x40);
+        e.mem.set_u32(shader_property + 0x20, 0x2000_0000);
+        e.register_double(GET_PROPERTY, move |_, a| {
+            eax(if a[1] == 2 { first } else { shader_property })
+        });
+        let leaf = geometry(&mut e);
+        let root = node(&mut e, &[leaf, 0]);
+        e.mem.set_u32(root + 0xf0, 1);
+        e.call(0x00b5_5480, &args![root, 0x1234u32]);
+        assert_eq!(e.mem.u32(first + 0x34), 0x1234);
+        e.mem.set_u32(shader_property + 0x20, 0);
+        e.call(0x00b5_5480, &args![leaf, 0x99u32]);
+        assert_eq!(e.mem.u32(first + 0x34), 0x1234);
+    }
+
+    #[test]
+    fn fn_00b55a10_makes_and_runs_the_debug_shader() {
+        let mut e = engine();
+        e.register(DEBUG_SHADER_CREATE, |e, _| {
+            let context = e.tls() + TLS_CONTEXT;
+            assert_eq!(e.mem.u32(context), 5);
+            eax(0x4400)
+        });
+        e.register(NI_POINTER_ASSIGN_00A5F860, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        stub(&mut e, &[DEBUG_SHADER_00BD1CF0]);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_5a10, &args![]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        e.set_global(GLOBAL_011F9508, 1u32);
+        let context = e.tls() + TLS_CONTEXT;
+        e.mem.set_u32(context, 3);
+        e.call(0x00b5_5a10, &args![]);
+        assert_eq!(e.mem.u32(context), 3);
+        assert_eq!(e.global::<u32>(DEBUG_SHADER_011F956C), 0x4400);
+        e.call(0x00b5_5a10, &args![]);
+        assert_eq!(calls_to(&e, DEBUG_SHADER_CREATE).len(), 1);
+        assert_eq!(
+            calls_to(&e, DEBUG_SHADER_00BD1CF0),
+            vec![vec![0x4400, 0], vec![0x4400, 0]]
+        );
+        // A failed creation leaves the shader unused.
+        e.set_global(DEBUG_SHADER_011F956C, 0u32);
+        e.register(DEBUG_SHADER_CREATE, |_, _| eax(0));
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_5a10, &args![]);
+        assert!(calls_to(&e, DEBUG_SHADER_00BD1CF0).is_empty());
+    }
+
+    #[test]
+    fn fn_00b55ac0_queries_then_resets_eight_stages() {
+        let mut e = engine();
+        e.register(QUERY_00B97900, |e, a| {
+            assert_eq!((e.mem.u32(a[2]), e.mem.u32(a[3])), (7, 8));
+            Ret::default()
+        });
+        stub(&mut e, &[0x0000_70dc]);
+        let state = object(&mut e, 1);
+        let renderer = e.mem.alloc(0x900);
+        e.mem.set_u32(renderer + 0x8b8, state);
+        e.set_global(GLOBAL_011F9508, renderer);
+        e.set_global(OBJECT_011F91AC, 0x4400u32);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_5ac0, &args![2u32, 7u32, 8u32]);
+        let query = calls_to(&e, QUERY_00B97900);
+        assert_eq!(query[0][..2], [0x4400, 2]);
+        let stages: Vec<Vec<u32>> = (0..8).map(|stage| vec![state, stage, 0]).collect();
+        assert_eq!(calls_to(&e, 0x0000_70dc), stages);
+    }
+
+    /// A shader whose vtable slot +8 answers `class`.
+    fn shader(e: &mut Engine, class: u32) -> u32 {
+        let slots: Vec<u32> = (0..0x50).map(|slot| 0x0000_8000 + 4 * slot).collect();
+        e.put_vtable(0x0f10_0000 + class % 0x100 * 0x400, &slots);
+        let shader = e.mem.alloc(0x10);
+        e.mem.set_u32(shader, 0x0f10_0000 + class % 0x100 * 0x400);
+        e.mem.set_u32(shader + 4, class);
+        shader
+    }
+
+    fn prepare_engine() -> Engine {
+        let mut e = engine();
+        e.register(0x0000_8008, |e, a| eax(e.mem.u32(a[0] + 4)));
+        e.register(0x0000_8118, |_, _| eax(0x5555));
+        stub(
+            &mut e,
+            &[
+                0x0000_8050,
+                REMOVE_PROPERTY,
+                ATTACH_PROPERTY,
+                FORMAT_00406D00,
+            ],
+        );
+        e.register(0x0000_7030, |_, _| eax(0));
+        e.register(0x0000_70b0, |_, _| eax(0));
+        e.register(0x0000_7f00, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn prepare_geometry_sets_the_shader_and_tells_the_renderer() {
+        let mut e = prepare_engine();
+        let property = object(&mut e, 1);
+        e.mem.set_u32(property + 0x58, 3);
+        e.register_double(GET_PROPERTY, move |_, _| eax(property));
+        let first = shader(&mut e, SHADER_RTTI_01202040);
+        e.set_global(GLOBAL_011F9508, 1u32);
+        e.set_global(SHADER_TABLE_011F9548 + 12, first);
+        let geometry = object(&mut e, 1);
+        let properties = e.mem.alloc(0x40);
+        e.mem.set_u8(properties + 0x38, 0x80);
+        e.mem.set_u32(geometry + 0xb8, properties);
+        let renderer = e.mem.alloc(4);
+        e.put_vtable(0x0f20_0000, &[0x0000_7f00u32; 0x3c]);
+        e.mem.set_u32(renderer, 0x0f20_0000);
+        e.set_global(RENDERER_OBJECT_011F4748, renderer);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_79e0, &args![geometry, 0u32, 0u32, 0u32]);
+        assert_eq!(e.mem.u32(geometry + 0xc0), first);
+        assert_eq!(calls_to(&e, 0x0000_8050), vec![vec![first, geometry]]);
+        assert_eq!(e.mem.u8(properties + 0x38), 0x80 | 0x33 | 4 | 8);
+        assert_eq!(
+            calls_to(&e, 0x0000_7f00),
+            vec![vec![renderer, geometry, 0x12, 4, 0x5555]]
+        );
+        assert_eq!(
+            calls_to(&e, 0x0000_8118),
+            vec![vec![first, geometry, property]]
+        );
+        // `skip` set: no renderer call; a skipping class sets it too.
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_79e0, &args![geometry, 0u32, 1u32, 1u32]);
+        assert!(calls_to(&e, 0x0000_7f00).is_empty());
+        let skipping = shader(&mut e, SHADER_RTTI_012021B8);
+        e.set_global(SHADER_TABLE_011F9548 + 12, skipping);
+        e.mem.set_u8(properties + 0x38, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_79e0, &args![geometry, 0u32, 0u32, 0u32]);
+        assert!(calls_to(&e, 0x0000_7f00).is_empty());
+        assert_eq!(e.mem.u8(properties + 0x38), 0x33);
+    }
+
+    #[test]
+    fn prepare_geometry_replaces_or_drops_the_property() {
+        let mut e = prepare_engine();
+        let property = object(&mut e, 1);
+        let replacement = object(&mut e, 1);
+        e.mem.set_u32(property + 0x58, 0);
+        e.register_double(GET_PROPERTY, move |_, _| eax(property));
+        e.register_double(0x0000_70b0, move |_, _| eax(replacement));
+        e.register(0x0000_708c, |_, _| eax(2));
+        stub(&mut e, &[NI_POINTER_ASSIGN_0066B0D0]);
+        let geometry = object(&mut e, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_79e0, &args![geometry, 0u32, 0u32, 0u32]);
+        assert_eq!(
+            calls_to(&e, ATTACH_PROPERTY),
+            vec![vec![geometry, replacement]]
+        );
+        assert_eq!(
+            calls_to(&e, NI_POINTER_ASSIGN_0066B0D0),
+            vec![vec![geometry + 0x9c + 8, replacement]]
+        );
+        // The replacement has no shader number: removed again.
+        assert_eq!(
+            calls_to(&e, REMOVE_PROPERTY),
+            vec![vec![geometry, 3], vec![geometry, 3]]
+        );
+        // No usable property: only the message.
+        e.mem.set_u32(property + 0x1c, 0xffff_ffff);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_79e0, &args![geometry, 0u32, 0u32, 0u32]);
+        let message = calls_to(&e, FORMAT_00406D00);
+        assert_eq!(message.len(), 1);
+        assert_eq!(message[0][1..3], [0x3e8, NO_SHADER_PROPERTY_010ADA44]);
+        assert!(calls_to(&e, 0x0000_70b0).is_empty());
+    }
+
+    #[test]
+    fn prepare_object_recurses_into_geometry() {
+        let mut e = engine();
+        kind_slots(&mut e);
+        stub(&mut e, &[UPDATE_PROPERTIES, FORMAT_00406D00]);
+        e.register(GET_PROPERTY, |_, _| eax(0));
+        let leaf = geometry(&mut e);
+        let root = node(&mut e, &[leaf]);
+        e.mem.set_u32(root + 0xf0, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_7e30, &args![root, 1u32, 0u32]);
+        assert_eq!(calls_to(&e, UPDATE_PROPERTIES), vec![vec![root]]);
+        // The leaf reached PrepareGeometry (no shader property: the message).
+        assert_eq!(calls_to(&e, GET_PROPERTY), vec![vec![leaf, 3]]);
+        let other = object(&mut e, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_7bd0, &args![other, 0u32, 0u32, 0u32]);
+        assert!(calls_to(&e, GET_PROPERTY).is_empty());
+    }
+
+    #[test]
+    fn clone_material_property_copies_into_a_new_property() {
+        let mut e = engine();
+        kind_slots(&mut e);
+        let property = object(&mut e, 1);
+        for (offset, value) in [
+            (0x1c, 1u32),
+            (0x20, 2),
+            (0x24, 3),
+            (0x28, 4),
+            (0x2c, 5),
+            (0x30, 6),
+        ] {
+            e.mem.set_u32(property + offset, value);
+        }
+        for (offset, value) in [(0x38, 0.5f32), (0x3c, 0.75), (0x40, 2.0)] {
+            e.mem.set_f32(property + offset, value);
+        }
+        let leaf = object(&mut e, 1);
+        e.register_double(GET_PROPERTY, move |_, a| {
+            eax(if a[0] == leaf { property } else { 0 })
+        });
+        e.register(NEW_OBJECT, |e, a| eax(e.mem.alloc(a[0])));
+        e.register(MATERIAL_PROPERTY_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 0x44, 10);
+            eax(a[0])
+        });
+        stub(&mut e, &[OBJECT_00654640, ATTACH_PROPERTY]);
+        let held = object(&mut e, 1);
+        e.register_double(SCOPE_CONSTRUCT_004AD0C0, move |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, held);
+            Ret::default()
+        });
+        stub(&mut e, &[0x0000_7000]);
+        let root = node(&mut e, &[leaf]);
+        e.mem.set_u32(root + 0xf0, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_7c60, &args![root]);
+        let attached = calls_to(&e, ATTACH_PROPERTY);
+        assert_eq!(attached.len(), 1);
+        let copy = attached[0][1];
+        assert_eq!(attached[0][0], leaf);
+        for (offset, value) in [
+            (0x1c, 1u32),
+            (0x20, 2),
+            (0x24, 3),
+            (0x28, 4),
+            (0x2c, 5),
+            (0x30, 6),
+        ] {
+            assert_eq!(e.mem.u32(copy + offset), value);
+        }
+        assert_eq!(e.mem.f32(copy + 0x38), 0.5);
+        assert_eq!(e.mem.f32(copy + 0x3c), 0.75);
+        assert_eq!(e.mem.f32(copy + 0x40), 2.0);
+        assert_eq!(e.mem.u32(copy + 0x44), 15);
+        assert_eq!(calls_to(&e, 0x0000_7000), vec![vec![held, 1]]);
+        assert_eq!(calls_to(&e, OBJECT_00654640), vec![vec![leaf, property]]);
+        // The reference taken is given back.
+        assert_eq!(e.mem.u32(property + 4), 1);
+        // A shared property (+0xC set) is attached as it is.
+        e.mem.set_u32(property + 0xc, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_7c60, &args![leaf]);
+        assert_eq!(calls_to(&e, ATTACH_PROPERTY), vec![vec![leaf, property]]);
+    }
+
+    /// A triangle-shape geometry (vtable +0x1C answers itself, +0x20 the
+    /// strips flag at +0xF8) with `count` vertices, its data at +0xB8.
+    fn shape(e: &mut Engine, positions: &[[f32; 3]], coordinates: &[[f32; 2]]) -> (u32, u32) {
+        let geometry = object(e, 1);
+        e.register(0x0000_701c, |_, a| eax(a[0]));
+        e.register(0x0000_7020, |e, a| eax(e.mem.u32(a[0] + 0xf8)));
+        let data = object(e, 1);
+        let count = positions.len() as u32;
+        let vertices = e.mem.alloc(12 * count);
+        let normals = e.mem.alloc(12 * count);
+        let uv = e.mem.alloc(8 * count);
+        for (index, position) in positions.iter().enumerate() {
+            let index = index as u32;
+            for axis in 0..3u32 {
+                e.mem
+                    .set_f32(vertices + 12 * index + 4 * axis, position[axis as usize]);
+            }
+            e.mem.set_f32(normals + 12 * index + 8, 1.0);
+            e.mem
+                .set_f32(uv + 8 * index, coordinates[index as usize][0]);
+            e.mem
+                .set_f32(uv + 8 * index + 4, coordinates[index as usize][1]);
+        }
+        e.mem.set_u16(data + 8, count as u16);
+        e.mem.set_u32(data + 0x20, vertices);
+        e.mem.set_u32(data + 0x24, normals);
+        e.mem.set_u32(data + 0x28, 0x6600);
+        e.mem.set_u32(data + 0x2c, uv);
+        e.mem.set_u16(data + 0xc, 3);
+        e.mem.set_u32(geometry + 0xb8, data);
+        (geometry, data)
+    }
+
+    fn tangent_engine() -> Engine {
+        let mut e = engine();
+        e.set_global(FIXED_STRING_NONE, 0x5100u32);
+        e.register(FIXED_STRING_MAKE, |_, _| eax(0x5100));
+        e.register(NEW_OBJECT, |e, a| eax(e.mem.alloc(a[0])));
+        e.register(TANGENT_DATA_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0x0f00_0000);
+            eax(a[0])
+        });
+        e.register(MEMCPY_00EC44D0, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        e.register(MEMSET_00EC61C0, |e, a| {
+            let bytes = vec![a[1] as u8; a[2] as usize];
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        stub(
+            &mut e,
+            &[
+                STRNICMP,
+                NORMALIZE_004A0C10,
+                REPLACE_DATA,
+                0x0000_7000,
+                REMOVE_EXTRA_DATA,
+            ],
+        );
+        e
+    }
+
+    fn floats(e: &Engine, at: u32) -> [f32; 3] {
+        [0, 4, 8].map(|offset| e.mem.f32(at + offset))
+    }
+
+    #[test]
+    fn create_tangent_space_builds_tangents_and_binormals() {
+        let mut e = tangent_engine();
+        e.register(GET_EXTRA_DATA, |_, _| eax(0));
+        let (geometry, data) = shape(
+            &mut e,
+            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            &[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+        );
+        e.mem.set_u16(data + 0x40, 1);
+        e.register(0x0000_70ac, |e, a| {
+            e.mem.set_u16(a[2], 0);
+            e.mem.set_u16(a[3], 1);
+            e.mem.set_u16(a[4], 2);
+            Ret::default()
+        });
+        let normals = e.mem.u32(data + 0x24);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b5_4b60, &args![geometry]).u32(), 0);
+        let replaced = calls_to(&e, REPLACE_DATA);
+        assert_eq!(replaced.len(), 1);
+        let call = &replaced[0];
+        assert_eq!(call[..3], [data, 3, e.mem.u32(data + 0x20)]);
+        assert_eq!(call[4..], [0x6600, e.mem.u32(data + 0x2c), 1, 0x1000]);
+        let output = call[3];
+        for vertex in 0..3 {
+            assert_eq!(floats(&e, output + 12 * vertex), [0.0, 0.0, 1.0]);
+            assert_eq!(floats(&e, output + 36 + 12 * vertex), [0.0, 1.0, 0.0]);
+            assert_eq!(floats(&e, output + 72 + 12 * vertex), [1.0, 0.0, 0.0]);
+        }
+        assert_eq!(calls_to(&e, NORMALIZE_004A0C10).len(), 6);
+        assert!(calls_to(&e, MEMORY_DEALLOCATE).contains(&vec![MEMORY_MANAGER, normals]));
+        // The made object is deleted.
+        assert_eq!(calls_to(&e, 0x0000_7000).len(), 1);
+    }
+
+    #[test]
+    fn create_tangent_space_reads_strips_with_alternating_winding() {
+        let mut e = tangent_engine();
+        e.register(GET_EXTRA_DATA, |_, _| eax(0));
+        let (geometry, data) = shape(
+            &mut e,
+            &[
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+            ],
+            &[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+        );
+        e.mem.set_u32(geometry + 0xf8, 1);
+        e.mem.set_u16(data + 0x40, 3);
+        let strip = e.mem.alloc(12);
+        // 0 1 2 3 3: the third triangle (2, 3, 3) is degenerate.
+        for (index, value) in [0u16, 1, 2, 3, 3].iter().enumerate() {
+            e.mem.set_u16(strip + 2 * index as u32, *value);
+        }
+        e.register_double(GET_STRIP_LISTS, move |_, _| eax(strip));
+        e.call_log = Some(vec![]);
+        e.call(0x00b5_4b60, &args![geometry]);
+        let output = calls_to(&e, REPLACE_DATA)[0][3];
+        // The flipped second triangle (3, 2, 1) gives vertex 3 the same
+        // tangent as the first triangle gives its vertices.
+        assert_eq!(floats(&e, output + 96 + 36), [1.0, 0.0, 0.0]);
+        assert_eq!(floats(&e, output + 96), [1.0, 0.0, 0.0]);
+        // Vertices 1 and 2 sum both triangles.
+        assert_eq!(floats(&e, output + 96 + 12), [2.0, 0.0, 0.0]);
+        assert!(calls_to(&e, 0x0000_70ac).is_empty());
+    }
+
+    #[test]
+    fn create_tangent_space_copies_existing_extra_data() {
+        let mut e = tangent_engine();
+        let extra = e.mem.alloc(0x10);
+        let buffer = e.mem.alloc(48);
+        for word in 0..12u32 {
+            e.mem.set_u32(buffer + 4 * word, word);
+        }
+        e.mem.set_u32(extra + 0xc, buffer);
+        e.register_double(GET_EXTRA_DATA, move |_, _| eax(extra));
+        let (geometry, data) = shape(
+            &mut e,
+            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            &[[0.0, 0.0], [1.0, 0.0]],
+        );
+        let _ = data;
+        e.call_log = Some(vec![]);
+        let object = e.call(0x00b5_4b60, &args![geometry]).u32();
+        assert_ne!(object, 0);
+        let second = e.mem.u32(object + 0xc);
+        let first = e.mem.u32(object + 0x10);
+        assert_eq!(e.mem.u32(second), 6);
+        assert_eq!(e.mem.u32(first + 4), 1);
+        assert_eq!(calls_to(&e, REMOVE_EXTRA_DATA).len(), 1);
+        assert_eq!(calls_to(&e, REMOVE_EXTRA_DATA)[0][0], geometry);
+        assert!(calls_to(&e, REPLACE_DATA).is_empty());
+
+        // Not a triangle shape: 0, nothing made.
+        let mut e = tangent_engine();
+        e.register(GET_EXTRA_DATA, |_, _| eax(0));
+        let other = object_without_shape(&mut e);
+        assert_eq!(e.call(0x00b5_4b60, &args![other]).u32(), 0);
+    }
+
+    fn object_without_shape(e: &mut Engine) -> u32 {
+        let other = object(e, 1);
+        e.register(0x0000_701c, |_, _| eax(0));
+        other
+    }
+
+    #[test]
+    fn create_tangent_space_needs_normals() {
+        let mut e = tangent_engine();
+        e.register(GET_EXTRA_DATA, |_, _| eax(0));
+        stub(&mut e, &[FORMAT_00406D00]);
+        let (geometry, data) = shape(&mut e, &[[0.0, 0.0, 0.0]], &[[0.0, 0.0]]);
+        e.mem.set_u32(data + 0x24, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b5_4b60, &args![geometry]).u32(), 0);
+        assert_eq!(
+            calls_to(&e, FORMAT_00406D00)[0][1..],
+            [0xff, NO_NORMALS_MESSAGE_010AD730]
+        );
+        assert!(calls_to(&e, REPLACE_DATA).is_empty());
+        assert!(calls_to(&e, 0x0000_7000).is_empty());
     }
 }

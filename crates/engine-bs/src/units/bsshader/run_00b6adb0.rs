@@ -87,11 +87,162 @@ pub fn fn_00b6aed0(e: &mut Engine, this: Ptr, object: u32) -> Ptr {
     this
 }
 
+/// What the functions below use: the destructor `00b6a520` (unnamed; `thiscall`, no stack
+/// words), the sized free `00aa1460` (`cdecl`: block, size), the imported
+/// `InterlockedDecrement` (import slot), the table `00b6aef0` stores (`010ae500`; no RTTI
+/// locator precedes it), the compiler's `eh vector destructor iterator` (`00ec5fce`,
+/// `stdcall`: array, element size, count, destructor) with the two element destructors it is
+/// given (`0045cec0`, `00b66f20`) and the `NiObject` destructor `00a5d3d0` (`niobject.cpp`;
+/// `thiscall`).
+const DESTRUCTOR_00B6A520: u32 = 0x00b6_a520;
+const FREE_00AA1460: u32 = 0x00aa_1460;
+const IMPORT_INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+const TABLE_010AE500: u32 = 0x010a_e500;
+const VECTOR_DESTRUCTOR_00EC5FCE: u32 = 0x00ec_5fce;
+const ELEMENT_DESTRUCTOR_0045CEC0: u32 = 0x0045_cec0;
+const ELEMENT_DESTRUCTOR_00B66F20: u32 = 0x00b6_6f20;
+const NI_OBJECT_DOWN_00A5D3D0: u32 = 0x00a5_d3d0;
+
+/// An `NiPointer` let go: the object's count (+4) down through `InterlockedDecrement` and, at
+/// zero, its virtual slot 4 (delete).
+fn release_reference(e: &mut Engine, object: u32) {
+    if object != 0
+        && e.call(IMPORT_INTERLOCKED_DECREMENT, &args![object.wrapping_add(4)])
+            .u32()
+            == 0
+    {
+        e.vcall(object, 4, &args![]);
+    }
+}
+
+// Translated from 00b6adb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6adb0`): a deleting destructor, `thiscall` with the
+/// flags: the destructor `00b6a520`, then with bit 0 the 0x150 bytes freed (`00aa1460`).
+/// Answers `this`.
+pub fn fn_00b6adb0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(DESTRUCTOR_00B6A520, &args![this]);
+    if flags & 1 != 0 {
+        e.call(FREE_00AA1460, &args![this, 0x150u32]);
+    }
+    this
+}
+
+// Translated from 00b6aef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6adb0`): a destructor, `thiscall`. The table `010ae500`;
+/// the six `NiPointer`s at +8 and the four at +0x30 let go (count down, deleted at zero) and
+/// cleared; the compiler's array destructor (`00ec5fce`) run over the four at +0x30
+/// (`0045cec0`); the `NiPointer`s at +0x28, +0x24 and +0x20 let go (not cleared); the array
+/// destructor run over the six at +8 (`00b66f20`); then the `NiObject` destructor
+/// (`00a5d3d0`).
+// Translation incomplete: 00b6aef0 - C++ exception unwinding (the FS:[0] frame and its states) is not translated.
+pub fn fn_00b6aef0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, TABLE_010AE500);
+    for (start, count) in [(8u32, 6u32), (0x30, 4)] {
+        for index in 0..count {
+            let at = base.wrapping_add(start + 4 * index);
+            let object = e.mem.u32(at);
+            if object != 0 {
+                release_reference(e, object);
+                e.mem.set_u32(at, 0);
+            }
+        }
+    }
+    e.call(
+        VECTOR_DESTRUCTOR_00EC5FCE,
+        &args![
+            base.wrapping_add(0x30),
+            4u32,
+            4u32,
+            ELEMENT_DESTRUCTOR_0045CEC0
+        ],
+    );
+    for offset in [0x28u32, 0x24, 0x20] {
+        let object = e.mem.u32(base.wrapping_add(offset));
+        release_reference(e, object);
+    }
+    e.call(
+        VECTOR_DESTRUCTOR_00EC5FCE,
+        &args![
+            base.wrapping_add(8),
+            4u32,
+            6u32,
+            ELEMENT_DESTRUCTOR_00B66F20
+        ],
+    );
+    e.call(NI_OBJECT_DOWN_00A5D3D0, &args![base]);
+}
+
+/// A stack of at most ten `NiPointer`s: its count (`011fa020`) and its slots (`011fa024`).
+const POINTER_STACK_COUNT_011FA020: u32 = 0x011f_a020;
+const POINTER_STACK_011FA024: u32 = 0x011f_a024;
+
+// Translated from 00b6b050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6adb0`), `cdecl` with an object: pushes it on the
+/// pointer stack at `011fa024` when the count (`011fa020`) is below 10. The slot at the count
+/// gets it as an `NiPointer` assignment (unless it already holds it: the old one let go, the
+/// new one counted when not null); the count goes up either way.
+pub fn fn_00b6b050(e: &mut Engine, object: u32) {
+    let count = e.mem.u32(POINTER_STACK_COUNT_011FA020);
+    if count >= 10 {
+        return;
+    }
+    let slot = POINTER_STACK_011FA024.wrapping_add(count.wrapping_mul(4));
+    let held = e.mem.u32(slot);
+    if held != object {
+        release_reference(e, held);
+        e.mem.set_u32(slot, object);
+        if object != 0 {
+            e.call(IMPORT_INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+        }
+    }
+    let count = e.mem.u32(POINTER_STACK_COUNT_011FA020).wrapping_add(1);
+    e.mem.set_u32(POINTER_STACK_COUNT_011FA020, count);
+}
+
+// Translated from 00b6b100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6adb0`; no arguments): the top of the pointer stack (the
+/// word at `011fa020 + 4 * count`), or 0 when the count is 0 (then read from a null
+/// `NiPointer` temporary). The temporary's release (count down through `InterlockedDecrement`,
+/// deleted at zero) is guarded by a flag set only on the empty path, where the temporary is
+/// null, so it never runs (Ghidra drops it as unreachable); it is translated as the code has
+/// it.
+pub fn fn_00b6b100(e: &mut Engine) -> u32 {
+    let count = e.mem.u32(POINTER_STACK_COUNT_011FA020);
+    let (top, made_temporary, temporary) = if count != 0 {
+        let at = POINTER_STACK_COUNT_011FA020.wrapping_add(count.wrapping_mul(4));
+        (e.mem.u32(at), false, 0u32)
+    } else {
+        (0, true, 0u32)
+    };
+    if made_temporary && temporary != 0 {
+        release_reference(e, temporary);
+    }
+    top
+}
+
+// Translated from 00b6b160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6adb0`): the deleting destructor of [`fn_00b6aef0`],
+/// `thiscall` with the flags: the destructor, then with bit 0 the 0x40 bytes freed
+/// (`00aa1460`). Answers `this`.
+pub fn fn_00b6b160(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b6aef0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_00AA1460, &args![this, 0x40u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00b6_b180, fn_00b6b180(Ptr, Ptr) -> u32),
         entry!(0x00b6_aed0, fn_00b6aed0(Ptr, u32) -> Ptr),
+        entry!(0x00b6_adb0, fn_00b6adb0(Ptr, u32) -> Ptr),
+        entry!(0x00b6_aef0, fn_00b6aef0(Ptr)),
+        entry!(0x00b6_b050, fn_00b6b050(u32)),
+        entry!(0x00b6_b100, fn_00b6b100() -> u32),
+        entry!(0x00b6_b160, fn_00b6b160(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -223,5 +374,131 @@ mod b000v_tests {
             .map(|(_, w)| w.clone())
             .collect();
         assert_eq!(counted, vec![vec![0x504]]);
+    }
+}
+
+#[cfg(test)]
+mod b051_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    const OBJECT_VTABLE: u32 = 0x6000;
+    const DELETE: u32 = 0x7004;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x011f_a000, 0x1000);
+        for no_op in [
+            DESTRUCTOR_00B6A520,
+            FREE_00AA1460,
+            VECTOR_DESTRUCTOR_00EC5FCE,
+            NI_OBJECT_DOWN_00A5D3D0,
+            DELETE,
+        ] {
+            e.register(no_op, |_, _| Ret::default());
+        }
+        // The interlocked doubles move the count they are given and answer it.
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.put_vtable(OBJECT_VTABLE, &[0, DELETE]);
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn object(e: &mut Engine, count: u32) -> u32 {
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, OBJECT_VTABLE);
+        e.mem.set_u32(object + 4, count);
+        object
+    }
+
+    #[test]
+    fn deleting_destructors_free_with_bit_0() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x150);
+        assert_eq!(e.call(0x00b6_adb0, &args![this, 0u32]).u32(), this);
+        assert_eq!(calls(&e, DESTRUCTOR_00B6A520), vec![vec![this]]);
+        assert!(calls(&e, FREE_00AA1460).is_empty());
+        e.call(0x00b6_adb0, &args![this, 1u32]);
+        assert_eq!(calls(&e, FREE_00AA1460), vec![vec![this, 0x150]]);
+        e.call(0x00b6_b160, &args![this, 3u32]);
+        assert_eq!(calls(&e, FREE_00AA1460)[1], vec![this, 0x40]);
+        assert_eq!(calls(&e, NI_OBJECT_DOWN_00A5D3D0), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_00b6aef0_lets_go_of_its_pointers() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x40);
+        let last = object(&mut e, 1);
+        let shared = object(&mut e, 5);
+        e.mem.set_u32(this + 8, last);
+        e.mem.set_u32(this + 0x34, shared);
+        e.mem.set_u32(this + 0x20, shared);
+        e.mem.set_u32(this + 0x28, shared);
+        e.call(0x00b6_aef0, &args![this]);
+        assert_eq!(e.mem.u32(this), TABLE_010AE500);
+        assert_eq!(calls(&e, DELETE), vec![vec![last]]);
+        assert_eq!(e.mem.u32(shared + 4), 2);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0x34), 0);
+        assert_eq!(e.mem.u32(this + 0x20), shared);
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCTOR_00EC5FCE),
+            vec![
+                vec![this + 0x30, 4, 4, ELEMENT_DESTRUCTOR_0045CEC0],
+                vec![this + 8, 4, 6, ELEMENT_DESTRUCTOR_00B66F20]
+            ]
+        );
+        assert_eq!(calls(&e, NI_OBJECT_DOWN_00A5D3D0), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_00b6b050_pushes_up_to_ten_pointers() {
+        let mut e = engine();
+        let old = object(&mut e, 1);
+        let new = object(&mut e, 0);
+        e.mem.set_u32(POINTER_STACK_011FA024 + 8, old);
+        e.mem.set_u32(POINTER_STACK_COUNT_011FA020, 2);
+        e.call(0x00b6_b050, &args![new]);
+        assert_eq!(calls(&e, DELETE), vec![vec![old]]);
+        assert_eq!(e.mem.u32(POINTER_STACK_011FA024 + 8), new);
+        assert_eq!(e.mem.u32(new + 4), 1);
+        assert_eq!(e.mem.u32(POINTER_STACK_COUNT_011FA020), 3);
+        // The same object again: only the count moves.
+        e.mem.set_u32(POINTER_STACK_COUNT_011FA020, 2);
+        e.call(0x00b6_b050, &args![new]);
+        assert_eq!(e.mem.u32(new + 4), 1);
+        assert_eq!(e.mem.u32(POINTER_STACK_COUNT_011FA020), 3);
+        e.mem.set_u32(POINTER_STACK_COUNT_011FA020, 10);
+        e.call(0x00b6_b050, &args![new]);
+        assert_eq!(e.mem.u32(POINTER_STACK_COUNT_011FA020), 10);
+    }
+
+    #[test]
+    fn fn_00b6b100_answers_the_top_of_the_stack() {
+        let mut e = engine();
+        assert_eq!(e.call(0x00b6_b100, &args![]).u32(), 0);
+        e.mem.set_u32(POINTER_STACK_COUNT_011FA020, 2);
+        e.mem.set_u32(POINTER_STACK_011FA024 + 4, 0x55);
+        assert_eq!(e.call(0x00b6_b100, &args![]).u32(), 0x55);
+        assert!(calls(&e, IMPORT_INTERLOCKED_DECREMENT).is_empty());
     }
 }

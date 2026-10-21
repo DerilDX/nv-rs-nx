@@ -1,4 +1,4 @@
-# Handoff: engine port push (updated 2026-10-16)
+# Handoff: engine port push (updated 2026-10-20)
 
 For the next Claude session leading the nv-rs engine port. Read AGENTS.md,
 docs/MILESTONES.md, docs/ENGINE_PORT_PLAN.md, docs/FRAME_SKELETON.md and
@@ -7,7 +7,61 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-10-20 night (current; read this first, then 2026-10-19 below)
+### Claude lead, 2026-10-20 evening (current; read this first, then the night section below)
+
+**Merged today:** PR #226 (recorded batches, renderer start-up, CPU-exact x87
+helpers) and PR #227 (recorded batches b008-b046 and Renderer::Init's layers
+b000t-b000y). After #227: 33,973 functions translated by hand, 80.2 % of the
+exe covered. This PR adds batches b047-b053: 34,580 translated, 81.0 % covered. Per system: physics about 98 %,
+gameplay 78 %, audio 72 %, animation and faces 38 %, graphics 39 %.
+
+**Recorded play queue:** batches b001-b053 are done.
+Extra batches
+b054-b075 are written and not assigned (private `phase0/lists/play/`,
+`assigned.txt` says what is done). Each agent report lists the untranslated
+callees the recorded game ran; those are the next batches after b075.
+
+**Left in nixenonrenderer.rs (large x87 / D3D functions, not started):**
+00e69ea0, 00e6ab40, 00e6c780 (Do_SetCameraData), 00e6cf40, 00e70140,
+00e71fe0 (PackGeometryBuffer), 00e74120.
+
+**Play build (branch `claude/build43-movement`, local in the private worktree
+`wt-build43`, head 36057785, not pushed):** the game's own `main` (0086a850)
+now runs as the main game thread, driven frame by frame (a `PeekMessageA` on an
+empty queue ends a frame). Platform layers on the branch: window and message
+queue, files, folders, INI reads, user name, Steam answering false, DirectInput8,
+and the start of the Direct3D 9 layer (ADR-0007; IDirect3D9 answers from a
+machine table that `scripts/d3d9-capture` writes; that table describes the
+player's hardware, so it is git-ignored and must never be committed). **Not yet
+run in Doc's house since the last fixes:** the last run stopped at
+GetPrivateProfileIntA in 00876ad0, which is now provided. No game frame has run
+yet, so there are no movement numbers to compare (walk about 85, run about 340,
+jump apex about 60) and no play copy. Next, in order: build the viewer, run
+Doc's house strict and with the probe, translate each stop; on `main`'s path
+come the INI reads (004de490, 0045d180), Renderer::Init (004da670) and
+IDirect3D9::CreateDevice with the whole IDirect3DDevice9 (not written; it must
+call `platform::direct3d_device_created` for the x87 precision switch). Exact
+commands: private `phase0/build43-status.md`, top section. On the next merge of
+the lead into the branch, 00b4e270 exists on both: keep the lead's.
+
+**Review notes for this and the last PR:** eight shader pass-setup functions in
+`unplaced/run_00c048b0.rs` (00c0d200, 00c0e630, 00c0fdc0, 00c11980, 00c124c0,
+00c16400, 00c17510, 00c072c0) and the five HLSL loaders' source tables in
+`bsshader/run_00bcc570.rs` were written out by scripts from the disassembly
+(call counts checked against the asm). The functions 00b43db0-00b49e20 look
+like a bundled stream decompressor (version text "1.2.1"); they are translated
+from their bodies, and whether the ledger should call them `library` is open.
+`00a29680` is called in several places but has no `entry!`.
+
+**Process lessons:** batches handed out at the same time overlapped on the
+renderer files (a08's priority layers against a02, a07 and a08's recorded
+batches). Each overlap was merged in the agent's own slot (keep one translation
+per address, keep both sides' tests). Check overlaps against the lead's
+unpushed commits, not only the running slots' units. The compile queue is the
+bottleneck: one big job at a time, about 15-20 minutes per agent test run and
+about 80 minutes for the gate, so plan batches around it.
+
+### Claude lead, 2026-10-20 night (read this next, then 2026-10-19 below)
 
 **The real game was recorded.** The maintainer played a new game with a
 recorder loaded (private `nv-cover`, an INT3 on the first byte of every one of
