@@ -10,10 +10,12 @@ use crate::prelude::*;
 
 // Translated from 005e0830 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets the name (`004f8ac0` with `name`), then calls the object's vtable
-/// +0x18 with `flag`.
-pub fn fn_005e0830(e: &mut Engine, this: Ptr, name: u32, flag: u8) {
+/// +0x18 with `flag` and answers what it answers: the call is the last
+/// instruction before the return (`005e0853`), so its `EAX` is this
+/// function's (`005e0200` tests `AL`: the setting file opened).
+pub fn fn_005e0830(e: &mut Engine, this: Ptr, name: u32, flag: u8) -> u32 {
     e.call(0x004f_8ac0, &args![this, name]);
-    e.vcall(this.addr(), 0x18, &args![u32::from(flag)]);
+    e.vcall(this.addr(), 0x18, &args![u32::from(flag)]).u32()
 }
 
 // Translated from 005e0860 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -46,7 +48,7 @@ pub fn fn_005e0860(e: &mut Engine, this: Ptr, name: u32, found: Ptr) -> bool {
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        entry!(0x005e_0830, fn_005e0830(Ptr, u32, u8)),
+        entry!(0x005e_0830, fn_005e0830(Ptr, u32, u8) -> u32),
         entry!(0x005e_0860, fn_005e0860(Ptr, u32, Ptr) -> bool),
     ]
 }
@@ -71,11 +73,15 @@ mod tests {
         e.register(0x004f_8ac0, |_, _| Ret::default());
         e.put_vtable(0x0060_0000, &[0; 8]);
         e.mem.set_u32(0x0060_0018, 0x0061_0000);
-        e.register(0x0061_0000, |_, _| Ret::default());
+        e.register(0x0061_0000, |_, _| 0x1234_5601u32.into_ret());
         let this = e.mem.alloc(0x120);
         e.mem.set_u32(this, 0x0060_0000);
         e.call_log = Some(vec![]);
-        e.call(0x005e_0830, &args![this, 0x5000u32, 0x101u32]);
+        // The slot's answer is passed on whole (005e0853).
+        assert_eq!(
+            e.call(0x005e_0830, &args![this, 0x5000u32, 0x101u32]).u32(),
+            0x1234_5601
+        );
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1], (0x004f_8ac0, vec![this, 0x5000]));
         assert_eq!(log[2], (0x0061_0000, vec![this, 1]));
