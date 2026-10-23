@@ -357,11 +357,507 @@ pub fn magic_item_preload(e: &mut Engine, this: Ptr, force: u8) {
     }
 }
 
+/// `MagicItem`'s RTTI type descriptor (`.?AVMagicItem@@`).
+const MAGIC_ITEM_TYPE: u32 = 0x0118_3140;
+/// `MagicItemForm`'s RTTI type descriptor (`.?AVMagicItemForm@@`).
+const MAGIC_ITEM_FORM_TYPE: u32 = 0x0118_395c;
+/// `MagicItemObject`'s RTTI type descriptor (`.?AVMagicItemObject@@`).
+const MAGIC_ITEM_OBJECT_TYPE: u32 = 0x0118_30e8;
+/// `0084e3a0` (thiscall, returns a word; unnamed getter: the form id here, the level of
+/// an effect item in `GetAVEffect`).
+const GETTER_0084E3A0: u32 = 0x0084_e3a0;
+/// `EffectItem::GetCost` (`00403f80`, thiscall: one word; `float` in `ST0`).
+const EFFECT_ITEM_GET_COST: u32 = 0x0040_3f80;
+/// `_ftol2` (`00ec62c0`): the `ST0` value as an integer (a leading `f64` argument).
+const FTOL: u32 = 0x00ec_62c0;
+/// `00405e40` (thiscall on an effect item, returns `AL`; unnamed): when true the item
+/// is not considered.
+const EFFECT_ITEM_SKIPPED: u32 = 0x0040_5e40;
+/// `EffectSetting::IsEffectLoaded` (`00408a00`) and `IsEffectQueued` (`00408a20`).
+const EFFECT_SETTING_IS_EFFECT_LOADED: u32 = 0x0040_8a00;
+const EFFECT_SETTING_IS_EFFECT_QUEUED: u32 = 0x0040_8a20;
+/// `ModelLoader::ReleaseModel` (`00445300`, thiscall on the loader: path, word, word).
+const MODEL_LOADER_RELEASE_MODEL: u32 = 0x0044_5300;
+/// `00445370` (thiscall on the loader: path, word; unnamed): releases an animation file.
+const MODEL_LOADER_RELEASE_KF: u32 = 0x0044_5370;
+/// `00408910` and `00408730` (thiscall on a setting; unnamed, `effectsetting.cpp`):
+/// the counterparts of the counters `Preload` raises.
+const SETTING_UNLOAD_00408910: u32 = 0x0040_8910;
+const SETTING_UNLOAD_00408730: u32 = 0x0040_8730;
+/// `0040bed0` (no arguments; this unit, not translated): lowers the global at `011c3438`.
+const UNCOUNT_PRELOADED: u32 = 0x0040_bed0;
+/// `EffectItem::InitItem` (`00403db0`, thiscall: the form).
+const EFFECT_ITEM_INIT_ITEM: u32 = 0x0040_3db0;
+/// `EffectItem::IsHostile` (`00404710`).
+const EFFECT_ITEM_IS_HOSTILE: u32 = 0x0040_4710;
+
+/// The effect list `MagicItem` walks: the `EffectItemList` at `this + 0xc` (null when
+/// `this` is null), as the exe computes the pointer it walks (the node is 4 above it).
+fn effect_list(this: Ptr) -> u32 {
+    if this.is_null() {
+        0
+    } else {
+        this.addr().wrapping_add(0xc)
+    }
+}
+
+/// The next walked pointer after `node` (`00726070`, then 4 back; 0 at the end).
+fn next_walked(e: &mut Engine, node: u32) -> u32 {
+    let next = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    if next != 0 {
+        next.wrapping_sub(4)
+    } else {
+        0
+    }
+}
+
+/// The effect setting of the effect item in `node` (0 for an empty slot).
+fn node_setting(e: &mut Engine, node: u32) -> u32 {
+    let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+    let item = e.mem.u32(slot);
+    if item == 0 {
+        0
+    } else {
+        e.call(EFFECT_ITEM_SETTING, &args![item]).u32()
+    }
+}
+
+/// Whether the setting's effect model counts: a setting with a model path
+/// (`0048cee0` of `+0x18` above 0) whose effect is not loaded.
+fn effect_model_missing(e: &mut Engine, setting: u32) -> bool {
+    setting != 0
+        && e.call(MODEL_PATH_LENGTH, &args![setting.wrapping_add(0x18)])
+            .u32()
+            != 0
+        && !e
+            .call(EFFECT_SETTING_IS_EFFECT_LOADED, &args![setting])
+            .bool()
+}
+
+/// Whether a setting's associated item counts as missing: it qualifies (`004064b0`)
+/// and is not loaded (`00408880`).
+fn associated_item_missing(e: &mut Engine, setting: u32) -> bool {
+    setting != 0
+        && e.call(EFFECT_SETTING_QUALIFIES, &args![setting]).bool()
+        && !e.call(SETTING_COUNTER_POSITIVE, &args![setting]).bool()
+}
+
+/// `ModelLoader::ReleaseModel(path, unload, 1)` on the singleton.
+fn release_model_file(e: &mut Engine, path: u32, unload: u8) {
+    let loader = e.global::<u32>(MODEL_LOADER);
+    e.call(
+        MODEL_LOADER_RELEASE_MODEL,
+        &args![loader, path, u32::from(unload), 1u32],
+    );
+}
+
+/// `00445370(path, unload)` on the singleton.
+fn release_animation_file(e: &mut Engine, path: u32, unload: u8) {
+    let loader = e.global::<u32>(MODEL_LOADER);
+    e.call(
+        MODEL_LOADER_RELEASE_KF,
+        &args![loader, path, u32::from(unload)],
+    );
+}
+
+// Translated from 0040a1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicItem::GetMagicItemFormID` (Xbox PDB): the form id (`0084e3a0`) of the item as a
+/// `MagicItemForm`, else as a `MagicItemObject` (`__RTDynamicCast` from `MagicItem`), else 0.
+pub fn magic_item_get_magic_item_form_id(e: &mut Engine, this: Ptr) -> u32 {
+    let as_form = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![this, 0u32, MAGIC_ITEM_TYPE, MAGIC_ITEM_FORM_TYPE, 0u32],
+        )
+        .u32();
+    let as_object = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![this, 0u32, MAGIC_ITEM_TYPE, MAGIC_ITEM_OBJECT_TYPE, 0u32],
+        )
+        .u32();
+    if as_form != 0 {
+        e.call(GETTER_0084E3A0, &args![as_form]).u32()
+    } else if as_object != 0 {
+        e.call(GETTER_0084E3A0, &args![as_object]).u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 0040a300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicItem::GetAVEffect` (Xbox PDB, `RET 4`): the effect setting of the item's
+/// strongest effect item: among the items `00405e40` does not skip, the one with the
+/// highest level (`0084e3a0`), above `minimum_level`, ties broken by the higher cost
+/// (`GetCost(0)` truncated by `_ftol2`, above -1); 0 for an empty list or no such item.
+pub fn magic_item_get_av_effect(e: &mut Engine, this: Ptr, minimum_level: i32) -> u32 {
+    let mut best = 0u32;
+    let mut walked = effect_list(this);
+    if e.call(LIST_NODE_IS_EMPTY, &args![walked.wrapping_add(4)])
+        .bool()
+    {
+        return 0;
+    }
+    let mut best_cost: i32 = -1;
+    let mut best_level = minimum_level;
+    while walked != 0 {
+        let node = walked.wrapping_add(4);
+        let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        let cost = e.call(EFFECT_ITEM_GET_COST, &args![item, 0u32]).f64();
+        let cost = e.call(FTOL, &args![cost]).i32();
+        let level = e.call(GETTER_0084E3A0, &args![item]).i32();
+        if !e.call(EFFECT_ITEM_SKIPPED, &args![item]).bool()
+            && (level > best_level || (level == best_level && cost > best_cost))
+        {
+            best = item;
+            best_cost = cost;
+            best_level = e.call(GETTER_0084E3A0, &args![item]).i32();
+        }
+        walked = next_walked(e, node);
+    }
+    if best == 0 {
+        0
+    } else {
+        e.call(EFFECT_ITEM_SETTING, &args![best]).u32()
+    }
+}
+
+// Translated from 0040b470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicItem::IsLoaded` (Xbox PDB): false when the strongest effect's model is not
+/// loaded or any qualifying setting's associated item is not loaded; true otherwise
+/// (also for an empty list).
+pub fn magic_item_is_loaded(e: &mut Engine, this: Ptr) -> bool {
+    let effect = magic_item_get_av_effect(e, this, 0);
+    if effect_model_missing(e, effect) {
+        return false;
+    }
+    let mut walked = effect_list(this);
+    if e.call(LIST_NODE_IS_EMPTY, &args![walked.wrapping_add(4)])
+        .bool()
+    {
+        return true;
+    }
+    while walked != 0 {
+        let node = walked.wrapping_add(4);
+        let setting = node_setting(e, node);
+        if associated_item_missing(e, setting) {
+            return false;
+        }
+        walked = next_walked(e, node);
+    }
+    true
+}
+
+// Translated from 0040b580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicItem::IsLoadingOrLoaded` (Xbox PDB): like `IsLoaded`, but a missing model or
+/// associated item that is queued (`IsEffectQueued`, `IsAssociatedItemQueued`) counts.
+pub fn magic_item_is_loading_or_loaded(e: &mut Engine, this: Ptr) -> bool {
+    let effect = magic_item_get_av_effect(e, this, 0);
+    if effect_model_missing(e, effect)
+        && !e
+            .call(EFFECT_SETTING_IS_EFFECT_QUEUED, &args![effect])
+            .bool()
+    {
+        return false;
+    }
+    let mut walked = effect_list(this);
+    if e.call(LIST_NODE_IS_EMPTY, &args![walked.wrapping_add(4)])
+        .bool()
+    {
+        return true;
+    }
+    while walked != 0 {
+        let node = walked.wrapping_add(4);
+        let setting = node_setting(e, node);
+        if associated_item_missing(e, setting)
+            && !e.call(SETTING_COUNTER_NEGATIVE, &args![setting]).bool()
+        {
+            return false;
+        }
+        walked = next_walked(e, node);
+    }
+    true
+}
+
+// Translated from 0040b6b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicItem::IsLoading` (Xbox PDB): true when something is missing (the strongest
+/// effect's model or a qualifying setting's associated item) and everything missing is
+/// queued; false when nothing is missing or something missing is not queued.
+pub fn magic_item_is_loading(e: &mut Engine, this: Ptr) -> bool {
+    let effect = magic_item_get_av_effect(e, this, 0);
+    let mut all_loaded = true;
+    if effect_model_missing(e, effect) {
+        all_loaded = false;
+        if !e
+            .call(EFFECT_SETTING_IS_EFFECT_QUEUED, &args![effect])
+            .bool()
+        {
+            return false;
+        }
+    }
+    let mut walked = effect_list(this);
+    if !e
+        .call(LIST_NODE_IS_EMPTY, &args![walked.wrapping_add(4)])
+        .bool()
+    {
+        while walked != 0 {
+            let node = walked.wrapping_add(4);
+            let setting = node_setting(e, node);
+            if associated_item_missing(e, setting) {
+                all_loaded = false;
+                if !e.call(SETTING_COUNTER_NEGATIVE, &args![setting]).bool() {
+                    return false;
+                }
+            }
+            walked = next_walked(e, node);
+        }
+    }
+    !all_loaded
+}
+
+/// The associated-form arms of `MagicItem::Unload`, the counterpart of
+/// [`preload_associated_form`]: the same casts by the flags 0x10000, 0x20000 and 0x40000,
+/// releasing what `Preload` loaded.
+fn unload_associated_form(e: &mut Engine, setting: u32, associated: u32, unload: u8) {
+    if associated != 0
+        && e.call(FORM_HAS_FLAG, &args![setting, 0x0001_0000u32])
+            .bool()
+    {
+        let form = dynamic_cast(e, associated, RTTI_CAST_FOR_10000);
+        if form != 0
+            && e.call(MODEL_PATH_LENGTH, &args![form.wrapping_add(0x3c)])
+                .u32()
+                != 0
+        {
+            let path = e
+                .vcall(form.wrapping_add(0x3c), SLOT_MODEL_PATH, &args![])
+                .u32();
+            release_model_file(e, path, unload);
+        }
+    } else if associated != 0
+        && e.call(FORM_HAS_FLAG, &args![setting, 0x0002_0000u32])
+            .bool()
+    {
+        let form = dynamic_cast(e, associated, RTTI_CAST_FOR_20000);
+        if form != 0 {
+            let biped = form.wrapping_add(0x70);
+            let first = e.call(BIPED_MODEL_BY_INDEX, &args![biped, 0u32]).u32();
+            release_model_file(e, first, unload);
+            let second = e.call(BIPED_MODEL_BY_INDEX, &args![biped, 1u32]).u32();
+            release_model_file(e, second, unload);
+        }
+    } else if associated != 0
+        && e.call(FORM_HAS_FLAG, &args![setting, 0x0004_0000u32])
+            .bool()
+    {
+        let form = dynamic_cast(e, associated, RTTI_CAST_FOR_40000_FIRST);
+        if form != 0 {
+            let list = e
+                .call(BUILD_DEFAULT_MODEL_LIST, &args![form, 1u32, 1u32])
+                .u32();
+            let mut node = list;
+            while node != 0 && !e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
+                let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+                let path = e.mem.u32(slot);
+                release_model_file(e, path, unload);
+                node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+            }
+            e.call(FILENAME_LIST_CLEAR, &args![list]);
+            if list != 0 {
+                e.call(FILENAME_LIST_DESTROY, &args![list, 1u32]);
+            }
+        }
+        let form = dynamic_cast(e, associated, RTTI_CAST_FOR_40000_SECOND);
+        if form != 0 {
+            unload_model_with_animations(e, form, unload);
+        }
+    }
+}
+
+/// The last arm of `MagicItem::Unload`, the counterpart of
+/// [`preload_model_with_animations`]: releases the model at `+0xdc`, the files of the
+/// list at `+0x114` next to it, the `Skeleton` animation files and the `SpecialAnims`
+/// files of the animation at `+0xc4`. The path buffer is a 0x104-byte stack array.
+fn unload_model_with_animations(e: &mut Engine, form: u32, unload: u8) {
+    let model = form.wrapping_add(0xdc);
+    e.with_stack(PATH_BUFFER_SIZE, |e, buffer| {
+        let path_buffer = buffer.addr();
+        let first_path = e.vcall(model, SLOT_MODEL_PATH, &args![]).u32();
+        release_model_file(e, first_path, unload);
+        let model_path = e.vcall(model, SLOT_MODEL_PATH, &args![]).u32();
+        let list = e
+            .call(MEMBER_LIST_AT_4, &args![form.wrapping_add(0x114)])
+            .u32();
+        e.call(
+            STRING_COPY,
+            &args![path_buffer, PATH_BUFFER_SIZE, model_path],
+        );
+        let mut folder_end = fn_0040ab30(e, buffer, 0x5c).addr();
+        let mut node = list;
+        while folder_end != 0 && node != 0 {
+            e.mem.set_u8(folder_end.wrapping_add(1), 0);
+            let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+            let name = e.mem.u32(slot);
+            if name != 0 {
+                e.call(STRING_APPEND, &args![path_buffer, PATH_BUFFER_SIZE, name]);
+                release_model_file(e, path_buffer, unload);
+            }
+            node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+        }
+        let last_slash = e.call(CRT_STRRCHR, &args![model_path, 0x5cu32]).u32();
+        if last_slash != 0
+            && e.call(
+                CRT_STRNICMP,
+                &args![last_slash.wrapping_add(1), SKELETON_TEXT, 8u32],
+            )
+            .u32()
+                == 0
+        {
+            let loader = e.global::<u32>(MODEL_LOADER);
+            let files = e
+                .call(
+                    MODEL_LOADER_BUILD_KF_LIST,
+                    &args![loader, model_path, 0u32, 0u32, 0u32],
+                )
+                .u32();
+            let mut node = files;
+            while node != 0 {
+                let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+                let file = e.mem.u32(slot);
+                if file != 0 {
+                    release_animation_file(e, file, unload);
+                }
+                e.call(FREE_BLOCK, &args![file]);
+                node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+            }
+            e.call(FILENAME_LIST_CLEAR, &args![files]);
+            if files != 0 {
+                e.call(FILENAME_LIST_DESTROY, &args![files, 1u32]);
+            }
+        }
+        let animation = form.wrapping_add(0xc4);
+        if e.call(ANIMATION_HAS_KF_FILES, &args![animation]).bool() {
+            e.mem.set_u8(folder_end.wrapping_add(1), 0);
+            e.call(
+                STRING_APPEND,
+                &args![path_buffer, PATH_BUFFER_SIZE, SPECIAL_ANIMS_TEXT],
+            );
+            e.call(
+                STRING_APPEND,
+                &args![path_buffer, PATH_BUFFER_SIZE, SPECIAL_ANIMS_SEPARATOR_TEXT],
+            );
+            folder_end = fn_0040ab30(e, buffer, 0x5c).addr();
+            let mut node = e.call(MEMBER_LIST_AT_4, &args![animation]).u32();
+            while node != 0 {
+                e.mem.set_u8(folder_end.wrapping_add(1), 0);
+                let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+                let name = e.mem.u32(slot);
+                if name != 0 {
+                    e.call(STRING_APPEND, &args![path_buffer, PATH_BUFFER_SIZE, name]);
+                    release_animation_file(e, path_buffer, unload);
+                }
+                node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+            }
+        }
+    });
+}
+
+// Translated from 0040b800 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0040b800 - the /GS stack-cookie check (00ec408c) at the end is not translated
+/// `MagicItem::Unload` (Xbox PDB, `RET 4`; the stack word is a byte passed on to the
+/// releases): the counterpart of `Preload`. Only for an item that is loading or loaded
+/// (`0040b580`). Unless the item is only loading (`0040b6b0`), the strongest effect's
+/// model is released; its setting is told (`00408910`). Then for each qualifying setting
+/// of the effect list: unless loading, the associated form's models and animation files
+/// are released (by the flags 0x10000, 0x20000, 0x40000, as `Preload` loads them); the
+/// setting is told (`00408730`); and a 0x40000 setting whose counter is neither positive
+/// nor negative lowers the global count (`0040bed0`).
+pub fn magic_item_unload(e: &mut Engine, this: Ptr, unload: u8) {
+    if !magic_item_is_loading_or_loaded(e, this) {
+        return;
+    }
+    let effect = magic_item_get_av_effect(e, this, 0);
+    let loading = magic_item_is_loading(e, this);
+    if effect != 0
+        && e.call(MODEL_PATH_LENGTH, &args![effect.wrapping_add(0x18)])
+            .u32()
+            != 0
+    {
+        if !loading {
+            let path = e
+                .vcall(effect.wrapping_add(0x18), SLOT_MODEL_PATH, &args![])
+                .u32();
+            release_model_file(e, path, unload);
+        }
+        e.call(SETTING_UNLOAD_00408910, &args![effect]);
+    }
+    let mut walked = effect_list(this);
+    if e.call(LIST_NODE_IS_EMPTY, &args![walked.wrapping_add(4)])
+        .bool()
+    {
+        return;
+    }
+    while walked != 0 {
+        let node = walked.wrapping_add(4);
+        let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+        let effect_item = e.mem.u32(slot);
+        let setting = e.call(EFFECT_ITEM_SETTING, &args![effect_item]).u32();
+        if e.call(EFFECT_SETTING_QUALIFIES, &args![setting]).bool() {
+            if !loading {
+                let associated = e
+                    .call(EFFECT_SETTING_ASSOCIATED_FORM, &args![setting])
+                    .u32();
+                unload_associated_form(e, setting, associated, unload);
+            }
+            e.call(SETTING_UNLOAD_00408730, &args![setting]);
+            if !e.call(SETTING_COUNTER_POSITIVE, &args![setting]).bool()
+                && !e.call(SETTING_COUNTER_NEGATIVE, &args![setting]).bool()
+                && e.call(FORM_HAS_FLAG, &args![setting, 0x0004_0000u32])
+                    .bool()
+            {
+                e.call(UNCOUNT_PRELOADED, &args![]);
+            }
+        }
+        walked = next_walked(e, node);
+    }
+}
+
+// Translated from 0040c030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MagicItem::MagicItemInitItem` (Xbox PDB, `RET 4`): initializes each effect item of
+/// the list with `form` (`EffectItem::InitItem`) and counts the hostile ones
+/// (`EffectItem::IsHostile`) into the word at `this + 0x18`.
+pub fn magic_item_magic_item_init_item(e: &mut Engine, this: Ptr, form: u32) {
+    let mut walked = effect_list(this);
+    e.mem.set_u32(this.addr().wrapping_add(0x18), 0);
+    while walked != 0 {
+        let node = walked.wrapping_add(4);
+        let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        if item != 0 {
+            e.call(EFFECT_ITEM_INIT_ITEM, &args![item, form]);
+            if e.call(EFFECT_ITEM_IS_HOSTILE, &args![item]).bool() {
+                let count = e.mem.u32(this.addr().wrapping_add(0x18));
+                e.mem
+                    .set_u32(this.addr().wrapping_add(0x18), count.wrapping_add(1));
+            }
+        }
+        walked = next_walked(e, node);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0040_a420, magic_item_preload(Ptr, u8)),
         entry!(0x0040_ab30, fn_0040ab30(Ptr, u32) -> Ptr),
+        entry!(0x0040_a1e0, magic_item_get_magic_item_form_id(Ptr) -> u32),
+        entry!(0x0040_a300, magic_item_get_av_effect(Ptr, i32) -> u32),
+        entry!(0x0040_b470, magic_item_is_loaded(Ptr) -> bool),
+        entry!(0x0040_b580, magic_item_is_loading_or_loaded(Ptr) -> bool),
+        entry!(0x0040_b6b0, magic_item_is_loading(Ptr) -> bool),
+        entry!(0x0040_b800, magic_item_unload(Ptr, u8)),
+        entry!(0x0040_c030, magic_item_magic_item_init_item(Ptr, u32)),
     ]
 }
 
@@ -866,5 +1362,352 @@ mod physics_work_ahead_tests {
         assert!(freed.borrow().is_empty());
         assert!(calls(&e, MODEL_LOADER_BUILD_KF_LIST).is_empty());
         assert_eq!(calls(&e, ANIMATION_HAS_KF_FILES).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod b066_tests {
+    use super::*;
+
+    type Calls = Vec<Vec<u32>>;
+
+    const MODEL_TABLE: u32 = 0x0f10_0000;
+    const MODEL_PATH_SLOT: u32 = 0x0f10_0100;
+    const LOADER: u32 = 0x00c0_ffee;
+
+    fn answer(e: &mut Engine, addr: u32, eax: u32) {
+        e.register_double(addr, move |_, _| Ret {
+            eax,
+            ..Ret::default()
+        });
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Calls {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn loaded_byte(e: &mut Engine, a: &[u32]) -> Ret {
+        u32::from(e.mem.u8(a[0] + 0x30)).into_ret()
+    }
+
+    fn queued_byte(e: &mut Engine, a: &[u32]) -> Ret {
+        u32::from(e.mem.u8(a[0] + 0x31)).into_ret()
+    }
+
+    fn associated_loaded_byte(e: &mut Engine, a: &[u32]) -> Ret {
+        u32::from(e.mem.u8(a[0] + 0x32)).into_ret()
+    }
+
+    fn associated_queued_byte(e: &mut Engine, a: &[u32]) -> Ret {
+        u32::from(e.mem.u8(a[0] + 0x33)).into_ret()
+    }
+
+    /// Doubles over plain objects: list nodes are (item, next) with `next` the next
+    /// node; an effect item has its setting at +0x14, its level at +0x18, its cost
+    /// (`float`) at +0x1c and its skip byte at +0x20; a setting has its flags at +8,
+    /// a model at +0x18 (vtable, path length at +4, path at +8 of it), its loaded,
+    /// queued, associated-loaded and associated-queued bytes at +0x30..+0x33 and its
+    /// associated form at +0x60; a qualifying setting is any non-null one.
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.map(MODEL_LOADER, 4);
+        e.set_global(MODEL_LOADER, LOADER);
+        e.put_vtable(MODEL_TABLE, &[0, 0, 0, 0, 0, MODEL_PATH_SLOT]);
+        e.register(MODEL_PATH_SLOT, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(MODEL_PATH_LENGTH, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(LIST_NODE_IS_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        e.register(LIST_NODE_ITEM_SLOT, |_, a| a[0].into_ret());
+        e.register(LIST_NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(EFFECT_ITEM_SETTING, |e, a| {
+            e.mem.u32(a[0] + 0x14).into_ret()
+        });
+        e.register(GETTER_0084E3A0, |e, a| e.mem.u32(a[0] + 0x18).into_ret());
+        e.register(EFFECT_ITEM_GET_COST, |e, a| Ret {
+            st0: f64::from(e.mem.f32(a[0] + 0x1c)),
+            ..Ret::default()
+        });
+        e.register(FTOL, |_, a| {
+            (f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32).into_ret()
+        });
+        e.register(EFFECT_ITEM_SKIPPED, |e, a| {
+            u32::from(e.mem.u8(a[0] + 0x20)).into_ret()
+        });
+        e.register(EFFECT_SETTING_QUALIFIES, |_, a| {
+            u32::from(a[0] != 0).into_ret()
+        });
+        e.register(EFFECT_SETTING_IS_EFFECT_LOADED, loaded_byte);
+        e.register(EFFECT_SETTING_IS_EFFECT_QUEUED, queued_byte);
+        e.register(SETTING_COUNTER_POSITIVE, associated_loaded_byte);
+        e.register(SETTING_COUNTER_NEGATIVE, associated_queued_byte);
+        e.register(EFFECT_SETTING_ASSOCIATED_FORM, |e, a| {
+            e.mem.u32(a[0] + 0x60).into_ret()
+        });
+        e.register(FORM_HAS_FLAG, |e, a| {
+            u32::from(e.mem.u32(a[0] + 8) & a[1] != 0).into_ret()
+        });
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        for f in [
+            MODEL_LOADER_RELEASE_MODEL,
+            MODEL_LOADER_RELEASE_KF,
+            SETTING_UNLOAD_00408910,
+            SETTING_UNLOAD_00408730,
+            UNCOUNT_PRELOADED,
+            FILENAME_LIST_CLEAR,
+            FILENAME_LIST_DESTROY,
+        ] {
+            answer(&mut e, f, 0);
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    /// A setting with a model of path length `path` at +0x18 (path pointer `path + 0x100`).
+    fn setting(e: &mut Engine, path: u32, flags: u32) -> u32 {
+        let setting = e.mem.alloc(0x80);
+        e.mem.set_u32(setting + 8, flags);
+        e.mem.set_u32(setting + 0x18, MODEL_TABLE);
+        e.mem.set_u32(setting + 0x1c, path);
+        e.mem.set_u32(setting + 0x20, path + 0x100);
+        setting
+    }
+
+    /// An effect item with `setting`, `level` and `cost`.
+    fn effect_item(e: &mut Engine, setting: u32, level: u32, cost: f32) -> u32 {
+        let item = e.mem.alloc(0x24);
+        e.mem.set_u32(item + 0x14, setting);
+        e.mem.set_u32(item + 0x18, level);
+        e.mem.set_f32(item + 0x1c, cost);
+        item
+    }
+
+    /// A magic item whose effect list holds `items` (the first node at +0x10).
+    fn magic_item(e: &mut Engine, items: &[u32]) -> Ptr {
+        let this = e.mem.alloc(0x20);
+        let mut node = this + 0x10;
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            let next = if i + 1 < items.len() {
+                e.mem.alloc(8)
+            } else {
+                0
+            };
+            e.mem.set_u32(node + 4, next);
+            node = next;
+        }
+        Ptr::new(this)
+    }
+
+    #[test]
+    fn get_magic_item_form_id_casts_to_form_then_object() {
+        for (form, object, want) in [(0x10u32, 0x20u32, 0x110u32), (0, 0x20, 0x120), (0, 0, 0)] {
+            let mut e = Engine::new();
+            e.register_double(RT_DYNAMIC_CAST, move |_, a| {
+                (if a[3] == MAGIC_ITEM_FORM_TYPE {
+                    form
+                } else {
+                    object
+                })
+                .into_ret()
+            });
+            e.register(GETTER_0084E3A0, |_, a| (a[0] + 0x100).into_ret());
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0040_a1e0, &args![0x5000u32]).u32(), want);
+            let casts = calls(&e, RT_DYNAMIC_CAST);
+            assert_eq!(
+                casts[0],
+                vec![0x5000, 0, MAGIC_ITEM_TYPE, MAGIC_ITEM_FORM_TYPE, 0]
+            );
+            assert_eq!(
+                casts[1],
+                vec![0x5000, 0, MAGIC_ITEM_TYPE, MAGIC_ITEM_OBJECT_TYPE, 0]
+            );
+        }
+    }
+
+    #[test]
+    fn get_av_effect_picks_the_highest_level_then_cost() {
+        let mut e = rig();
+        let a = effect_item(&mut e, 0xa0, 2, 5.0);
+        let b = effect_item(&mut e, 0xb0, 3, 1.0);
+        let c = effect_item(&mut e, 0xc0, 3, 4.9);
+        let d = effect_item(&mut e, 0xd0, 9, 9.0);
+        e.mem.set_u8(d + 0x20, 1);
+        let item = magic_item(&mut e, &[a, b, c, d]);
+        assert_eq!(e.call(0x0040_a300, &args![item, 0u32]).u32(), 0xc0);
+        // Nothing above the minimum level: none.
+        assert_eq!(e.call(0x0040_a300, &args![item, 4u32]).u32(), 0);
+        // Equal level to the minimum: the higher cost wins over -1.
+        let item = magic_item(&mut e, &[a]);
+        assert_eq!(e.call(0x0040_a300, &args![item, 2u32]).u32(), 0xa0);
+        // An empty list.
+        let item = magic_item(&mut e, &[]);
+        assert_eq!(e.call(0x0040_a300, &args![item, 0u32]).u32(), 0);
+    }
+
+    /// A magic item whose strongest effect's setting has a model (loaded and queued as
+    /// given) and one more qualifying setting (associated loaded and queued as given).
+    fn states(model: (u8, u8), associated: (u8, u8)) -> (Engine, Ptr) {
+        let mut e = rig();
+        let first = setting(&mut e, 4, 0);
+        e.mem.set_u8(first + 0x30, model.0);
+        e.mem.set_u8(first + 0x31, model.1);
+        e.mem.set_u8(first + 0x32, 1);
+        let second = setting(&mut e, 0, 0);
+        e.mem.set_u8(second + 0x32, associated.0);
+        e.mem.set_u8(second + 0x33, associated.1);
+        let a = effect_item(&mut e, first, 1, 0.0);
+        let b = effect_item(&mut e, second, 0, 0.0);
+        let item = magic_item(&mut e, &[a, b]);
+        (e, item)
+    }
+
+    #[test]
+    fn loaded_loading_and_loading_or_loaded_states() {
+        // (model loaded, queued), (associated loaded, queued) -> (loaded, loading or
+        // loaded, loading)
+        for (model, associated, want) in [
+            ((1, 0), (1, 0), (true, true, false)),
+            ((0, 1), (1, 0), (false, true, true)),
+            ((0, 0), (1, 0), (false, false, false)),
+            ((1, 0), (0, 1), (false, true, true)),
+            ((1, 0), (0, 0), (false, false, false)),
+            ((0, 1), (0, 1), (false, true, true)),
+        ] {
+            let (mut e, item) = states(model, associated);
+            let got = (
+                e.call(0x0040_b470, &args![item]).bool(),
+                e.call(0x0040_b580, &args![item]).bool(),
+                e.call(0x0040_b6b0, &args![item]).bool(),
+            );
+            assert_eq!(got, want, "{model:?} {associated:?}");
+        }
+        // An empty list without an effect: loaded, not loading.
+        let mut e = rig();
+        let item = magic_item(&mut e, &[]);
+        assert!(e.call(0x0040_b470, &args![item]).bool());
+        assert!(e.call(0x0040_b580, &args![item]).bool());
+        assert!(!e.call(0x0040_b6b0, &args![item]).bool());
+    }
+
+    /// The settings of the first two effect items of `item`.
+    fn settings_of(e: &Engine, item: Ptr) -> (u32, u32) {
+        let first = e.mem.u32(e.mem.u32(item.addr() + 0x10) + 0x14);
+        let node = e.mem.u32(item.addr() + 0x14);
+        let second = e.mem.u32(e.mem.u32(node) + 0x14);
+        (first, second)
+    }
+
+    #[test]
+    fn unload_releases_the_effect_and_associated_models() {
+        let (mut e, item) = states((1, 0), (1, 0));
+        let (first, second) = settings_of(&e, item);
+        // The second setting gets the 0x10000 arm with a model of length 3 at +0x3c.
+        let associated = e.mem.alloc(0x50);
+        e.mem.set_u32(associated + 0x3c, MODEL_TABLE);
+        e.mem.set_u32(associated + 0x40, 3);
+        e.mem.set_u32(associated + 0x44, 0x7700);
+        e.mem.set_u32(second + 8, 0x0001_0000);
+        e.mem.set_u32(second + 0x60, associated);
+        e.call_log = Some(vec![]);
+        e.call(0x0040_b800, &args![item, 0x101u32]);
+        assert_eq!(
+            calls(&e, MODEL_LOADER_RELEASE_MODEL),
+            vec![vec![LOADER, 0x104, 1, 1], vec![LOADER, 0x7700, 1, 1]]
+        );
+        assert_eq!(calls(&e, SETTING_UNLOAD_00408910), vec![vec![first]]);
+        assert_eq!(
+            calls(&e, SETTING_UNLOAD_00408730),
+            vec![vec![first], vec![second]]
+        );
+        assert!(calls(&e, UNCOUNT_PRELOADED).is_empty());
+    }
+
+    #[test]
+    fn unload_skips_releases_while_loading_and_needs_a_loaded_item() {
+        // Loading: only the settings are told.
+        let (mut e, item) = states((0, 1), (1, 0));
+        e.call(0x0040_b800, &args![item, 0u32]);
+        assert!(calls(&e, MODEL_LOADER_RELEASE_MODEL).is_empty());
+        assert_eq!(calls(&e, SETTING_UNLOAD_00408910).len(), 1);
+        assert_eq!(calls(&e, SETTING_UNLOAD_00408730).len(), 2);
+        // Neither loading nor loaded: nothing.
+        let (mut e, item) = states((0, 0), (1, 0));
+        e.call(0x0040_b800, &args![item, 0u32]);
+        assert!(calls(&e, SETTING_UNLOAD_00408910).is_empty());
+        assert!(calls(&e, SETTING_UNLOAD_00408730).is_empty());
+    }
+
+    #[test]
+    fn unload_releases_biped_and_default_models_and_uncounts() {
+        let (mut e, item) = states((1, 0), (1, 0));
+        let (first, second) = settings_of(&e, item);
+        // The 0x20000 arm on the first setting: two biped models.
+        e.mem.set_u32(first + 8, 0x0002_0000);
+        e.mem.set_u32(first + 0x60, 0x7000);
+        e.register(BIPED_MODEL_BY_INDEX, |_, a| (a[0] + a[1]).into_ret());
+        // The 0x40000 arm on the second: a default model list of two paths; the second
+        // cast finds nothing. Telling the setting (00408730) drops its counter, so it
+        // is uncounted.
+        e.mem.set_u32(second + 8, 0x0004_0000);
+        e.mem.set_u32(second + 0x60, 0x7100);
+        e.register(SETTING_UNLOAD_00408730, |e, a| {
+            e.mem.set_u8(a[0] + 0x32, 0);
+            Ret::default()
+        });
+        let list = e.mem.alloc(8);
+        let tail = e.mem.alloc(8);
+        e.mem.set_u32(list, 0x7200);
+        e.mem.set_u32(list + 4, tail);
+        e.mem.set_u32(tail, 0x7300);
+        answer(&mut e, BUILD_DEFAULT_MODEL_LIST, list);
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            (if a[3] == RTTI_CAST_FOR_40000_SECOND {
+                0
+            } else {
+                a[0]
+            })
+            .into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0040_b800, &args![item, 0u32]);
+        let released: Vec<u32> = calls(&e, MODEL_LOADER_RELEASE_MODEL)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(released, vec![0x104, 0x7070, 0x7071, 0x7200, 0x7300]);
+        assert_eq!(
+            calls(&e, BUILD_DEFAULT_MODEL_LIST),
+            vec![vec![0x7100, 1, 1]]
+        );
+        assert_eq!(calls(&e, FILENAME_LIST_DESTROY), vec![vec![list, 1]]);
+        assert_eq!(calls(&e, UNCOUNT_PRELOADED).len(), 1);
+    }
+
+    #[test]
+    fn magic_item_init_item_counts_hostile_effects() {
+        let mut e = rig();
+        answer(&mut e, EFFECT_ITEM_INIT_ITEM, 0);
+        e.register(EFFECT_ITEM_IS_HOSTILE, |e, a| {
+            u32::from(e.mem.u8(a[0] + 0x20)).into_ret()
+        });
+        let a = effect_item(&mut e, 0, 0, 0.0);
+        let b = effect_item(&mut e, 0, 0, 0.0);
+        e.mem.set_u8(b + 0x20, 1);
+        let item = magic_item(&mut e, &[a, 0, b]);
+        e.mem.set_u32(item.addr() + 0x18, 9);
+        e.call(0x0040_c030, &args![item, 0x5000u32]);
+        assert_eq!(e.mem.u32(item.addr() + 0x18), 1);
+        assert_eq!(
+            calls(&e, EFFECT_ITEM_INIT_ITEM),
+            vec![vec![a, 0x5000], vec![b, 0x5000]]
+        );
     }
 }

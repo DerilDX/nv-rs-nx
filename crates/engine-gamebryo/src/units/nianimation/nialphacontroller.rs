@@ -169,6 +169,43 @@ pub fn ni_alpha_controller_create_object(e: &mut Engine) -> Ptr {
     Ptr::new(object)
 }
 
+/// `NiMaterialProperty::ms_RTTI` (`011f4a5c`; `NiMaterialProperty::GetRTTI`
+/// `00a756c0` answers it).
+const NI_MATERIAL_PROPERTY_RTTI: u32 = 0x011f_4a5c;
+
+// Translated from 00a569f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAlphaController::GetTargetFloatValue` (Xbox PDB): the target's alpha
+/// (+0x3C, through `FLD`/`FSTP`) stored to `value`.
+pub fn ni_alpha_controller_get_target_float_value(e: &mut Engine, this: Ptr, value: Ptr) {
+    let target = e.mem.u32(this.addr().wrapping_add(TARGET));
+    let alpha = x87_quiet_bits(e.mem.u32(target.wrapping_add(TARGET_ALPHA)));
+    e.mem.set_u32(value.addr(), alpha);
+}
+
+// Translated from 00bc3050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAlphaController::InterpTargetIsCorrectType` (Xbox PDB; `thiscall`,
+/// one stack word): whether the target is an `NiMaterialProperty` (its
+/// `GetRTTI`, vtable +8, and then each base, `NiRTTI` +4, compared with
+/// `NiMaterialProperty::ms_RTTI`); false for a null target. `this` is not
+/// read.
+pub fn ni_alpha_controller_interp_target_is_correct_type(
+    e: &mut Engine,
+    _this: Ptr,
+    target: Ptr,
+) -> bool {
+    if target.is_null() {
+        return false;
+    }
+    let mut class = e.vcall(target.addr(), 8, &args![]).u32();
+    while class != 0 {
+        if class == NI_MATERIAL_PROPERTY_RTTI {
+            return true;
+        }
+        class = e.mem.u32(class.wrapping_add(4));
+    }
+    false
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -177,6 +214,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a5_6a00, ni_alpha_controller_update(Ptr, Ptr)),
         entry!(0x00a5_6ae0, ni_alpha_controller_create_clone(Ptr, u32) -> Ptr),
         entry!(0x00a5_6b30, ni_alpha_controller_create_object() -> Ptr),
+        entry!(
+            0x00a5_69f0,
+            ni_alpha_controller_get_target_float_value(Ptr, Ptr)
+        ),
+        entry!(
+            0x00bc_3050,
+            ni_alpha_controller_interp_target_is_correct_type(Ptr, Ptr) -> bool
+        ),
     ]
 }
 
@@ -381,5 +426,43 @@ mod tests {
                 (COPY_MEMBERS, vec![this, 0, 0x9000]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod a07_tests {
+    use super::*;
+
+    #[test]
+    fn get_target_float_value_reads_the_alpha() {
+        let mut e = Engine::new();
+        let target = e.mem.alloc(0x48);
+        e.mem.set_u32(target + TARGET_ALPHA, 0x7f80_0002);
+        let this = e.mem.alloc(NI_ALPHA_CONTROLLER_SIZE);
+        e.mem.set_u32(this + TARGET, target);
+        let value = e.mem.alloc(4);
+        e.call(0x00a5_69f0, &args![this, value]);
+        assert_eq!(e.mem.u32(value), 0x7fc0_0002, "quieted by FLD");
+        e.mem.set_f32(target + TARGET_ALPHA, 0.5);
+        e.call(0x00a5_69f0, &args![this, value]);
+        assert_eq!(e.mem.f32(value), 0.5);
+    }
+
+    #[test]
+    fn interp_target_is_correct_type_walks_the_rtti_chain() {
+        const VTABLE: u32 = 0x7400_0000;
+        const GET_RTTI: u32 = 0x7500_0008;
+        let mut e = Engine::new();
+        e.put_vtable(VTABLE, &[0, 0, GET_RTTI]);
+        e.register(GET_RTTI, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let parent = e.mem.alloc(8);
+        e.mem.set_u32(parent + 4, NI_MATERIAL_PROPERTY_RTTI);
+        let target = e.mem.alloc(8);
+        e.mem.set_u32(target, VTABLE);
+        e.mem.set_u32(target + 4, parent);
+        assert!(e.call(0x00bc_3050, &args![0u32, target]).bool());
+        e.mem.set_u32(parent + 4, 0);
+        assert!(!e.call(0x00bc_3050, &args![0u32, target]).bool());
+        assert!(!e.call(0x00bc_3050, &args![0u32, 0u32]).bool());
     }
 }

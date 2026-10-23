@@ -476,9 +476,1679 @@ mod element_clear_tests {
     }
 }
 
+/// The renderer holder (`011f4748`): its +0x200 mode, byte +0x208 and the
+/// virtual slots +0xAC (set background colour), +0xB4 (get it) and +0x18C
+/// (camera set-up) are used here.
+const RENDER_HOLDER: u32 = 0x011f_4748;
+/// The renderer singleton pointer.
+const RENDERER: u32 = 0x011f_9508;
+/// The texture manager and the image-space manager singletons.
+const TEXTURE_MANAGER: u32 = 0x011f_91a8;
+const IMAGE_SPACE_MANAGER: u32 = 0x011f_91ac;
+/// The memory manager's deallocation (`00aa4060`; thiscall, one word).
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+/// `BSBatchRenderer`'s functions this unit calls (`bsbatchrenderer.cpp`).
+const BATCH_STOP_GROUPING_ALPHAS: u32 = 0x00b9_aec0;
+const BATCH_START_GROUPING_ALPHAS: u32 = 0x00b9_ac80;
+const BATCH_CLEAR_PASSES: u32 = 0x00b9_9bc0;
+const BATCH_HAS_LISTED_PASS: u32 = 0x00b9_8970;
+const BATCH_NEXT_LIST: u32 = 0x00b9_a090;
+const BATCH_RENDER_LIST: u32 = 0x00b9_a120;
+const BATCH_RENDER_LIST_00B9A3C0: u32 = 0x00b9_a3c0;
+const BATCH_SORT_ALPHAS: u32 = 0x00b9_9a10;
+const BATCH_END_PASS: u32 = 0x00b9_88e0;
+const BATCH_RENDER_PASS_IMMEDIATELY: u32 = 0x00b9_94f0;
+const BATCH_GROUP_DISTANCE: u32 = 0x00b9_8c80;
+const BATCH_RENDER_NEXT_ALPHA: u32 = 0x00b9_af60;
+const GEOMETRY_GROUP_DESTRUCTOR: u32 = 0x00b9_a410;
+const GEOMETRY_GROUP_RESET: u32 = 0x00b9_a490;
+const GEOMETRY_GROUP_RENDER_00B9A4D0: u32 = 0x00b9_a4d0;
+/// The clear of a 16-bit list (`00b64ec0`; thiscall).
+const SHORT_LIST_CLEAR: u32 = 0x00b6_4ec0;
+/// An occlusion query's destructor (`00c4ed40`; thiscall), its result
+/// read (`00c4ee40` and `00c4edf0`; thiscall, two words: out slot, 1;
+/// answer 0 ready, 1 not yet, other failed), constructor (`00c4ecf0`),
+/// begin (`00c4ed70`) and `BSOcclusionQuery::End` (`00c4edb0`).
+const QUERY_DESTRUCTOR: u32 = 0x00c4_ed40;
+const QUERY_RESULT_00C4EE40: u32 = 0x00c4_ee40;
+const QUERY_RESULT_00C4EDF0: u32 = 0x00c4_edf0;
+const QUERY_CONSTRUCTOR: u32 = 0x00c4_ecf0;
+const QUERY_BEGIN: u32 = 0x00c4_ed70;
+const QUERY_END: u32 = 0x00c4_edb0;
+/// The float `2^32` the unsigned-to-float conversion adds and the double
+/// `1500.0` the sun pixel count is divided by.
+const TWO_TO_32: u32 = 0x0109_9378;
+const SUN_PIXELS_010737C8: u32 = 0x0107_37c8;
+
+/// The batch renderer of the running thread: `pBatchRenderer[word +0x2BC
+/// of the thread block % uiBatchRendererCount]` (the exe's `DIV`, which
+/// faults on a zero count as this does).
+fn thread_batch_renderer(e: &mut Engine, this: Ptr<BSShaderAccumulator>) -> u32 {
+    let tls = e.tls();
+    let index = e.mem.u32(tls + TLS_WORD_2BC);
+    let count = e.get(this, BSShaderAccumulator::uiBatchRendererCount);
+    let slot = index % count;
+    e.mem.u32(this.addr() + 0x174 + slot * 4)
+}
+
+/// Batch renderer `i` (`pBatchRenderer[i]`).
+fn batch_renderer(e: &Engine, this: u32, i: u32) -> u32 {
+    e.mem
+        .u32(this.wrapping_add(0x174).wrapping_add(i.wrapping_mul(4)))
+}
+
+fn batch_count(e: &Engine, this: u32) -> u32 {
+    e.mem.u32(this + 0x18c)
+}
+
+// Translated from 00b63090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderAccumulator::StopGroupingAlphas` (Xbox PDB): jumps to
+/// `BSBatchRenderer::StopGroupingAlphas` on the thread's batch renderer.
+pub fn bs_shader_accumulator_stop_grouping_alphas(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
+    let renderer = thread_batch_renderer(e, this);
+    e.call(BATCH_STOP_GROUPING_ALPHAS, &[renderer]);
+}
+
+// Translated from 00b630c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: clears the passes in use of every batch
+/// renderer (`00b99bc0(0)`).
+pub fn fn_00b630c0(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
+    let base = this.addr();
+    let mut i = 0;
+    while i < batch_count(e, base) {
+        let renderer = batch_renderer(e, base, i);
+        e.call(BATCH_CLEAR_PASSES, &[renderer, 0]);
+        i += 1;
+    }
+}
+
+// Translated from 00b630f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderAccumulator::IsShadowPass` (Xbox PDB; cdecl, one word): the
+/// pass types 0x1C4..0x1C7, 0x231..0x234 and 0x284..0x287.
+pub fn bs_shader_accumulator_is_shadow_pass(_e: &mut Engine, pass_type: u32) -> bool {
+    (0x1c4..=0x1c7).contains(&pass_type)
+        || (0x231..=0x234).contains(&pass_type)
+        || pass_type.wrapping_sub(0x284) <= 3
+}
+
+// Translated from 00b63120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, two words): whether any batch
+/// renderer's active pass list holds one of the listed pass types within
+/// `low..=high` (`00b98970`; the walk stops at the first that does).
+pub fn fn_00b63120(e: &mut Engine, this: Ptr<BSShaderAccumulator>, low: u32, high: u32) -> bool {
+    let base = this.addr();
+    let mut found = false;
+    let mut i = 0;
+    while i < batch_count(e, base) {
+        if found {
+            break;
+        }
+        let renderer = batch_renderer(e, base, i);
+        found = e.call(BATCH_HAS_LISTED_PASS, &[renderer, low, high]).u8() != 0;
+        i += 1;
+    }
+    found
+}
+
+// Translated from 00b63500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderAccumulator::StartGroupingAlphas` (Xbox PDB; thiscall, two
+/// words): `BSBatchRenderer::StartGroupingAlphas(point, keep, camera
+/// (+0x08), the byte +0x31)` on the thread's batch renderer.
+pub fn bs_shader_accumulator_start_grouping_alphas(
+    e: &mut Engine,
+    this: Ptr<BSShaderAccumulator>,
+    point: u32,
+    keep: u32,
+) {
+    let base = this.addr();
+    let flag = u32::from(e.mem.u8(base + 0x31));
+    let camera = e.mem.u32(base + 8);
+    let renderer = thread_batch_renderer(e, this);
+    e.call(
+        BATCH_START_GROUPING_ALPHAS,
+        &[renderer, point, keep, camera, flag],
+    );
+}
+
+// Translated from 00b63540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, one word): collects the result of
+/// sun occlusion test `index` (0..2; 0x14 bytes from +0x48: query, waiting
+/// byte, visible fraction, pixel count) while it waits for one. A ready
+/// result (`00c4ee40` answers 1, the count written into the argument's own
+/// slot) ends the wait and stores the count and `1 - min(count, 1500) /
+/// 1500` (the double at `010737c8`; 1.0 for a zero count); a failed query
+/// is destroyed and freed and the wait ends; "not yet" changes nothing.
+pub fn fn_00b63540(e: &mut Engine, this: Ptr<BSShaderAccumulator>, index: u32) {
+    if index >= 3 {
+        return;
+    }
+    let base = this.addr();
+    let test = base + index * 0x14;
+    if e.mem.u8(test + 0x4c) == 0 {
+        return;
+    }
+    let query = e.mem.u32(test + 0x48);
+    if query == 0 {
+        return;
+    }
+    let (state, count) = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), index);
+        let state = e.call(QUERY_RESULT_00C4EE40, &[query, slot.addr(), 1]).u8();
+        (state, e.mem.u32(slot.addr()))
+    });
+    if state == 1 {
+        if count == 0 {
+            e.mem.set_u32(test + 0x54, 0);
+            e.mem.set_u8(test + 0x4c, 0);
+            e.mem.set_u32(test + 0x50, x87_store32(1.0));
+            return;
+        }
+        let clamped = if count > 0x5dc { 0x5dc } else { count };
+        let mut value = f64::from(clamped as i32);
+        if (clamped as i32) < 0 {
+            value = x87_add(value, x87_m32(e.mem.u32(TWO_TO_32)));
+        }
+        let fraction = x87_div(value, e.mem.f64(SUN_PIXELS_010737C8));
+        e.mem.set_u32(test + 0x54, count);
+        e.mem.set_u8(test + 0x4c, 0);
+        let visible = x87_store32(x87_sub(1.0, fraction));
+        e.mem.set_u32(test + 0x50, visible);
+        return;
+    }
+    if state != 0 {
+        let query = e.mem.u32(test + 0x48);
+        if query != 0 {
+            e.call(QUERY_DESTRUCTOR, &[query]);
+            e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, query]);
+        }
+        e.mem.set_u32(test + 0x48, 0);
+        e.mem.set_u8(test + 0x4c, 0);
+    }
+}
+
+/// The bytes that switch on waiting for a reference volume's query
+/// (`011f9fc3`) and the "no query, treat as occluded" fallback (`011f9fc4`).
+const VOLUME_QUERY_ENABLED: u32 = 0x011f_9fc3;
+const VOLUME_QUERY_FALLBACK: u32 = 0x011f_9fc4;
+
+/// Destroys and frees the occlusion query a reference volume holds at +0x14
+/// and clears the word.
+fn drop_volume_query(e: &mut Engine, volume: u32) {
+    let query = e.mem.u32(volume + 0x14);
+    if query != 0 {
+        e.call(QUERY_DESTRUCTOR, &[query]);
+        e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, query]);
+    }
+    e.mem.set_u32(volume + 0x14, 0);
+}
+
+// Translated from 00b63680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, two words): the occlusion result
+/// of the reference volume whose +0x10 is `reference` (the
+/// `ReferenceVolumeList` at +0x140), cached in `uiLastOcclusionRef` /
+/// `bLastOcclusionResult`. No volume answers false. A volume still waiting
+/// (+0x19) and asked to `wait` polls its query (`00c4edf0` until it is not
+/// "not yet"; the count goes to the argument's own slot) when the byte at
+/// `011f9fc3` is set: ready gives occluded = count 0 and the count; a
+/// failure drops the query and gives 999999, not occluded (as the
+/// fallback byte `011f9fc4` does without a query). Only a volume no longer
+/// waiting is cached. Answers the volume's +0x18.
+pub fn fn_00b63680(
+    e: &mut Engine,
+    this: Ptr<BSShaderAccumulator>,
+    reference: u32,
+    wait: u32,
+) -> u8 {
+    let base = this.addr();
+    if reference == e.get(this, BSShaderAccumulator::uiLastOcclusionRef) {
+        return e.get(this, BSShaderAccumulator::bLastOcclusionResult);
+    }
+    let mut node = e.mem.u32(base + 0x140);
+    let volume = loop {
+        if node == 0 {
+            return 0;
+        }
+        let item = e.mem.u32(node + 8);
+        node = e.mem.u32(node);
+        if item != 0 && e.mem.u32(item + 0x10) == reference {
+            break item;
+        }
+    };
+    if e.mem.u8(volume + 0x19) != 0 {
+        if wait as u8 != 0 {
+            let mut fallback = false;
+            if e.mem.u8(VOLUME_QUERY_ENABLED) != 0 && e.mem.u32(volume + 0x14) != 0 {
+                let (state, count) = e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), wait);
+                    let state = loop {
+                        let query = e.mem.u32(volume + 0x14);
+                        let state = e.call(QUERY_RESULT_00C4EDF0, &[query, slot.addr(), 1]).u8();
+                        if state != 1 {
+                            break state;
+                        }
+                    };
+                    (state, e.mem.u32(slot.addr()))
+                });
+                if state == 0 {
+                    e.mem.set_u8(volume + 0x18, u8::from(count == 0));
+                    e.mem.set_u32(volume + 0x1c, count);
+                } else {
+                    drop_volume_query(e, volume);
+                    fallback = true;
+                }
+            } else if e.mem.u8(VOLUME_QUERY_FALLBACK) != 0 {
+                fallback = true;
+            }
+            if fallback {
+                e.mem.set_u32(volume + 0x1c, 999_999);
+                e.mem.set_u8(volume + 0x18, 0);
+            }
+            e.mem.set_u8(volume + 0x19, 0);
+        }
+        if e.mem.u8(volume + 0x19) != 0 {
+            return e.mem.u8(volume + 0x18);
+        }
+    }
+    e.set(this, BSShaderAccumulator::uiLastOcclusionRef, reference);
+    let result = e.mem.u8(volume + 0x18);
+    e.set(this, BSShaderAccumulator::bLastOcclusionResult, result);
+    e.mem.u8(volume + 0x18)
+}
+
+/// The byte that makes `00b63770` run `00bbb840` first.
+const LIGHTING_FLAG_011F94A6: u32 = 0x011f_94a6;
+/// `00bbb840` (`lighting30shader.cpp`; no arguments).
+const LIGHTING_00BBB840: u32 = 0x00bb_b840;
+
+// Translated from 00b63770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, four words): renders the pass
+/// types `low..=high` of the batch renderers (or, for `group` >= 0, of
+/// each renderer's geometry group `group`'s own renderer), interleaved by
+/// pass type: each renderer gets the range (+0x20, +0x24) and its first
+/// list (`00b9a090` into `puicurrentPassA`/`picurrentBucketA`/
+/// `pbcurrentFirstPassA`, the result in `pbcurrentActiveA`); then while
+/// any is active the one with the lowest pass type (then bucket, then the
+/// one with its first-pass flag) renders its list: a shadow pass with the
+/// byte +0x164 or +0x165 set through `00b9a3c0(.., 0)`, any other through
+/// `00b9a120(.., second)`. Then the geometry groups are reset
+/// (`00b9a490`) and the pass ends.
+///
+/// The exe keeps the renderers and groups in two 2-word stack arrays and
+/// fills `uiBatchRendererCount` words of each; the frame here has room for
+/// that many.
+pub fn fn_00b63770(
+    e: &mut Engine,
+    this: Ptr<BSShaderAccumulator>,
+    low: u32,
+    high: u32,
+    second: u32,
+    group: i32,
+) {
+    let base = this.addr();
+    if e.mem.u8(LIGHTING_FLAG_011F94A6) != 0 {
+        e.call(LIGHTING_00BBB840, &[]);
+    }
+    let count = batch_count(e, base);
+    let frame_size = 0x10u32.max(8u32.wrapping_add(count.wrapping_mul(4)));
+    e.with_stack(frame_size, |e, frame| {
+        let renderers = frame.addr();
+        let groups = frame.addr() + 8;
+        if group > -1 {
+            for i in 0..count {
+                let renderer = batch_renderer(e, base, i);
+                let own = e.mem.u32(
+                    renderer
+                        .wrapping_add(0x3c)
+                        .wrapping_add((group as u32).wrapping_mul(4)),
+                );
+                e.mem.set_u32(groups + i * 4, own);
+                let inner = e.mem.u32(own + 8);
+                e.mem.set_u32(renderers + i * 4, inner);
+            }
+        } else if count != 0 {
+            for i in 0..count {
+                e.mem.set_u32(groups + i * 4, 0);
+            }
+            for i in 0..count {
+                let renderer = batch_renderer(e, base, i);
+                e.mem.set_u32(renderers + i * 4, renderer);
+            }
+        }
+        let passes = |e: &Engine| e.get(this, BSShaderAccumulator::puicurrentPassA);
+        let buckets = |e: &Engine| e.get(this, BSShaderAccumulator::picurrentBucketA);
+        let firsts = |e: &Engine| e.get(this, BSShaderAccumulator::pbcurrentFirstPassA);
+        let actives = |e: &Engine| e.get(this, BSShaderAccumulator::pbcurrentActiveA);
+        let mut i = 0;
+        if count != 0 {
+            loop {
+                let renderer = e.mem.u32(renderers + i * 4);
+                e.mem.set_u32(passes(e) + i * 4, 0);
+                if renderer != 0 {
+                    e.mem.set_u32(renderer + 0x20, low);
+                    e.mem.set_u32(renderer + 0x24, high);
+                    let first = firsts(e) + i;
+                    let bucket = buckets(e) + i * 4;
+                    let pass = passes(e) + i * 4;
+                    let active = e
+                        .call(BATCH_NEXT_LIST, &[renderer, pass, bucket, first])
+                        .u8();
+                    e.mem.set_u8(actives(e) + i, active);
+                } else {
+                    e.mem.set_u8(actives(e) + i, 0);
+                }
+                i += 1;
+                if i >= batch_count(e, base) {
+                    break;
+                }
+            }
+        }
+        loop {
+            let mut any = e.mem.u8(actives(e)) != 0;
+            let mut best = 0u32;
+            let mut index = 1u32;
+            while index < batch_count(e, base) {
+                let active = e.mem.u8(actives(e) + index) != 0;
+                let better = if !any && active {
+                    any = true;
+                    true
+                } else if active {
+                    let pass_of = |e: &Engine, k: u32| e.mem.u32(passes(e) + k * 4);
+                    let bucket_of = |e: &Engine, k: u32| e.mem.i32(buckets(e) + k * 4);
+                    let p = pass_of(e, index);
+                    let q = pass_of(e, best);
+                    p < q
+                        || (p == q
+                            && (bucket_of(e, index) < bucket_of(e, best)
+                                || (bucket_of(e, index) == bucket_of(e, best)
+                                    && e.mem.u8(firsts(e) + index) != 0)))
+                } else {
+                    false
+                };
+                if better {
+                    best = index;
+                }
+                index += 1;
+            }
+            if !any {
+                break;
+            }
+            let pass_slot = passes(e) + best * 4;
+            let pass_type = e.mem.u32(pass_slot);
+            let renderer = e.mem.u32(renderers + best * 4);
+            let shadow = (0x1c4..=0x1c7).contains(&pass_type)
+                || (0x231..=0x234).contains(&pass_type)
+                || pass_type.wrapping_sub(0x284) <= 3;
+            let first = firsts(e) + best;
+            let bucket = buckets(e) + best * 4;
+            let active = if shadow && (e.mem.u8(base + 0x164) != 0 || e.mem.u8(base + 0x165) != 0) {
+                e.call(
+                    BATCH_RENDER_LIST_00B9A3C0,
+                    &[renderer, pass_slot, bucket, first, 0],
+                )
+                .u8()
+            } else {
+                e.call(
+                    BATCH_RENDER_LIST,
+                    &[renderer, pass_slot, bucket, first, second],
+                )
+                .u8()
+            };
+            e.mem.set_u8(actives(e) + best, active);
+        }
+        let mut i = 0;
+        while i < batch_count(e, base) {
+            let own = e.mem.u32(groups + i * 4);
+            if own != 0 {
+                e.call(GEOMETRY_GROUP_RESET, &[own]);
+            }
+            i += 1;
+        }
+    });
+    e.call(BATCH_END_PASS, &[]);
+}
+
+// Translated from 00b639e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, two words): renders geometry group
+/// `group` (+0x3C array of the batch renderers): when the first renderer's
+/// group keeps its passes itself (bit 0 of its first byte) each renderer's
+/// group renders them (`00b9a4d0(flag)`), otherwise its pass types 1..0x2F1
+/// go through `00b63770(1, 0x2F1, flag, group)`. Nothing without a group.
+pub fn fn_00b639e0(e: &mut Engine, this: Ptr<BSShaderAccumulator>, group: u32, flag: u32) {
+    let base = this.addr();
+    let slot = |e: &Engine, i: u32| {
+        batch_renderer(e, base, i)
+            .wrapping_add(group.wrapping_mul(4))
+            .wrapping_add(0x3c)
+    };
+    let first = e.mem.u32(slot(e, 0));
+    if first == 0 {
+        return;
+    }
+    if e.mem.u8(first) & 1 == 0 {
+        fn_00b63770(e, this, 1, 0x2f1, flag, group as i32);
+        return;
+    }
+    let mut i = 0;
+    while i < batch_count(e, base) {
+        let own = e.mem.u32(slot(e, i));
+        e.call(GEOMETRY_GROUP_RENDER_00B9A4D0, &[own, flag]);
+        i += 1;
+    }
+}
+
+// Translated from 00b63a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: sorts every batch renderer's alpha groups
+/// along the camera (+0x08) with the byte +0x31 (`00b99a10`).
+pub fn fn_00b63a50(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
+    let base = this.addr();
+    let mut i = 0;
+    while i < batch_count(e, base) {
+        let flag = u32::from(e.mem.u8(base + 0x31));
+        let camera = e.mem.u32(base + 8);
+        let renderer = batch_renderer(e, base, i);
+        e.call(BATCH_SORT_ALPHAS, &[renderer, camera, flag]);
+        i += 1;
+    }
+}
+
+/// The 16-bit count of a batch renderer's geometry group in slot `offset`.
+fn group_count(e: &Engine, renderer: u32, offset: u32) -> u32 {
+    let group = e.mem.u32(renderer + offset);
+    u32::from(e.mem.u16(group + 2))
+}
+
+// Translated from 00b63a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the summed 16-bit counts of the geometry
+/// group at +0x54 of every batch renderer (the exe adds them two at a
+/// time, then the odd one).
+pub fn fn_00b63a90(e: &mut Engine, this: Ptr<BSShaderAccumulator>) -> u32 {
+    let base = this.addr();
+    let count = batch_count(e, base);
+    let mut even = 0u32;
+    let mut odd = 0u32;
+    let mut index = 0u32;
+    if count as i32 >= 2 {
+        let pairs = ((count - 2) >> 1) + 1;
+        index = pairs * 2;
+        for pair in 0..pairs {
+            even = even.wrapping_add(group_count(e, batch_renderer(e, base, pair * 2), 0x54));
+            odd = odd.wrapping_add(group_count(e, batch_renderer(e, base, pair * 2 + 1), 0x54));
+        }
+    }
+    let mut last = 0u32;
+    if index < count {
+        last = group_count(e, batch_renderer(e, base, index), 0x54);
+    }
+    odd.wrapping_add(even).wrapping_add(last)
+}
+
+/// `EnterCriticalSection`, `LeaveCriticalSection` and
+/// `DeleteCriticalSection` (import slots).
+const IMPORT_ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
+const IMPORT_LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
+const IMPORT_DELETE_CRITICAL_SECTION: u32 = 0x00fd_f058;
+/// The room map's `RemoveAll` (`00b601a0`; thiscall).
+const ROOM_MAP_REMOVE_ALL: u32 = 0x00b6_01a0;
+
+// Translated from 00b63b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: empties the room map (+0x1B4, `00b601a0`)
+/// inside its critical section (+0x200).
+pub fn fn_00b63b60(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
+    let base = this.addr();
+    e.call(IMPORT_ENTER_CRITICAL_SECTION, &[base + 0x200]);
+    e.call(ROOM_MAP_REMOVE_ALL, &[base + 0x1b4]);
+    e.call(IMPORT_LEAVE_CRITICAL_SECTION, &[base + 0x200]);
+}
+
+// Translated from 00b63b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, one word): resets geometry group
+/// `group` of every batch renderer (`00b9a490`).
+pub fn fn_00b63b90(e: &mut Engine, this: Ptr<BSShaderAccumulator>, group: u32) {
+    let base = this.addr();
+    let mut i = 0;
+    while i < batch_count(e, base) {
+        let renderer = batch_renderer(e, base, i);
+        let own = e.mem.u32(
+            renderer
+                .wrapping_add(group.wrapping_mul(4))
+                .wrapping_add(0x3c),
+        );
+        e.call(GEOMETRY_GROUP_RESET, &[own]);
+        i += 1;
+    }
+}
+
+/// `ImageSpaceTexture::GetRenderedTexture` and `::SetTexture` (engine map;
+/// thiscall), and `BSTextureManager::ReturnRenderedTexture` (thiscall, one
+/// word).
+const IMAGE_SPACE_TEXTURE_GET_RENDERED: u32 = 0x00ba_3770;
+const IMAGE_SPACE_TEXTURE_SET: u32 = 0x00ba_37a0;
+const TEXTURE_MANAGER_RETURN_RENDERED: u32 = 0x00b6_da10;
+
+// Translated from 00b63d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceShaderVolumetricFog::ReturnVolumetricFogTexture` (engine
+/// map; the body fits it): when the image-space texture at +0x08 of the
+/// object at +0x98 has a rendered texture, gives it back to the texture
+/// manager and clears the image-space texture (`SetTexture(0)`).
+pub fn image_space_shader_volumetric_fog_return_volumetric_fog_texture(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let holder = e.mem.u32(base + 0x98);
+    if e.mem.u32(holder + 8) == 0 {
+        return;
+    }
+    let texture = e.mem.u32(holder + 8);
+    if e.call(IMAGE_SPACE_TEXTURE_GET_RENDERED, &[texture]).u32() == 0 {
+        return;
+    }
+    let holder = e.mem.u32(base + 0x98);
+    let texture = e.mem.u32(holder + 8);
+    let manager = e.mem.u32(TEXTURE_MANAGER);
+    let rendered = e.call(IMAGE_SPACE_TEXTURE_GET_RENDERED, &[texture]).u32();
+    e.call(TEXTURE_MANAGER_RETURN_RENDERED, &[manager, rendered]);
+    let holder = e.mem.u32(base + 0x98);
+    let texture = e.mem.u32(holder + 8);
+    e.call(IMAGE_SPACE_TEXTURE_SET, &[texture, 0]);
+}
+
+/// The skin instance class record `00b63f10` checks.
+const SKIN_RTTI_011F49D8: u32 = 0x011f_49d8;
+/// The per-render-mode register functions (cdecl, five words:
+/// accumulator, geometry, property state, properties, shader); entry 0 is
+/// the fallback for an empty entry.
+const REGISTER_FUNCTIONS: u32 = 0x011f_9f80;
+
+// Translated from 00b63f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, slot +0x98 of `BSShaderAccumulator`'s vtable
+/// (Ghidra made no function here; read from the bytes; thiscall, one
+/// word): registers a geometry with the render mode's function (the table
+/// at `011f9f80`, entry 0 when the mode's is null), passing the
+/// accumulator, the geometry, its property state (+0x9C), properties
+/// (+0xA8) and shader (+0xC0), and answers its result. Answers true
+/// without calling when the geometry's skin instance (+0xBC) is of the
+/// class `011f49d8` with its byte +0x3C clear, or when it has no shader
+/// or properties.
+pub fn fn_00b63f10(e: &mut Engine, this: Ptr<BSShaderAccumulator>, geometry: u32) -> bool {
+    let skin = e.mem.u32(geometry + 0xbc);
+    if skin != 0 && e.vcall(skin, 8, &[]).u32() == SKIN_RTTI_011F49D8 && e.mem.u8(skin + 0x3c) == 0
+    {
+        return true;
+    }
+    let shader = e.mem.u32(geometry + 0xc0);
+    let properties = e.mem.u32(geometry + 0xa8);
+    if shader == 0 || properties == 0 {
+        return true;
+    }
+    let mode = e.get(this, BSShaderAccumulator::eRenderMode);
+    let function = e
+        .mem
+        .u32(REGISTER_FUNCTIONS.wrapping_add(mode.wrapping_mul(4)));
+    let words = [this.addr(), geometry, geometry + 0x9c, properties, shader];
+    if function != 0 {
+        e.call(function, &words).bool()
+    } else {
+        let fallback = e.mem.u32(REGISTER_FUNCTIONS);
+        e.call(fallback, &words).bool()
+    }
+}
+
+/// The calls the shadow-map passes share: the normals texture
+/// (`ImageSpaceEffectRefraction::GetNormalsTexture`, `00bd9380`; thiscall,
+/// one word), a render-target getter (`00b6b260`, named
+/// `BSRenderedTexture::StopOffscreen` in the engine map; thiscall), the
+/// target switch (`00b6b8d0`; cdecl: flag, target), the renderer clears
+/// `00b6b790` and the state reset `00b98380` (cdecl, two words).
+const GET_NORMALS_TEXTURE: u32 = 0x00bd_9380;
+const RENDER_TARGET_OF: u32 = 0x00b6_b260;
+const SET_RENDER_TARGET: u32 = 0x00b6_b8d0;
+const RENDERER_CLEAR: u32 = 0x00b6_b790;
+const STATE_RESET_00B98380: u32 = 0x00b9_8380;
+/// The current rendered texture (`00b4f530`, which jumps to `00b8b190` on
+/// the image-space manager).
+const CURRENT_RENDERED_TEXTURE: u32 = 0x00b4_f530;
+/// The half the background colour of the normals pass uses (`01016248`).
+const HALF: u32 = 0x0101_6248;
+/// The byte that shows the normals texture through the debug shader
+/// (`011f9fc2`), `BSShaderManager::GetShader` and
+/// `DebugShader::SetTextureToRender` (thiscall, one word).
+const SHOW_NORMALS: u32 = 0x011f_9fc2;
+const GET_SHADER: u32 = 0x00b5_5560;
+const DEBUG_SET_TEXTURE: u32 = 0x00bd_22c0;
+
+/// Copies the camera's three rotation columns into `v68` (+0x68, +0x74,
+/// +0x80), `v6c` (+0x6C, ..) and `v70` (+0x70, ..), each float through x87.
+fn camera_columns(e: &mut Engine, camera: u32, v68: u32, v6c: u32, v70: u32) {
+    for (target, start) in [(v70, 0x70), (v6c, 0x6c), (v68, 0x68)] {
+        for k in 0..3 {
+            let value = x87_quiet_bits(e.mem.u32(camera + start + k * 0xc));
+            e.mem.set_u32(target + k * 4, value);
+        }
+    }
+}
+
+/// The renderer holder's camera set-up (slot +0x18C) when its mode (+0x200)
+/// is 1 or 2 and its byte +0x208 is 1.
+fn holder_camera_setup(e: &mut Engine, holder: u32, camera: u32, vectors: [u32; 3], eye: u32) {
+    let mode = e.mem.u32(holder + 0x200);
+    if (mode == 1 || mode == 2) && e.mem.u8(holder + 0x208) == 1 {
+        e.vcall(
+            holder,
+            0x18c,
+            &[
+                camera + 0x8c,
+                vectors[0],
+                vectors[1],
+                vectors[2],
+                eye,
+                camera + 0x100,
+            ],
+        );
+    }
+}
+
+/// Copies what the render target of `from` holds into that of `to` (the
+/// first target's slot +0xB4 answers the value the second's slot +0xAC
+/// takes).
+fn copy_render_target(e: &mut Engine, from: u32, to: u32) {
+    let source = e.call(RENDER_TARGET_OF, &[from]).u32();
+    let target = e.call(RENDER_TARGET_OF, &[to]).u32();
+    let value = e.vcall(source, 0xb4, &[]).u32();
+    e.vcall(target, 0xac, &[value]);
+}
+
+/// Saves the background colour into `saved` and sets (h, h, 0, 0) with
+/// h the float at `01016248`, in `colour`.
+fn set_normals_background(e: &mut Engine, holder: u32, saved: u32, colour: u32) {
+    e.vcall(holder, 0xb4, &[saved]);
+    let half = x87_quiet_bits(e.mem.u32(HALF));
+    e.mem.set_u32(colour, half);
+    e.mem.set_u32(colour + 4, half);
+    e.mem.set_u32(colour + 8, x87_store32(0.0));
+    e.mem.set_u32(colour + 0xc, x87_store32(0.0));
+    e.vcall(holder, 0xac, &[colour]);
+}
+
+// Translated from 00b64570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, two words): renders the normals
+/// passes for `camera` into the normals texture (`00bd9380(0)`, made with
+/// `00bd9380(1)` when needed for the second part) and copies it with
+/// `target`. Nothing without a `target`. The camera replaces +0x08 for the
+/// duration. With a texture and items in the geometry groups +0x5C, the
+/// background becomes (h, h, 0, 0), the texture is set as the render target
+/// (`00b6b8d0(0, ..)`), the camera set up and group 8 rendered; the +0x5C
+/// groups are then reset. With items in the +0x54 groups the same set-up
+/// (if not done) renders group 6, and the debug shader may show the
+/// texture (`011f9fc2`). Afterwards the renderer is cleared when anything
+/// rendered, the target copied back, and the background restored. Answers
+/// false.
+pub fn fn_00b64570(
+    e: &mut Engine,
+    this: Ptr<BSShaderAccumulator>,
+    camera: u32,
+    target: u32,
+) -> bool {
+    let base = this.addr();
+    if target == 0 {
+        return false;
+    }
+    let old_camera = e.mem.u32(base + 8);
+    e.mem.set_u32(base + 8, camera);
+    let holder = e.mem.u32(RENDER_HOLDER);
+    e.with_stack(0x50, |e, frame| {
+        let f = frame.addr();
+        let saved = f + 0x40;
+        let colour = f + 0x30;
+        let zero = x87_store32(0.0);
+        for k in 0..4 {
+            e.mem.set_u32(saved + k * 4, zero);
+        }
+        let mut flags_c = 0u32;
+        let mut restore = false;
+        let mut rendered = false;
+        let normals_owner = |e: &Engine| {
+            let manager = e.mem.u32(IMAGE_SPACE_MANAGER);
+            e.mem.u32(e.mem.u32(manager + 8) + 8)
+        };
+        let owner = normals_owner(e);
+        let mut texture = e.call(GET_NORMALS_TEXTURE, &[owner, 0]).u32();
+        e.call(STATE_RESET_00B98380, &[0xf, 0]);
+        let mut items = 0u32;
+        for i in 0..batch_count(e, base) {
+            items = items.wrapping_add(group_count(e, batch_renderer(e, base, i), 0x5c));
+        }
+        let mut slot_54 = camera;
+        if texture != 0 && items as i32 > 0 {
+            let source = e.call(RENDER_TARGET_OF, &[target]).u32();
+            let second = e.call(RENDER_TARGET_OF, &[texture]).u32();
+            slot_54 = second;
+            let value = e.vcall(source, 0xb4, &[]).u32();
+            e.vcall(second, 0xac, &[value]);
+            set_normals_background(e, holder, saved, colour);
+            let holder_now = e.mem.u32(RENDER_HOLDER);
+            restore = true;
+            if e.mem.u32(holder_now + 0x200) != 0 {
+                e.call(RENDERER_CLEAR, &[]);
+            }
+            let rt = e.call(RENDER_TARGET_OF, &[texture]).u32();
+            e.call(SET_RENDER_TARGET, &[0, rt]);
+            let cam = e.mem.u32(base + 8);
+            camera_columns(e, cam, f + 0x30, f + 0x24, f + 0x18);
+            holder_camera_setup(e, holder, cam, [f + 0x30, f + 0x24, f + 0x18], cam + 0xdc);
+            fn_00b639e0(e, this, 8, 0);
+            rendered = true;
+        }
+        for i in 0..batch_count(e, base) {
+            let group = e.mem.u32(batch_renderer(e, base, i) + 0x5c);
+            e.call(GEOMETRY_GROUP_RESET, &[group]);
+        }
+        let mut sum = 0u32;
+        if batch_count(e, base) != 0 {
+            for i in 0..batch_count(e, base) {
+                sum = sum.wrapping_add(group_count(e, batch_renderer(e, base, i), 0x54));
+            }
+            if sum != 0 {
+                if !rendered {
+                    let mut made = false;
+                    if texture == 0 {
+                        let owner = normals_owner(e);
+                        texture = e.call(GET_NORMALS_TEXTURE, &[owner, 1]).u32();
+                        made = true;
+                    }
+                    slot_54 = (slot_54 & 0xffff_ff00) | u32::from(made);
+                    copy_render_target(e, target, texture);
+                    set_normals_background(e, holder, saved, colour);
+                    restore = true;
+                    e.call(RENDERER_CLEAR, &[]);
+                    let rt = e.call(RENDER_TARGET_OF, &[texture]).u32();
+                    e.call(SET_RENDER_TARGET, &[u32::from(made), rt]);
+                    let cam = e.mem.u32(base + 8);
+                    camera_columns(e, cam, f + 0x18, f + 0x24, f + 0x30);
+                    holder_camera_setup(e, holder, cam, [f + 0x18, f + 0x24, f + 0x30], cam + 0xdc);
+                }
+                fn_00b639e0(e, this, 6, 0);
+                if e.mem.u8(SHOW_NORMALS) != 0 {
+                    let (held, shown) = if texture != 0 {
+                        (slot_54, e.mem.u32(texture + 0x30))
+                    } else {
+                        flags_c = 1;
+                        (0, 0)
+                    };
+                    // The inlined `NiPointer` temporary's release: only
+                    // with bit 0 of the frame word set, which only the null
+                    // texture path sets (with nothing held).
+                    if flags_c & 1 != 0
+                        && held != 0
+                        && e.call(IMPORT_INTERLOCKED_DECREMENT, &[held + 4]).u32() == 0
+                    {
+                        e.vcall(held, 4, &[]);
+                    }
+                    let shader = e.call(GET_SHADER, &[9]).u32();
+                    e.call(DEBUG_SET_TEXTURE, &[shader, shown]);
+                }
+            }
+        }
+        if rendered || sum != 0 {
+            e.call(RENDERER_CLEAR, &[]);
+        }
+        if texture != 0 {
+            copy_render_target(e, target, texture);
+        }
+        if restore {
+            e.vcall(holder, 0xac, &[saved]);
+        }
+    });
+    e.mem.set_u32(base + 8, old_camera);
+    false
+}
+
+// Translated from 00b64a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, two words): renders geometry group
+/// 0x0B for `camera` (kept in +0x08) into the current rendered texture with
+/// a white background: saves the background, sets (1, 1, 1, 1), clears
+/// the renderer when its +0x200 is set, sets the texture as render target
+/// 7, sets the camera up and renders group 0x0B; with `second_camera`
+/// (whose +0xDC is the eye) also group 0x0C. Then clears the renderer and
+/// restores the background.
+pub fn fn_00b64a00(
+    e: &mut Engine,
+    this: Ptr<BSShaderAccumulator>,
+    camera: u32,
+    second_camera: u32,
+) {
+    let base = this.addr();
+    let holder = e.mem.u32(RENDER_HOLDER);
+    e.with_stack(0x38, |e, frame| {
+        let f = frame.addr();
+        let saved = f + 0x28;
+        let white = f + 0x18;
+        let zero = x87_store32(0.0);
+        for k in 0..4 {
+            e.mem.set_u32(saved + k * 4, zero);
+        }
+        e.vcall(holder, 0xb4, &[saved]);
+        let one = x87_store32(1.0);
+        for k in 0..4 {
+            e.mem.set_u32(white + k * 4, one);
+        }
+        e.vcall(holder, 0xac, &[white]);
+        let texture = e.call(CURRENT_RENDERED_TEXTURE, &[]).u32();
+        let holder_now = e.mem.u32(RENDER_HOLDER);
+        if e.mem.u32(holder_now + 0x200) != 0 {
+            e.call(RENDERER_CLEAR, &[]);
+        }
+        let rt = e.call(RENDER_TARGET_OF, &[texture]).u32();
+        e.call(SET_RENDER_TARGET, &[7, rt]);
+        e.mem.set_u32(base + 8, camera);
+        camera_columns(e, camera, f + 0x18, f + 0xc, f);
+        holder_camera_setup(e, holder, camera, [f + 0x18, f + 0xc, f], camera + 0xdc);
+        fn_00b639e0(e, this, 0xb, 0);
+        if second_camera != 0 {
+            let cam = e.mem.u32(base + 8);
+            camera_columns(e, cam, f, f + 0xc, f + 0x18);
+            holder_camera_setup(e, holder, cam, [f, f + 0xc, f + 0x18], second_camera + 0xdc);
+            fn_00b639e0(e, this, 0xc, 0);
+        }
+        e.call(RENDERER_CLEAR, &[]);
+        e.vcall(holder, 0xac, &[saved]);
+    });
+}
+
+/// The shader-manager calls of the sun query: `BSShaderManager::GetShader`
+/// (cdecl, one word) and `00b7a870` (cdecl, two words).
+const SHADER_SETUP_00B7A870: u32 = 0x00b7_a870;
+/// The holder's method `004e9bb0` (`teswater.cpp`; thiscall, one word).
+const HOLDER_METHOD_004E9BB0: u32 = 0x004e_9bb0;
+/// `BSShaderProperty::RenderPass::~RenderPass` (engine map; thiscall).
+const RENDER_PASS_DESTRUCTOR: u32 = 0x00ba_8cd0;
+
+// Translated from 00b64bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderAccumulator::DoSunOcclusionQueury` (Xbox PDB; thiscall, three
+/// words): unless the accumulator waits for a sun query (+0x40) or test
+/// `index` (0..2) already waits, makes the test's occlusion query when it
+/// has none (4 bytes, `00c4ecf0`; a failure sets the test's fraction to 0,
+/// clears its wait byte and +0x58 and stops), sets up shader 1
+/// (`00b7a870(9, 0)`, slots +0x24 of its +0x34 and +0x30), begins the
+/// query, passes `argument` to the holder (`004e9bb0`), renders `geometry`
+/// as pass type 9 through a stack `RenderPass` (`00ba8ec0(.., geometry,
+/// 9, 1, 0, 0)`, `RenderPassImmediately(.., 9, 0, 0, 0)`), ends the query,
+/// sets the wait byte, clears +0x58 and destroys the pass.
+// Translation incomplete: 00b64bf0 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the query and the render pass) is not translated.
+pub fn bs_shader_accumulator_do_sun_occlusion_queury(
+    e: &mut Engine,
+    this: Ptr<BSShaderAccumulator>,
+    geometry: u32,
+    index: u32,
+    argument: u32,
+) {
+    let base = this.addr();
+    if e.get(this, BSShaderAccumulator::bWaitingForSunQueury) != 0 || index >= 3 {
+        return;
+    }
+    let test = base + index * 0x14;
+    if e.mem.u8(test + 0x4c) != 0 {
+        return;
+    }
+    if e.mem.u32(test + 0x48) == 0 {
+        let block = e.call(MEMORY_ALLOCATE, &[MEMORY_MANAGER, 4]).u32();
+        let query = if block != 0 {
+            e.call(QUERY_CONSTRUCTOR, &[block]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(test + 0x48, query);
+        if query == 0 {
+            e.mem.set_u32(test + 0x50, x87_store32(0.0));
+            e.mem.set_u8(test + 0x4c, 0);
+            e.mem.set_u32(test + 0x58, 0);
+            return;
+        }
+    }
+    let shader = e.call(GET_SHADER, &[1]).u32();
+    e.call(SHADER_SETUP_00B7A870, &[9, 0]);
+    let first = e.mem.u32(shader + 0x34);
+    e.vcall(first, 0x24, &[]);
+    let second = e.mem.u32(shader + 0x30);
+    e.vcall(second, 0x24, &[]);
+    let query = e.mem.u32(test + 0x48);
+    e.call(QUERY_BEGIN, &[query]);
+    let holder = e.mem.u32(RENDER_HOLDER);
+    e.call(HOLDER_METHOD_004E9BB0, &[holder, argument]);
+    e.with_stack(0x10, |e, pass| {
+        let pass = pass.addr();
+        e.call(RENDER_PASS_CONSTRUCTOR, &[pass, geometry, 9, 1, 0, 0]);
+        e.call(BATCH_RENDER_PASS_IMMEDIATELY, &[pass, 9, 0, 0, 0]);
+        let query = e.mem.u32(test + 0x48);
+        e.call(QUERY_END, &[query]);
+        e.mem.set_u8(test + 0x4c, 1);
+        e.mem.set_u32(test + 0x58, 0);
+        e.call(RENDER_PASS_DESTRUCTOR, &[pass]);
+    });
+}
+
+// Translated from 00b64f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall on a `BSBatchRenderer`, one word):
+/// resets alpha geometry group `index` (+0x70 array, `00b9a490`),
+/// destroys and frees every alpha group of its list (+0x78, 0x0C each),
+/// empties the list (`RemoveAll`) and clears the current group
+/// (+0x90 array).
+pub fn fn_00b64f20(e: &mut Engine, renderer: Ptr, index: u32) {
+    let base = renderer.addr();
+    let group = e.mem.u32(base + index * 4 + 0x70);
+    e.call(GEOMETRY_GROUP_RESET, &[group]);
+    let list = base + index * 0xc + 0x78;
+    let mut node = e.mem.u32(list);
+    while node != 0 {
+        let item = e.mem.u32(node + 8);
+        node = e.mem.u32(node);
+        if item != 0 {
+            e.call(GEOMETRY_GROUP_DESTRUCTOR, &[item]);
+            e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, item]);
+        }
+    }
+    e.call(POINTER_LIST_REMOVE_ALL, &[list]);
+    e.mem.set_u32(base + index * 4 + 0x90, 0);
+}
+
+/// Gives the node `node` back to the node pool (lock, free list, count),
+/// with its item cleared before the lock is taken, as the exe does.
+fn pool_return(e: &mut Engine, node: u32) {
+    e.mem.set_u32(node + 8, 0);
+    e.call(LOCK_ENTER, &[NODE_POOL_LOCK, 0]);
+    e.mem.set_u32(node + 4, 0);
+    let free = e.mem.u32(NODE_POOL_FREE_LIST);
+    e.mem.set_u32(node, free);
+    let count = e.mem.u32(NODE_POOL_LOCK_COUNT).wrapping_sub(1);
+    e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
+    e.mem.set_u32(NODE_POOL_FREE_LIST, node);
+    if count == 0 {
+        e.mem.set_u32(NODE_POOL_LOCK, 0);
+    }
+}
+
+// Translated from 00b64f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: ends the current pass, renders the sorted
+/// alpha items back to front (the +0x24 array from +0x1C down, each through
+/// the render pass at +0x1A4: `RenderPassImmediately(pass, its type, 1, 1,
+/// 1)`), then empties the item list: the one at +0x18 when set (head,
+/// tail, count), otherwise the own list at +0x0C (count +0x14), each node
+/// going back to the pool. Ends the pass again.
+pub fn fn_00b64f90(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
+    let base = this.addr();
+    e.call(BATCH_END_PASS, &[]);
+    let mut index = e.mem.u32(base + 0x1c);
+    e.mem.set_u32(base + 0x2c, index);
+    if index != 0 {
+        index -= 1;
+        e.mem.set_u32(base + 0x2c, index);
+        let mut item = e.mem.u32(e.mem.u32(base + 0x24) + index * 4);
+        while item != 0 {
+            let pass_type = u32::from(e.mem.u16(base + 0x1a8));
+            e.mem.set_u32(base + 0x1a4, item);
+            e.call(
+                BATCH_RENDER_PASS_IMMEDIATELY,
+                &[base + 0x1a4, pass_type, 1, 1, 1],
+            );
+            let index = e.mem.u32(base + 0x2c);
+            if index == 0 {
+                break;
+            }
+            e.mem.set_u32(base + 0x2c, index - 1);
+            item = e.mem.u32(e.mem.u32(base + 0x24) + (index - 1) * 4);
+        }
+    }
+    let list = e.mem.u32(base + 0x18);
+    if list != 0 {
+        if e.mem.u32(list + 8) != 0 {
+            loop {
+                let list = e.mem.u32(base + 0x18);
+                let node = e.mem.u32(list);
+                let next = e.mem.u32(node);
+                e.mem.set_u32(list, next);
+                if next != 0 {
+                    e.mem.set_u32(next + 4, 0);
+                } else {
+                    e.mem.set_u32(list + 4, 0);
+                }
+                pool_return(e, node);
+                let count = e.mem.u32(list + 8).wrapping_sub(1);
+                e.mem.set_u32(list + 8, count);
+                if e.mem.u32(e.mem.u32(base + 0x18) + 8) == 0 {
+                    break;
+                }
+            }
+        }
+    } else if e.mem.u32(base + 0x14) != 0 {
+        loop {
+            let node = e.mem.u32(base + 0xc);
+            let next = e.mem.u32(node);
+            e.mem.set_u32(base + 0xc, next);
+            if next != 0 {
+                e.mem.set_u32(next + 4, 0);
+            } else {
+                e.mem.set_u32(base + 0x10, 0);
+            }
+            pool_return(e, node);
+            let count = e.mem.u32(base + 0x14).wrapping_sub(1);
+            e.mem.set_u32(base + 0x14, count);
+            if count == 0 {
+                break;
+            }
+        }
+    }
+    e.call(BATCH_END_PASS, &[]);
+}
+
+/// `-FLT_MAX` as a float (`01015f5c`) and as the double the loop compares
+/// with (`010241b0`).
+const NO_DISTANCE: u32 = 0x0101_5f5c;
+const NO_DISTANCE_DOUBLE: u32 = 0x0102_41b0;
+
+// Translated from 00b650c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderAccumulator::RenderAlphaGeometry` (Xbox PDB; thiscall, one
+/// word): renders alpha group `group` of the one or two batch renderers
+/// back to front: the distance of each renderer's group (`00b98c80` with
+/// the camera +0x08 and the byte +0x31; `-FLT_MAX` for a missing second
+/// renderer); while either is above the double at `010241b0`, the
+/// renderer with the farther one (the second on a tie) renders its next
+/// alphas down to the other's distance (`RenderNextAlpha`) and its
+/// distance is taken again. Then each renderer's groups are cleared
+/// (`00b64f20`) and the pass ends.
+///
+/// The flag goes out as a word whose upper bytes are a stack slot's: an
+/// uninitialised local for the first distance (passed as 0 here) and the
+/// `group` argument's for the others, as the exe pushes them.
+pub fn bs_shader_accumulator_render_alpha_geometry(
+    e: &mut Engine,
+    this: Ptr<BSShaderAccumulator>,
+    group: u32,
+) {
+    let base = this.addr();
+    e.call(BATCH_END_PASS, &[]);
+    let flag = u32::from(e.mem.u8(base + 0x31));
+    let camera = e.mem.u32(base + 8);
+    let first = batch_renderer(e, base, 0);
+    let mut distances = [0u32; 2];
+    distances[0] = x87_store32(
+        e.call(BATCH_GROUP_DISTANCE, &[first, group, camera, flag])
+            .st0,
+    );
+    let second = if batch_count(e, base) == 2 {
+        let flag = (group & 0xffff_ff00) | u32::from(e.mem.u8(base + 0x31));
+        let camera = e.mem.u32(base + 8);
+        let renderer = batch_renderer(e, base, 1);
+        e.call(BATCH_GROUP_DISTANCE, &[renderer, group, camera, flag])
+            .st0
+    } else {
+        x87_load32(e.mem.u32(NO_DISTANCE))
+    };
+    distances[1] = x87_store32(second);
+    loop {
+        let floor = e.mem.f64(NO_DISTANCE_DOUBLE);
+        let a = x87_load32(distances[0]);
+        let b = x87_load32(distances[1]);
+        if !(a > floor) && !(b > floor) {
+            break;
+        }
+        // FCOMPP: the second renderer when the first is not farther.
+        let which = usize::from(!(a > b));
+        let limit = x87_quiet_bits(distances[1 - which]);
+        let flag = u32::from(e.mem.u8(base + 0x31));
+        let camera = e.mem.u32(base + 8);
+        let renderer = batch_renderer(e, base, which as u32);
+        e.call(
+            BATCH_RENDER_NEXT_ALPHA,
+            &[renderer, group, camera, flag, limit],
+        );
+        let flag = (group & 0xffff_ff00) | u32::from(e.mem.u8(base + 0x31));
+        let camera = e.mem.u32(base + 8);
+        let renderer = batch_renderer(e, base, which as u32);
+        let distance = e
+            .call(BATCH_GROUP_DISTANCE, &[renderer, group, camera, flag])
+            .st0;
+        distances[which] = x87_store32(distance);
+    }
+    fn_00b64f20(e, Ptr::new(batch_renderer(e, base, 0)), group);
+    if batch_count(e, base) == 2 {
+        fn_00b64f20(e, Ptr::new(batch_renderer(e, base, 1)), group);
+    }
+    e.call(BATCH_END_PASS, &[]);
+}
+
+// Translated from 00b65550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, `RET 0xC`: three words, the third
+/// never read): `00b64a00(first, second)`.
+pub fn fn_00b65550(
+    e: &mut Engine,
+    this: Ptr<BSShaderAccumulator>,
+    first: u32,
+    second: u32,
+    _unused_2: u32,
+) {
+    fn_00b64a00(e, this, first, second);
+}
+
+// Translated from 00b65570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: jumps to `NiTPointerListBase<..>::RemoveAll`
+/// on the item list at +0x0C.
+pub fn fn_00b65570(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
+    e.call(POINTER_LIST_REMOVE_ALL, &[this.addr() + 0xc]);
+}
+
+// Translated from 00b65580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: clears every batch renderer's active pass
+/// list (+0x2C, `00b64ec0`).
+pub fn fn_00b65580(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
+    let base = this.addr();
+    let mut i = 0;
+    while i < batch_count(e, base) {
+        let renderer = batch_renderer(e, base, i);
+        e.call(SHORT_LIST_CLEAR, &[renderer + 0x2c]);
+        i += 1;
+    }
+}
+
+// Translated from 00b655b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderAccumulator::ClearAllBoundVolumes` (Xbox PDB): while the
+/// `ReferenceVolumeList` (+0x140) counts items, destroys the head's volume
+/// (its query first) and frees it, and unlinks the head node back to the
+/// node pool.
+pub fn bs_shader_accumulator_clear_all_bound_volumes(
+    e: &mut Engine,
+    this: Ptr<BSShaderAccumulator>,
+) {
+    let base = this.addr();
+    while e.mem.u32(base + 0x148) != 0 {
+        let volume = e.mem.u32(e.mem.u32(base + 0x140) + 8);
+        if volume != 0 {
+            drop_volume_query_kept(e, volume);
+            e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, volume]);
+        }
+        let node = e.mem.u32(base + 0x140);
+        let next = e.mem.u32(node);
+        e.mem.set_u32(base + 0x140, next);
+        if next != 0 {
+            e.mem.set_u32(next + 4, 0);
+        } else {
+            e.mem.set_u32(base + 0x144, 0);
+        }
+        pool_return(e, node);
+        let count = e.mem.u32(base + 0x148).wrapping_sub(1);
+        e.mem.set_u32(base + 0x148, count);
+    }
+}
+
+/// The volume clean-up of `ClearAllBoundVolumes` and the destructor: the
+/// query (+0x14) is destroyed and freed and the word cleared only when set.
+fn drop_volume_query_kept(e: &mut Engine, volume: u32) {
+    let query = e.mem.u32(volume + 0x14);
+    if query != 0 {
+        e.call(QUERY_DESTRUCTOR, &[query]);
+        e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, query]);
+        e.mem.set_u32(volume + 0x14, 0);
+    }
+}
+
+/// Empties a rendered-geometry cache element: clean-up (`00b63e90`), nodes
+/// to its free list, words cleared.
+fn empty_element(e: &mut Engine, element: u32) {
+    fn_00b63e90(e, Ptr::new(element));
+    let head = e.mem.u32(element + 4);
+    e.mem.set_u32(element + 0xc, head);
+    e.mem.set_u32(element + 4, 0);
+    e.mem.set_u32(element + 8, 0);
+    e.mem.set_u32(element + 0x10, 0);
+}
+
+// Translated from 00b65660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: empties the two rendered-geometry caches'
+/// elements pairwise (+0x9C and +0xEC, four of 0x14 bytes each).
+pub fn fn_00b65660(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
+    let base = this.addr();
+    for i in 0..4 {
+        empty_element(e, base + 0x9c + i * 0x14);
+        empty_element(e, base + 0xec + i * 0x14);
+    }
+}
+
+/// The `NiAccumulator` base destructor (`00a9b4a0`; thiscall).
+const ACCUMULATOR_BASE_DESTRUCTOR: u32 = 0x00a9_b4a0;
+/// The bucket array's release (`00aa10f0`; cdecl, one word).
+const FREE_BUCKETS: u32 = 0x00aa_10f0;
+/// The instance renderer's destructor (`00bd9150`; thiscall).
+const INSTANCE_RENDERER_DESTRUCTOR: u32 = 0x00bd_9150;
+/// The compiler's `eh vector destructor iterator` (stdcall: array, element
+/// size, count, destructor).
+const VECTOR_DESTRUCTOR_ITERATOR: u32 = 0x00ec_5fce;
+/// The reference volume list's removal by item (`00e7db70`; thiscall, one
+/// word: the address of the item).
+const VOLUME_LIST_REMOVE: u32 = 0x00e7_db70;
+
+/// Drops the `NiPointer` at `slot` without clearing it (the member
+/// destructors' inlined release).
+fn release_kept(e: &mut Engine, slot: u32) {
+    let object = e.mem.u32(slot);
+    if object != 0 && e.call(IMPORT_INTERLOCKED_DECREMENT, &[object + 4]).u32() == 0 {
+        e.vcall(object, 4, &[]);
+    }
+}
+
+// Translated from 00b656e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSShaderAccumulator` destructor (unnamed in the engine map; the
+/// scalar deleting destructor `00b664f0` calls it): sets the vtable,
+/// empties the cache elements (as `00b65660`), frees the occlusion query
+/// slots (+0x8C), clears the reference volumes (as
+/// `ClearAllBoundVolumes`), drops the bound test geometry (+0x13C), the
+/// three sun queries, the instance renderer (+0x170), deletes both batch
+/// renderers (their slot 0 with 1), frees the four per-renderer arrays,
+/// drops the shadow light (+0x1A0), empties the room map, drops the water
+/// fog target (+0x198), deletes the critical section, then runs the member
+/// destructors (room map with its vtables and bucket array, the render
+/// pass +0x1A4, the two pointers again, the volume list, the bound test
+/// geometry again, both caches, the fog list) and the `NiAccumulator` base
+/// destructor.
+// Translation incomplete: 00b656e0 - the C++ exception frame (FS:[0] chain, unwind states 1..0xB for the members) is not translated.
+pub fn fn_00b656e0(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
+    let base = this.addr();
+    e.mem.set_u32(base, ACCUMULATOR_VTABLE);
+    fn_00b65660(e, this);
+    let queries = e.get(this, BSShaderAccumulator::ppOcclusionQuery);
+    e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, queries]);
+    bs_shader_accumulator_clear_all_bound_volumes(e, this);
+    let bound = e.mem.u32(base + 0x13c);
+    if bound != 0 {
+        if e.call(IMPORT_INTERLOCKED_DECREMENT, &[bound + 4]).u32() == 0 {
+            e.vcall(bound, 4, &[]);
+        }
+        e.mem.set_u32(base + 0x13c, 0);
+    }
+    for i in 0..3 {
+        let slot = base + 0x48 + i * 0x14;
+        let query = e.mem.u32(slot);
+        if query != 0 {
+            e.call(QUERY_DESTRUCTOR, &[query]);
+            e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, query]);
+            e.mem.set_u32(slot, 0);
+        }
+    }
+    let instance = e.get(this, BSShaderAccumulator::pInstanceRenderer);
+    if instance != 0 {
+        e.call(INSTANCE_RENDERER_DESTRUCTOR, &[instance]);
+        e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, instance]);
+        e.set(this, BSShaderAccumulator::pInstanceRenderer, 0);
+    }
+    for slot in [0x174, 0x178] {
+        let renderer = e.mem.u32(base + slot);
+        if renderer != 0 {
+            e.vcall(renderer, 0, &[1]);
+        }
+    }
+    for slot in [0x17c, 0x180, 0x184, 0x188] {
+        let block = e.mem.u32(base + slot);
+        e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, block]);
+    }
+    release_pointer(e, base + 0x1a0);
+    let map = base + 0x1b4;
+    e.call(ROOM_MAP_REMOVE_ALL, &[map]);
+    release_pointer(e, base + 0x198);
+    e.call(IMPORT_DELETE_CRITICAL_SECTION, &[base + 0x200]);
+    e.mem.set_u32(map, MAP_VTABLE);
+    e.call(ROOM_MAP_REMOVE_ALL, &[map]);
+    e.mem.set_u32(map, MAP_BASE_VTABLE);
+    e.call(ROOM_MAP_REMOVE_ALL, &[map]);
+    let buckets = e.mem.u32(map + 8);
+    e.call(FREE_BUCKETS, &[buckets]);
+    e.call(RENDER_PASS_DESTRUCTOR, &[base + 0x1a4]);
+    release_kept(e, base + 0x1a0);
+    release_kept(e, base + 0x198);
+    e.call(POINTER_LIST_REMOVE_ALL, &[base + 0x140]);
+    release_kept(e, base + 0x13c);
+    for cache in [0xec, 0x9c] {
+        e.call(
+            VECTOR_DESTRUCTOR_ITERATOR,
+            &[base + cache, 0x14, 4, PERSISTENT_LIST_DESTRUCTOR],
+        );
+    }
+    e.call(POINTER_LIST_REMOVE_ALL, &[base + 0x90]);
+    e.call(ACCUMULATOR_BASE_DESTRUCTOR, &[base]);
+}
+
+/// The list-node allocator (engine map `NiTPointerListBase<..>::AddHead`,
+/// `0043a010`; thiscall on a count word, answers a node).
+const LIST_NODE_ALLOCATE: u32 = 0x0043_a010;
+
+/// The class record `GetRTTI` answers for `BSShaderAccumulator`.
+const ACCUMULATOR_RTTI: u32 = 0x011f_a000;
+
+// Translated from 00b65a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot +8 (`GetRTTI`) of `BSShaderAccumulator`'s vtable (Ghidra made no
+/// function here; read from the bytes): answers `011fa000`.
+pub fn fn_00b65a80(_e: &mut Engine, _this: Ptr) -> u32 {
+    ACCUMULATOR_RTTI
+}
+
+// Translated from 00b65a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, a register function the shader manager's
+/// set-up (`00b57420`) stores (Ghidra made no function here; read from the
+/// bytes; cdecl, five words, the third and fourth never read): with a
+/// shader, appends `geometry` to the accumulator's item list (+0x0C head,
+/// +0x10 tail, +0x14 count; node from `0043a010`). Answers true.
+pub fn fn_00b65a90(
+    e: &mut Engine,
+    accumulator: u32,
+    geometry: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    shader: u32,
+) -> bool {
+    if shader == 0 {
+        return true;
+    }
+    let node = e.call(LIST_NODE_ALLOCATE, &[accumulator + 0x14]).u32();
+    e.mem.set_u32(node + 8, geometry);
+    e.mem.set_u32(node, 0);
+    let tail = e.mem.u32(accumulator + 0x10);
+    e.mem.set_u32(node + 4, tail);
+    let tail = e.mem.u32(accumulator + 0x10);
+    let count = e.mem.u32(accumulator + 0x14).wrapping_add(1);
+    if tail != 0 {
+        e.mem.set_u32(tail, node);
+        e.mem.set_u32(accumulator + 0x14, count);
+        e.mem.set_u32(accumulator + 0x10, node);
+    } else {
+        e.mem.set_u32(accumulator + 0x14, count);
+        e.mem.set_u32(accumulator + 0xc, node);
+        e.mem.set_u32(accumulator + 0x10, node);
+    }
+    true
+}
+
+/// The byte that asks for the render-pass tree (`011f9fc1`), its maker
+/// `BSShaderAccumulator::CreateRenderPassTree` (`00b63420`, not translated
+/// here; thiscall) and its consumer `0066b0d0` (thiscall on `011fa008`, one
+/// word).
+const MAKE_PASS_TREE: u32 = 0x011f_9fc1;
+const CREATE_RENDER_PASS_TREE: u32 = 0x00b6_3420;
+const PASS_TREE_OWNER: u32 = 0x011f_a008;
+const PASS_TREE_TAKE: u32 = 0x0066_b0d0;
+/// The decal pass (`00b64e30`, `bsrenderstate_xenon.cpp`), alpha blending
+/// (`00b97fa0`) and the clip planes (`00b98280`).
+const DECAL_PASS: u32 = 0x00b6_4e30;
+const SET_ALPHA_BLEND_ENABLE: u32 = 0x00b9_7fa0;
+const SET_CLIP_PLANES: u32 = 0x00b9_8280;
+/// The word `00b65ae0` sets to 1 around group 0.
+const GROUP_ZERO_FLAG_011A9608: u32 = 0x011a_9608;
+
+fn make_pass_tree(e: &mut Engine, accumulator: u32) {
+    let tree = e.call(CREATE_RENDER_PASS_TREE, &[accumulator]).u32();
+    e.call(PASS_TREE_TAKE, &[PASS_TREE_OWNER, tree]);
+    e.mem.set_u8(MAKE_PASS_TREE, 0);
+}
+
+// Translated from 00b65ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word; the render-mode 0 pass of
+/// `00b66520`): with a camera, render mode 8 renders the pass types
+/// 6..8 and 0x1D3..0x1D6, mode 7 the types 0x10..0x13 and 0x1C8..0x1CB
+/// (both then clear the active lists). Other modes render group 0x0A,
+/// make the render-pass tree when asked (`011f9fc1`), render the types
+/// 1..0x25B (split at 0x237 with clip planes off for the second part when
+/// the byte +0x164 is set), group 0 with the word at `011a9608` set to 1,
+/// the decal pass, the types 0x25C..0x287, sort the alphas and render alpha
+/// group `(+0x167 == 0)`.
+pub fn fn_00b65ae0(e: &mut Engine, accumulator: Ptr<BSShaderAccumulator>) {
+    let base = accumulator.addr();
+    if e.mem.u32(base + 8) == 0 {
+        return;
+    }
+    let mode = e.get(accumulator, BSShaderAccumulator::eRenderMode);
+    if mode == 8 {
+        fn_00b63770(e, accumulator, 6, 8, 0, -1);
+        fn_00b63770(e, accumulator, 0x1d3, 0x1d6, 0, -1);
+        fn_00b65580(e, accumulator);
+        return;
+    }
+    if mode == 7 {
+        fn_00b63770(e, accumulator, 0x10, 0x13, 0, -1);
+        fn_00b63770(e, accumulator, 0x1c8, 0x1cb, 0, -1);
+        fn_00b65580(e, accumulator);
+        return;
+    }
+    fn_00b639e0(e, accumulator, 0xa, 0);
+    if e.mem.u8(MAKE_PASS_TREE) != 0 && e.get(accumulator, BSShaderAccumulator::eRenderMode) != 7 {
+        make_pass_tree(e, base);
+    }
+    if e.mem.u8(base + 0x164) != 0 {
+        fn_00b63770(e, accumulator, 1, 0x237, 0, -1);
+        e.call(SET_CLIP_PLANES, &[0, 0, 0, 0, 0, 0, 0]);
+        fn_00b63770(e, accumulator, 0x238, 0x25b, 0, -1);
+        e.call(SET_CLIP_PLANES, &[1, 0, 0, 0, 0, 0, 0]);
+    } else {
+        fn_00b63770(e, accumulator, 1, 0x25b, 0, -1);
+    }
+    let saved = e.mem.u32(GROUP_ZERO_FLAG_011A9608);
+    e.mem.set_u32(GROUP_ZERO_FLAG_011A9608, 1);
+    fn_00b639e0(e, accumulator, 0, 0);
+    e.mem.set_u32(GROUP_ZERO_FLAG_011A9608, saved);
+    e.call(DECAL_PASS, &[base]);
+    fn_00b63770(e, accumulator, 0x25c, 0x287, 0, -1);
+    fn_00b63a50(e, accumulator);
+    let group = u32::from(e.mem.u8(base + 0x167) == 0);
+    bs_shader_accumulator_render_alpha_geometry(e, accumulator, group);
+}
+
+/// The water-reflection source target and its rendered copy
+/// (`011f9438`, `011f943c`).
+const REFLECTION_SOURCE: u32 = 0x011f_9438;
+const REFLECTION_COPY: u32 = 0x011f_943c;
+/// The texture manager's borrow (`00b6e110`; thiscall, five words) and the
+/// image-space effect render (`00b97550`; thiscall, six words).
+const TEXTURE_MANAGER_BORROW: u32 = 0x00b6_e110;
+const IMAGE_SPACE_RENDER_EFFECT: u32 = 0x00b9_7550;
+
+// Translated from 00b65c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word; the render-mode 0 finish of
+/// `00b66570`): with the byte +0x38 set and a pass of 0x288..0x2CE listed
+/// (`00b63120`), copies the reflection source (`011f9438`, when set) into a
+/// borrowed target (`011f943c`, borrowed once: `00b6e110(renderer, 5, 0,
+/// 0, 0)`) through image-space effect 0x22 and makes it the render target,
+/// then passes the camera to the renderer (`004e9bb0`). Renders the types
+/// 0x288..0x289, 0x28A..0x2AB and 0x2AC..0x2CE, returns the borrowed
+/// target when +0x38 is set, renders group 9 (flag 1), alpha group
+/// `(+0x167 != 0)`, turns alpha blending off twice, renders the types
+/// 0x2CF..0x2D7 and group 1.
+pub fn fn_00b65c60(e: &mut Engine, accumulator: Ptr<BSShaderAccumulator>) {
+    let base = accumulator.addr();
+    if e.mem.u8(base + 0x38) != 0 && fn_00b63120(e, accumulator, 0x288, 0x2ce) {
+        if e.mem.u32(REFLECTION_SOURCE) != 0 {
+            e.call(RENDERER_CLEAR, &[]);
+            let mut copy = e.mem.u32(REFLECTION_COPY);
+            if copy == 0 {
+                let manager = e.mem.u32(TEXTURE_MANAGER);
+                let renderer = e.mem.u32(RENDERER);
+                copy = e
+                    .call(TEXTURE_MANAGER_BORROW, &[manager, renderer, 5, 0, 0, 0])
+                    .u32();
+                e.mem.set_u32(REFLECTION_COPY, copy);
+            }
+            let source = e.mem.u32(REFLECTION_SOURCE);
+            let renderer = e.mem.u32(RENDERER);
+            let image_space = e.mem.u32(IMAGE_SPACE_MANAGER);
+            e.call(
+                IMAGE_SPACE_RENDER_EFFECT,
+                &[image_space, 0x22, renderer, source, copy, 0, 1],
+            );
+            let source = e.mem.u32(REFLECTION_SOURCE);
+            let rt = e.call(RENDER_TARGET_OF, &[source]).u32();
+            e.call(SET_RENDER_TARGET, &[0, rt]);
+        }
+        let camera = e.mem.u32(base + 8);
+        let renderer = e.mem.u32(RENDERER);
+        e.call(HOLDER_METHOD_004E9BB0, &[renderer, camera]);
+    }
+    fn_00b63770(e, accumulator, 0x288, 0x289, 0, -1);
+    fn_00b63770(e, accumulator, 0x28a, 0x2ab, 0, -1);
+    fn_00b63770(e, accumulator, 0x2ac, 0x2ce, 0, -1);
+    if e.mem.u8(base + 0x38) != 0 {
+        let copy = e.mem.u32(REFLECTION_COPY);
+        let manager = e.mem.u32(TEXTURE_MANAGER);
+        e.call(TEXTURE_MANAGER_RETURN_RENDERED, &[manager, copy]);
+        e.mem.set_u32(REFLECTION_COPY, 0);
+    }
+    fn_00b639e0(e, accumulator, 9, 1);
+    let group = u32::from(e.mem.u8(base + 0x167) != 0);
+    bs_shader_accumulator_render_alpha_geometry(e, accumulator, group);
+    e.call(SET_ALPHA_BLEND_ENABLE, &[0, 0]);
+    e.call(SET_ALPHA_BLEND_ENABLE, &[0, 0]);
+    fn_00b63770(e, accumulator, 0x2cf, 0x2d7, 0, -1);
+    fn_00b639e0(e, accumulator, 1, 0);
+}
+
+// Translated from 00b65dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word; a render-mode function of
+/// the table at `011f9f40`): with a camera, makes the render-pass tree when
+/// asked, clears +0x18 and runs the accumulator's slot +0xA4, renders the
+/// types 1..0x287, the decal pass, sorts the alphas, renders both alpha
+/// groups (`(+0x167 == 0)` first), turns alpha blending off, renders
+/// 0x2CF..0x2D7 and clears the active lists.
+pub fn fn_00b65dc0(e: &mut Engine, accumulator: Ptr<BSShaderAccumulator>) {
+    let base = accumulator.addr();
+    if e.mem.u32(base + 8) == 0 {
+        return;
+    }
+    if e.mem.u8(MAKE_PASS_TREE) != 0 {
+        make_pass_tree(e, base);
+    }
+    e.mem.set_u32(base + 0x18, 0);
+    e.vcall(base, 0xa4, &[]);
+    fn_00b63770(e, accumulator, 1, 0x287, 0, -1);
+    e.call(DECAL_PASS, &[base]);
+    fn_00b63a50(e, accumulator);
+    let group = u32::from(e.mem.u8(base + 0x167) == 0);
+    bs_shader_accumulator_render_alpha_geometry(e, accumulator, group);
+    let group = u32::from(e.mem.u8(base + 0x167) != 0);
+    bs_shader_accumulator_render_alpha_geometry(e, accumulator, group);
+    e.call(SET_ALPHA_BLEND_ENABLE, &[0, 0]);
+    fn_00b63770(e, accumulator, 0x2cf, 0x2d7, 0, -1);
+    fn_00b65580(e, accumulator);
+}
+
+// Translated from 00b65e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, one word; a render-mode function):
+/// with a camera, clears +0x18, runs the accumulator's slot +0xA4, renders
+/// the sorted alpha items (`00b64f90`) and turns alpha blending off.
+pub fn fn_00b65e80(e: &mut Engine, accumulator: Ptr<BSShaderAccumulator>) {
+    let base = accumulator.addr();
+    if e.mem.u32(base + 8) == 0 {
+        return;
+    }
+    e.mem.set_u32(base + 0x18, 0);
+    e.vcall(base, 0xa4, &[]);
+    fn_00b64f90(e, accumulator);
+    e.call(SET_ALPHA_BLEND_ENABLE, &[0, 0]);
+}
+
+// Translated from 00b66050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, one word): removes the reference
+/// volume whose +0x10 is `reference`: its query is destroyed and freed,
+/// the volume freed, and it is taken out of the `ReferenceVolumeList`
+/// (`00e7db70` with the argument's own slot, which then holds the volume).
+pub fn fn_00b66050(e: &mut Engine, this: Ptr<BSShaderAccumulator>, reference: u32) {
+    let base = this.addr();
+    let mut node = e.mem.u32(base + 0x140);
+    if node == 0 {
+        return;
+    }
+    let volume = loop {
+        let item = e.mem.u32(node + 8);
+        node = e.mem.u32(node);
+        if item != 0 && e.mem.u32(item + 0x10) == reference {
+            break item;
+        }
+        if node == 0 {
+            return;
+        }
+    };
+    if e.mem.u32(volume + 0x14) != 0 {
+        drop_volume_query(e, volume);
+    }
+    e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, volume]);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), volume);
+        e.call(VOLUME_LIST_REMOVE, &[base + 0x140, slot.addr()]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00b6_3090,
+            bs_shader_accumulator_stop_grouping_alphas(Ptr<BSShaderAccumulator>)
+        ),
+        entry!(0x00b6_30c0, fn_00b630c0(Ptr<BSShaderAccumulator>)),
+        entry!(0x00b6_30f0, bs_shader_accumulator_is_shadow_pass(u32) -> bool),
+        entry!(
+            0x00b6_3120,
+            fn_00b63120(Ptr<BSShaderAccumulator>, u32, u32) -> bool
+        ),
+        entry!(
+            0x00b6_3500,
+            bs_shader_accumulator_start_grouping_alphas(Ptr<BSShaderAccumulator>, u32, u32)
+        ),
+        entry!(0x00b6_3540, fn_00b63540(Ptr<BSShaderAccumulator>, u32)),
+        entry!(
+            0x00b6_3680,
+            fn_00b63680(Ptr<BSShaderAccumulator>, u32, u32) -> u8
+        ),
+        entry!(
+            0x00b6_3770,
+            fn_00b63770(Ptr<BSShaderAccumulator>, u32, u32, u32, i32)
+        ),
+        entry!(0x00b6_39e0, fn_00b639e0(Ptr<BSShaderAccumulator>, u32, u32)),
+        entry!(0x00b6_3a50, fn_00b63a50(Ptr<BSShaderAccumulator>)),
+        entry!(0x00b6_3a90, fn_00b63a90(Ptr<BSShaderAccumulator>) -> u32),
+        entry!(0x00b6_3b60, fn_00b63b60(Ptr<BSShaderAccumulator>)),
+        entry!(0x00b6_3b90, fn_00b63b90(Ptr<BSShaderAccumulator>, u32)),
+        entry!(
+            0x00b6_3d10,
+            image_space_shader_volumetric_fog_return_volumetric_fog_texture(Ptr)
+        ),
+        entry!(
+            0x00b6_3f10,
+            fn_00b63f10(Ptr<BSShaderAccumulator>, u32) -> bool
+        ),
+        entry!(
+            0x00b6_4570,
+            fn_00b64570(Ptr<BSShaderAccumulator>, u32, u32) -> bool
+        ),
+        entry!(0x00b6_4a00, fn_00b64a00(Ptr<BSShaderAccumulator>, u32, u32)),
+        entry!(
+            0x00b6_4bf0,
+            bs_shader_accumulator_do_sun_occlusion_queury(Ptr<BSShaderAccumulator>, u32, u32, u32)
+        ),
+        entry!(0x00b6_4f20, fn_00b64f20(Ptr, u32)),
+        entry!(0x00b6_4f90, fn_00b64f90(Ptr<BSShaderAccumulator>)),
+        entry!(
+            0x00b6_50c0,
+            bs_shader_accumulator_render_alpha_geometry(Ptr<BSShaderAccumulator>, u32)
+        ),
+        entry!(
+            0x00b6_5550,
+            fn_00b65550(Ptr<BSShaderAccumulator>, u32, u32, u32)
+        ),
+        entry!(0x00b6_5570, fn_00b65570(Ptr<BSShaderAccumulator>)),
+        entry!(0x00b6_5580, fn_00b65580(Ptr<BSShaderAccumulator>)),
+        entry!(
+            0x00b6_55b0,
+            bs_shader_accumulator_clear_all_bound_volumes(Ptr<BSShaderAccumulator>)
+        ),
+        entry!(0x00b6_5660, fn_00b65660(Ptr<BSShaderAccumulator>)),
+        entry!(0x00b6_56e0, fn_00b656e0(Ptr<BSShaderAccumulator>)),
+        entry!(0x00b6_5a80, fn_00b65a80(Ptr) -> u32),
+        entry!(0x00b6_5a90, fn_00b65a90(u32, u32, u32, u32, u32) -> bool),
+        entry!(0x00b6_5ae0, fn_00b65ae0(Ptr<BSShaderAccumulator>)),
+        entry!(0x00b6_5c60, fn_00b65c60(Ptr<BSShaderAccumulator>)),
+        entry!(0x00b6_5dc0, fn_00b65dc0(Ptr<BSShaderAccumulator>)),
+        entry!(0x00b6_5e80, fn_00b65e80(Ptr<BSShaderAccumulator>)),
+        entry!(0x00b6_6050, fn_00b66050(Ptr<BSShaderAccumulator>, u32)),
         entry!(
             0x00b660d0,
             bs_shader_accumulator_bs_shader_accumulator(
@@ -752,5 +2422,1033 @@ mod tests {
         // The overflow rule of the word arrays.
         assert_eq!(word_array_size(0x4000_0000), u32::MAX);
         assert_eq!(word_array_size(3), 12);
+    }
+}
+
+#[cfg(test)]
+mod b061_tests {
+    use super::*;
+
+    const QUIET: &[u32] = &[
+        BATCH_STOP_GROUPING_ALPHAS,
+        BATCH_START_GROUPING_ALPHAS,
+        BATCH_CLEAR_PASSES,
+        BATCH_HAS_LISTED_PASS,
+        BATCH_NEXT_LIST,
+        BATCH_RENDER_LIST,
+        BATCH_RENDER_LIST_00B9A3C0,
+        BATCH_SORT_ALPHAS,
+        BATCH_END_PASS,
+        BATCH_RENDER_PASS_IMMEDIATELY,
+        BATCH_RENDER_NEXT_ALPHA,
+        GEOMETRY_GROUP_DESTRUCTOR,
+        GEOMETRY_GROUP_RESET,
+        GEOMETRY_GROUP_RENDER_00B9A4D0,
+        SHORT_LIST_CLEAR,
+        QUERY_DESTRUCTOR,
+        QUERY_RESULT_00C4EE40,
+        QUERY_RESULT_00C4EDF0,
+        QUERY_BEGIN,
+        QUERY_END,
+        MEMORY_DEALLOCATE,
+        LIGHTING_00BBB840,
+        IMPORT_ENTER_CRITICAL_SECTION,
+        IMPORT_LEAVE_CRITICAL_SECTION,
+        IMPORT_DELETE_CRITICAL_SECTION,
+        ROOM_MAP_REMOVE_ALL,
+        IMAGE_SPACE_TEXTURE_GET_RENDERED,
+        IMAGE_SPACE_TEXTURE_SET,
+        TEXTURE_MANAGER_RETURN_RENDERED,
+        GET_NORMALS_TEXTURE,
+        RENDER_TARGET_OF,
+        SET_RENDER_TARGET,
+        RENDERER_CLEAR,
+        STATE_RESET_00B98380,
+        CURRENT_RENDERED_TEXTURE,
+        GET_SHADER,
+        DEBUG_SET_TEXTURE,
+        SHADER_SETUP_00B7A870,
+        HOLDER_METHOD_004E9BB0,
+        RENDER_PASS_DESTRUCTOR,
+        RENDER_PASS_CONSTRUCTOR,
+        POINTER_LIST_REMOVE_ALL,
+        FREE_BUCKETS,
+        INSTANCE_RENDERER_DESTRUCTOR,
+        VECTOR_DESTRUCTOR_ITERATOR,
+        VOLUME_LIST_REMOVE,
+        ACCUMULATOR_BASE_DESTRUCTOR,
+        CREATE_RENDER_PASS_TREE,
+        PASS_TREE_TAKE,
+        DECAL_PASS,
+        SET_ALPHA_BLEND_ENABLE,
+        SET_CLIP_PLANES,
+        TEXTURE_MANAGER_BORROW,
+        IMAGE_SPACE_RENDER_EFFECT,
+        QUERY_CONSTRUCTOR,
+        MEMORY_ALLOCATE,
+        LIST_NODE_ALLOCATE,
+        LOCK_ENTER,
+        IMPORT_INTERLOCKED_DECREMENT,
+        BATCH_GROUP_DISTANCE,
+        0x0066_00a4,
+        0x0066_0004,
+    ];
+
+    /// An accumulator with `count` empty batch renderers, its four
+    /// per-renderer arrays, a camera, a renderer holder and doubles for
+    /// every callee outside this file (allocators hand out fresh blocks,
+    /// the node pool's lock and the interlocked decrement count, the group
+    /// distance answers `-FLT_MAX`).
+    fn engine(count: u32) -> (Engine, Ptr<BSShaderAccumulator>) {
+        let mut e = Engine::new();
+        for (page, size) in [
+            (0x0101_5000, 0x2000),
+            (0x0102_4000, 0x1000),
+            (0x0107_3000, 0x1000),
+            (0x0109_9000, 0x1000),
+            (0x011a_9000, 0x1000),
+            (0x011c_5000, 0x1000),
+            (0x011f_4000, 0xc000),
+        ] {
+            e.map(page, size);
+        }
+        for &addr in QUIET {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(LIST_NODE_ALLOCATE, |e, _| e.mem.alloc(0xc).into_ret());
+        e.register(LOCK_ENTER, |e, _| {
+            let count = e.mem.u32(NODE_POOL_LOCK_COUNT) + 1;
+            e.mem.set_u32(NODE_POOL_LOCK_COUNT, count);
+            Ret::default()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(BATCH_GROUP_DISTANCE, |_, _| f64::from(f32::MIN).into_ret());
+        e.mem.set_u32(NO_DISTANCE, f32::MIN.to_bits());
+        e.mem.set_f64(NO_DISTANCE_DOUBLE, f64::from(f32::MIN));
+        let this = e.new_object::<BSShaderAccumulator>();
+        let base = this.addr();
+        for i in 0..count {
+            let renderer = e.mem.alloc(0x98);
+            e.mem.set_u32(base + 0x174 + i * 4, renderer);
+        }
+        e.set(this, BSShaderAccumulator::uiBatchRendererCount, count);
+        for slot in [0x17c, 0x180, 0x184, 0x188] {
+            let block = e.mem.alloc(8);
+            e.mem.set_u32(base + slot, block);
+        }
+        let camera = e.mem.alloc(0x110);
+        e.mem.set_u32(base + 8, camera);
+        let holder = e.mem.alloc(0x210);
+        let vtable = e.mem.alloc(0x190);
+        for slot in [0xac, 0xb4, 0x18c] {
+            e.mem.set_u32(vtable + slot, 0x0069_0000 + slot);
+            e.register(0x0069_0000 + slot, |_, _| Ret::default());
+        }
+        e.mem.set_u32(holder, vtable);
+        e.mem.set_u32(RENDER_HOLDER, holder);
+        let accumulator_vtable = e.mem.alloc(0xa8);
+        e.mem.set_u32(accumulator_vtable + 0xa4, 0x0066_00a4);
+        e.mem.set_u32(base, accumulator_vtable);
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn order(e: &Engine, of: &[u32]) -> Vec<u32> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(a, _)| *a)
+            .filter(|a| of.contains(a))
+            .collect()
+    }
+
+    fn renderer(e: &Engine, this: Ptr<BSShaderAccumulator>, i: u32) -> u32 {
+        e.mem.u32(this.addr() + 0x174 + i * 4)
+    }
+
+    #[test]
+    fn stop_grouping_uses_the_thread_renderer() {
+        let (mut e, this) = engine(2);
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_WORD_2BC, 3);
+        e.call(0x00b6_3090, &[this.addr()]);
+        assert_eq!(
+            calls_to(&e, BATCH_STOP_GROUPING_ALPHAS),
+            vec![vec![renderer(&e, this, 1)]]
+        );
+    }
+
+    #[test]
+    fn clear_passes_of_every_renderer() {
+        let (mut e, this) = engine(2);
+        e.call(0x00b6_30c0, &[this.addr()]);
+        let (a, b) = (renderer(&e, this, 0), renderer(&e, this, 1));
+        assert_eq!(
+            calls_to(&e, BATCH_CLEAR_PASSES),
+            vec![vec![a, 0], vec![b, 0]]
+        );
+    }
+
+    #[test]
+    fn shadow_pass_types() {
+        let mut e = Engine::new();
+        for (pass_type, shadow) in [
+            (0x1c3, false),
+            (0x1c4, true),
+            (0x1c7, true),
+            (0x230, false),
+            (0x234, true),
+            (0x283, false),
+            (0x287, true),
+            (0x288, false),
+        ] {
+            assert_eq!(
+                e.call(0x00b6_30f0, &[pass_type]).bool(),
+                shadow,
+                "{pass_type:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn listed_pass_stops_at_the_first_renderer_that_has_one() {
+        let (mut e, this) = engine(2);
+        let second = renderer(&e, this, 1);
+        e.register_double(BATCH_HAS_LISTED_PASS, move |_, a| {
+            u32::from(a[0] == second).into_ret()
+        });
+        assert!(e.call(0x00b6_3120, &[this.addr(), 5, 6]).bool());
+        assert_eq!(calls_to(&e, BATCH_HAS_LISTED_PASS).len(), 2);
+        assert_eq!(calls_to(&e, BATCH_HAS_LISTED_PASS)[1], vec![second, 5, 6]);
+        e.register(BATCH_HAS_LISTED_PASS, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00b6_3120, &[this.addr(), 5, 6]).bool());
+        assert_eq!(calls_to(&e, BATCH_HAS_LISTED_PASS).len(), 1);
+        let (mut e, this) = engine(0);
+        assert!(!e.call(0x00b6_3120, &[this.addr(), 5, 6]).bool());
+    }
+
+    #[test]
+    fn start_grouping_passes_the_camera_and_flag() {
+        let (mut e, this) = engine(1);
+        e.mem.set_u8(this.addr() + 0x31, 1);
+        e.call(0x00b6_3500, &[this.addr(), 0x5000, 1]);
+        let camera = e.mem.u32(this.addr() + 8);
+        assert_eq!(
+            calls_to(&e, BATCH_START_GROUPING_ALPHAS),
+            vec![vec![renderer(&e, this, 0), 0x5000, 1, camera, 1]]
+        );
+    }
+
+    fn sun_query(
+        e: &mut Engine,
+        this: Ptr<BSShaderAccumulator>,
+        index: u32,
+        state: u8,
+        count: u32,
+    ) -> u32 {
+        let test = this.addr() + index * 0x14;
+        e.mem.set_u32(test + 0x48, 0x7700);
+        e.mem.set_u8(test + 0x4c, 1);
+        e.register_double(QUERY_RESULT_00C4EE40, move |e, a| {
+            e.mem.set_u32(a[1], count);
+            u32::from(state).into_ret()
+        });
+        e.call(0x00b6_3540, &[this.addr(), index]);
+        test
+    }
+
+    #[test]
+    fn sun_query_result_sets_the_visible_fraction() {
+        let (mut e, this) = engine(1);
+        e.mem.set_f64(SUN_PIXELS_010737C8, 1500.0);
+        let test = sun_query(&mut e, this, 1, 1, 750);
+        assert_eq!(e.mem.f32(test + 0x50), 0.5);
+        assert_eq!(e.mem.u32(test + 0x54), 750);
+        assert_eq!(e.mem.u8(test + 0x4c), 0);
+        let test = sun_query(&mut e, this, 2, 1, 3000);
+        assert_eq!(e.mem.f32(test + 0x50), 0.0);
+        assert_eq!(e.mem.u32(test + 0x54), 3000);
+        let test = sun_query(&mut e, this, 0, 1, 0);
+        assert_eq!(e.mem.f32(test + 0x50), 1.0);
+        // Not ready: unchanged; failed: the query goes.
+        let test = sun_query(&mut e, this, 0, 0, 5);
+        assert_eq!(e.mem.u8(test + 0x4c), 1);
+        let test = sun_query(&mut e, this, 0, 2, 5);
+        assert_eq!(e.mem.u32(test + 0x48), 0);
+        assert_eq!(e.mem.u8(test + 0x4c), 0);
+        assert_eq!(calls_to(&e, QUERY_DESTRUCTOR), vec![vec![0x7700]]);
+        // Index 3 is out of range.
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_3540, &[this.addr(), 3]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    /// A reference volume for `reference` in the accumulator's list.
+    fn volume(e: &mut Engine, this: Ptr<BSShaderAccumulator>, reference: u32) -> u32 {
+        let volume = e.mem.alloc(0x20);
+        e.mem.set_u32(volume + 0x10, reference);
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(node + 8, volume);
+        let head = e.mem.u32(this.addr() + 0x140);
+        e.mem.set_u32(node, head);
+        if head != 0 {
+            e.mem.set_u32(head + 4, node);
+        } else {
+            e.mem.set_u32(this.addr() + 0x144, node);
+        }
+        e.mem.set_u32(this.addr() + 0x140, node);
+        let count = e.mem.u32(this.addr() + 0x148) + 1;
+        e.mem.set_u32(this.addr() + 0x148, count);
+        volume
+    }
+
+    #[test]
+    fn occlusion_result_is_polled_and_cached() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        let v = volume(&mut e, this, 0x42);
+        // No such volume.
+        assert_eq!(e.call(0x00b6_3680, &[base, 0x43, 1]).u8(), 0);
+        // Not waiting: cached as is.
+        e.mem.set_u8(v + 0x18, 1);
+        assert_eq!(e.call(0x00b6_3680, &[base, 0x42, 0]).u8(), 1);
+        assert_eq!(e.mem.u32(base + 0x14c), 0x42);
+        assert_eq!(e.mem.u8(base + 0x150), 1);
+        // A cached reference answers without looking.
+        e.mem.set_u8(v + 0x18, 0);
+        assert_eq!(e.call(0x00b6_3680, &[base, 0x42, 0]).u8(), 1);
+        // Waiting, polled: "not yet" twice, then 0 pixels: occluded.
+        let w = volume(&mut e, this, 0x50);
+        e.mem.set_u8(w + 0x19, 1);
+        e.mem.set_u32(w + 0x14, 0x7700);
+        e.mem.set_u8(VOLUME_QUERY_ENABLED, 1);
+        let mut polls = 0;
+        e.register_double(QUERY_RESULT_00C4EDF0, move |e, a| {
+            polls += 1;
+            e.mem.set_u32(a[1], 0);
+            u32::from(polls < 3).into_ret()
+        });
+        assert_eq!(e.call(0x00b6_3680, &[base, 0x50, 1]).u8(), 1);
+        assert_eq!(calls_to(&e, QUERY_RESULT_00C4EDF0).len(), 3);
+        assert_eq!(e.mem.u8(w + 0x19), 0);
+        assert_eq!(e.mem.u32(base + 0x14c), 0x50);
+        // A failed query: dropped, 999999 and not occluded.
+        let f = volume(&mut e, this, 0x60);
+        e.mem.set_u8(f + 0x19, 1);
+        e.mem.set_u32(f + 0x14, 0x7800);
+        e.register(QUERY_RESULT_00C4EDF0, |_, _| 2u32.into_ret());
+        assert_eq!(e.call(0x00b6_3680, &[base, 0x60, 1]).u8(), 0);
+        assert_eq!(e.mem.u32(f + 0x14), 0);
+        assert_eq!(e.mem.u32(f + 0x1c), 999_999);
+        // Waiting but not asked to wait: not cached.
+        let g = volume(&mut e, this, 0x70);
+        e.mem.set_u8(g + 0x19, 1);
+        e.mem.set_u8(g + 0x18, 1);
+        assert_eq!(e.call(0x00b6_3680, &[base, 0x70, 0]).u8(), 1);
+        assert_eq!(e.mem.u32(base + 0x14c), 0x60);
+    }
+
+    #[test]
+    fn pass_range_renders_the_lowest_pass_first() {
+        let (mut e, this) = engine(2);
+        let (a, b) = (renderer(&e, this, 0), renderer(&e, this, 1));
+        e.register_double(BATCH_NEXT_LIST, move |e, w| {
+            e.mem.set_u32(w[1], if w[0] == a { 5 } else { 3 });
+            1u32.into_ret()
+        });
+        e.call(0x00b6_3770, &[this.addr(), 1, 0x2f1, 7, 0xffff_ffff]);
+        assert_eq!(e.mem.u32(a + 0x20), 1);
+        assert_eq!(e.mem.u32(b + 0x24), 0x2f1);
+        let renders: Vec<u32> = calls_to(&e, BATCH_RENDER_LIST)
+            .iter()
+            .map(|w| w[0])
+            .collect();
+        assert_eq!(renders, vec![b, a]);
+        assert_eq!(calls_to(&e, BATCH_RENDER_LIST)[0][4], 7);
+        assert_eq!(calls_to(&e, BATCH_END_PASS).len(), 1);
+        assert!(calls_to(&e, GEOMETRY_GROUP_RESET).is_empty());
+        // A shadow pass with +0x164 set goes through 00b9a3c0; a group
+        // index uses the groups' own renderers and resets the groups.
+        let (mut e, this) = engine(1);
+        let r = renderer(&e, this, 0);
+        let group = e.mem.alloc(0x24);
+        let own = e.mem.alloc(0x98);
+        e.mem.set_u32(group + 8, own);
+        e.mem.set_u32(r + 0x3c + 2 * 4, group);
+        e.mem.set_u8(this.addr() + 0x164, 1);
+        e.register(BATCH_NEXT_LIST, |e, w| {
+            e.mem.set_u32(w[1], 0x1c5);
+            1u32.into_ret()
+        });
+        e.call(0x00b6_3770, &[this.addr(), 1, 0x2f1, 0, 2]);
+        assert_eq!(calls_to(&e, BATCH_RENDER_LIST_00B9A3C0)[0][0], own);
+        assert_eq!(calls_to(&e, BATCH_RENDER_LIST_00B9A3C0)[0][4], 0);
+        assert_eq!(calls_to(&e, GEOMETRY_GROUP_RESET), vec![vec![group]]);
+    }
+
+    #[test]
+    fn group_render_by_its_kind() {
+        let (mut e, this) = engine(2);
+        let (a, b) = (renderer(&e, this, 0), renderer(&e, this, 1));
+        // No group: nothing.
+        e.call(0x00b6_39e0, &[this.addr(), 3, 1]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        let ga = e.mem.alloc(0x24);
+        let gb = e.mem.alloc(0x24);
+        e.mem.set_u32(a + 0x3c + 12, ga);
+        e.mem.set_u32(b + 0x3c + 12, gb);
+        e.mem.set_u8(ga, 1);
+        e.call(0x00b6_39e0, &[this.addr(), 3, 1]);
+        assert_eq!(
+            calls_to(&e, GEOMETRY_GROUP_RENDER_00B9A4D0),
+            vec![vec![ga, 1], vec![gb, 1]]
+        );
+        // Bit 0 clear: the pass range of the groups' renderers.
+        e.mem.set_u8(ga, 0);
+        e.call(0x00b6_39e0, &[this.addr(), 3, 1]);
+        assert_eq!(calls_to(&e, GEOMETRY_GROUP_RESET), vec![vec![ga], vec![gb]]);
+    }
+
+    #[test]
+    fn alpha_sort_for_every_renderer() {
+        let (mut e, this) = engine(2);
+        e.mem.set_u8(this.addr() + 0x31, 1);
+        e.call(0x00b6_3a50, &[this.addr()]);
+        let camera = e.mem.u32(this.addr() + 8);
+        let sorts = calls_to(&e, BATCH_SORT_ALPHAS);
+        assert_eq!(
+            sorts,
+            vec![
+                vec![renderer(&e, this, 0), camera, 1],
+                vec![renderer(&e, this, 1), camera, 1]
+            ]
+        );
+    }
+
+    #[test]
+    fn group_counts_are_summed() {
+        let (mut e, this) = engine(2);
+        for (i, count) in [(0, 3u16), (1, 4)] {
+            let group = e.mem.alloc(0x24);
+            e.mem.set_u16(group + 2, count);
+            let r = renderer(&e, this, i);
+            e.mem.set_u32(r + 0x54, group);
+        }
+        assert_eq!(e.call(0x00b6_3a90, &[this.addr()]).u32(), 7);
+        e.set(this, BSShaderAccumulator::uiBatchRendererCount, 1);
+        assert_eq!(e.call(0x00b6_3a90, &[this.addr()]).u32(), 3);
+        e.set(this, BSShaderAccumulator::uiBatchRendererCount, 0);
+        assert_eq!(e.call(0x00b6_3a90, &[this.addr()]).u32(), 0);
+    }
+
+    #[test]
+    fn room_map_is_emptied_inside_its_lock() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        e.call(0x00b6_3b60, &[base]);
+        assert_eq!(
+            order(
+                &e,
+                &[
+                    IMPORT_ENTER_CRITICAL_SECTION,
+                    ROOM_MAP_REMOVE_ALL,
+                    IMPORT_LEAVE_CRITICAL_SECTION
+                ]
+            ),
+            vec![
+                IMPORT_ENTER_CRITICAL_SECTION,
+                ROOM_MAP_REMOVE_ALL,
+                IMPORT_LEAVE_CRITICAL_SECTION
+            ]
+        );
+        assert_eq!(calls_to(&e, ROOM_MAP_REMOVE_ALL), vec![vec![base + 0x1b4]]);
+        assert_eq!(
+            calls_to(&e, IMPORT_ENTER_CRITICAL_SECTION),
+            vec![vec![base + 0x200]]
+        );
+    }
+
+    #[test]
+    fn group_reset_for_every_renderer() {
+        let (mut e, this) = engine(2);
+        let (a, b) = (renderer(&e, this, 0), renderer(&e, this, 1));
+        e.mem.set_u32(a + 0x3c + 8, 0xa0);
+        e.mem.set_u32(b + 0x3c + 8, 0xb0);
+        e.call(0x00b6_3b90, &[this.addr(), 2]);
+        assert_eq!(
+            calls_to(&e, GEOMETRY_GROUP_RESET),
+            vec![vec![0xa0], vec![0xb0]]
+        );
+    }
+
+    #[test]
+    fn fog_texture_goes_back() {
+        let (mut e, _) = engine(1);
+        let this = e.mem.alloc(0x9c);
+        let holder = e.mem.alloc(0xc);
+        e.mem.set_u32(this + 0x98, holder);
+        e.mem.set_u32(TEXTURE_MANAGER, 0x7777);
+        e.call(0x00b6_3d10, &[this]);
+        assert!(calls_to(&e, IMAGE_SPACE_TEXTURE_GET_RENDERED).is_empty());
+        e.mem.set_u32(holder + 8, 0x5500);
+        e.call(0x00b6_3d10, &[this]);
+        assert!(calls_to(&e, TEXTURE_MANAGER_RETURN_RENDERED).is_empty());
+        e.register(IMAGE_SPACE_TEXTURE_GET_RENDERED, |_, _| {
+            0x6600u32.into_ret()
+        });
+        e.call(0x00b6_3d10, &[this]);
+        assert_eq!(
+            calls_to(&e, TEXTURE_MANAGER_RETURN_RENDERED),
+            vec![vec![0x7777, 0x6600]]
+        );
+        assert_eq!(calls_to(&e, IMAGE_SPACE_TEXTURE_SET), vec![vec![0x5500, 0]]);
+    }
+
+    #[test]
+    fn register_geometry_through_the_mode_function() {
+        let (mut e, this) = engine(1);
+        let geometry = e.mem.alloc(0xc4);
+        // No shader or properties: true without a call.
+        assert!(e.call(0x00b6_3f10, &[this.addr(), geometry]).bool());
+        e.mem.set_u32(geometry + 0xc0, 0x5100);
+        e.mem.set_u32(geometry + 0xa8, 0x5200);
+        e.register(0x0066_0100, |_, _| 0u32.into_ret());
+        e.register(0x0066_0200, |_, _| 1u32.into_ret());
+        e.mem.set_u32(REGISTER_FUNCTIONS, 0x0066_0100);
+        e.mem.set_u32(REGISTER_FUNCTIONS + 8, 0x0066_0200);
+        e.set(this, BSShaderAccumulator::eRenderMode, 2);
+        assert!(e.call(0x00b6_3f10, &[this.addr(), geometry]).bool());
+        assert_eq!(
+            calls_to(&e, 0x0066_0200),
+            vec![vec![this.addr(), geometry, geometry + 0x9c, 0x5200, 0x5100]]
+        );
+        // An empty entry falls back to entry 0.
+        e.set(this, BSShaderAccumulator::eRenderMode, 1);
+        assert!(!e.call(0x00b6_3f10, &[this.addr(), geometry]).bool());
+        // A skin of the class with +0x3C clear: true at once.
+        let skin = e.mem.alloc(0x40);
+        let vtable = e.mem.alloc(0xc);
+        e.mem.set_u32(vtable + 8, 0x0066_0008);
+        e.register(0x0066_0008, |_, _| SKIN_RTTI_011F49D8.into_ret());
+        e.mem.set_u32(skin, vtable);
+        e.mem.set_u32(geometry + 0xbc, skin);
+        assert!(e.call(0x00b6_3f10, &[this.addr(), geometry]).bool());
+        assert_eq!(calls_to(&e, 0x0066_0100).len(), 1);
+    }
+
+    #[test]
+    fn normals_pass_renders_and_restores() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        let camera = e.mem.alloc(0x110);
+        for i in 0..9 {
+            e.mem.set_f32(camera + 0x68 + i * 4, i as f32);
+        }
+        assert!(!e.call(0x00b6_4570, &[base, camera, 0]).bool());
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        let old = e.mem.u32(base + 8);
+        let r = renderer(&e, this, 0);
+        let group = e.mem.alloc(0x24);
+        e.mem.set_u16(group + 2, 2);
+        e.mem.set_u32(r + 0x5c, group);
+        let empty = e.mem.alloc(0x24);
+        e.mem.set_u32(r + 0x54, empty);
+        e.register(GET_NORMALS_TEXTURE, |_, _| 0x7100u32.into_ret());
+        // Every render-target lookup answers one object.
+        let rt = e.mem.alloc(4);
+        let vtable = e.mem.alloc(0xb8);
+        for slot in [0xac, 0xb4] {
+            e.mem.set_u32(vtable + slot, 0x006a_0000 + slot);
+            e.register(0x006a_0000 + slot, |_, _| 0x99u32.into_ret());
+        }
+        e.mem.set_u32(rt, vtable);
+        e.register_double(RENDER_TARGET_OF, move |_, _| rt.into_ret());
+        let target = 0x7300;
+        let manager = e.mem.alloc(0xc);
+        let inner = e.mem.alloc(0xc);
+        e.mem.set_u32(manager + 8, inner);
+        e.mem.set_u32(inner + 8, 0x4400);
+        e.mem.set_u32(IMAGE_SPACE_MANAGER, manager);
+        e.mem.set_f32(HALF, 0.5);
+        e.call(0x00b6_4570, &[base, camera, target]);
+        assert_eq!(calls_to(&e, GET_NORMALS_TEXTURE), vec![vec![0x4400, 0]]);
+        assert_eq!(calls_to(&e, SET_RENDER_TARGET), vec![vec![0, rt]]);
+        let holder = e.mem.u32(RENDER_HOLDER);
+        let backgrounds = calls_to(&e, 0x0069_00ac);
+        assert_eq!(backgrounds.len(), 2);
+        // Group 8 is the +0x5C group: reset by its pass range and by the loop.
+        assert_eq!(
+            calls_to(&e, GEOMETRY_GROUP_RESET),
+            vec![vec![group], vec![group]]
+        );
+        assert_eq!(calls_to(&e, RENDERER_CLEAR).len(), 1);
+        // The texture's target got the target's value twice (to it and back).
+        assert_eq!(calls_to(&e, 0x006a_00ac).len(), 2);
+        assert_eq!(e.mem.u32(base + 8), old);
+        let _ = holder;
+    }
+
+    #[test]
+    fn white_background_pass_for_one_or_two_cameras() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        let holder = e.mem.u32(RENDER_HOLDER);
+        e.mem.set_u32(holder + 0x200, 1);
+        e.mem.set_u8(holder + 0x208, 1);
+        e.register(CURRENT_RENDERED_TEXTURE, |_, _| 0x7200u32.into_ret());
+        e.register(RENDER_TARGET_OF, |_, a| (a[0] + 1).into_ret());
+        let camera = e.mem.alloc(0x110);
+        let second = e.mem.alloc(0x110);
+        e.call(0x00b6_4a00, &[base, camera, second]);
+        assert_eq!(e.mem.u32(base + 8), camera);
+        assert_eq!(calls_to(&e, SET_RENDER_TARGET), vec![vec![7, 0x7201]]);
+        assert_eq!(calls_to(&e, RENDERER_CLEAR).len(), 2);
+        let setups = calls_to(&e, 0x0069_018c);
+        assert_eq!(setups.len(), 2);
+        assert_eq!(setups[0][1], camera + 0x8c);
+        assert_eq!(setups[0][5], camera + 0xdc);
+        assert_eq!(setups[1][5], second + 0xdc);
+        assert_eq!(setups[1][6], camera + 0x100);
+        // Saved, white, restored.
+        assert_eq!(calls_to(&e, 0x0069_00ac).len(), 2);
+        assert_eq!(calls_to(&e, 0x0069_00b4).len(), 1);
+        // The thiscall wrapper `00b65550` passes its first two words on.
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_5550, &[base, camera, 0, 0xdead]);
+        assert_eq!(calls_to(&e, 0x0069_018c).len(), 1);
+    }
+
+    #[test]
+    fn sun_occlusion_query_renders_the_geometry() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        let shader = e.mem.alloc(0x38);
+        let object = e.mem.alloc(4);
+        let vtable = e.mem.alloc(0x28);
+        e.mem.set_u32(vtable + 0x24, 0x0066_0024);
+        e.register(0x0066_0024, |_, _| Ret::default());
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(shader + 0x30, object);
+        e.mem.set_u32(shader + 0x34, object);
+        e.register_double(GET_SHADER, move |_, _| shader.into_ret());
+        e.register(QUERY_CONSTRUCTOR, |_, a| a[0].into_ret());
+        e.call(0x00b6_4bf0, &[base, 0x6000, 1, 0x77]);
+        let test = base + 0x14;
+        let query = e.mem.u32(test + 0x48);
+        assert_ne!(query, 0);
+        assert_eq!(e.mem.u8(test + 0x4c), 1);
+        assert_eq!(calls_to(&e, QUERY_BEGIN), vec![vec![query]]);
+        assert_eq!(calls_to(&e, QUERY_END), vec![vec![query]]);
+        let pass = calls_to(&e, RENDER_PASS_CONSTRUCTOR)[0][0];
+        assert_eq!(
+            calls_to(&e, RENDER_PASS_CONSTRUCTOR)[0],
+            vec![pass, 0x6000, 9, 1, 0, 0]
+        );
+        assert_eq!(
+            calls_to(&e, BATCH_RENDER_PASS_IMMEDIATELY),
+            vec![vec![pass, 9, 0, 0, 0]]
+        );
+        assert_eq!(calls_to(&e, HOLDER_METHOD_004E9BB0)[0][1], 0x77);
+        // Already waiting: nothing more.
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_4bf0, &[base, 0x6000, 1, 0x77]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+        // A failed query: fraction 0, nothing rendered.
+        e.register(MEMORY_ALLOCATE, |_, _| 0u32.into_ret());
+        e.mem.set_u32(base + 0x50, 0x3f80_0000);
+        e.call(0x00b6_4bf0, &[base, 0x6000, 0, 0x77]);
+        assert_eq!(e.mem.u32(base + 0x50), 0);
+        assert!(calls_to(&e, RENDER_PASS_CONSTRUCTOR).is_empty());
+    }
+
+    #[test]
+    fn alpha_groups_of_a_renderer_are_destroyed() {
+        let (mut e, _) = engine(1);
+        let r = e.mem.alloc(0x98);
+        e.mem.set_u32(r + 0x74, 0x7400);
+        let g = e.mem.alloc(0x24);
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(node + 8, g);
+        e.mem.set_u32(r + 0x84, node);
+        e.mem.set_u32(r + 0x94, 0x9400);
+        e.call(0x00b6_4f20, &[r, 1]);
+        assert_eq!(calls_to(&e, GEOMETRY_GROUP_RESET), vec![vec![0x7400]]);
+        assert_eq!(calls_to(&e, GEOMETRY_GROUP_DESTRUCTOR), vec![vec![g]]);
+        assert_eq!(
+            calls_to(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, g]]
+        );
+        assert_eq!(calls_to(&e, POINTER_LIST_REMOVE_ALL), vec![vec![r + 0x84]]);
+        assert_eq!(e.mem.u32(r + 0x94), 0);
+    }
+
+    #[test]
+    fn sorted_items_render_back_to_front() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        let items = e.mem.alloc(8);
+        e.mem.set_u32(items, 0x1111);
+        e.mem.set_u32(items + 4, 0x2222);
+        e.mem.set_u32(base + 0x24, items);
+        e.mem.set_u32(base + 0x1c, 2);
+        e.mem.set_u16(base + 0x1a8, 0x2f5);
+        // The own list holds two nodes.
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(second + 4, first);
+        e.mem.set_u32(base + 0xc, first);
+        e.mem.set_u32(base + 0x10, second);
+        e.mem.set_u32(base + 0x14, 2);
+        let mut seen = vec![];
+        let log = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let record = log.clone();
+        e.register_double(BATCH_RENDER_PASS_IMMEDIATELY, move |e, a| {
+            record.borrow_mut().push(e.mem.u32(a[0]));
+            Ret::default()
+        });
+        e.call(0x00b6_4f90, &[base]);
+        seen.extend(log.borrow().iter().copied());
+        assert_eq!(seen, vec![0x2222, 0x1111]);
+        assert_eq!(
+            calls_to(&e, BATCH_RENDER_PASS_IMMEDIATELY)[0],
+            vec![base + 0x1a4, 0x2f5, 1, 1, 1]
+        );
+        assert_eq!(e.mem.u32(base + 0x14), 0);
+        assert_eq!(e.mem.u32(base + 0xc), 0);
+        assert_eq!(e.mem.u32(base + 0x10), 0);
+        assert_eq!(e.mem.u32(NODE_POOL_FREE_LIST), second);
+        assert_eq!(calls_to(&e, BATCH_END_PASS).len(), 2);
+        // An outside list (+0x18) is emptied instead.
+        let list = e.mem.alloc(0xc);
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(list, node);
+        e.mem.set_u32(list + 4, node);
+        e.mem.set_u32(list + 8, 1);
+        e.mem.set_u32(base + 0x18, list);
+        e.mem.set_u32(base + 0x1c, 0);
+        e.call(0x00b6_4f90, &[base]);
+        assert_eq!(e.mem.u32(list + 8), 0);
+        assert_eq!(e.mem.u32(list), 0);
+        assert_eq!(e.mem.u32(NODE_POOL_FREE_LIST), node);
+    }
+
+    #[test]
+    fn alpha_geometry_renders_the_farther_renderer_first() {
+        let (mut e, this) = engine(2);
+        let base = this.addr();
+        let (a, b) = (renderer(&e, this, 0), renderer(&e, this, 1));
+        for r in [a, b] {
+            e.mem.set_u32(r + 0x70, 0x7000);
+        }
+        // a starts at 5, b at 8; each render drops that renderer to -MAX.
+        let distances = std::rc::Rc::new(std::cell::RefCell::new([5.0f64, 8.0]));
+        let d = distances.clone();
+        e.register_double(BATCH_GROUP_DISTANCE, move |_, w| {
+            let i = usize::from(w[0] == b);
+            d.borrow()[i].into_ret()
+        });
+        let d = distances.clone();
+        e.register_double(BATCH_RENDER_NEXT_ALPHA, move |_, w| {
+            let i = usize::from(w[0] == b);
+            d.borrow_mut()[i] = f64::from(f32::MIN);
+            Ret::default()
+        });
+        e.call(0x00b6_50c0, &[base, 0]);
+        let renders = calls_to(&e, BATCH_RENDER_NEXT_ALPHA);
+        assert_eq!(renders.len(), 2);
+        assert_eq!(renders[0][0], b);
+        assert_eq!(renders[0][4], 5.0f32.to_bits());
+        assert_eq!(renders[1][0], a);
+        assert_eq!(renders[1][4], f32::MIN.to_bits());
+        assert_eq!(calls_to(&e, GEOMETRY_GROUP_RESET).len(), 2);
+        assert_eq!(calls_to(&e, BATCH_END_PASS).len(), 2);
+    }
+
+    #[test]
+    fn item_list_and_active_lists_are_cleared() {
+        let (mut e, this) = engine(2);
+        let base = this.addr();
+        e.call(0x00b6_5570, &[base]);
+        assert_eq!(
+            calls_to(&e, POINTER_LIST_REMOVE_ALL),
+            vec![vec![base + 0xc]]
+        );
+        e.call(0x00b6_5580, &[base]);
+        let (a, b) = (renderer(&e, this, 0), renderer(&e, this, 1));
+        assert_eq!(
+            calls_to(&e, SHORT_LIST_CLEAR),
+            vec![vec![a + 0x2c], vec![b + 0x2c]]
+        );
+    }
+
+    #[test]
+    fn active_lists_cleared_for_none() {
+        let (mut e, this) = engine(0);
+        e.call(0x00b6_5580, &[this.addr()]);
+        assert!(calls_to(&e, SHORT_LIST_CLEAR).is_empty());
+    }
+
+    #[test]
+    fn bound_volumes_are_all_freed() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        let v1 = volume(&mut e, this, 1);
+        let v2 = volume(&mut e, this, 2);
+        e.mem.set_u32(v1 + 0x14, 0x7700);
+        e.call(0x00b6_55b0, &[base]);
+        assert_eq!(e.mem.u32(base + 0x148), 0);
+        assert_eq!(e.mem.u32(base + 0x140), 0);
+        assert_eq!(e.mem.u32(base + 0x144), 0);
+        assert_eq!(calls_to(&e, QUERY_DESTRUCTOR), vec![vec![0x7700]]);
+        assert_eq!(e.mem.u32(v1 + 0x14), 0);
+        let freed: Vec<u32> = calls_to(&e, MEMORY_DEALLOCATE)
+            .iter()
+            .map(|w| w[1])
+            .collect();
+        assert_eq!(freed, vec![v2, 0x7700, v1]);
+        assert_eq!(calls_to(&e, LOCK_ENTER).len(), 2);
+    }
+
+    #[test]
+    fn cache_elements_are_emptied() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        for offset in [0x9c, 0xec + 3 * 0x14] {
+            e.mem.set_u32(base + offset + 4, 0x40);
+            e.mem.set_u32(base + offset + 0x10, 3);
+        }
+        e.call(0x00b6_5660, &[base]);
+        for offset in [0x9c, 0xec + 3 * 0x14] {
+            assert_eq!(e.mem.u32(base + offset + 0xc), 0x40);
+            assert_eq!(e.mem.u32(base + offset + 4), 0);
+            assert_eq!(e.mem.u32(base + offset + 0x10), 0);
+        }
+    }
+
+    #[test]
+    fn destructor_releases_the_members() {
+        let (mut e, this) = engine(2);
+        let base = this.addr();
+        let (a, b) = (renderer(&e, this, 0), renderer(&e, this, 1));
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable, 0x0066_0000);
+        e.mem.set_u32(vtable + 4, 0x0066_0004);
+        e.register(0x0066_0000, |_, _| Ret::default());
+        for r in [a, b] {
+            e.mem.set_u32(r, vtable);
+        }
+        let light = e.mem.alloc(8);
+        e.mem.set_u32(light, vtable);
+        e.mem.set_u32(light + 4, 1);
+        e.mem.set_u32(base + 0x1a0, light);
+        e.mem.set_u32(base + 0x48 + 0x14, 0x7700);
+        e.mem.set_u32(base + 0x170, 0x1700);
+        e.mem.set_u32(base + 0x8c, 0x8c00);
+        e.mem.set_u32(base + 0x1b4 + 8, 0xb0c0);
+        e.call(0x00b6_56e0, &[base]);
+        assert_eq!(e.mem.u32(base), ACCUMULATOR_VTABLE);
+        assert_eq!(calls_to(&e, 0x0066_0000), vec![vec![a, 1], vec![b, 1]]);
+        assert_eq!(calls_to(&e, 0x0066_0004), vec![vec![light]]);
+        assert_eq!(e.mem.u32(base + 0x1a0), 0);
+        assert_eq!(calls_to(&e, QUERY_DESTRUCTOR), vec![vec![0x7700]]);
+        assert_eq!(
+            calls_to(&e, INSTANCE_RENDERER_DESTRUCTOR),
+            vec![vec![0x1700]]
+        );
+        assert_eq!(calls_to(&e, ROOM_MAP_REMOVE_ALL).len(), 3);
+        assert_eq!(calls_to(&e, FREE_BUCKETS), vec![vec![0xb0c0]]);
+        assert_eq!(e.mem.u32(base + 0x1b4), MAP_BASE_VTABLE);
+        assert_eq!(
+            calls_to(&e, IMPORT_DELETE_CRITICAL_SECTION),
+            vec![vec![base + 0x200]]
+        );
+        assert_eq!(
+            calls_to(&e, VECTOR_DESTRUCTOR_ITERATOR),
+            vec![
+                vec![base + 0xec, 0x14, 4, PERSISTENT_LIST_DESTRUCTOR],
+                vec![base + 0x9c, 0x14, 4, PERSISTENT_LIST_DESTRUCTOR],
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, POINTER_LIST_REMOVE_ALL),
+            vec![vec![base + 0x140], vec![base + 0x90]]
+        );
+        assert_eq!(calls_to(&e, ACCUMULATOR_BASE_DESTRUCTOR), vec![vec![base]]);
+        let freed: Vec<u32> = calls_to(&e, MEMORY_DEALLOCATE)
+            .iter()
+            .map(|w| w[1])
+            .collect();
+        assert_eq!(freed[0], 0x8c00);
+        assert!(freed.contains(&0x1700));
+    }
+
+    #[test]
+    fn rtti_and_the_item_register_function() {
+        let (mut e, _) = engine(1);
+        assert_eq!(e.call(0x00b6_5a80, &[0x1234]).u32(), ACCUMULATOR_RTTI);
+        let accumulator = e.mem.alloc(0x18);
+        assert!(e.call(0x00b6_5a90, &[accumulator, 0x11, 0, 0, 0]).bool());
+        assert!(calls_to(&e, LIST_NODE_ALLOCATE).is_empty());
+        assert!(e.call(0x00b6_5a90, &[accumulator, 0x11, 0, 0, 1]).bool());
+        assert!(e.call(0x00b6_5a90, &[accumulator, 0x22, 0, 0, 1]).bool());
+        let head = e.mem.u32(accumulator + 0xc);
+        let tail = e.mem.u32(accumulator + 0x10);
+        assert_eq!(e.mem.u32(head + 8), 0x11);
+        assert_eq!(e.mem.u32(tail + 8), 0x22);
+        assert_eq!(e.mem.u32(head), tail);
+        assert_eq!(e.mem.u32(tail + 4), head);
+        assert_eq!(e.mem.u32(accumulator + 0x14), 2);
+    }
+
+    const RANGE: u32 = BATCH_END_PASS;
+
+    #[test]
+    fn mode_zero_pass_by_render_mode() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        // Modes 8 and 7: two pass ranges and the active-list clear.
+        e.set(this, BSShaderAccumulator::eRenderMode, 8);
+        e.call(0x00b6_5ae0, &[base]);
+        assert_eq!(calls_to(&e, RANGE).len(), 2);
+        assert_eq!(calls_to(&e, SHORT_LIST_CLEAR).len(), 1);
+        e.set(this, BSShaderAccumulator::eRenderMode, 7);
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_5ae0, &[base]);
+        assert_eq!(calls_to(&e, RANGE).len(), 2);
+        // Mode 0 with +0x164 set: the split range with clip planes and the
+        // tree made once.
+        e.set(this, BSShaderAccumulator::eRenderMode, 0);
+        e.mem.set_u8(base + 0x164, 1);
+        e.mem.set_u8(MAKE_PASS_TREE, 1);
+        e.mem.set_u32(GROUP_ZERO_FLAG_011A9608, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_5ae0, &[base]);
+        assert_eq!(calls_to(&e, CREATE_RENDER_PASS_TREE), vec![vec![base]]);
+        assert_eq!(e.mem.u8(MAKE_PASS_TREE), 0);
+        let planes = calls_to(&e, SET_CLIP_PLANES);
+        assert_eq!(
+            planes,
+            vec![vec![0, 0, 0, 0, 0, 0, 0], vec![1, 0, 0, 0, 0, 0, 0]]
+        );
+        assert_eq!(calls_to(&e, DECAL_PASS), vec![vec![base]]);
+        assert_eq!(e.mem.u32(GROUP_ZERO_FLAG_011A9608), 5);
+        // Three ranges and the alpha geometry's two pass ends.
+        assert_eq!(calls_to(&e, RANGE).len(), 5);
+        // No camera: nothing.
+        e.mem.set_u32(base + 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_5ae0, &[base]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn mode_zero_finish_with_the_reflection_copy() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        e.mem.set_u8(base + 0x38, 1);
+        e.register(BATCH_HAS_LISTED_PASS, |_, _| 1u32.into_ret());
+        e.register(TEXTURE_MANAGER_BORROW, |_, _| 0x4300u32.into_ret());
+        e.mem.set_u32(REFLECTION_SOURCE, 0x4200);
+        e.mem.set_u32(TEXTURE_MANAGER, 0x7777);
+        e.mem.set_u32(RENDERER, 0x9508);
+        e.mem.set_u32(IMAGE_SPACE_MANAGER, 0x91ac);
+        e.call(0x00b6_5c60, &[base]);
+        assert_eq!(
+            calls_to(&e, TEXTURE_MANAGER_BORROW),
+            vec![vec![0x7777, 0x9508, 5, 0, 0, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, IMAGE_SPACE_RENDER_EFFECT),
+            vec![vec![0x91ac, 0x22, 0x9508, 0x4200, 0x4300, 0, 1]]
+        );
+        let camera = e.mem.u32(base + 8);
+        assert_eq!(
+            calls_to(&e, HOLDER_METHOD_004E9BB0),
+            vec![vec![0x9508, camera]]
+        );
+        assert_eq!(
+            calls_to(&e, TEXTURE_MANAGER_RETURN_RENDERED),
+            vec![vec![0x7777, 0x4300]]
+        );
+        assert_eq!(e.mem.u32(REFLECTION_COPY), 0);
+        assert_eq!(
+            calls_to(&e, SET_ALPHA_BLEND_ENABLE),
+            vec![vec![0, 0], vec![0, 0]]
+        );
+        // Four ranges and the alpha geometry's two pass ends.
+        assert_eq!(calls_to(&e, RANGE).len(), 6);
+    }
+
+    #[test]
+    fn render_mode_functions_with_a_camera() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        e.mem.set_u32(base + 0x18, 9);
+        e.call(0x00b6_5dc0, &[base]);
+        assert_eq!(e.mem.u32(base + 0x18), 0);
+        assert_eq!(calls_to(&e, 0x0066_00a4), vec![vec![base]]);
+        assert_eq!(calls_to(&e, DECAL_PASS), vec![vec![base]]);
+        assert_eq!(calls_to(&e, SET_ALPHA_BLEND_ENABLE), vec![vec![0, 0]]);
+        assert_eq!(calls_to(&e, SHORT_LIST_CLEAR).len(), 1);
+        // 00b65e80: the slot, the sorted items, blending off.
+        e.call_log = Some(vec![]);
+        e.mem.set_u32(base + 0x18, 9);
+        e.call(0x00b6_5e80, &[base]);
+        assert_eq!(e.mem.u32(base + 0x18), 0);
+        assert_eq!(calls_to(&e, 0x0066_00a4).len(), 1);
+        assert_eq!(calls_to(&e, BATCH_END_PASS).len(), 2);
+        assert_eq!(calls_to(&e, SET_ALPHA_BLEND_ENABLE), vec![vec![0, 0]]);
+        // No camera: neither does anything.
+        e.mem.set_u32(base + 8, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_5dc0, &[base]);
+        e.call(0x00b6_5e80, &[base]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn sorted_items_mode_function_alone() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        e.call(0x00b6_5e80, &[base]);
+        assert_eq!(calls_to(&e, SET_ALPHA_BLEND_ENABLE).len(), 1);
+    }
+
+    #[test]
+    fn reference_volume_removal() {
+        let (mut e, this) = engine(1);
+        let base = this.addr();
+        let v = volume(&mut e, this, 0x42);
+        e.mem.set_u32(v + 0x14, 0x7700);
+        e.call(0x00b6_6050, &[base, 0x43]);
+        assert!(calls_to(&e, VOLUME_LIST_REMOVE).is_empty());
+        e.call(0x00b6_6050, &[base, 0x42]);
+        assert_eq!(calls_to(&e, QUERY_DESTRUCTOR), vec![vec![0x7700]]);
+        let freed: Vec<u32> = calls_to(&e, MEMORY_DEALLOCATE)
+            .iter()
+            .map(|w| w[1])
+            .collect();
+        assert_eq!(freed, vec![0x7700, v]);
+        let removes = calls_to(&e, VOLUME_LIST_REMOVE);
+        assert_eq!(removes.len(), 1);
+        assert_eq!(removes[0][0], base + 0x140);
     }
 }

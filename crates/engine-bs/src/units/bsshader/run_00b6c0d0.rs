@@ -656,9 +656,189 @@ pub fn fn_00b6d170(
     made
 }
 
+/// The object `00b6c0d0` requires and passes its first argument to.
+const OBJECT_011F4748: u32 = 0x011f_4748;
+/// That object's method `004e9bb0` (`teswater.cpp`; thiscall, one word).
+const OBJECT_METHOD_004E9BB0: u32 = 0x004e_9bb0;
+/// Where `00b6c0d0` keeps its first argument.
+const CURRENT_011F917C: u32 = 0x011f_917c;
+/// `00b54b10` (`bsshadermanager.cpp`; cdecl, one word).
+const SHADER_MANAGER_00B54B10: u32 = 0x00b5_4b10;
+
+// Translated from 00b6c0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (cdecl, two words): when the object at
+/// `011f4748` exists and `first` is set: `004e9bb0(first)` on that object,
+/// keeps `first` at `011f917c`, runs `00b54b10(second)` and `second`'s
+/// virtual slots +0x8C (with `first`) and +0xA8. Always ends in a jump to
+/// `second`'s slot +0xAC, whose result it passes on.
+pub fn fn_00b6c0d0(e: &mut Engine, first: u32, second: Ptr) -> u32 {
+    let holder = e.mem.u32(OBJECT_011F4748);
+    let second = second.addr();
+    if holder != 0 && first != 0 {
+        e.call(OBJECT_METHOD_004E9BB0, &[holder, first]);
+        e.mem.set_u32(CURRENT_011F917C, first);
+        e.call(SHADER_MANAGER_00B54B10, &[second]);
+        e.vcall(second, 0x8c, &[first]);
+        e.vcall(second, 0xa8, &[]);
+    }
+    e.vcall(second, 0xac, &[]).u32()
+}
+
+/// The two named blocks `00b6c130` frees (each starts with a name handle).
+const NAMED_BLOCK_011FA050: u32 = 0x011f_a050;
+const NAMED_BLOCK_011FA054: u32 = 0x011f_a054;
+/// The memory manager object and its deallocation (`00aa4060`; thiscall,
+/// one word).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+
+/// Drops the name handle at the start of `block` (its count sits 8 bytes
+/// before the handle; a handle equal to the word at `0109b220` is not
+/// counted) and frees the block.
+fn free_named_block(e: &mut Engine, block: u32) {
+    let name = e.mem.u32(block);
+    if name != e.mem.u32(NULL_NAME_0109B220) {
+        e.call(IMPORT_INTERLOCKED_DECREMENT, &[name.wrapping_sub(8)]);
+    }
+    e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, block]);
+}
+
+// Translated from 00b6c130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): frees the blocks at
+/// `011fa050` and `011fa054` when set (dropping each one's name handle
+/// first) and clears both words.
+pub fn fn_00b6c130(e: &mut Engine) {
+    let block = e.mem.u32(NAMED_BLOCK_011FA050);
+    if block != 0 {
+        free_named_block(e, block);
+    }
+    let block = e.mem.u32(NAMED_BLOCK_011FA054);
+    if block != 0 {
+        free_named_block(e, block);
+    }
+    e.mem.set_u32(NAMED_BLOCK_011FA054, 0);
+    e.mem.set_u32(NAMED_BLOCK_011FA050, 0);
+}
+
+/// `InterlockedIncrement` (import slot).
+const IMPORT_INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+/// Takes the first item of the list at +0x90 (`00b9e850`,
+/// `shadowscenelight.cpp`; thiscall, one word: an `NiPointer` out slot;
+/// answers the slot).
+const LIST_TAKE_00B9E850: u32 = 0x00b9_e850;
+/// Adds an item to a list (`00a5a310`, `niavobject.cpp`; thiscall, one
+/// word: the address of an `NiPointer`).
+const LIST_ADD_00A5A310: u32 = 0x00a5_a310;
+/// `NiTPointerListBase<..>::RemovePos` (engine map; thiscall, two words:
+/// the out slot for the removed item, the address of the position).
+const LIST_REMOVE_POS: u32 = 0x00b9_efa0;
+
+/// Drops one reference of the `NiRefObject` `object` (count at +4; its
+/// virtual slot +4 deletes it at zero).
+fn release(e: &mut Engine, object: u32) {
+    if e.call(IMPORT_INTERLOCKED_DECREMENT, &[object + 4]).u32() == 0 {
+        e.vcall(object, 4, &[]);
+    }
+}
+
+// Translated from 00b6d3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, no stack words): when the count at
+/// +0x98 is not 0, takes the first item of the list at +0x90 (`00b9e850`
+/// into a temporary `NiPointer`), holds it, drops the temporary and adds
+/// it to the list at +0x9C (`00a5a310`). Drops the held reference and
+/// returns the item (null when the list was empty).
+// Translation incomplete: 00b6d3f0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the held pointer) is not translated.
+pub fn fn_00b6d3f0(e: &mut Engine, this: Ptr) -> u32 {
+    let base = this.addr();
+    let mut item = 0u32;
+    if e.mem.u32(base + 0x98) != 0 {
+        item = e.with_stack(8, |e, frame| {
+            let held = frame.addr();
+            let temporary = frame.addr() + 4;
+            let slot = e.call(LIST_TAKE_00B9E850, &[base + 0x90, temporary]).u32();
+            let taken = e.mem.u32(slot);
+            let mut item = 0;
+            if taken != 0 {
+                item = taken;
+                e.mem.set_u32(held, taken);
+                e.call(IMPORT_INTERLOCKED_INCREMENT, &[taken + 4]);
+            }
+            let temporary_item = e.mem.u32(temporary);
+            if temporary_item != 0 {
+                release(e, temporary_item);
+            }
+            e.call(LIST_ADD_00A5A310, &[base + 0x9c, held]);
+            item
+        });
+    }
+    if item != 0 {
+        release(e, item);
+    }
+    item
+}
+
+// Translated from 00b6d4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, one word): looks for `item` in the
+/// list at +0x9C (nodes: next, previous, item), holding a reference to the
+/// item of the node being looked at; when found, adds the held item to the
+/// list at +0x90 (`00a5a310`), removes the node (`RemovePos`, which writes
+/// the removed item into the argument's own stack slot) and drops that
+/// item. The held reference is dropped at the end. A null `item` does
+/// nothing.
+// Translation incomplete: 00b6d4c0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the held pointer) is not translated.
+pub fn fn_00b6d4c0(e: &mut Engine, this: Ptr, item: u32) {
+    if item == 0 {
+        return;
+    }
+    let base = this.addr();
+    e.with_stack(0xc, |e, frame| {
+        let position = frame.addr();
+        let held = frame.addr() + 4;
+        let argument = frame.addr() + 8;
+        e.mem.set_u32(argument, item);
+        let mut current = 0u32;
+        let mut node = e.mem.u32(base + 0x9c);
+        e.mem.set_u32(position, node);
+        while node != 0 {
+            let node_item = e.mem.u32(node + 8);
+            if current != node_item {
+                if current != 0 {
+                    release(e, current);
+                }
+                current = e.mem.u32(node + 8);
+                e.mem.set_u32(held, current);
+                if current != 0 {
+                    e.call(IMPORT_INTERLOCKED_INCREMENT, &[current + 4]);
+                }
+            }
+            if current == e.mem.u32(argument) {
+                e.mem.set_u32(position, node);
+                e.call(LIST_ADD_00A5A310, &[base + 0x90, held]);
+                e.call(LIST_REMOVE_POS, &[base + 0x9c, argument, position]);
+                let removed = e.mem.u32(argument);
+                if removed != 0 {
+                    release(e, removed);
+                }
+                break;
+            }
+            node = e.mem.u32(node);
+            if node == 0 {
+                e.mem.set_u32(position, 0);
+            }
+        }
+        if current != 0 {
+            release(e, current);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b6_c0d0, fn_00b6c0d0(u32, Ptr) -> u32),
+        entry!(0x00b6_c130, fn_00b6c130()),
+        entry!(0x00b6_d3f0, fn_00b6d3f0(Ptr) -> u32),
+        entry!(0x00b6_d4c0, fn_00b6d4c0(Ptr, u32)),
         entry!(0x00b6_c1a0, fn_00b6c1a0(Ptr) -> u32),
         entry!(0x00b6_c1d0, fn_00b6c1d0(Ptr) -> u32),
         entry!(0x00b6_c200, fn_00b6c200_entry(i32) -> u32),
@@ -1124,5 +1304,159 @@ mod b000h_tests {
         let (mut e, this) = maker(false, SURFACE, 0);
         assert_eq!(make(&mut e, this, [3, 2, 0, 0x10, 2]), 0);
         assert!(calls(&e, TEXTURE_CONSTRUCT_00B6B380).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod b061_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// An object whose vtable slots +0x04, +0x8C, +0xA8 and +0xAC are
+    /// doubles at `0x0066_0000 + slot`.
+    fn object(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(0xb0);
+        for slot in [4u32, 0x8c, 0xa8, 0xac] {
+            e.mem.set_u32(vtable + slot, 0x0066_0000 + slot);
+            e.register(0x0066_0000 + slot, |_, _| Ret::default());
+        }
+        e.register(0x0066_00ac, |_, _| 0x1234u32.into_ret());
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    #[test]
+    fn begin_runs_the_set_up_only_with_both_objects() {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x6000);
+        e.register(OBJECT_METHOD_004E9BB0, |_, _| Ret::default());
+        e.register(SHADER_MANAGER_00B54B10, |_, _| Ret::default());
+        let second = object(&mut e);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b6_c0d0, &[0x500, second]).u32(), 0x1234);
+        assert!(calls(&e, OBJECT_METHOD_004E9BB0).is_empty());
+        e.mem.set_u32(OBJECT_011F4748, 0x4000);
+        e.call(0x00b6_c0d0, &[0, second]);
+        assert!(calls(&e, OBJECT_METHOD_004E9BB0).is_empty());
+        e.call(0x00b6_c0d0, &[0x500, second]);
+        assert_eq!(calls(&e, OBJECT_METHOD_004E9BB0), vec![vec![0x4000, 0x500]]);
+        assert_eq!(calls(&e, SHADER_MANAGER_00B54B10), vec![vec![second]]);
+        assert_eq!(calls(&e, 0x0066_008c), vec![vec![second, 0x500]]);
+        assert_eq!(calls(&e, 0x0066_00a8), vec![vec![second]]);
+        assert_eq!(calls(&e, 0x0066_00ac).len(), 3);
+        assert_eq!(e.mem.u32(CURRENT_011F917C), 0x500);
+    }
+
+    #[test]
+    fn named_blocks_drop_their_names_and_are_freed() {
+        let mut e = Engine::new();
+        e.map(0x0109_b000, 0x1000);
+        e.map(0x011f_a000, 0x1000);
+        e.mem.set_u32(NULL_NAME_0109B220, 0x7770);
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |_, _| 1u32.into_ret());
+        e.register(MEMORY_DEALLOCATE, |_, _| Ret::default());
+        let first = e.mem.alloc(4);
+        e.mem.set_u32(first, 0x8008);
+        let second = e.mem.alloc(4);
+        e.mem.set_u32(second, 0x7770);
+        e.mem.set_u32(NAMED_BLOCK_011FA050, first);
+        e.mem.set_u32(NAMED_BLOCK_011FA054, second);
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_c130, &[]);
+        assert_eq!(calls(&e, IMPORT_INTERLOCKED_DECREMENT), vec![vec![0x8000]]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, first], vec![MEMORY_MANAGER, second]]
+        );
+        assert_eq!(e.mem.u32(NAMED_BLOCK_011FA050), 0);
+        assert_eq!(e.mem.u32(NAMED_BLOCK_011FA054), 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_c130, &[]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    fn counting(e: &mut Engine) {
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let count = e.mem.u32(a[0]) + 1;
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let count = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], count);
+            count.into_ret()
+        });
+        e.register(LIST_ADD_00A5A310, |_, _| Ret::default());
+    }
+
+    #[test]
+    fn take_moves_the_first_item_between_the_lists() {
+        let mut e = Engine::new();
+        counting(&mut e);
+        let item = object(&mut e);
+        e.mem.set_u32(item + 4, 1);
+        // The take double gives the list's reference to the out slot.
+        e.register_double(LIST_TAKE_00B9E850, move |e, a| {
+            e.mem.set_u32(a[1], item);
+            a[1].into_ret()
+        });
+        let this = e.mem.alloc(0xa0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00b6_d3f0, &[this]).u32(), 0);
+        assert!(calls(&e, LIST_TAKE_00B9E850).is_empty());
+        e.mem.set_u32(this + 0x98, 1);
+        e.register_double(LIST_ADD_00A5A310, move |e, a| {
+            assert_eq!(e.mem.u32(a[1]), item);
+            Ret::default()
+        });
+        assert_eq!(e.call(0x00b6_d3f0, &[this]).u32(), item);
+        assert_eq!(calls(&e, LIST_ADD_00A5A310)[0][0], this + 0x9c);
+        // +1 held, -1 temporary, -1 held: the list's reference went away.
+        assert_eq!(e.mem.u32(item + 4), 0);
+        assert_eq!(calls(&e, 0x0066_0004), vec![vec![item]]);
+    }
+
+    #[test]
+    fn remove_finds_the_item_and_moves_it_back() {
+        let mut e = Engine::new();
+        counting(&mut e);
+        let a = object(&mut e);
+        let b = object(&mut e);
+        e.mem.set_u32(a + 4, 5);
+        e.mem.set_u32(b + 4, 5);
+        let second = e.mem.alloc(0xc);
+        e.mem.set_u32(second + 8, b);
+        let first = e.mem.alloc(0xc);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 8, a);
+        let this = e.mem.alloc(0xa0);
+        e.mem.set_u32(this + 0x9c, first);
+        e.register_double(LIST_REMOVE_POS, move |e, w| {
+            assert_eq!(e.mem.u32(w[2]), second);
+            assert_eq!(e.mem.u32(w[1]), b);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_d4c0, &[this, b]);
+        assert_eq!(calls(&e, LIST_ADD_00A5A310)[0][0], this + 0x90);
+        assert_eq!(calls(&e, LIST_REMOVE_POS)[0][0], this + 0x9c);
+        // a: +1 -1; b: +1, -1 (removed), -1 (held).
+        assert_eq!(e.mem.u32(a + 4), 5);
+        assert_eq!(e.mem.u32(b + 4), 4);
+        // Not in the list, or null: nothing is removed.
+        e.call_log = Some(vec![]);
+        e.call(0x00b6_d4c0, &[this, 0x9999]);
+        e.call(0x00b6_d4c0, &[this, 0]);
+        assert!(calls(&e, LIST_REMOVE_POS).is_empty());
     }
 }

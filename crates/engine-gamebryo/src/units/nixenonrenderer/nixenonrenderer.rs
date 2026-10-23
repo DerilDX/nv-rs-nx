@@ -112,6 +112,32 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00e7_2aa0,
             fn_00e72aa0(Ptr<NiDX9Renderer>, u32, u32, u32, u32, u32, u32) -> bool
         ),
+        entry!(
+            0x00e6_9ea0,
+            fn_00e69ea0(Ptr<NiDX9Renderer>, u32, u32, u32, u32, u32, u32, u16)
+        ),
+        entry!(
+            0x00e6_ab40,
+            fn_00e6ab40(Ptr<NiDX9Renderer>, u32, u32, u32, u32, u32, u32, u32, u16)
+        ),
+        entry!(
+            0x00e6_c780,
+            ni_xenon_renderer_do_set_camera_data(Ptr<NiDX9Renderer>, Ptr, Ptr, Ptr, Ptr, Ptr, Ptr)
+        ),
+        entry!(0x00e6_cf40, fn_00e6cf40(Ptr<NiDX9Renderer>, Ptr)),
+        entry!(
+            0x00e7_1fe0,
+            ni_xenon_renderer_pack_geometry_buffer(
+                Ptr<NiDX9Renderer>,
+                Ptr,
+                Ptr,
+                u32,
+                u32,
+                u8,
+            ) -> bool
+        ),
+        entry!(0x00e7_4120, fn_00e74120(Ptr<NiDX9Renderer>)),
+        entry!(0x00e7_0140, fn_00e70140(Ptr<NiDX9Renderer>, Ptr)),
     ]
 }
 
@@ -6497,5 +6523,2822 @@ mod b048_partial_draw_tests {
                 vec![CLEARED_BLOCK_0126EFD8, 0, 0x76]
             ]
         );
+    }
+}
+
+// ---- Large x87 functions (a07) ----
+
+/// The camera vectors the quad builders read. `Do_SetCameraData` (`00e6c780`) stores its
+/// right vector at +0x64C (and +0x634) and its up vector at +0x658 (and +0x640); the Xbox
+/// PDB's `m_kCamRight`, `m_kCamUp`, `m_kModelCamRight`, `m_kModelCamUp` are four `NiPoint3`
+/// in the same order.
+const QUAD_RIGHT: u32 = 0x64c;
+const QUAD_UP: u32 = 0x658;
+
+/// How a quad builder's instructions take the camera vectors and the positions (the two
+/// builders differ only here; it decides which NaN an instruction keeps): `true` where the
+/// component is the instruction's `float` memory operand (`x87_m32`, a signalling NaN
+/// still signalling), `false` where it was loaded with `FLD` (quiet). Values the code
+/// computed and stored are never signalling, so for them both are the same.
+struct QuadOperands {
+    /// The rotated corner offsets with colours: up·B, right·A, up·A, right·(−B) (x, y, z
+    /// each; A and B as in [`rotated_offsets`]).
+    rotated_colored: [bool; 12],
+    /// The same without colours.
+    rotated_plain: [bool; 12],
+    /// The normal's z subtracts `up.x·right.y` with `up.x` loaded (`true`) or with
+    /// `right.y` loaded (`false`).
+    normal_z_up_loaded: bool,
+    /// The fourth corner's x adds the position as the memory operand.
+    corner3_x_memory: bool,
+}
+
+/// A camera component (`index` 0..3 of the vector at `vector`).
+fn quad_camera(e: &Engine, this: u32, vector: u32, index: u32) -> u32 {
+    e.mem.u32(this + vector + 4 * index)
+}
+
+/// `FLD dword` (`false`) or a `float` memory operand (`true`).
+fn quad_operand(bits: u32, memory: bool) -> f64 {
+    if memory {
+        x87_m32(bits)
+    } else {
+        x87_load32(bits)
+    }
+}
+
+/// `value · component`, stored as a float.
+fn quad_times(value: f64, bits: u32, memory: bool) -> u32 {
+    x87_store32(x87_mul(value, quad_operand(bits, memory)))
+}
+
+/// The packed colour of an `NiColorA` (`r, g, b, a`): each channel times 255.0 (`double`
+/// at `0101e568`), stored as a float and converted with `FISTP` (round to nearest),
+/// packed `((a << 8 | r) << 8 | g) << 8 | b`.
+fn quad_color(e: &Engine, color: u32) -> u32 {
+    let scale = f64::from_bits(e.mem.u64(SCALE_TO_BYTE));
+    let channel = |at: u32| {
+        let product = x87_store32(x87_mul(x87_load32(e.mem.u32(at)), scale));
+        crate::x87::fistp(x87_load32(product)) as u32
+    };
+    let alpha = channel(color + 0xc);
+    let red = channel(color);
+    let green = channel(color + 4);
+    let blue = channel(color + 8);
+    (((((alpha << 8) | red) << 8) | green) << 8) | blue
+}
+
+/// The face normal both builders give every vertex: `up × right` component by component
+/// (`up.z·right.y − up.y·right.z`, `right.z·up.x − up.z·right.x`, `up.y·right.x −
+/// up.x·right.y`).
+fn quad_normal(e: &Engine, this: u32, ops: &QuadOperands) -> [u32; 3] {
+    let r = |i| quad_camera(e, this, QUAD_RIGHT, i);
+    let u = |i| quad_camera(e, this, QUAD_UP, i);
+    let x = x87_sub(
+        x87_mul(x87_load32(u(2)), x87_m32(r(1))),
+        x87_mul(x87_load32(u(1)), x87_m32(r(2))),
+    );
+    let y = x87_sub(
+        x87_mul(x87_load32(r(2)), x87_m32(u(0))),
+        x87_mul(x87_load32(u(2)), x87_m32(r(0))),
+    );
+    let last = if ops.normal_z_up_loaded {
+        x87_mul(x87_load32(u(0)), x87_m32(r(1)))
+    } else {
+        x87_mul(x87_load32(r(1)), x87_m32(u(0)))
+    };
+    let z = x87_sub(x87_mul(x87_load32(u(1)), x87_m32(r(0))), last);
+    [x87_store32(x), x87_store32(y), x87_store32(z)]
+}
+
+/// The corner offsets of a rotated quad: `FSINCOS` of the angle (sine and cosine stored as
+/// floats), `A = (sin + cos)·size`, `B = (cos − sin)·size` (floats), then the first offset
+/// `right·A + up·B` and the second `right·(−B) + up·A`, every product and sum a float.
+fn rotated_offsets(
+    e: &Engine,
+    this: u32,
+    angle: u32,
+    size: u32,
+    kinds: &[bool; 12],
+) -> ([u32; 3], [u32; 3]) {
+    let (sin, cos) = x87_fsincos(X87Ext::load32(angle));
+    let sin = x87_load32(sin.store32());
+    let cos = x87_load32(cos.store32());
+    let size = x87_load32(size);
+    let a = x87_load32(x87_store32(x87_mul(x87_add(sin, cos), size)));
+    let b = x87_load32(x87_store32(x87_mul(x87_sub(cos, sin), size)));
+    let r = |i: usize| quad_camera(e, this, QUAD_RIGHT, i as u32);
+    let u = |i: usize| quad_camera(e, this, QUAD_UP, i as u32);
+    let mut up_b = [0u32; 3];
+    let mut right_a = [0u32; 3];
+    for i in 0..3 {
+        up_b[i] = quad_times(b, u(i), kinds[i]);
+    }
+    for i in 0..3 {
+        right_a[i] = quad_times(a, r(i), kinds[3 + i]);
+    }
+    let mut first = [0u32; 3];
+    for i in 0..3 {
+        first[i] = x87_store32(x87_add(x87_load32(right_a[i]), x87_load32(up_b[i])));
+    }
+    let mut up_a = [0u32; 3];
+    for i in 0..3 {
+        up_a[i] = quad_times(a, u(i), kinds[6 + i]);
+    }
+    // `FCHS` of B, stored as a float.
+    let minus_b = x87_load32(x87_store32(-b));
+    let mut right_minus_b = [0u32; 3];
+    for i in 0..3 {
+        right_minus_b[i] = quad_times(minus_b, r(i), kinds[9 + i]);
+    }
+    let mut second = [0u32; 3];
+    for i in 0..3 {
+        second[i] = x87_store32(x87_add(x87_load32(right_minus_b[i]), x87_load32(up_a[i])));
+    }
+    (first, second)
+}
+
+/// Writes one quad: four vertices `stride` bytes apart (position, the normal, the colour,
+/// two texture coordinates, then with `extra` its byte as a float). The corners are the
+/// position minus the first offset (u 0, v 1), minus the second (1, 1), plus the first
+/// (1, 0) and plus the second (0, 0). Each corner reads the position again, then writes the
+/// vertex, then reads the byte.
+#[allow(clippy::too_many_arguments)]
+fn write_quad(
+    e: &mut Engine,
+    dest: u32,
+    stride: u32,
+    position: u32,
+    color: u32,
+    offsets: &([u32; 3], [u32; 3]),
+    normal: &[u32; 3],
+    extra: Option<u32>,
+    corner3_x_memory: bool,
+) {
+    const ONE_BITS: u32 = 0x3f80_0000;
+    let uv = [(0, ONE_BITS), (ONE_BITS, ONE_BITS), (ONE_BITS, 0), (0, 0)];
+    for corner in 0..4u32 {
+        let vertex = dest.wrapping_add(corner * stride);
+        let offset = if corner % 2 == 0 {
+            &offsets.0
+        } else {
+            &offsets.1
+        };
+        let mut xyz = [0u32; 3];
+        for j in 0..3u32 {
+            let p = e.mem.u32(position.wrapping_add(4 * j));
+            let o = x87_load32(offset[j as usize]);
+            xyz[j as usize] = if corner < 2 {
+                x87_store32(x87_sub(x87_load32(p), o))
+            } else {
+                let memory = j == 1 || (corner == 3 && j == 0 && corner3_x_memory);
+                x87_store32(x87_add(quad_operand(p, memory), o))
+            };
+        }
+        e.mem.set_u32(vertex.wrapping_add(0x18), color);
+        for j in 0..3u32 {
+            e.mem.set_u32(vertex.wrapping_add(4 * j), xyz[j as usize]);
+            e.mem
+                .set_u32(vertex.wrapping_add(0xc + 4 * j), normal[j as usize]);
+        }
+        let (u, v) = uv[corner as usize];
+        e.mem.set_u32(vertex.wrapping_add(0x1c), u);
+        e.mem.set_u32(vertex.wrapping_add(0x20), v);
+        if let Some(bytes) = extra {
+            let value = e.mem.u8(bytes);
+            e.mem
+                .set_u32(vertex.wrapping_add(0x24), x87_store32(f64::from(value)));
+        }
+    }
+}
+
+/// The body both quad builders share (see [`fn_00e69ea0`]).
+#[allow(clippy::too_many_arguments)]
+fn build_quads(
+    e: &mut Engine,
+    this: Ptr<NiDX9Renderer>,
+    mut dest: u32,
+    mut positions: u32,
+    mut colors: u32,
+    mut sizes: u32,
+    mut scales: u32,
+    mut angles: u32,
+    mut extra: Option<u32>,
+    count: u16,
+    stride: u32,
+    ops: &QuadOperands,
+) {
+    let t = this.addr();
+    let normal = quad_normal(e, t, ops);
+    let rotated = angles != 0;
+    let with_colors = colors != 0;
+    let (sum, difference) = if rotated {
+        ([0u32; 3], [0u32; 3])
+    } else {
+        let r = |e: &Engine, i| quad_camera(e, t, QUAD_RIGHT, i);
+        let u = |e: &Engine, i| quad_camera(e, t, QUAD_UP, i);
+        let mut difference = [0u32; 3];
+        for i in 0..3u32 {
+            difference[i as usize] = x87_store32(x87_sub(x87_load32(u(e, i)), x87_m32(r(e, i))));
+        }
+        let sum = [
+            x87_store32(x87_add(x87_load32(u(e, 0)), x87_m32(r(e, 0)))),
+            x87_store32(x87_add(x87_load32(r(e, 1)), x87_m32(u(e, 1)))),
+            x87_store32(x87_add(x87_load32(r(e, 2)), x87_m32(u(e, 2)))),
+        ];
+        (sum, difference)
+    };
+    let mut left = u32::from(count);
+    while left != 0 {
+        let color = if with_colors {
+            quad_color(e, colors)
+        } else {
+            0xffff_ffff
+        };
+        let size = x87_store32(x87_mul(
+            x87_load32(e.mem.u32(sizes)),
+            x87_m32(e.mem.u32(scales)),
+        ));
+        let offsets = if rotated {
+            let kinds = if with_colors {
+                &ops.rotated_colored
+            } else {
+                &ops.rotated_plain
+            };
+            rotated_offsets(e, t, e.mem.u32(angles), size, kinds)
+        } else {
+            let s = x87_load32(size);
+            let mut first = [0u32; 3];
+            let mut second = [0u32; 3];
+            for i in 0..3 {
+                first[i] = x87_store32(x87_mul(x87_load32(sum[i]), s));
+                second[i] = x87_store32(x87_mul(x87_load32(difference[i]), s));
+            }
+            (first, second)
+        };
+        write_quad(
+            e,
+            dest,
+            stride,
+            positions,
+            color,
+            &offsets,
+            &normal,
+            extra,
+            ops.corner3_x_memory,
+        );
+        if with_colors {
+            colors = colors.wrapping_add(0x10);
+        }
+        sizes = sizes.wrapping_add(4);
+        scales = scales.wrapping_add(4);
+        if rotated {
+            angles = angles.wrapping_add(4);
+        }
+        positions = positions.wrapping_add(0xc);
+        extra = extra.map(|bytes| bytes.wrapping_add(1));
+        dest = dest.wrapping_add(4 * stride);
+        left -= 1;
+    }
+}
+
+// Translated from 00e69ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, seven words: the vertices, the positions, the
+/// colours or 0, two size arrays, the angles or 0, the count as a `u16`). Builds a camera
+/// facing quad per element: four vertices of 0x24 bytes (position, normal, `D3DCOLOR`, u, v)
+/// from its position (`NiPoint3`), its size (the two sizes multiplied), the camera's right
+/// (+0x64C) and up (+0x658) vectors and, with angles, its angle (`FSINCOS`). The normal is
+/// `up × right` for all; the colour is the packed `NiColorA` (`0xFFFFFFFF` without colours).
+/// Without angles the corner offsets are `(up + right)·size` and `(up − right)·size`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00e69ea0(
+    e: &mut Engine,
+    this: Ptr<NiDX9Renderer>,
+    vertices: u32,
+    positions: u32,
+    colors: u32,
+    sizes: u32,
+    scales: u32,
+    angles: u32,
+    count: u16,
+) {
+    const OPS: QuadOperands = QuadOperands {
+        rotated_colored: [
+            true, false, false, false, false, false, false, false, true, false, false, true,
+        ],
+        rotated_plain: [
+            false, false, false, true, false, false, false, false, true, false, true, true,
+        ],
+        normal_z_up_loaded: false,
+        corner3_x_memory: false,
+    };
+    build_quads(
+        e, this, vertices, positions, colors, sizes, scales, angles, None, count, 0x24, &OPS,
+    );
+}
+
+// Translated from 00e6ab40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, eight words): [`fn_00e69ea0`] with one more
+/// array, of bytes (the seventh word, before the count), each vertex 0x28 bytes with its
+/// element's byte as a float at +0x24.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00e6ab40(
+    e: &mut Engine,
+    this: Ptr<NiDX9Renderer>,
+    vertices: u32,
+    positions: u32,
+    colors: u32,
+    sizes: u32,
+    scales: u32,
+    angles: u32,
+    bytes: u32,
+    count: u16,
+) {
+    const OPS: QuadOperands = QuadOperands {
+        rotated_colored: [
+            false, false, false, false, false, false, false, false, true, false, false, true,
+        ],
+        rotated_plain: [
+            false, false, false, false, false, false, false, true, true, true, false, true,
+        ],
+        normal_z_up_loaded: true,
+        corner3_x_memory: true,
+    };
+    build_quads(
+        e,
+        this,
+        vertices,
+        positions,
+        colors,
+        sizes,
+        scales,
+        angles,
+        Some(bytes),
+        count,
+        0x28,
+        &OPS,
+    );
+}
+
+#[cfg(test)]
+mod a07_quad_tests {
+    use super::*;
+
+    const RENDERER_VT: u32 = 0x6400;
+
+    fn renderer(e: &mut Engine) -> Ptr<NiDX9Renderer> {
+        let r = e.new_object::<NiDX9Renderer>();
+        let t = r.addr();
+        e.mem.set_u32(t, RENDERER_VT);
+        // right (1, 0, 0), up (0, 1, 0)
+        for (i, v) in [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0].iter().enumerate() {
+            e.mem.set_u32(t + QUAD_RIGHT + 4 * i as u32, v.to_bits());
+        }
+        r
+    }
+
+    fn floats(e: &mut Engine, values: &[f32]) -> u32 {
+        let p = e.mem.alloc(4 * values.len() as u32 + 4);
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_u32(p + 4 * i as u32, v.to_bits());
+        }
+        p
+    }
+
+    fn vertex(e: &Engine, v: u32, n: u32) -> Vec<f32> {
+        (0..n)
+            .map(|i| f32::from_bits(e.mem.u32(v + 4 * i)))
+            .collect()
+    }
+
+    fn scale_constant(e: &mut Engine) {
+        e.map(SCALE_TO_BYTE & !0xfff, 0x1000);
+        e.mem.set_u64(SCALE_TO_BYTE, 255.0f64.to_bits());
+    }
+
+    #[test]
+    fn quads_without_angles_take_up_plus_and_minus_right() {
+        let mut e = Engine::new();
+        scale_constant(&mut e);
+        let r = renderer(&mut e);
+        let positions = floats(&mut e, &[10.0, 20.0, 30.0]);
+        let sizes = floats(&mut e, &[2.0]);
+        let scales = floats(&mut e, &[0.5]);
+        let out = e.mem.alloc(0x90);
+        e.call(
+            0x00e6_9ea0,
+            &args![r, out, positions, 0u32, sizes, scales, 0u32, 1u32],
+        );
+        let expect = [
+            [9.0, 19.0, 30.0, 0.0, 1.0],
+            [11.0, 19.0, 30.0, 1.0, 1.0],
+            [11.0, 21.0, 30.0, 1.0, 0.0],
+            [9.0, 21.0, 30.0, 0.0, 0.0],
+        ];
+        for (k, x) in expect.iter().enumerate() {
+            let at = out + 0x24 * k as u32;
+            let v = vertex(&e, at, 9);
+            assert_eq!(&v[..3], &x[..3]);
+            assert_eq!(&v[3..6], &[0.0, 0.0, 1.0]);
+            assert_eq!(e.mem.u32(at + 0x18), 0xffff_ffff);
+            assert_eq!(&v[7..], &x[3..]);
+        }
+        // With colours: r 1, g 0.5, b 0, a 1 packs to 0xFFFF8000 (127.5 rounds to even).
+        let colors = floats(&mut e, &[1.0, 0.5, 0.0, 1.0]);
+        e.call(
+            0x00e6_9ea0,
+            &args![r, out, positions, colors, sizes, scales, 0u32, 1u32],
+        );
+        for k in 0..4 {
+            assert_eq!(e.mem.u32(out + 0x24 * k + 0x18), 0xffff_8000);
+        }
+        assert_eq!(vertex(&e, out + 0x24 * 3, 3), vec![9.0, 21.0, 30.0]);
+        // A count of 0 writes nothing.
+        let fresh = e.mem.alloc(0x90);
+        e.mem.set_u32(fresh, 0x1234);
+        e.call(
+            0x00e6_9ea0,
+            &args![r, fresh, positions, colors, sizes, scales, 0u32, 0u32],
+        );
+        assert_eq!(e.mem.u32(fresh), 0x1234);
+    }
+
+    #[test]
+    fn quads_with_angles_rotate_the_offsets() {
+        let mut e = Engine::new();
+        scale_constant(&mut e);
+        let r = renderer(&mut e);
+        let positions = floats(&mut e, &[10.0, 20.0, 30.0, 0.0, 0.0, 0.0]);
+        let sizes = floats(&mut e, &[1.0, 1.0]);
+        let scales = floats(&mut e, &[1.0, 2.0]);
+        // Angle 0: the offsets of the unrotated quad; angle pi: (nearly) their negation.
+        let angles = floats(&mut e, &[0.0, std::f32::consts::PI]);
+        let out = e.mem.alloc(0x120);
+        e.call(
+            0x00e6_9ea0,
+            &args![r, out, positions, 0u32, sizes, scales, angles, 2u32],
+        );
+        assert_eq!(vertex(&e, out, 3), vec![9.0, 19.0, 30.0]);
+        assert_eq!(vertex(&e, out + 0x24, 3), vec![11.0, 19.0, 30.0]);
+        assert_eq!(vertex(&e, out + 0x48, 3), vec![11.0, 21.0, 30.0]);
+        let second = vertex(&e, out + 0x90, 3);
+        assert!((second[0] - 2.0).abs() < 1e-5 && (second[1] - 2.0).abs() < 1e-5);
+        let third = vertex(&e, out + 0x90 + 0x24, 3);
+        assert!((third[0] + 2.0).abs() < 1e-5 && (third[1] - 2.0).abs() < 1e-5);
+        assert_eq!(e.mem.u32(out + 0x90 + 0x18), 0xffff_ffff);
+        // With colours the colour is packed per element.
+        let colors = floats(&mut e, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+        e.call(
+            0x00e6_9ea0,
+            &args![r, out, positions, colors, sizes, scales, angles, 2u32],
+        );
+        assert_eq!(e.mem.u32(out + 0x18), 0xff00_0000);
+        assert_eq!(e.mem.u32(out + 0x90 + 0x18), 0);
+        assert_eq!(vertex(&e, out + 0x24, 3), vec![11.0, 19.0, 30.0]);
+    }
+
+    #[test]
+    fn byte_quads_add_the_byte_as_a_float() {
+        let mut e = Engine::new();
+        scale_constant(&mut e);
+        let r = renderer(&mut e);
+        let positions = floats(&mut e, &[10.0, 20.0, 30.0, 1.0, 2.0, 3.0]);
+        let sizes = floats(&mut e, &[2.0, 1.0]);
+        let scales = floats(&mut e, &[0.5, 1.0]);
+        let colors = floats(&mut e, &[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+        let bytes = e.mem.alloc(4);
+        e.mem.set_u8(bytes, 7);
+        e.mem.set_u8(bytes + 1, 9);
+        let out = e.mem.alloc(0x140);
+        e.call(
+            0x00e6_ab40,
+            &args![r, out, positions, colors, sizes, scales, 0u32, bytes, 2u32],
+        );
+        let first = vertex(&e, out, 10);
+        assert_eq!(&first[..6], &[9.0, 19.0, 30.0, 0.0, 0.0, 1.0]);
+        assert_eq!(&first[7..], &[0.0, 1.0, 7.0]);
+        assert_eq!(e.mem.u32(out + 0x18), 0x0000_00ff);
+        assert_eq!(vertex(&e, out + 0x28 * 3, 3), vec![9.0, 21.0, 30.0]);
+        assert_eq!(f32::from_bits(e.mem.u32(out + 0x28 * 3 + 0x24)), 7.0);
+        assert_eq!(e.mem.u32(out + 0xa0 + 0x18), 0xffff_ffff);
+        assert_eq!(vertex(&e, out + 0xa0, 3), vec![0.0, 1.0, 3.0]);
+        assert_eq!(f32::from_bits(e.mem.u32(out + 0xa0 + 0x24)), 9.0);
+        // With angles (0) the corners are the same.
+        let angles = floats(&mut e, &[0.0, 0.0]);
+        e.call(
+            0x00e6_ab40,
+            &args![r, out, positions, 0u32, sizes, scales, angles, bytes, 1u32],
+        );
+        assert_eq!(vertex(&e, out + 0x28, 3), vec![11.0, 19.0, 30.0]);
+        assert_eq!(e.mem.u32(out + 0x18), 0xffff_ffff);
+    }
+}
+
+/// The globals `Do_SetCameraData` reads and writes: two point copies (`011f426c` and
+/// `011f474c`, three floats each) and a byte that, with the byte at `0126efd1`, selects which
+/// of the location and the copy at `011f426c` becomes the view's eye.
+const CAMERA_POINT_011F426C: u32 = 0x011f_426c;
+const CAMERA_POINT_011F474C: u32 = 0x011f_474c;
+const CAMERA_FLAG_011A9604: u32 = 0x011a_9604;
+/// The `double` constants of the projection's first column and row (`01011590`, `0106d4c8`;
+/// 2.0 and -2.0 by the decompiler).
+const PROJECTION_SCALE_01011590: u32 = 0x0101_1590;
+const PROJECTION_SCALE_0106D4C8: u32 = 0x0106_d4c8;
+/// `D3DXVec4Transform` (`00ee6e34`, by its import), `D3DXVec3Normalize`,
+/// `D3DXVec3TransformCoord`, `D3DXMatrixMultiply` (`stdcall`).
+const D3DX_VEC4_TRANSFORM: u32 = 0x00ee_6e34;
+const D3DX_VEC3_NORMALIZE: u32 = 0x00ee_6dec;
+const D3DX_VEC3_TRANSFORM_COORD: u32 = 0x00ee_6df8;
+const D3DX_MATRIX_MULTIPLY: u32 = 0x00ee_6de0;
+/// `IDirect3DDevice9::SetTransform` (slot 44).
+const DEVICE_SET_TRANSFORM: u32 = 0xb0;
+/// The renderer's view (+0x980), projection (+0x9C0), view·projection (+0xA00) and inverse
+/// view (+0xA40) matrices (`D3DMATRIX`, rows of four floats).
+const VIEW_MATRIX: u32 = 0x980;
+const PROJECTION_MATRIX: u32 = 0x9c0;
+const VIEW_PROJECTION_MATRIX: u32 = 0xa00;
+const INVERSE_VIEW_MATRIX: u32 = 0xa40;
+
+/// `FISTP qword` under the code's chop control word, keeping the low word.
+fn chop_low_word(value: f64) -> u32 {
+    x87_fistp64_chop(X87Ext::load64(value)) as u32
+}
+
+// Translated from 00e6c780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiXenonRenderer::Do_SetCameraData` (Xbox PDB; renderer vtable +0x18C): `thiscall`, six
+/// words (location, direction, up, right as `NiPoint3`, an `NiFrustum`, an `NiRect<float>`
+/// viewport). Nothing with the byte at +0x6FC set. The eye is the location, or with the
+/// bytes at `0126efd1` and `011a9604` both set the point at `011f426c` (the other one goes
+/// to `011f474c`). Builds the view matrix (+0x980: right, up, direction as columns, the
+/// eye's negated dot products as the last row) and the inverse view (+0xA40), sets the view
+/// transform (`SetTransform(2, ..)`), keeps right (+0x634, +0x64C) and up (+0x640, +0x658),
+/// the near plane (+0x684) and the depth range (+0x688), and builds the projection
+/// (+0x9C0) for an orthographic (`m_bOrtho`) or perspective frustum, its handedness by the
+/// object at +0x8B8 (virtual +0x4C). With the byte at `0126efd1` set the projection's third
+/// column becomes the clip plane through the point `(0, 0, [0126efd4])` facing the view's z
+/// axis (`D3DXVec4Transform`, `D3DXVec3Normalize`, `D3DXVec3TransformCoord`). Then
+/// `SetTransform(3, ..)`, the viewport from the render target group's size (+0x888, virtual
+/// +0x8C/+0x90) and the rectangle (`SetViewport`, depths 0 to 1), the view·projection
+/// (+0xA00, `D3DXMatrixMultiply`) and the near and far planes to +0x8B8's virtual +0x48.
+#[allow(clippy::too_many_arguments)]
+pub fn ni_xenon_renderer_do_set_camera_data(
+    e: &mut Engine,
+    this: Ptr<NiDX9Renderer>,
+    location: Ptr,
+    direction: Ptr,
+    up: Ptr,
+    right: Ptr,
+    frustum: Ptr,
+    port: Ptr,
+) {
+    let t = this.addr();
+    if e.mem.u8(t + SKIP_END_SCENE) != 0 {
+        return;
+    }
+    let (loc, dir, up, right, fr, port) = (
+        location.addr(),
+        direction.addr(),
+        up.addr(),
+        right.addr(),
+        frustum.addr(),
+        port.addr(),
+    );
+    let word = |e: &Engine, a: u32, i: u32| e.mem.u32(a.wrapping_add(4 * i));
+    let eye: [u32; 3] =
+        if e.mem.u8(ZEROED_FLAG_0126EFD1) != 0 && e.mem.u8(CAMERA_FLAG_011A9604) != 0 {
+            for i in 0..3 {
+                let v = word(e, CAMERA_POINT_011F426C, i);
+                e.mem.set_u32(CAMERA_POINT_011F474C + 4 * i, v);
+            }
+            [word(e, loc, 0), word(e, loc, 1), word(e, loc, 2)]
+        } else {
+            for i in 0..3 {
+                let v = word(e, loc, i);
+                e.mem.set_u32(CAMERA_POINT_011F474C + 4 * i, v);
+            }
+            [
+                word(e, CAMERA_POINT_011F426C, 0),
+                word(e, CAMERA_POINT_011F426C, 1),
+                word(e, CAMERA_POINT_011F426C, 2),
+            ]
+        };
+    let copy = |e: &Engine, a: u32, i: u32| x87_quiet_bits(word(e, a, i));
+    let view = t + VIEW_MATRIX;
+    for i in 0..3 {
+        let row = view + 0x10 * i;
+        let values = [copy(e, right, i), copy(e, up, i), copy(e, dir, i), 0];
+        for (k, v) in values.iter().enumerate() {
+            e.mem.set_u32(row + 4 * k as u32, *v);
+        }
+    }
+    let ld = |e: &Engine, a: u32, i: u32| x87_load32(word(e, a, i));
+    let (ex, ey, ez) = (x87_load32(eye[0]), x87_load32(eye[1]), x87_load32(eye[2]));
+    let along_right = x87_store32(x87_add(
+        x87_add(x87_mul(ld(e, right, 0), ex), x87_mul(ld(e, right, 1), ey)),
+        x87_mul(ld(e, right, 2), ez),
+    ));
+    e.mem
+        .set_u32(view + 0x30, x87_store32(-x87_load32(along_right)));
+    let along_up = x87_store32(x87_add(
+        x87_add(x87_mul(ld(e, up, 0), ex), x87_mul(ld(e, up, 1), ey)),
+        x87_mul(ld(e, up, 2), ez),
+    ));
+    e.mem
+        .set_u32(view + 0x34, x87_store32(-x87_load32(along_up)));
+    let along_dir = x87_store32(x87_add(
+        x87_add(x87_mul(ld(e, dir, 1), ey), x87_mul(ld(e, dir, 0), ex)),
+        x87_mul(ez, x87_m32(word(e, dir, 2))),
+    ));
+    e.mem
+        .set_u32(view + 0x38, x87_store32(-x87_load32(along_dir)));
+    const ONE_BITS: u32 = 0x3f80_0000;
+    e.mem.set_u32(view + 0x3c, ONE_BITS);
+    let inverse = t + INVERSE_VIEW_MATRIX;
+    for (row, source) in [right, up, dir].iter().enumerate() {
+        for i in 0..3 {
+            let v = copy(e, *source, i);
+            e.mem.set_u32(inverse + 0x10 * row as u32 + 4 * i, v);
+        }
+        e.mem.set_u32(inverse + 0x10 * row as u32 + 0xc, 0);
+    }
+    for (i, v) in eye.iter().enumerate() {
+        e.mem
+            .set_u32(inverse + 0x30 + 4 * i as u32, x87_quiet_bits(*v));
+    }
+    e.mem.set_u32(inverse + 0x3c, ONE_BITS);
+    let device = e.get(this, NiDX9Renderer::device);
+    e.vcall(device, DEVICE_SET_TRANSFORM, &args![2u32, view]);
+    for i in 0..3 {
+        let r = word(e, right, i);
+        e.mem.set_u32(t + QUAD_RIGHT + 4 * i, r);
+        let r = word(e, right, i);
+        e.mem.set_u32(t + 0x634 + 4 * i, r);
+    }
+    for i in 0..3 {
+        let u = word(e, up, i);
+        e.mem.set_u32(t + QUAD_UP + 4 * i, u);
+        let u = word(e, up, i);
+        e.mem.set_u32(t + 0x640 + 4 * i, u);
+    }
+    // NiFrustum: left, right, top, bottom, near, far, then the byte m_bOrtho (Xbox PDB).
+    e.mem.set_u32(t + 0x684, copy(e, fr, 4));
+    let object = e.mem.u32(t + 0x8b8);
+    let range = x87_store32(x87_sub(ld(e, fr, 5), x87_m32(word(e, fr, 4))));
+    e.mem.set_u32(t + 0x688, range);
+    let ortho = e.mem.u8(fr + 0x18) != 0;
+    let width = x87_store32(x87_sub(ld(e, fr, 1), x87_m32(word(e, fr, 0))));
+    let width_sum = x87_store32(x87_add(ld(e, fr, 0), x87_m32(word(e, fr, 1))));
+    let height = x87_store32(x87_sub(ld(e, fr, 2), x87_m32(word(e, fr, 3))));
+    let height_sum = x87_store32(x87_add(ld(e, fr, 3), x87_m32(word(e, fr, 2))));
+    let inverse_range = x87_store32(x87_div(1.0, x87_load32(range)));
+    let flipped = e.vcall(object, 0x4c, &args![]).u8() != 0;
+    let scale = x87_load64(e.mem.u64(PROJECTION_SCALE_01011590));
+    let w = x87_load32(width);
+    let proj = t + PROJECTION_MATRIX;
+    let first = if flipped {
+        x87_div(f64::from_bits(e.mem.u64(PROJECTION_SCALE_0106D4C8)), w)
+    } else {
+        x87_div(scale, w)
+    };
+    e.mem.set_u32(proj, x87_store32(first));
+    e.mem.set_u32(proj + 0x10, 0);
+    if ortho {
+        e.mem.set_u32(proj + 0x20, 0);
+    }
+    let sum = if flipped {
+        x87_load32(width_sum)
+    } else {
+        -x87_load32(width_sum)
+    };
+    let x_offset = x87_store32(x87_div(sum, w));
+    if ortho {
+        e.mem.set_u32(proj + 0x30, x_offset);
+    } else {
+        e.mem.set_u32(proj + 0x20, x_offset);
+        e.mem.set_u32(proj + 0x30, 0);
+    }
+    e.mem.set_u32(proj + 4, 0);
+    let h = x87_load32(height);
+    e.mem.set_u32(proj + 0x14, x87_store32(x87_div(scale, h)));
+    if ortho {
+        e.mem.set_u32(proj + 0x24, 0);
+    }
+    let y_offset = x87_store32(x87_div(-x87_load32(height_sum), h));
+    if ortho {
+        e.mem.set_u32(proj + 0x34, y_offset);
+    } else {
+        e.mem.set_u32(proj + 0x24, y_offset);
+        e.mem.set_u32(proj + 0x34, 0);
+    }
+    e.mem.set_u32(proj + 8, 0);
+    e.mem.set_u32(proj + 0x18, 0);
+    let inv = x87_load32(inverse_range);
+    if ortho {
+        e.mem.set_u32(proj + 0x28, inverse_range);
+        let near = x87_mul(inv, x87_m32(word(e, fr, 4)));
+        e.mem.set_u32(proj + 0x38, x87_store32(-near));
+        e.mem.set_u32(proj + 0xc, 0);
+        e.mem.set_u32(proj + 0x1c, 0);
+        e.mem.set_u32(proj + 0x2c, 0);
+        e.mem.set_u32(proj + 0x3c, ONE_BITS);
+    } else {
+        let far = x87_mul(inv, x87_m32(word(e, fr, 5)));
+        e.mem.set_u32(proj + 0x28, x87_store32(far));
+        let near_far = x87_mul(ld(e, fr, 4), x87_m32(word(e, fr, 5)));
+        e.mem
+            .set_u32(proj + 0x38, x87_store32(-x87_mul(inv, near_far)));
+        e.mem.set_u32(proj + 0xc, 0);
+        e.mem.set_u32(proj + 0x1c, 0);
+        e.mem.set_u32(proj + 0x2c, ONE_BITS);
+        e.mem.set_u32(proj + 0x3c, 0);
+    }
+    e.with_stack(0x80, |e, frame| {
+        let l = frame.addr();
+        if e.mem.u8(ZEROED_FLAG_0126EFD1) != 0 {
+            // The view's z axis (0, 0, 1, 0) and the point (0, 0, [0126efd4]).
+            for (offset, value) in [
+                (0x58, 0),
+                (0x5c, 0),
+                (0x64, 0),
+                (0x28, 0),
+                (0x2c, 0),
+                (0x60, ONE_BITS),
+            ] {
+                e.mem.set_u32(l + offset, value);
+            }
+            let height = x87_quiet_bits(e.mem.u32(ZEROED_VALUE_0126EFD4));
+            e.mem.set_u32(l + 0x30, height);
+            e.call(D3DX_VEC4_TRANSFORM, &args![l + 0x48, l + 0x58, view]);
+            e.call(D3DX_VEC3_NORMALIZE, &args![l + 0x48, l + 0x48]);
+            e.call(D3DX_VEC3_TRANSFORM_COORD, &args![l + 0x38, l + 0x28, view]);
+            let n = |e: &Engine, i: u32| x87_load32(e.mem.u32(l + 0x48 + 4 * i));
+            let p = |e: &Engine, i: u32| x87_load32(e.mem.u32(l + 0x38 + 4 * i));
+            let (nx, ny, nz) = (n(e, 0), n(e, 1), n(e, 2));
+            let distance = x87_store32(x87_add(
+                x87_add(x87_mul(p(e, 1), ny), x87_mul(p(e, 0), nx)),
+                x87_mul(p(e, 2), nz),
+            ));
+            let plane_w = x87_store32(-x87_load32(distance));
+            e.mem.set_u32(l + 0x64, plane_w);
+            let negative = x87_quiet_bits(e.mem.u32(FRUSTUM_SIDE_01012054));
+            let sign = |v: f64| {
+                if 0.0 < v {
+                    ONE_BITS
+                } else if v < 0.0 {
+                    negative
+                } else {
+                    0
+                }
+            };
+            let sign_x = sign(nx);
+            e.mem.set_u32(l + 0x1c, sign_x);
+            let qx = x87_store32(x87_div(x87_load32(sign_x), x87_m32(e.mem.u32(proj))));
+            e.mem.set_u32(l + 0x48, qx);
+            let sign_y = sign(ny);
+            e.mem.set_u32(l + 0x1c, sign_y);
+            let qy = x87_store32(x87_div(x87_load32(sign_y), x87_m32(e.mem.u32(proj + 0x14))));
+            e.mem.set_u32(l + 0x4c, qy);
+            let qw = x87_store32(x87_div(
+                x87_sub(1.0, x87_load32(e.mem.u32(proj + 0x28))),
+                x87_load32(e.mem.u32(proj + 0x38)),
+            ));
+            e.mem.set_u32(l + 0x54, qw);
+            let cw = x87_load32(plane_w);
+            let dot = x87_store32(x87_add(
+                x87_add(
+                    x87_add(x87_mul(x87_load32(qy), ny), x87_mul(x87_load32(qx), nx)),
+                    nz,
+                ),
+                x87_mul(x87_load32(qw), cw),
+            ));
+            let factor = x87_load32(x87_store32(x87_div(1.0, x87_load32(dot))));
+            let column = [
+                x87_store32(x87_mul(nx, factor)),
+                x87_store32(x87_mul(ny, factor)),
+                x87_store32(x87_mul(nz, factor)),
+                x87_store32(x87_mul(factor, cw)),
+            ];
+            for (i, v) in column.iter().enumerate() {
+                e.mem.set_u32(l + 0x38 + 4 * i as u32, *v);
+            }
+            for (i, v) in column.iter().enumerate() {
+                e.mem.set_u32(proj + 8 + 0x10 * i as u32, *v);
+            }
+        }
+        let device = e.get(this, NiDX9Renderer::device);
+        e.vcall(device, DEVICE_SET_TRANSFORM, &args![3u32, proj]);
+        let group = e.get(this, NiDX9Renderer::target_group);
+        let target_width = e.vcall(group, 0x8c, &args![0u32]).u32();
+        let wf = x87_load32(unsigned_to_float(e, target_width));
+        let group = e.get(this, NiDX9Renderer::target_group);
+        let target_height = e.vcall(group, 0x90, &args![0u32]).u32();
+        let hf = x87_load32(unsigned_to_float(e, target_height));
+        // NiRect<float>: left, right, top, bottom.
+        let x = chop_low_word(x87_mul(wf, x87_m32(word(e, port, 0))));
+        e.mem.set_u32(l + 0x68, x);
+        let y = chop_low_word(x87_mul(x87_sub(1.0, ld(e, port, 2)), hf));
+        e.mem.set_u32(l + 0x6c, y);
+        let span = x87_sub(ld(e, port, 1), x87_m32(word(e, port, 0)));
+        e.mem.set_u32(l + 0x70, chop_low_word(x87_mul(wf, span)));
+        let span = x87_sub(ld(e, port, 2), x87_m32(word(e, port, 3)));
+        e.mem.set_u32(l + 0x74, chop_low_word(x87_mul(hf, span)));
+        e.mem.set_u32(l + 0x78, 0);
+        e.mem.set_u32(l + 0x7c, ONE_BITS);
+        let device = e.get(this, NiDX9Renderer::device);
+        e.vcall(device, DEVICE_SET_VIEWPORT, &args![l + 0x68]);
+    });
+    e.call(
+        D3DX_MATRIX_MULTIPLY,
+        &args![t + VIEW_PROJECTION_MATRIX, view, proj],
+    );
+    let object = e.mem.u32(t + 0x8b8);
+    let far = copy(e, fr, 5);
+    let near = copy(e, fr, 4);
+    e.vcall(object, 0x48, &args![near, far]);
+}
+
+#[cfg(test)]
+mod a07_camera_tests {
+    use super::*;
+
+    const DEVICE_BASE: u32 = 0x6100_0000;
+    const GROUP_BASE: u32 = 0x6140_0000;
+    const OBJECT_BASE: u32 = 0x6180_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn nop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn object(e: &mut Engine, table: u32, base: u32) -> u32 {
+        let targets: Vec<u32> = (0..0x80).map(|n| base + 4 * n).collect();
+        e.put_vtable(table, &targets);
+        let o = e.mem.alloc(0x10);
+        e.mem.set_u32(o, table);
+        o
+    }
+
+    fn floats(e: &mut Engine, values: &[f32]) -> u32 {
+        let p = e.mem.alloc(4 * values.len() as u32 + 4);
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_u32(p + 4 * i as u32, v.to_bits());
+        }
+        p
+    }
+
+    fn f(e: &Engine, a: u32) -> f32 {
+        f32::from_bits(e.mem.u32(a))
+    }
+
+    /// A renderer with a device, a 800×600 target group and the object at +0x8B8 (its
+    /// virtual +0x4C answers `flipped`), the globals mapped, and the inputs.
+    fn set_up(e: &mut Engine, flipped: bool) -> (Ptr<NiDX9Renderer>, u32, [u32; 4]) {
+        e.map(0x0126_e000, 0x2000);
+        e.map(0x011a_9000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x0101_1000, 0x2000);
+        e.map(0x0106_d000, 0x1000);
+        e.map(TWO_TO_32_01099378 & !0xfff, 0x1000);
+        e.mem.set_u64(PROJECTION_SCALE_01011590, 2.0f64.to_bits());
+        e.mem
+            .set_u64(PROJECTION_SCALE_0106D4C8, (-2.0f64).to_bits());
+        e.mem.set_u32(FRUSTUM_SIDE_01012054, (-1.0f32).to_bits());
+        for (i, v) in [4.0f32, 5.0, 6.0].iter().enumerate() {
+            e.mem
+                .set_u32(CAMERA_POINT_011F426C + 4 * i as u32, v.to_bits());
+        }
+        let r = e.new_object::<NiDX9Renderer>();
+        let device = object(e, 0x6000, DEVICE_BASE);
+        e.set(r, NiDX9Renderer::device, device);
+        let group = object(e, 0x6400, GROUP_BASE);
+        e.set(r, NiDX9Renderer::target_group, group);
+        e.register(GROUP_BASE + 0x8c, |_, _| 800u32.into_ret());
+        e.register(GROUP_BASE + 0x90, |_, _| 600u32.into_ret());
+        let other = object(e, 0x6800, OBJECT_BASE);
+        e.mem.set_u32(r.addr() + 0x8b8, other);
+        if flipped {
+            e.register(OBJECT_BASE + 0x4c, |_, _| 1u32.into_ret());
+        } else {
+            e.register(OBJECT_BASE + 0x4c, |_, _| 0u32.into_ret());
+        }
+        e.register(OBJECT_BASE + 0x48, nop);
+        e.register(DEVICE_BASE + DEVICE_SET_TRANSFORM, nop);
+        e.register(DEVICE_BASE + DEVICE_SET_VIEWPORT, nop);
+        e.register(D3DX_MATRIX_MULTIPLY, nop);
+        let location = floats(e, &[1.0, 2.0, 3.0]);
+        let direction = floats(e, &[0.0, 0.0, 1.0]);
+        let up = floats(e, &[0.0, 1.0, 0.0]);
+        let right = floats(e, &[1.0, 0.0, 0.0]);
+        (r, device, [location, direction, up, right])
+    }
+
+    #[test]
+    fn perspective_camera_builds_the_view_projection_and_viewport() {
+        let mut e = Engine::new();
+        let (r, device, [location, direction, up, right]) = set_up(&mut e, false);
+        let t = r.addr();
+        let frustum = floats(&mut e, &[-1.0, 1.0, 1.0, -1.0, 1.0, 5.0, 0.0]);
+        let port = floats(&mut e, &[0.0, 1.0, 1.0, 0.0]);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00e6_c780,
+            &args![r, location, direction, up, right, frustum, port],
+        );
+        // The flags are clear: the eye is the point at 011f426c, the location is kept.
+        assert_eq!(f(&e, CAMERA_POINT_011F474C + 8), 3.0);
+        let view = t + VIEW_MATRIX;
+        assert_eq!(
+            (0..16).map(|i| f(&e, view + 4 * i)).collect::<Vec<_>>(),
+            vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -4.0, -5.0, -6.0, 1.0]
+        );
+        assert_eq!(f(&e, t + INVERSE_VIEW_MATRIX + 0x34), 5.0);
+        assert_eq!(f(&e, t + INVERSE_VIEW_MATRIX + 0x3c), 1.0);
+        assert_eq!(f(&e, t + QUAD_RIGHT), 1.0);
+        assert_eq!(f(&e, t + QUAD_UP + 4), 1.0);
+        assert_eq!(f(&e, t + 0x640 + 4), 1.0);
+        assert_eq!(f(&e, t + 0x684), 1.0);
+        assert_eq!(f(&e, t + 0x688), 4.0);
+        let proj = t + PROJECTION_MATRIX;
+        assert_eq!(f(&e, proj), 1.0);
+        assert_eq!(e.mem.u32(proj + 0x20), 0x8000_0000);
+        assert_eq!(f(&e, proj + 0x14), 1.0);
+        assert_eq!(e.mem.u32(proj + 0x24), 0x8000_0000);
+        assert_eq!(f(&e, proj + 0x28), 1.25);
+        assert_eq!(f(&e, proj + 0x38), -1.25);
+        assert_eq!(f(&e, proj + 0x2c), 1.0);
+        assert_eq!(f(&e, proj + 0x3c), 0.0);
+        assert_eq!(
+            calls(&e, DEVICE_BASE + DEVICE_SET_TRANSFORM),
+            vec![vec![device, 2, view], vec![device, 3, proj]]
+        );
+        let viewport = calls(&e, DEVICE_BASE + DEVICE_SET_VIEWPORT);
+        assert_eq!(viewport.len(), 1);
+        // Its values: viewport_is_the_rectangle_of_the_target.
+        assert_eq!(
+            calls(&e, D3DX_MATRIX_MULTIPLY),
+            vec![vec![t + VIEW_PROJECTION_MATRIX, view, proj]]
+        );
+        let other = e.mem.u32(t + 0x8b8);
+        assert_eq!(
+            calls(&e, OBJECT_BASE + 0x48),
+            vec![vec![other, 1.0f32.to_bits(), 5.0f32.to_bits()]]
+        );
+        assert!(calls(&e, D3DX_VEC4_TRANSFORM).is_empty());
+    }
+
+    #[test]
+    fn viewport_is_the_rectangle_of_the_target() {
+        let mut e = Engine::new();
+        let (r, _, [location, direction, up, right]) = set_up(&mut e, false);
+        let frustum = floats(&mut e, &[-1.0, 1.0, 1.0, -1.0, 1.0, 5.0, 0.0]);
+        let port = floats(&mut e, &[0.25, 0.75, 0.5, 0.0]);
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(DEVICE_BASE + DEVICE_SET_VIEWPORT, move |e, a| {
+            log.borrow_mut()
+                .extend((0..6).map(|i| e.mem.u32(a[1] + 4 * i)));
+            Ret::default()
+        });
+        e.call(
+            0x00e6_c780,
+            &args![r, location, direction, up, right, frustum, port],
+        );
+        assert_eq!(
+            *seen.borrow(),
+            vec![200, 300, 400, 300, 0, 1.0f32.to_bits()]
+        );
+    }
+
+    #[test]
+    fn oblique_orthographic_camera_replaces_the_third_column() {
+        let mut e = Engine::new();
+        let (r, _, [location, direction, up, right]) = set_up(&mut e, true);
+        let t = r.addr();
+        e.mem.set_u8(ZEROED_FLAG_0126EFD1, 1);
+        e.mem.set_u8(CAMERA_FLAG_011A9604, 1);
+        e.mem.set_u32(ZEROED_VALUE_0126EFD4, 7.0f32.to_bits());
+        let frustum = floats(&mut e, &[-1.0, 3.0, 1.0, -1.0, 1.0, 5.0, 0.0]);
+        e.mem.set_u8(frustum + 0x18, 1);
+        let port = floats(&mut e, &[0.0, 1.0, 1.0, 0.0]);
+        // The view's z axis transforms to (0, 0, 1); the point to (0, 0, 3).
+        e.register(D3DX_VEC4_TRANSFORM, |e, a| {
+            assert_eq!(e.mem.u32(a[1] + 8), 1.0f32.to_bits());
+            for (i, v) in [0.0f32, 0.0, 1.0, 0.0].iter().enumerate() {
+                e.mem.set_u32(a[0] + 4 * i as u32, v.to_bits());
+            }
+            a[0].into_ret()
+        });
+        e.register(D3DX_VEC3_NORMALIZE, |_, a| a[0].into_ret());
+        e.register(D3DX_VEC3_TRANSFORM_COORD, |e, a| {
+            assert_eq!(e.mem.u32(a[1] + 8), 7.0f32.to_bits());
+            for (i, v) in [0.0f32, 0.0, 3.0].iter().enumerate() {
+                e.mem.set_u32(a[0] + 4 * i as u32, v.to_bits());
+            }
+            a[0].into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00e6_c780,
+            &args![r, location, direction, up, right, frustum, port],
+        );
+        // Both flags set: the eye is the location, the point at 011f426c is copied.
+        assert_eq!(f(&e, CAMERA_POINT_011F474C), 4.0);
+        assert_eq!(f(&e, t + VIEW_MATRIX + 0x30), -1.0);
+        let proj = t + PROJECTION_MATRIX;
+        // Flipped orthographic: -2 / 4, (left + right) / 4, 2 / 2, -(top + bottom) / 2.
+        assert_eq!(f(&e, proj), -0.5);
+        assert_eq!(f(&e, proj + 0x30), 0.5);
+        assert_eq!(f(&e, proj + 0x14), 1.0);
+        assert_eq!(e.mem.u32(proj + 0x34), 0x8000_0000);
+        assert_eq!(f(&e, proj + 0x3c), 1.0);
+        assert_eq!(f(&e, proj + 0x2c), 0.0);
+        // The plane (0, 0, 1, -3); q.w = (1 - 0.25) / -0.25 = -3; dot = 1 + 9.
+        let factor = x87_store32(x87_div(1.0, 10.0));
+        let ff = f64::from(f32::from_bits(factor));
+        assert_eq!(e.mem.u32(proj + 8), 0);
+        assert_eq!(e.mem.u32(proj + 0x18), 0);
+        assert_eq!(e.mem.u32(proj + 0x28), factor);
+        assert_eq!(e.mem.u32(proj + 0x38), x87_store32(ff * -3.0));
+        assert_eq!(calls(&e, D3DX_VEC3_NORMALIZE).len(), 1);
+    }
+
+    #[test]
+    fn nothing_while_the_scene_is_skipped() {
+        let mut e = Engine::new();
+        let r = e.new_object::<NiDX9Renderer>();
+        e.mem.set_u8(r.addr() + SKIP_END_SCENE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_c780, &args![r, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+}
+
+/// The `float` constants of the screen-space camera (`0102295c` -0.5, `01016248` 0.5,
+/// `010ed968` 9999.0 for the depth range, `010162c0` 2.0, `010ed964` and `010ed960` about
+/// ±1.0e-4 for the depth column, `01022958` 10000.0 for the far plane) and the `double`
+/// `0101a6b0` (-1.0) the x offset is divided from (values as the exe holds them).
+const SCREEN_VIEW_X_0102295C: u32 = 0x0102_295c;
+const SCREEN_VIEW_Y_01016248: u32 = 0x0101_6248;
+const SCREEN_RANGE_010ED968: u32 = 0x010e_d968;
+const SCREEN_SCALE_010162C0: u32 = 0x0101_62c0;
+const SCREEN_OFFSET_0101A6B0: u32 = 0x0101_a6b0;
+const SCREEN_DEPTH_010ED964: u32 = 0x010e_d964;
+const SCREEN_DEPTH_OFFSET_010ED960: u32 = 0x010e_d960;
+const SCREEN_FAR_01022958: u32 = 0x0102_2958;
+
+// Translated from 00e6cf40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (renderer vtable +0x190, `Do_SetScreenSpaceCameraData`'s slot
+/// on Xbox): `thiscall`, one word (an `NiRect<float>` viewport or 0). Nothing with the byte
+/// at +0x6FC set. Takes the render target group's size (+0x888, virtuals +0x8C, +0x90 with
+/// 0) as floats, sets a fixed view matrix (+0x980: x kept, y and z negated by the `float`
+/// -1.0 at `01012054`, translated by (-0.5, 0.5, 1)) and its inverse (+0xA40), the right
+/// (1, 0, 0) and up (0, -1, 0) vectors (+0x64C/+0x634, +0x658/+0x640), the near plane 1.0
+/// (+0x684) and depth range (+0x688), and a projection (+0x9C0) with the target's size
+/// (`-1.0 / width` and `1 / height` as the offsets). The viewport is the rectangle of the
+/// target (truncated as `00e6c780` does), or without one the whole target; depths 0 to 1.
+/// Ends with near 1.0 and far 10000.0 (`01022958`) to +0x8B8's virtual +0x48.
+pub fn fn_00e6cf40(e: &mut Engine, this: Ptr<NiDX9Renderer>, port: Ptr) {
+    let t = this.addr();
+    if e.mem.u8(t + SKIP_END_SCENE) != 0 {
+        return;
+    }
+    let group = e.get(this, NiDX9Renderer::target_group);
+    let target_width = e.vcall(group, 0x8c, &args![0u32]).u32();
+    let group = e.get(this, NiDX9Renderer::target_group);
+    let target_height = e.vcall(group, 0x90, &args![0u32]).u32();
+    let wf = unsigned_to_float(e, target_width);
+    let hf = unsigned_to_float(e, target_height);
+    const ONE_BITS: u32 = 0x3f80_0000;
+    let constant = |e: &Engine, a: u32| x87_quiet_bits(e.mem.u32(a));
+    let minus_one = constant(e, FRUSTUM_SIDE_01012054);
+    let half_x = constant(e, SCREEN_VIEW_X_0102295C);
+    let half_y = constant(e, SCREEN_VIEW_Y_01016248);
+    let view = t + VIEW_MATRIX;
+    let view_values = [
+        ONE_BITS, 0, 0, 0, 0, minus_one, 0, 0, 0, 0, ONE_BITS, 0, half_x, half_y, ONE_BITS,
+        ONE_BITS,
+    ];
+    for (i, v) in view_values.iter().enumerate() {
+        e.mem.set_u32(view + 4 * i as u32, *v);
+    }
+    let inverse = t + INVERSE_VIEW_MATRIX;
+    let inverse_values = [
+        ONE_BITS, 0, 0, 0, 0, minus_one, 0, 0, 0, 0, ONE_BITS, 0, half_y, half_y, minus_one,
+        ONE_BITS,
+    ];
+    for (i, v) in inverse_values.iter().enumerate() {
+        e.mem.set_u32(inverse + 4 * i as u32, *v);
+    }
+    let device = e.get(this, NiDX9Renderer::device);
+    e.vcall(device, DEVICE_SET_TRANSFORM, &args![2u32, view]);
+    for (i, v) in [ONE_BITS, 0, 0].iter().enumerate() {
+        e.mem.set_u32(t + QUAD_RIGHT + 4 * i as u32, *v);
+        e.mem.set_u32(t + 0x634 + 4 * i as u32, *v);
+    }
+    for (i, v) in [0, minus_one, 0].iter().enumerate() {
+        e.mem.set_u32(t + QUAD_UP + 4 * i as u32, *v);
+        e.mem.set_u32(t + 0x640 + 4 * i as u32, *v);
+    }
+    e.mem.set_u32(t + 0x684, ONE_BITS);
+    let range = constant(e, SCREEN_RANGE_010ED968);
+    e.mem.set_u32(t + 0x688, range);
+    let proj = t + PROJECTION_MATRIX;
+    let scale = constant(e, SCREEN_SCALE_010162C0);
+    let x_offset = x87_div(
+        f64::from_bits(e.mem.u64(SCREEN_OFFSET_0101A6B0)),
+        x87_load32(wf),
+    );
+    let y_offset = x87_div(1.0, x87_load32(hf));
+    let depth = constant(e, SCREEN_DEPTH_010ED964);
+    let depth_offset = constant(e, SCREEN_DEPTH_OFFSET_010ED960);
+    let proj_values = [
+        scale,
+        0,
+        0,
+        0,
+        0,
+        scale,
+        0,
+        0,
+        0,
+        0,
+        depth,
+        0,
+        x87_store32(x_offset),
+        x87_store32(y_offset),
+        depth_offset,
+        ONE_BITS,
+    ];
+    for (i, v) in proj_values.iter().enumerate() {
+        e.mem.set_u32(proj + 4 * i as u32, *v);
+    }
+    let device = e.get(this, NiDX9Renderer::device);
+    e.vcall(device, DEVICE_SET_TRANSFORM, &args![3u32, proj]);
+    let p = port.addr();
+    e.with_stack(0x18, |e, viewport| {
+        let v = viewport.addr();
+        let rectangle = if p != 0 {
+            let word = |e: &Engine, i: u32| e.mem.u32(p + 4 * i);
+            let w = x87_load32(wf);
+            let h = x87_load32(hf);
+            let x = chop_low_word(x87_mul(w, x87_load32(word(e, 0))));
+            let y = chop_low_word(x87_mul(x87_sub(1.0, x87_load32(word(e, 2))), h));
+            let span = x87_sub(x87_load32(word(e, 1)), x87_m32(word(e, 0)));
+            let width = chop_low_word(x87_mul(w, span));
+            let span = x87_sub(x87_load32(word(e, 2)), x87_m32(word(e, 3)));
+            let height = chop_low_word(x87_mul(h, span));
+            [x, y, width, height]
+        } else {
+            [0, 0, target_width, target_height]
+        };
+        for (i, value) in rectangle.iter().enumerate() {
+            e.mem.set_u32(v + 4 * i as u32, *value);
+        }
+        e.mem.set_u32(v + 0x10, 0);
+        e.mem.set_u32(v + 0x14, ONE_BITS);
+        let device = e.get(this, NiDX9Renderer::device);
+        e.vcall(device, DEVICE_SET_VIEWPORT, &args![v]);
+    });
+    let far = constant(e, SCREEN_FAR_01022958);
+    let object = e.mem.u32(t + 0x8b8);
+    e.vcall(object, 0x48, &args![ONE_BITS, far]);
+}
+
+#[cfg(test)]
+mod a07_screen_camera_tests {
+    use super::*;
+
+    const DEVICE_BASE: u32 = 0x6100_0000;
+    const GROUP_BASE: u32 = 0x6140_0000;
+    const OBJECT_BASE: u32 = 0x6180_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn nop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn object(e: &mut Engine, table: u32, base: u32) -> u32 {
+        let targets: Vec<u32> = (0..0x80).map(|n| base + 4 * n).collect();
+        e.put_vtable(table, &targets);
+        let o = e.mem.alloc(0x10);
+        e.mem.set_u32(o, table);
+        o
+    }
+
+    type Seen = std::rc::Rc<std::cell::RefCell<Vec<u32>>>;
+
+    fn set_up(e: &mut Engine) -> (Ptr<NiDX9Renderer>, u32, Seen) {
+        e.map(0x0101_0000, 0x0002_0000);
+        e.map(0x010e_d000, 0x1000);
+        e.map(TWO_TO_32_01099378 & !0xfff, 0x1000);
+        for (a, v) in [
+            (FRUSTUM_SIDE_01012054, -1.0f32),
+            (SCREEN_VIEW_X_0102295C, -0.5),
+            (SCREEN_VIEW_Y_01016248, 0.5),
+            (SCREEN_RANGE_010ED968, 9999.0),
+            (SCREEN_SCALE_010162C0, 2.0),
+            (SCREEN_DEPTH_010ED964, 1.0e-4),
+            (SCREEN_DEPTH_OFFSET_010ED960, -1.0e-4),
+            (SCREEN_FAR_01022958, 10000.0),
+        ] {
+            e.mem.set_u32(a, v.to_bits());
+        }
+        e.mem.set_u64(SCREEN_OFFSET_0101A6B0, (-1.0f64).to_bits());
+        let r = e.new_object::<NiDX9Renderer>();
+        let device = object(e, 0x6000, DEVICE_BASE);
+        e.set(r, NiDX9Renderer::device, device);
+        let group = object(e, 0x6400, GROUP_BASE);
+        e.set(r, NiDX9Renderer::target_group, group);
+        e.register(GROUP_BASE + 0x8c, |_, _| 800u32.into_ret());
+        e.register(GROUP_BASE + 0x90, |_, _| 400u32.into_ret());
+        let other = object(e, 0x6800, OBJECT_BASE);
+        e.mem.set_u32(r.addr() + 0x8b8, other);
+        e.register(OBJECT_BASE + 0x48, nop);
+        e.register(DEVICE_BASE + DEVICE_SET_TRANSFORM, nop);
+        let seen: Seen = Default::default();
+        let log = seen.clone();
+        e.register_double(DEVICE_BASE + DEVICE_SET_VIEWPORT, move |e, a| {
+            log.borrow_mut()
+                .extend((0..6).map(|i| e.mem.u32(a[1] + 4 * i)));
+            Ret::default()
+        });
+        (r, device, seen)
+    }
+
+    fn f(e: &Engine, a: u32) -> f32 {
+        f32::from_bits(e.mem.u32(a))
+    }
+
+    #[test]
+    fn screen_camera_sets_the_fixed_view_and_the_target_projection() {
+        let mut e = Engine::new();
+        let (r, device, seen) = set_up(&mut e);
+        let t = r.addr();
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_cf40, &args![r, 0u32]);
+        let view = t + VIEW_MATRIX;
+        assert_eq!(
+            (0..16).map(|i| f(&e, view + 4 * i)).collect::<Vec<_>>(),
+            vec![1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -0.5, 0.5, 1.0, 1.0]
+        );
+        let inverse = t + INVERSE_VIEW_MATRIX;
+        assert_eq!(
+            (12..16).map(|i| f(&e, inverse + 4 * i)).collect::<Vec<_>>(),
+            vec![0.5, 0.5, -1.0, 1.0]
+        );
+        assert_eq!(f(&e, t + QUAD_UP + 4), -1.0);
+        assert_eq!(f(&e, t + 0x634), 1.0);
+        assert_eq!(f(&e, t + 0x688), 9999.0);
+        let proj = t + PROJECTION_MATRIX;
+        assert_eq!(f(&e, proj), 2.0);
+        assert_eq!(f(&e, proj + 0x14), 2.0);
+        assert_eq!(f(&e, proj + 0x28), 1.0e-4);
+        assert_eq!(f(&e, proj + 0x30), -1.0 / 800.0);
+        assert_eq!(f(&e, proj + 0x34), 1.0 / 400.0);
+        assert_eq!(f(&e, proj + 0x38), -1.0e-4);
+        assert_eq!(f(&e, proj + 0x3c), 1.0);
+        assert_eq!(
+            calls(&e, DEVICE_BASE + DEVICE_SET_TRANSFORM),
+            vec![vec![device, 2, view], vec![device, 3, proj]]
+        );
+        // Without a rectangle the viewport is the whole target.
+        assert_eq!(*seen.borrow(), vec![0, 0, 800, 400, 0, 1.0f32.to_bits()]);
+        let other = e.mem.u32(t + 0x8b8);
+        assert_eq!(
+            calls(&e, OBJECT_BASE + 0x48),
+            vec![vec![other, 1.0f32.to_bits(), 10000.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn screen_camera_viewport_takes_the_rectangle() {
+        let mut e = Engine::new();
+        let (r, _, seen) = set_up(&mut e);
+        let port = e.mem.alloc(0x10);
+        for (i, v) in [0.25f32, 0.75, 0.5, 0.0].iter().enumerate() {
+            e.mem.set_u32(port + 4 * i as u32, v.to_bits());
+        }
+        e.call(0x00e6_cf40, &args![r, port]);
+        assert_eq!(
+            *seen.borrow(),
+            vec![200, 200, 400, 200, 0, 1.0f32.to_bits()]
+        );
+        // Skipped scene: nothing.
+        e.mem.set_u8(r.addr() + SKIP_END_SCENE, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e6_cf40, &args![r, port]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+}
+
+/// The two RTTI records `PackGeometryBuffer` tells the data's kind by: `011f4a88` (walked
+/// up the data's own RTTI chain; then the triangle list `00a7b850`, `GetTriList`) and
+/// `011f4a70` (`IsKindOf`; then the strip lists `00a75f10`, `GetStripLists`).
+const TRI_LIST_DATA_RTTI_011F4A88: u32 = 0x011f_4a88;
+const STRIP_DATA_RTTI_011F4A70: u32 = 0x011f_4a70;
+/// `NiD3DHLSLVertexShader::GetEntryPoint` (`00e8bf90`, engine map; `thiscall` on the object
+/// at +0x8BC), `NiXenonVertexBufferManager::PackUntransformedVB` (`00e8c1e0`, engine map;
+/// `thiscall` on it, five words), `00e8f200` (`thiscall` on the object at +0x8C0, seven
+/// words: makes or refills an index buffer) and `NiGeometryBufferData::RemoveIB`
+/// (`00e8eee0`, engine map; `thiscall`).
+const GET_ENTRY_POINT_00E8BF90: u32 = 0x00e8_bf90;
+const PACK_UNTRANSFORMED_VB_00E8C1E0: u32 = 0x00e8_c1e0;
+const INDEX_BUFFER_00E8F200: u32 = 0x00e8_f200;
+const REMOVE_IB_00E8EEE0: u32 = 0x00e8_eee0;
+
+// Translated from 00e71fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiXenonRenderer::PackGeometryBuffer` (Xbox PDB): `thiscall`, five words (the geometry
+/// buffer data, the geometry data, an object with a word at +0x18 or 0, a stream source or
+/// 0, a force byte); answers whether it packed. False without buffer data or data; true at
+/// once when not forced and the buffer data is already packed (`00e8eeb0`) with the data's
+/// word +0xE at `0x4000` in its bits `0x7000`. The buffer's word +4 gets the flags
+/// `00e6da60` builds. The vertex count (data virtual +0x90) and the word +8 are kept, and for
+/// triangle data (RTTI `011f4a88` in the data's RTTI chain) the triangle count (virtual
+/// +0xA8), the index count `3·[+0x40]` and the list (`00a7b850`), for strip data
+/// (`IsKindOf` `011f4a70`) the strip count +0x44, the lengths +0x48 and the index count
+/// `[+0x40] + 2·strips` (`00a75f10`). The streams (the source's word +0x20, else 1) are
+/// reset (each unpacked one through the buffer's +8 object, virtual +0x1C, then `00e8ef10`)
+/// unless the buffer is packed with that count, which keeps the data's dirty bits (+0xE,
+/// low 12 bits, with 3 when the object's +0x18 is not the entry point of +0x8BC's
+/// `00e8bf90`, which then replaces it); otherwise and when forced all bits count. With any
+/// bit but `0x10`, each stream is packed by the source's virtual +0xAC, or for a single
+/// stream by `PackUntransformedVB`; a failure answers false. With indices and the bits
+/// `0x30` the index buffer is made (`00e8f200`, false on failure) and a new one replaces the
+/// old (`RemoveIB`, +0x34, +0x2C, +0x30). Then the data's dirty bits are cleared (+0xE keeps
+/// `0xF000`).
+pub fn ni_xenon_renderer_pack_geometry_buffer(
+    e: &mut Engine,
+    this: Ptr<NiDX9Renderer>,
+    buffer: Ptr,
+    data: Ptr,
+    object: u32,
+    source: u32,
+    force: u8,
+) -> bool {
+    let b = buffer.addr();
+    let d = data.addr();
+    if b == 0 || d == 0 {
+        return false;
+    }
+    let packed = e.call(DATA_IS_PACKED_00E8EEB0, &args![buffer]).u8() != 0;
+    if force == 0 && packed && e.mem.u16(d + 0xe) & 0x7000 == 0x4000 {
+        return true;
+    }
+    let has_28 = e.mem.u32(d + 0x28) != 0;
+    let has_24 = e.mem.u32(d + 0x24) != 0;
+    let top_bits = has_24 && e.mem.u16(d + 0xc) & 0xf000 != 0;
+    let mut low = u32::from(e.mem.u16(d + 0xc)) & 1;
+    let limit = e.global::<u32>(STREAM_LIMIT_011BF558);
+    if low > limit {
+        low = limit;
+    }
+    let mut stream_flags = 0u32;
+    if has_28 {
+        stream_flags = 0x40_0000;
+    }
+    if has_24 {
+        stream_flags |= 0x80_0000;
+    }
+    if top_bits {
+        stream_flags |= 0x20_0000;
+    }
+    e.mem.set_u32(b + 4, (low << 24) | stream_flags);
+    let vertices = u32::from(e.vcall(d, 0x90, &args![]).u16());
+    let second = u32::from(e.mem.u16(d + 8));
+    let mut triangles = 0u32;
+    let mut base_count = 0u32;
+    let mut index_count = 0u32;
+    let mut list = 0u32;
+    let mut lengths = 0u32;
+    let mut strips = 0u32;
+    let mut rtti = e.vcall(d, 8, &args![]).u32();
+    let mut tri_list = false;
+    while rtti != 0 {
+        if rtti == TRI_LIST_DATA_RTTI_011F4A88 {
+            tri_list = true;
+            break;
+        }
+        rtti = e.mem.u32(rtti + 4);
+    }
+    if tri_list {
+        triangles = u32::from(e.vcall(d, 0xa8, &args![]).u16());
+        base_count = u32::from(e.mem.u16(d + 0x40));
+        list = e.call(TRI_SHAPE_DATA_GET_TRI_LIST, &args![data]).u32();
+        lengths = 0;
+        strips = 1;
+        index_count = base_count * 3;
+    } else if e
+        .call(IS_KIND_OF, &args![STRIP_DATA_RTTI_011F4A70, data])
+        .u8()
+        != 0
+    {
+        triangles = u32::from(e.vcall(d, 0xa8, &args![]).u16());
+        base_count = u32::from(e.mem.u16(d + 0x40));
+        list = e.call(TRI_STRIPS_DATA_GET_STRIP_LISTS, &args![data]).u32();
+        lengths = e.mem.u32(d + 0x48);
+        strips = u32::from(e.mem.u16(d + 0x44));
+        index_count = base_count + strips * 2;
+    }
+    let count = if source != 0 {
+        e.mem.u32(source.wrapping_add(0x20))
+    } else {
+        1
+    };
+    let mut dirty = u32::from(e.mem.u16(d + 0xe) & 0xfff);
+    if object != 0 {
+        let previous = e.mem.u32(object.wrapping_add(0x18));
+        let group = e.get(this, NiDX9Renderer::object_8bc);
+        if previous != e.call(GET_ENTRY_POINT_00E8BF90, &args![group]).u32() {
+            dirty |= 3;
+            let group = e.get(this, NiDX9Renderer::object_8bc);
+            let entry = e.call(GET_ENTRY_POINT_00E8BF90, &args![group]).u32();
+            e.mem.set_u32(object.wrapping_add(0x18), entry);
+        }
+    }
+    if force != 0 {
+        dirty = 0xfff;
+    }
+    if packed {
+        if count != e.mem.u32(b + 0x20) {
+            e.call(DATA_SET_COUNT_00E8EF10, &args![buffer, count]);
+            dirty = 0xfff;
+        }
+    } else {
+        let owner = e.mem.u32(b + 8);
+        let mut index = 0u32;
+        if count > 0 {
+            loop {
+                e.vcall(owner, 0x1c, &args![buffer, index]);
+                index += 1;
+                if index >= count {
+                    break;
+                }
+            }
+        }
+        e.call(DATA_SET_COUNT_00E8EF10, &args![buffer, count]);
+        e.mem.set_u32(b + 0x38, 0);
+        dirty = 0xfff;
+    }
+    e.mem.set_u32(b + 0x18, vertices);
+    e.mem.set_u32(b + 0x1c, second);
+    e.mem.set_u32(b + 0x4c, lengths);
+    e.mem.set_u32(b + 0x44, base_count);
+    e.mem.set_u32(b + 0x40, triangles);
+    e.mem.set_u32(b + 0x50, list);
+    e.mem.set_u32(b + 0x48, strips);
+    if dirty & 0xffff_ffef != 0 {
+        let mut index = 0u32;
+        while index < count {
+            let stream = if index < e.mem.u32(b + 0x20) {
+                let slots = e.mem.u32(b + 0x28);
+                e.mem.u32(slots.wrapping_add(index * 4))
+            } else {
+                0
+            };
+            let done = source != 0
+                && e.vcall(
+                    source,
+                    0xac,
+                    &args![data, object, 0u32, dirty, stream, index, 0u32, 0u32, 0u32],
+                )
+                .u32()
+                    != 0;
+            if !done {
+                if count != 1 {
+                    return false;
+                }
+                let group = e.get(this, NiDX9Renderer::object_8bc);
+                let vb = e
+                    .call(
+                        PACK_UNTRANSFORMED_VB_00E8C1E0,
+                        &args![group, data, object, dirty, stream, 0u32],
+                    )
+                    .u32();
+                if vb == 0 {
+                    return false;
+                }
+            }
+            index += 1;
+        }
+    }
+    if list != 0 && dirty & 0x30 != 0 {
+        let dynamic = if e.mem.u8(b + 0x14) != 0 { 0x10 } else { 0 };
+        let old = e.mem.u32(b + 0x34);
+        let not_ex = u32::from(e.mem.u8(DIRECT3D_IS_EX) == 0);
+        let made = e.with_stack(4, |e, slot| {
+            let s = slot.addr();
+            e.mem.set_u32(s, e.mem.u32(b + 0x30));
+            let manager = e.mem.u32(this.addr() + 0x8c0);
+            let made = e
+                .call(
+                    INDEX_BUFFER_00E8F200,
+                    &args![
+                        manager,
+                        list,
+                        index_count,
+                        index_count,
+                        old,
+                        s,
+                        not_ex,
+                        dynamic
+                    ],
+                )
+                .u32();
+            (made, e.mem.u32(s))
+        });
+        let (index_buffer, offset) = made;
+        if index_buffer == 0 {
+            return false;
+        }
+        if old != index_buffer {
+            e.call(REMOVE_IB_00E8EEE0, &args![buffer]);
+            e.mem.set_u32(b + 0x34, index_buffer);
+            e.mem.set_u32(b + 0x2c, index_count);
+            e.mem.set_u32(b + 0x30, offset);
+        }
+    }
+    let flags = e.mem.u16(d + 0xe);
+    e.mem.set_u16(d + 0xe, flags & 0xf000);
+    true
+}
+
+#[cfg(test)]
+mod a07_pack_tests {
+    use super::*;
+
+    const DATA_BASE: u32 = 0x6100_0000;
+    const OWNER_BASE: u32 = 0x6140_0000;
+    const SOURCE_BASE: u32 = 0x6180_0000;
+    const RTTI_CHAIN: u32 = 0x6000_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn nop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn object(e: &mut Engine, table: u32, base: u32, size: u32) -> u32 {
+        let targets: Vec<u32> = (0..0x80).map(|n| base + 4 * n).collect();
+        e.put_vtable(table, &targets);
+        let o = e.mem.alloc(size);
+        e.mem.set_u32(o, table);
+        o
+    }
+
+    struct Scene {
+        renderer: Ptr<NiDX9Renderer>,
+        buffer: u32,
+        data: u32,
+        group: u32,
+        manager: u32,
+    }
+
+    /// Buffer data (one stream slot), geometry data of 9 vertices, the renderer's objects
+    /// at +0x8BC and +0x8C0, and every callee doubled.
+    fn set_up(e: &mut Engine, packed: bool, tri_list: bool) -> Scene {
+        e.map(STREAM_LIMIT_011BF558 & !0xfff, 0x1000);
+        e.mem.set_u32(STREAM_LIMIT_011BF558, 1);
+        e.map(DIRECT3D_IS_EX & !0xfff, 0x1000);
+        let renderer = e.new_object::<NiDX9Renderer>();
+        let group = e.mem.alloc(0x10);
+        e.set(renderer, NiDX9Renderer::object_8bc, group);
+        let manager = e.mem.alloc(0x10);
+        e.mem.set_u32(renderer.addr() + 0x8c0, manager);
+        let buffer = e.mem.alloc(0x60);
+        let owner = object(e, 0x6400, OWNER_BASE, 0x10);
+        e.mem.set_u32(buffer + 8, owner);
+        e.mem.set_u32(buffer + 0x20, 1);
+        let slots = e.mem.alloc(8);
+        e.mem.set_u32(slots, 0x5150);
+        e.mem.set_u32(buffer + 0x28, slots);
+        e.mem.set_u32(buffer + 0x30, 0x77);
+        e.mem.set_u32(buffer + 0x34, 0x88);
+        let data = object(e, 0x6800, DATA_BASE, 0x60);
+        e.mem.set_u16(data + 8, 0x21);
+        e.mem.set_u16(data + 0xc, 0xf001);
+        e.mem.set_u32(data + 0x24, 1);
+        e.mem.set_u16(data + 0x40, 4);
+        e.mem.set_u16(data + 0x44, 2);
+        e.mem.set_u32(data + 0x48, 0x4848);
+        e.register(DATA_BASE + 0x90, |_, _| 0x1_0009u32.into_ret());
+        e.register(DATA_BASE + 0xa8, |_, _| 0x2_0005u32.into_ret());
+        // An RTTI chain of two records: the data's own, then 011f4a88 or another.
+        let chain = RTTI_CHAIN;
+        e.map(chain, 0x1000);
+        e.mem.set_u32(chain + 4, chain + 0x10);
+        let parent = if tri_list {
+            TRI_LIST_DATA_RTTI_011F4A88
+        } else {
+            0
+        };
+        e.mem.set_u32(chain + 0x14, parent);
+        e.register(DATA_BASE + 8, |_, _| RTTI_CHAIN.into_ret());
+        e.register(IS_KIND_OF, |_, _| 1u32.into_ret());
+        e.register(TRI_SHAPE_DATA_GET_TRI_LIST, |_, _| 0x7100u32.into_ret());
+        e.register(TRI_STRIPS_DATA_GET_STRIP_LISTS, |_, _| 0x7200u32.into_ret());
+        if packed {
+            e.register(DATA_IS_PACKED_00E8EEB0, |_, _| 1u32.into_ret());
+        } else {
+            e.register(DATA_IS_PACKED_00E8EEB0, |_, _| 0u32.into_ret());
+        }
+        e.register(OWNER_BASE + 0x1c, nop);
+        e.register(DATA_SET_COUNT_00E8EF10, nop);
+        e.register(GET_ENTRY_POINT_00E8BF90, |_, _| 0xe1u32.into_ret());
+        e.register(PACK_UNTRANSFORMED_VB_00E8C1E0, |_, _| 1u32.into_ret());
+        e.register(INDEX_BUFFER_00E8F200, |e, a| {
+            e.mem.set_u32(a[5], 0x99);
+            0x1b00u32.into_ret()
+        });
+        e.register(REMOVE_IB_00E8EEE0, nop);
+        Scene {
+            renderer,
+            buffer,
+            data,
+            group,
+            manager,
+        }
+    }
+
+    #[test]
+    fn pack_needs_buffer_and_data_and_skips_packed_data() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e, true, true);
+        let (r, b, d) = (s.renderer, s.buffer, s.data);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, 0u32, d, 0u32, 0u32, 0u32])
+                .u8(),
+            0
+        );
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, b, 0u32, 0u32, 0u32, 0u32])
+                .u8(),
+            0
+        );
+        e.mem.set_u16(d + 0xe, 0x4123);
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, b, d, 0u32, 0u32, 0u32]).u8(),
+            1
+        );
+        assert!(calls(&e, DATA_BASE + 0x90).is_empty());
+        assert_eq!(e.mem.u16(d + 0xe), 0x4123);
+    }
+
+    #[test]
+    fn unpacked_triangles_are_packed_with_their_index_buffer() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e, false, true);
+        let (r, b, d) = (s.renderer, s.buffer, s.data);
+        e.mem.set_u16(d + 0xe, 0x4000);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, b, d, 0u32, 0u32, 0u32]).u8(),
+            1
+        );
+        // Bit 0 of +0xC (limit 1) on top, +0x24 set with the top bits of +0xC.
+        assert_eq!(e.mem.u32(b + 4), 0x01a0_0000);
+        assert_eq!(
+            calls(&e, OWNER_BASE + 0x1c),
+            vec![vec![e.mem.u32(b + 8), b, 0]]
+        );
+        assert_eq!(calls(&e, DATA_SET_COUNT_00E8EF10), vec![vec![b, 1]]);
+        assert!(calls(&e, IS_KIND_OF).is_empty());
+        let fields: Vec<u32> = [0x18, 0x1c, 0x40, 0x44, 0x48, 0x4c, 0x50]
+            .iter()
+            .map(|o| e.mem.u32(b + o))
+            .collect();
+        assert_eq!(fields, vec![9, 0x21, 5, 4, 1, 0, 0x7100]);
+        assert_eq!(
+            calls(&e, PACK_UNTRANSFORMED_VB_00E8C1E0),
+            vec![vec![s.group, d, 0, 0xfff, 0x5150, 0]]
+        );
+        assert_eq!(
+            calls(&e, INDEX_BUFFER_00E8F200)[0][..5],
+            [s.manager, 0x7100, 12, 12, 0x88]
+        );
+        assert_eq!(calls(&e, INDEX_BUFFER_00E8F200)[0][6..], [1, 0]);
+        assert_eq!(calls(&e, REMOVE_IB_00E8EEE0), vec![vec![b]]);
+        assert_eq!(e.mem.u32(b + 0x34), 0x1b00);
+        assert_eq!(e.mem.u32(b + 0x2c), 12);
+        assert_eq!(e.mem.u32(b + 0x30), 0x99);
+        assert_eq!(e.mem.u32(b + 0x38), 0);
+        assert_eq!(e.mem.u16(d + 0xe), 0x4000);
+    }
+
+    #[test]
+    fn packed_strips_keep_their_dirty_bits_and_pack_through_the_source() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e, true, false);
+        let (r, b, d) = (s.renderer, s.buffer, s.data);
+        e.mem.set_u16(d + 0xe, 0x2010);
+        let source = object(&mut e, 0x6c00, SOURCE_BASE, 0x30);
+        e.mem.set_u32(source + 0x20, 1);
+        e.register(SOURCE_BASE + 0xac, |_, _| 1u32.into_ret());
+        // The object's entry point differs: bits 3 join, and it takes the new one.
+        let shader = e.mem.alloc(0x20);
+        e.mem.set_u32(shader + 0x18, 0xe0);
+        // The index buffer comes back the same: nothing replaced.
+        e.register(INDEX_BUFFER_00E8F200, |_, a| a[4].into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, b, d, shader, source, 0u32])
+                .u8(),
+            1
+        );
+        assert_eq!(e.mem.u32(shader + 0x18), 0xe1);
+        assert!(calls(&e, DATA_SET_COUNT_00E8EF10).is_empty());
+        assert_eq!(
+            calls(&e, SOURCE_BASE + 0xac),
+            vec![vec![source, d, shader, 0, 0x13, 0x5150, 0, 0, 0, 0]]
+        );
+        assert!(calls(&e, PACK_UNTRANSFORMED_VB_00E8C1E0).is_empty());
+        let fields: Vec<u32> = [0x40, 0x44, 0x48, 0x4c, 0x50]
+            .iter()
+            .map(|o| e.mem.u32(b + o))
+            .collect();
+        assert_eq!(fields, vec![5, 4, 2, 0x4848, 0x7200]);
+        assert_eq!(calls(&e, INDEX_BUFFER_00E8F200)[0][2], 8);
+        assert!(calls(&e, REMOVE_IB_00E8EEE0).is_empty());
+        assert_eq!(e.mem.u16(d + 0xe), 0x2000);
+    }
+
+    #[test]
+    fn pack_fails_when_several_streams_cannot_be_packed() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e, true, true);
+        let (r, b, d) = (s.renderer, s.buffer, s.data);
+        e.mem.set_u16(d + 0xe, 0x0001);
+        let source = object(&mut e, 0x6c00, SOURCE_BASE, 0x30);
+        e.mem.set_u32(source + 0x20, 2);
+        e.register(SOURCE_BASE + 0xac, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        // Forced: all bits; the count differs from the buffer's 1, so it is set.
+        assert_eq!(
+            e.call(0x00e7_1fe0, &args![r, b, d, 0u32, source, 1u32])
+                .u8(),
+            0
+        );
+        assert_eq!(calls(&e, DATA_SET_COUNT_00E8EF10), vec![vec![b, 2]]);
+        assert_eq!(calls(&e, SOURCE_BASE + 0xac).len(), 1);
+        assert_eq!(e.mem.u16(d + 0xe), 0x0001);
+    }
+}
+
+/// The callees of `00e74120`: `00b601a0` (`thiscall` on the map: empties it), `00e8bff0`
+/// and `00e8c0d0` (`thiscall` on the object at +0x8BC: four words, a buffer, the start, the
+/// size and a word, answering the address the streams pack at; and one word, the buffer,
+/// after them), `00e8c820` (`thiscall` on +0x8BC, six words: packs a partition's stream),
+/// `00e6d780` (`thiscall` on the renderer, six words: packs a partition's buffer).
+const MAP_REMOVE_ALL_00B601A0: u32 = 0x00b6_01a0;
+const STREAMS_BEGIN_00E8BFF0: u32 = 0x00e8_bff0;
+const STREAMS_END_00E8C0D0: u32 = 0x00e8_c0d0;
+const PACK_PARTITION_STREAM_00E8C820: u32 = 0x00e8_c820;
+const PACK_PARTITION_00E6D780: u32 = 0x00e6_d780;
+
+/// The stream of a record's data (+0x18) at the record's index (+0x1C): the data's +0x28
+/// element, or 0 past its count (+0x20).
+fn record_stream(e: &Engine, record: u32) -> u32 {
+    let data = e.mem.u32(record.wrapping_add(0x18));
+    let index = e.mem.u32(record.wrapping_add(0x1c));
+    if index < e.mem.u32(data.wrapping_add(0x20)) {
+        e.mem
+            .u32(e.mem.u32(data.wrapping_add(0x28)).wrapping_add(index * 4))
+    } else {
+        0
+    }
+}
+
+// Translated from 00e74120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: packs every geometry recorded in the map at +0x610 (the
+/// records `00e72980` and `00e72aa0` chain per stream key), under the locks at +0x80 and
+/// +0x100 (`thiscall`, no words). It walks the map's items (hash size +0x614, buckets
+/// +0x618; the next bucket through the map's virtual +4). Records under key 0 are packed one
+/// by one when their stream index is 0: `PackGeometryBuffer` (no partition) or `00e6d780`
+/// (with one), forced. Under any other key the records' streams span from the smallest
+/// start (+0xC) to the largest end (start + size +0x14); when that span is not empty
+/// `00e8bff0` gives the base for the last record's stream buffer (+8, its word +0x10), and
+/// each record's stream is packed at its start plus the base, by the source's virtual +0xAC
+/// or else `PackUntransformedVB` / `00e8c820` (with a partition), all bits dirty; a first
+/// stream with indices remakes the data's index buffer (`00e8f200`: index counts from the
+/// strip lengths, or by the primitive type +0x3C, 4: `3·` the words +0x40 and +0x44, 5:
+/// each `+ 2`), then `00e8c0d0` ends the buffer. The records of key 0 and of a non-empty
+/// span go on a list; when the map is done it is emptied (`00b601a0`), and each listed record whose
+/// object's +0xE bits `0x7000` read `0x4000` at stream 0 has them cleared (keeping `0xF000`)
+/// and goes to `00e6fa90`; every listed record is freed (0x24 bytes).
+pub fn fn_00e74120(e: &mut Engine, this: Ptr<NiDX9Renderer>) {
+    let t = this.addr();
+    let first_lock = t + 0x80;
+    let second_lock = t + 0x100;
+    e.call(ENTER_CRITICAL_SECTION, &args![first_lock]);
+    e.call(ENTER_CRITICAL_SECTION, &args![second_lock]);
+    let map = t + 0x610;
+    let mut item = 0u32;
+    let size = e.mem.u32(map + 4);
+    let mut bucket = 0u32;
+    while bucket < size {
+        let head = e.mem.u32(e.mem.u32(map + 8).wrapping_add(4 * bucket));
+        if head != 0 {
+            item = head;
+            break;
+        }
+        bucket += 1;
+    }
+    let mut done = 0u32;
+    while item != 0 {
+        let key = e.mem.u32(item.wrapping_add(4));
+        let first = e.mem.u32(item.wrapping_add(8));
+        let mut next_item = e.mem.u32(item);
+        if next_item == 0 {
+            let hash = e.vcall(map, 4, &args![key]).u32();
+            let mut index = hash.wrapping_add(1);
+            let size = e.mem.u32(map + 4);
+            while index < size {
+                let head = e.mem.u32(e.mem.u32(map + 8).wrapping_add(4 * index));
+                if head != 0 {
+                    next_item = head;
+                    break;
+                }
+                index += 1;
+            }
+        }
+        if first != 0 {
+            if key == 0 {
+                let mut record = first;
+                while record != 0 {
+                    let next = e.mem.u32(record.wrapping_add(0x20));
+                    if e.mem.u32(record.wrapping_add(0x1c)) == 0 {
+                        let word = |e: &Engine, offset: u32| e.mem.u32(record.wrapping_add(offset));
+                        let partition = word(e, 8);
+                        let (data, object, skin, source) =
+                            (word(e, 0x18), word(e, 0), word(e, 4), word(e, 0xc));
+                        if partition != 0 {
+                            e.call(
+                                PACK_PARTITION_00E6D780,
+                                &args![this, data, object, skin, partition, source, 1u32],
+                            );
+                        } else {
+                            ni_xenon_renderer_pack_geometry_buffer(
+                                e,
+                                this,
+                                Ptr::new(data),
+                                Ptr::new(object),
+                                skin,
+                                source,
+                                1,
+                            );
+                        }
+                    }
+                    e.mem.set_u32(record.wrapping_add(0x20), done);
+                    done = record;
+                    record = next;
+                }
+            } else {
+                let mut start = u32::MAX;
+                let mut end = 0u32;
+                let mut stream = 0u32;
+                let mut record = first;
+                while record != 0 {
+                    let next = e.mem.u32(record.wrapping_add(0x20));
+                    stream = record_stream(e, record);
+                    let at = e.mem.u32(stream.wrapping_add(0xc));
+                    if at < start {
+                        start = at;
+                    }
+                    let stop = at.wrapping_add(e.mem.u32(stream.wrapping_add(0x14)));
+                    if stop > end {
+                        end = stop;
+                    }
+                    record = next;
+                }
+                if end > start {
+                    let group = e.get(this, NiDX9Renderer::object_8bc);
+                    let buffer = e.mem.u32(stream.wrapping_add(8));
+                    let word_10 = e.mem.u32(stream.wrapping_add(0x10));
+                    let base = e
+                        .call(
+                            STREAMS_BEGIN_00E8BFF0,
+                            &args![group, buffer, start, end - start, word_10],
+                        )
+                        .u32();
+                    let mut record = first;
+                    loop {
+                        let word = |e: &Engine, offset: u32| e.mem.u32(record.wrapping_add(offset));
+                        let data = word(e, 0x18);
+                        let index = word(e, 0x1c);
+                        let next = word(e, 0x20);
+                        stream = record_stream(e, record);
+                        let offset = e.mem.u32(stream.wrapping_add(0xc)).wrapping_add(base);
+                        let source = word(e, 0xc);
+                        let (object, skin, partition) = (word(e, 0), word(e, 4), word(e, 8));
+                        let packed = source != 0
+                            && e.vcall(
+                                source,
+                                0xac,
+                                &args![
+                                    object, skin, partition, 0xfffu32, stream, index, offset, 0u32,
+                                    0u32
+                                ],
+                            )
+                            .u32()
+                                != 0;
+                        if !packed {
+                            let partition = word(e, 8);
+                            let object = word(e, 0);
+                            let group = e.get(this, NiDX9Renderer::object_8bc);
+                            let skin = word(e, 4);
+                            if partition != 0 {
+                                e.call(
+                                    PACK_PARTITION_STREAM_00E8C820,
+                                    &args![
+                                        group, object, skin, partition, 0xfffu32, stream, offset
+                                    ],
+                                );
+                            } else {
+                                e.call(
+                                    PACK_UNTRANSFORMED_VB_00E8C1E0,
+                                    &args![group, object, skin, 0xfffu32, stream, offset],
+                                );
+                            }
+                        }
+                        if word(e, 0x1c) == 0 && e.mem.u32(data.wrapping_add(0x50)) != 0 {
+                            let list = e.mem.u32(data.wrapping_add(0x50));
+                            let at = |e: &Engine, offset: u32| e.mem.u32(data.wrapping_add(offset));
+                            let lengths = at(e, 0x4c);
+                            let (first_count, second_count) = if lengths != 0 {
+                                let mut sum = 0u32;
+                                let mut strip = at(e, 0x48);
+                                while strip != 0 {
+                                    let length =
+                                        e.mem.u16(lengths.wrapping_add(strip * 2).wrapping_sub(2));
+                                    sum = sum.wrapping_add(u32::from(length));
+                                    strip -= 1;
+                                }
+                                (sum, sum)
+                            } else {
+                                match at(e, 0x3c) {
+                                    4 => (at(e, 0x40).wrapping_mul(3), at(e, 0x44).wrapping_mul(3)),
+                                    5 => (at(e, 0x40).wrapping_add(2), at(e, 0x44).wrapping_add(2)),
+                                    _ => (0, 0),
+                                }
+                            };
+                            let dynamic = if e.mem.u8(data.wrapping_add(0x14)) != 0 {
+                                0x10
+                            } else {
+                                0
+                            };
+                            let old = at(e, 0x34);
+                            let not_ex = u32::from(e.mem.u8(DIRECT3D_IS_EX) == 0);
+                            let slot_value = at(e, 0x30);
+                            let (index_buffer, slot_value) = e.with_stack(4, |e, slot| {
+                                let s = slot.addr();
+                                e.mem.set_u32(s, slot_value);
+                                let manager = e.mem.u32(t + 0x8c0);
+                                let made = e
+                                    .call(
+                                        INDEX_BUFFER_00E8F200,
+                                        &args![
+                                            manager,
+                                            list,
+                                            first_count,
+                                            second_count,
+                                            old,
+                                            s,
+                                            not_ex,
+                                            dynamic
+                                        ],
+                                    )
+                                    .u32();
+                                (made, e.mem.u32(s))
+                            });
+                            e.mem.set_u32(data.wrapping_add(0x34), index_buffer);
+                            e.mem.set_u32(data.wrapping_add(0x2c), first_count);
+                            e.mem.set_u32(data.wrapping_add(0x30), slot_value);
+                        }
+                        e.mem.set_u32(record.wrapping_add(0x20), done);
+                        done = record;
+                        record = next;
+                        if record == 0 {
+                            break;
+                        }
+                    }
+                    let group = e.get(this, NiDX9Renderer::object_8bc);
+                    let buffer = e.mem.u32(stream.wrapping_add(8));
+                    e.call(STREAMS_END_00E8C0D0, &args![group, buffer]);
+                }
+            }
+        }
+        item = next_item;
+    }
+    e.call(MAP_REMOVE_ALL_00B601A0, &args![map]);
+    let mut record = done;
+    while record != 0 {
+        let object = e.mem.u32(record);
+        let next = e.mem.u32(record.wrapping_add(0x20));
+        let flags = e.mem.u16(object.wrapping_add(0xe));
+        if flags & 0x7000 == 0x4000 && e.mem.u32(record.wrapping_add(0x1c)) == 0 {
+            e.mem.set_u16(object.wrapping_add(0xe), flags & 0xf000);
+            let skin = e.mem.u32(record.wrapping_add(4));
+            let partition = e.mem.u32(record.wrapping_add(8));
+            fn_00e6fa90(e, Ptr::new(t), Ptr::new(object), Ptr::new(skin), partition);
+        }
+        e.call(SIZED_DELETE, &args![record, RECORD_SIZE]);
+        record = next;
+    }
+    e.call(LEAVE_CRITICAL_SECTION, &args![second_lock]);
+    e.call(LEAVE_CRITICAL_SECTION, &args![first_lock]);
+}
+
+#[cfg(test)]
+mod a07_flush_tests {
+    use super::*;
+
+    const MAP_BASE: u32 = 0x6100_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn nop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    /// A record: object, skin, partition, source, data, stream index, next.
+    fn record(e: &mut Engine, words: [u32; 7]) -> u32 {
+        let r = e.mem.alloc(RECORD_SIZE);
+        for (offset, value) in [0, 4, 8, 0xc, 0x18, 0x1c, 0x20].iter().zip(words) {
+            e.mem.set_u32(r + offset, value);
+        }
+        r
+    }
+
+    fn renderer(e: &mut Engine) -> Ptr<NiDX9Renderer> {
+        e.map(DIRECT3D_IS_EX & !0xfff, 0x1000);
+        let r = e.new_object::<NiDX9Renderer>();
+        let targets: Vec<u32> = (0..8).map(|n| MAP_BASE + 4 * n).collect();
+        e.put_vtable(0x6000, &targets);
+        e.mem.set_u32(r.addr() + 0x610, 0x6000);
+        for addr in [
+            ENTER_CRITICAL_SECTION,
+            LEAVE_CRITICAL_SECTION,
+            MAP_REMOVE_ALL_00B601A0,
+            SIZED_DELETE,
+            TEXTURE_SET_00A670C0,
+            PACK_PARTITION_00E6D780,
+            PACK_UNTRANSFORMED_VB_00E8C1E0,
+            PACK_PARTITION_STREAM_00E8C820,
+            STREAMS_END_00E8C0D0,
+        ] {
+            e.register(addr, nop);
+        }
+        e.register(STREAMS_BEGIN_00E8BFF0, |_, _| 0x1000u32.into_ret());
+        e.register(INDEX_BUFFER_00E8F200, |e, a| {
+            e.mem.set_u32(a[5], 0x99);
+            0x1b00u32.into_ret()
+        });
+        e.register(MAP_BASE + 4, |_, a| u32::from(a[1] != 0).into_ret());
+        r
+    }
+
+    #[test]
+    fn flush_packs_every_recorded_geometry_and_frees_the_records() {
+        let mut e = Engine::new();
+        let r = renderer(&mut e);
+        let t = r.addr();
+        let group = e.mem.alloc(0x10);
+        e.set(r, NiDX9Renderer::object_8bc, group);
+        let manager = e.mem.alloc(0x10);
+        e.mem.set_u32(t + 0x8c0, manager);
+        // Key 0: a partition's record, one without data (PackGeometryBuffer answers false
+        // at once) and one of stream 1 (not packed).
+        let first_object = e.mem.alloc(0x40);
+        e.mem.set_u16(first_object + 0xe, 0x4123);
+        e.mem.set_u8(first_object + 0x38, 0x30);
+        let fourth = record(&mut e, [first_object, 0, 0, 0, 0x5d4, 1, 0]);
+        let second = record(&mut e, [first_object, 0, 0, 0, 0, 0, fourth]);
+        let first = record(&mut e, [first_object, 0x11, 0x3000, 0x13, 0x5d1, 0, second]);
+        // Key 0x55: one record whose stream packs at the base plus its start.
+        let stream = e.mem.alloc(0x18);
+        for (offset, value) in [(8, 0xb0f), (0xc, 0x40), (0x10, 7), (0x14, 0x20)] {
+            e.mem.set_u32(stream + offset, value);
+        }
+        let data = e.mem.alloc(0x60);
+        let slots = e.mem.alloc(4);
+        e.mem.set_u32(slots, stream);
+        for (offset, value) in [
+            (0x20, 1),
+            (0x28, slots),
+            (0x50, 0x9000),
+            (0x3c, 4),
+            (0x40, 5),
+            (0x44, 6),
+            (0x34, 0x88),
+            (0x30, 0x77),
+        ] {
+            e.mem.set_u32(data + offset, value);
+        }
+        e.mem.set_u8(data + 0x14, 1);
+        let third_object = e.mem.alloc(0x40);
+        e.mem.set_u16(third_object + 0xe, 0x4abc);
+        e.mem.set_u8(third_object + 0x38, 0x30);
+        let third = record(&mut e, [third_object, 0x31, 0, 0, data, 0, 0]);
+        // Two buckets: item (0, first) and item (0x55, third).
+        let items = e.mem.alloc(0x18);
+        e.mem.set_u32(items + 4, 0);
+        e.mem.set_u32(items + 8, first);
+        e.mem.set_u32(items + 0x10, 0x55);
+        e.mem.set_u32(items + 0x14, third);
+        let buckets = e.mem.alloc(8);
+        e.mem.set_u32(buckets, items);
+        e.mem.set_u32(buckets + 4, items + 0xc);
+        e.mem.set_u32(t + 0x614, 2);
+        e.mem.set_u32(t + 0x618, buckets);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_4120, &args![r]);
+        assert_eq!(
+            calls(&e, ENTER_CRITICAL_SECTION),
+            vec![vec![t + 0x80], vec![t + 0x100]]
+        );
+        assert_eq!(
+            calls(&e, MAP_BASE + 4),
+            vec![vec![t + 0x610, 0], vec![t + 0x610, 0x55]]
+        );
+        assert_eq!(
+            calls(&e, PACK_PARTITION_00E6D780),
+            vec![vec![t, 0x5d1, first_object, 0x11, 0x3000, 0x13, 1]]
+        );
+        assert_eq!(
+            calls(&e, STREAMS_BEGIN_00E8BFF0),
+            vec![vec![group, 0xb0f, 0x40, 0x20, 7]]
+        );
+        assert_eq!(
+            calls(&e, PACK_UNTRANSFORMED_VB_00E8C1E0),
+            vec![vec![group, third_object, 0x31, 0xfff, stream, 0x1040]]
+        );
+        let index = calls(&e, INDEX_BUFFER_00E8F200);
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[0][..5], [manager, 0x9000, 15, 18, 0x88]);
+        assert_eq!(index[0][6..], [1, 0x10]);
+        assert_eq!(e.mem.u32(data + 0x34), 0x1b00);
+        assert_eq!(e.mem.u32(data + 0x2c), 15);
+        assert_eq!(e.mem.u32(data + 0x30), 0x99);
+        assert_eq!(calls(&e, STREAMS_END_00E8C0D0), vec![vec![group, 0xb0f]]);
+        assert_eq!(calls(&e, MAP_REMOVE_ALL_00B601A0), vec![vec![t + 0x610]]);
+        assert_eq!(
+            calls(&e, SIZED_DELETE),
+            vec![
+                vec![third, RECORD_SIZE],
+                vec![fourth, RECORD_SIZE],
+                vec![second, RECORD_SIZE],
+                vec![first, RECORD_SIZE]
+            ]
+        );
+        assert_eq!(e.mem.u16(third_object + 0xe), 0x4000);
+        assert_eq!(e.mem.u16(first_object + 0xe), 0x4000);
+        assert_eq!(calls(&e, TEXTURE_SET_00A670C0).len(), 3);
+        assert_eq!(
+            calls(&e, LEAVE_CRITICAL_SECTION),
+            vec![vec![t + 0x100], vec![t + 0x80]]
+        );
+    }
+
+    #[test]
+    fn flush_keeps_records_whose_streams_span_nothing() {
+        let mut e = Engine::new();
+        let r = renderer(&mut e);
+        let t = r.addr();
+        let stream = e.mem.alloc(0x18);
+        let data = e.mem.alloc(0x60);
+        let slots = e.mem.alloc(4);
+        e.mem.set_u32(slots, stream);
+        e.mem.set_u32(data + 0x20, 1);
+        e.mem.set_u32(data + 0x28, slots);
+        let only = record(&mut e, [0, 0, 0, 0, data, 0, 0]);
+        let items = e.mem.alloc(0xc);
+        e.mem.set_u32(items + 4, 0x55);
+        e.mem.set_u32(items + 8, only);
+        let buckets = e.mem.alloc(4);
+        e.mem.set_u32(buckets, items);
+        e.mem.set_u32(t + 0x614, 1);
+        e.mem.set_u32(t + 0x618, buckets);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_4120, &args![r]);
+        assert!(calls(&e, STREAMS_BEGIN_00E8BFF0).is_empty());
+        assert!(calls(&e, SIZED_DELETE).is_empty());
+        assert_eq!(calls(&e, MAP_REMOVE_ALL_00B601A0).len(), 1);
+    }
+}
+
+/// The callees of `00e70140`: `00e8f360` (`thiscall` on the object at +0x8C0, five words:
+/// an index buffer for a vertex count), `00e8fc50` (`thiscall` on it, four words: an index
+/// buffer of a size), `004b3ae0` (`cdecl`, three words: a point out, a point, the
+/// transform's rotation; answers the out pointer).
+const POINT_INDICES_00E8F360: u32 = 0x00e8_f360;
+const NEW_INDEX_BUFFER_00E8FC50: u32 = 0x00e8_fc50;
+const ROTATE_POINT_004B3AE0: u32 = 0x004b_3ae0;
+/// `"NiDX9IndexBufferManager::PackBuffer> Failed to lock index buffer\n"` (`010eddd0`).
+const LOCK_FAILED_MESSAGE_010EDDD0: u32 = 0x010e_ddd0;
+/// `IDirect3DIndexBuffer9::Lock` (slot 11) and `Unlock` (slot 12).
+const INDEX_BUFFER_LOCK: u32 = 0x2c;
+const INDEX_BUFFER_UNLOCK: u32 = 0x30;
+/// `IDirect3DDevice9::SetStreamSource` (slot 100) and `SetIndices` (slot 104).
+const DEVICE_SET_STREAM_SOURCE: u32 = 0x190;
+const DEVICE_SET_INDICES: u32 = 0x1a0;
+/// `D3DTS_WORLD`.
+const TRANSFORM_WORLD: u32 = 0x100;
+
+// Translated from 00e70140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (renderer vtable +0x1BC, `Do_RenderPoints`' slot on Xbox):
+/// draws a geometry's points as camera facing quads (`thiscall`, one word). Nothing with the
+/// byte at +0x6FC set, or when the object at +0xC has bit 0 of its first word's byte +0x18
+/// set and its third word's float +0x3C is not above 0 (a NaN draws), or for data (+0xB8)
+/// without vertices (virtual +0x90). The data joins the group (`AddObjectToGroup_ov2` with
+/// +0x8B4); its buffer data (+0x34) gets one stream (`00e8ef10`), four vertices and two
+/// triangles per point, the type word `0x1C00000`, and the renderer the geometry's bound
+/// (+0x20, else `011f4288`) at +0x664. The indices: with the data's index array (+0x44) six
+/// per point (`4i, 4i+1, 4i+2, 4i, 4i+2, 4i+3` of each index, written into the buffer data's
+/// index buffer, made by `00e8fc50` when missing), else `00e8f360`'s. The world transform
+/// (+0x68) goes to +0x940 (`00b71a40`) and the device (`SetTransform(0x100, ..)`) and to
+/// +0x8B8's virtuals +0x2C/+0x30; the camera's right and up (+0x634, +0x640) through it
+/// (`004b3ae0`) give +0x64C and +0x658. With the data's byte array (+0x64) `00e6ab40` builds
+/// 0x28-byte vertices (declaration `00e69790`), else `00e69ea0` 0x24-byte ones (`00e696a0`),
+/// into the stream's buffer between `00e8bff0` and `00e8c0d0` (nothing without one). Then
+/// the property at +0xC0 draws its passes (`DrawIndexedPrimitive` per pass) with the
+/// geometry's +0x9C.
+pub fn fn_00e70140(e: &mut Engine, this: Ptr<NiDX9Renderer>, geometry: Ptr) {
+    let t = this.addr();
+    let g = geometry.addr();
+    if e.mem.u8(t + SKIP_END_SCENE) != 0 {
+        return;
+    }
+    let owner = e.mem.u32(t + 0xc);
+    if e.mem.u8(e.mem.u32(owner).wrapping_add(0x18)) & 1 != 0 {
+        let limit = x87_m32(
+            e.mem
+                .u32(e.mem.u32(owner.wrapping_add(8)).wrapping_add(0x3c)),
+        );
+        // `FCOMP` of 0 with it: on only when 0 is below it or the compare is unordered.
+        if limit <= 0.0 {
+            return;
+        }
+    }
+    e.with_stack(0x7c, |e, frame| {
+        let f = frame.addr();
+        let data = e.mem.u32(g.wrapping_add(0xb8));
+        for i in 0..0xd {
+            let word = e.mem.u32(g.wrapping_add(0x68 + 4 * i));
+            e.mem.set_u32(f + 0x48 + 4 * i, word);
+        }
+        let mut bound = e.mem.u32(g.wrapping_add(0x20));
+        if bound == 0 {
+            bound = DEFAULT_BOUND;
+        }
+        for i in 0..4 {
+            let word = e.mem.u32(bound + 4 * i);
+            e.mem.set_u32(f + 0x38 + 4 * i, word);
+        }
+        let count = u32::from(e.vcall(data, 0x90, &args![]).u16());
+        let second = u32::from(e.mem.u16(data.wrapping_add(8)));
+        if count == 0 {
+            return;
+        }
+        let property = e.mem.u32(g.wrapping_add(0xc0));
+        let manager = e.mem.u32(t + 0x8ac);
+        let group = e.mem.u32(t + 0x8b4);
+        e.call(
+            ADD_OBJECT_TO_GROUP,
+            &args![manager, group, data, 0u32, 0u32, 0u32, 0u32],
+        );
+        let buffer = e.mem.u32(data.wrapping_add(0x34));
+        let vertices = count * 4;
+        e.call(DATA_SET_COUNT_00E8EF10, &args![buffer, 1u32]);
+        let radius = x87_quiet_bits(e.mem.u32(f + 0x44));
+        e.mem.set_u32(buffer.wrapping_add(0x18), vertices);
+        e.mem.set_u32(buffer.wrapping_add(0x1c), second * 4);
+        e.mem.set_u32(buffer.wrapping_add(0x40), count * 2);
+        e.mem.set_u32(buffer.wrapping_add(0x44), second * 2);
+        e.mem.set_u32(buffer.wrapping_add(0x50), 0);
+        e.mem.set_u32(buffer.wrapping_add(0x4c), 0);
+        e.mem.set_u32(buffer.wrapping_add(0x48), 1);
+        for (i, offset) in [0x664u32, 0x668, 0x66c].iter().enumerate() {
+            let word = e.mem.u32(f + 0x38 + 4 * i as u32);
+            e.mem.set_u32(t + offset, word);
+        }
+        e.mem.set_u32(t + 0x670, radius);
+        e.mem.set_u32(buffer.wrapping_add(4), 0x01c0_0000);
+        let not_ex = u32::from(e.mem.u8(DIRECT3D_IS_EX) == 0);
+        let index_buffer = if e.mem.u32(data.wrapping_add(0x44)) == 0 {
+            let indices = e.mem.u32(t + 0x8c0);
+            e.call(
+                POINT_INDICES_00E8F360,
+                &args![indices, count, second, 0u32, 0u32, not_ex],
+            )
+            .u32()
+        } else {
+            let mut index_buffer = e.mem.u32(buffer.wrapping_add(0x34));
+            let size = second * 12;
+            if index_buffer == 0 {
+                let indices = e.mem.u32(t + 0x8c0);
+                index_buffer = e
+                    .call(
+                        NEW_INDEX_BUFFER_00E8FC50,
+                        &args![indices, size, 0u32, 0x65u32, not_ex],
+                    )
+                    .u32();
+                e.mem.set_u32(buffer.wrapping_add(0x34), index_buffer);
+                e.mem.set_u32(buffer.wrapping_add(0x2c), second * 6);
+                e.mem.set_u32(buffer.wrapping_add(0x30), size);
+                if index_buffer == 0 {
+                    return;
+                }
+            }
+            e.mem.set_u32(f + 0x1c, 0);
+            let locked = e
+                .vcall(
+                    index_buffer,
+                    INDEX_BUFFER_LOCK,
+                    &args![0u32, count * 12, f + 0x1c, 0u32],
+                )
+                .u32() as i32;
+            if locked < 0 {
+                e.call(REPORT_00A29680, &args![LOCK_FAILED_MESSAGE_010EDDD0]);
+                e.vcall(index_buffer, INDEX_BUFFER_UNLOCK, &args![]);
+                e.vcall(index_buffer, RELEASE, &args![]);
+                return;
+            }
+            let array = e.mem.u32(data.wrapping_add(0x44));
+            let mut at = e.mem.u32(f + 0x1c);
+            let mut point = 0u32;
+            while point < count {
+                let first = u32::from(e.mem.u16(array.wrapping_add(point * 2))) * 4;
+                for value in [first, first + 1, first + 2, first, first + 2, first + 3] {
+                    e.mem.set_u16(at, value as u16);
+                    at = at.wrapping_add(2);
+                }
+                point += 1;
+            }
+            e.vcall(index_buffer, INDEX_BUFFER_UNLOCK, &args![]);
+            index_buffer
+        };
+        if index_buffer == 0 {
+            return;
+        }
+        let word = |e: &Engine, offset: u32| e.mem.u32(data.wrapping_add(offset));
+        let (sizes, colors, scales, angles, positions, bytes) = (
+            word(e, 0x4c),
+            word(e, 0x28),
+            word(e, 0x54),
+            word(e, 0x5c),
+            word(e, 0x20),
+            word(e, 0x64),
+        );
+        let other = e.mem.u32(t + 0x8b8);
+        e.vcall(other, 0x2c, &args![0u32]);
+        let scale = x87_quiet_bits(e.mem.u32(f + 0x78));
+        let world = t + 0x940;
+        e.call(
+            D3D_FROM_NI_00B71A40,
+            &args![world, f + 0x48, f + 0x6c, scale],
+        );
+        let device = e.get(this, NiDX9Renderer::device);
+        e.vcall(device, DEVICE_SET_TRANSFORM, &args![TRANSFORM_WORLD, world]);
+        let other = e.mem.u32(t + 0x8b8);
+        e.vcall(other, 0x30, &args![f + 0x48]);
+        for (from, to) in [(0x634u32, QUAD_RIGHT), (0x640, QUAD_UP)] {
+            let out = e
+                .call(ROTATE_POINT_004B3AE0, &args![f + 0x38, t + from, f + 0x48])
+                .u32();
+            for i in 0..3 {
+                let v = e.mem.u32(out.wrapping_add(4 * i));
+                e.mem.set_u32(t + to + 4 * i, v);
+            }
+        }
+        let (stride, declaration) = if bytes != 0 {
+            (0x28u32, fn_00e69790(e, this))
+        } else {
+            (0x24u32, fn_00e696a0(e, this))
+        };
+        e.call(DATA_SET_SECOND_00E8F040, &args![buffer, declaration]);
+        if e.mem.u32(buffer.wrapping_add(0x20)) > 0 {
+            let strides = e.mem.u32(buffer.wrapping_add(0x24));
+            e.mem.set_u32(strides, stride);
+        }
+        let streams = e.get(this, NiDX9Renderer::object_8bc);
+        e.call(GROUP_STREAM_00E8BFA0, &args![streams, buffer, 0u32]);
+        let stream = if e.mem.u32(buffer.wrapping_add(0x20)) > 0 {
+            e.mem.u32(e.mem.u32(buffer.wrapping_add(0x28)))
+        } else {
+            0
+        };
+        let vertex_buffer = e.mem.u32(stream.wrapping_add(8));
+        if vertex_buffer == 0 {
+            return;
+        }
+        let start = e.mem.u32(stream.wrapping_add(0xc));
+        let flags = e.mem.u32(stream.wrapping_add(0x10));
+        let streams = e.get(this, NiDX9Renderer::object_8bc);
+        let base = e
+            .call(
+                STREAMS_BEGIN_00E8BFF0,
+                &args![streams, vertex_buffer, start, vertices * stride, flags],
+            )
+            .u32();
+        if base == 0 {
+            return;
+        }
+        let count16 = count as u16;
+        if bytes != 0 {
+            fn_00e6ab40(
+                e, this, base, positions, colors, sizes, scales, angles, bytes, count16,
+            );
+        } else {
+            fn_00e69ea0(
+                e, this, base, positions, colors, sizes, scales, angles, count16,
+            );
+        }
+        let streams = e.get(this, NiDX9Renderer::object_8bc);
+        let vertex_buffer = e.mem.u32(stream.wrapping_add(8));
+        e.call(STREAMS_END_00E8C0D0, &args![streams, vertex_buffer]);
+        let passes = e.vcall(property, 0x90, &args![]).u32();
+        let state = g.wrapping_add(0x9c);
+        for slot in [0x78u32, 0x7c, 0x80, 0x84] {
+            e.vcall(property, slot, &args![state]);
+        }
+        e.vcall(property, 0x88, &args![state, 1u32]);
+        let other = e.mem.u32(t + 0x8b8);
+        let word_10 = e.mem.u32(buffer.wrapping_add(0x10));
+        e.vcall(other, 0xac, &args![word_10, 0u32]);
+        let stride = if e.mem.u32(buffer.wrapping_add(0x20)) > 0 {
+            e.mem.u32(e.mem.u32(buffer.wrapping_add(0x24)))
+        } else {
+            0
+        };
+        let device = e.get(this, NiDX9Renderer::device);
+        let vertex_buffer = e.mem.u32(stream.wrapping_add(8));
+        e.vcall(
+            device,
+            DEVICE_SET_STREAM_SOURCE,
+            &args![0u32, vertex_buffer, 0u32, stride],
+        );
+        let device = e.get(this, NiDX9Renderer::device);
+        e.vcall(device, DEVICE_SET_INDICES, &args![index_buffer]);
+        if passes != 0 {
+            loop {
+                let device = e.get(this, NiDX9Renderer::device);
+                let b = |e: &Engine, offset: u32| e.mem.u32(buffer.wrapping_add(offset));
+                let (kind, first, vertices, triangles) =
+                    (b(e, 0x3c), b(e, 0x38), b(e, 0x18), b(e, 0x40));
+                e.vcall(
+                    device,
+                    DEVICE_DRAW_INDEXED_PRIMITIVE,
+                    &args![kind, first, 0u32, vertices, 0u32, triangles],
+                );
+                if e.vcall(property, 0x94, &args![]).u32() == 0 {
+                    break;
+                }
+            }
+        }
+        e.vcall(property, 0x8c, &args![state]);
+    });
+}
+
+#[cfg(test)]
+mod a07_points_tests {
+    use super::*;
+
+    const DEVICE_BASE: u32 = 0x6100_0000;
+    const OTHER_BASE: u32 = 0x6140_0000;
+    const DATA_BASE: u32 = 0x6180_0000;
+    const PROPERTY_BASE: u32 = 0x61c0_0000;
+    const INDEX_BASE: u32 = 0x6200_0000;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn nop(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn object(e: &mut Engine, table: u32, base: u32, size: u32) -> u32 {
+        let targets: Vec<u32> = (0..0x80).map(|n| base + 4 * n).collect();
+        e.put_vtable(table, &targets);
+        let o = e.mem.alloc(size);
+        e.mem.set_u32(o, table);
+        o
+    }
+
+    fn floats(e: &mut Engine, values: &[f32]) -> u32 {
+        let p = e.mem.alloc(4 * values.len() as u32 + 4);
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_u32(p + 4 * i as u32, v.to_bits());
+        }
+        p
+    }
+
+    struct Scene {
+        renderer: Ptr<NiDX9Renderer>,
+        device: u32,
+        geometry: u32,
+        data: u32,
+        buffer: u32,
+        strides: u32,
+        streams: u32,
+        vertices: u32,
+        owner_flags: u32,
+    }
+
+    /// One point at (10, 20, 30) of size 2·0.5 with right (1, 0, 0) and up (0, 1, 0).
+    fn set_up(e: &mut Engine) -> Scene {
+        e.map(DIRECT3D_IS_EX & !0xfff, 0x1000);
+        let renderer = e.new_object::<NiDX9Renderer>();
+        let t = renderer.addr();
+        let flags = e.mem.alloc(0x20);
+        let owner = e.mem.alloc(0x10);
+        e.mem.set_u32(owner, flags);
+        e.mem.set_u32(t + 0xc, owner);
+        let device = object(e, 0x6000, DEVICE_BASE, 0x10);
+        e.set(renderer, NiDX9Renderer::device, device);
+        let other = object(e, 0x6400, OTHER_BASE, 0x10);
+        e.mem.set_u32(t + 0x8b8, other);
+        let streams = e.mem.alloc(0x10);
+        e.set(renderer, NiDX9Renderer::object_8bc, streams);
+        e.mem.set_u32(t + 0x8ac, 0x8ac0);
+        e.mem.set_u32(t + 0x8b4, 0x8b40);
+        e.mem.set_u32(t + 0x8c0, 0x8c00);
+        e.mem.set_u32(t + 0x280, 0xdec1);
+        e.mem.set_u32(t + 0x284, 0xdec2);
+        for (i, v) in [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0].iter().enumerate() {
+            e.mem.set_u32(t + 0x634 + 4 * i as u32, v.to_bits());
+        }
+        let geometry = e.mem.alloc(0xd0);
+        let bound = floats(e, &[1.0, 2.0, 3.0, 4.0]);
+        e.mem.set_u32(geometry + 0x20, bound);
+        e.mem.set_u32(geometry + 0x68 + 0x30, 1.0f32.to_bits());
+        let data = object(e, 0x6800, DATA_BASE, 0x70);
+        e.mem.set_u32(geometry + 0xb8, data);
+        e.register(DATA_BASE + 0x90, |_, _| 1u32.into_ret());
+        e.mem.set_u16(data + 8, 2);
+        let positions = floats(e, &[10.0, 20.0, 30.0]);
+        let sizes = floats(e, &[2.0]);
+        let scales = floats(e, &[0.5]);
+        e.mem.set_u32(data + 0x20, positions);
+        e.mem.set_u32(data + 0x4c, sizes);
+        e.mem.set_u32(data + 0x54, scales);
+        let buffer = e.mem.alloc(0x60);
+        e.mem.set_u32(data + 0x34, buffer);
+        e.mem.set_u32(buffer + 0x20, 1);
+        let strides = e.mem.alloc(4);
+        e.mem.set_u32(buffer + 0x24, strides);
+        let stream = e.mem.alloc(0x18);
+        e.mem.set_u32(stream + 8, 0x7b00);
+        e.mem.set_u32(stream + 0xc, 0x10);
+        e.mem.set_u32(stream + 0x10, 3);
+        let stream_list = e.mem.alloc(4);
+        e.mem.set_u32(stream_list, stream);
+        e.mem.set_u32(buffer + 0x28, stream_list);
+        e.mem.set_u32(buffer + 0x3c, 4);
+        e.mem.set_u32(buffer + 0x38, 0x38);
+        let property = object(e, 0x6c00, PROPERTY_BASE, 0x10);
+        e.mem.set_u32(geometry + 0xc0, property);
+        e.register(PROPERTY_BASE + 0x90, |_, _| 1u32.into_ret());
+        e.register(PROPERTY_BASE + 0x94, |_, _| 0u32.into_ret());
+        for slot in [0x78, 0x7c, 0x80, 0x84, 0x88, 0x8c] {
+            e.register(PROPERTY_BASE + slot, nop);
+        }
+        for slot in [0x2c, 0x30, 0xac] {
+            e.register(OTHER_BASE + slot, nop);
+        }
+        for slot in [
+            DEVICE_SET_TRANSFORM,
+            DEVICE_SET_STREAM_SOURCE,
+            DEVICE_SET_INDICES,
+            DEVICE_DRAW_INDEXED_PRIMITIVE,
+        ] {
+            e.register(DEVICE_BASE + slot, nop);
+        }
+        for addr in [
+            ADD_OBJECT_TO_GROUP,
+            DATA_SET_COUNT_00E8EF10,
+            D3D_FROM_NI_00B71A40,
+            DATA_SET_SECOND_00E8F040,
+            GROUP_STREAM_00E8BFA0,
+            STREAMS_END_00E8C0D0,
+            REPORT_00A29680,
+        ] {
+            e.register(addr, nop);
+        }
+        e.register(POINT_INDICES_00E8F360, |_, _| 0x1b00u32.into_ret());
+        // The rotation is the identity: the point comes back as it went.
+        e.register(ROTATE_POINT_004B3AE0, |e, a| {
+            for i in 0..3 {
+                let v = e.mem.u32(a[1] + 4 * i);
+                e.mem.set_u32(a[0] + 4 * i, v);
+            }
+            a[0].into_ret()
+        });
+        let vertices = e.mem.alloc(0xa0);
+        e.register_double(STREAMS_BEGIN_00E8BFF0, move |_, _| vertices.into_ret());
+        Scene {
+            renderer,
+            device,
+            geometry,
+            data,
+            buffer,
+            strides,
+            streams,
+            vertices,
+            owner_flags: flags,
+        }
+    }
+
+    #[test]
+    fn points_build_their_quads_and_draw_each_pass() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e);
+        let (r, t) = (s.renderer, s.renderer.addr());
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_0140, &args![r, s.geometry]);
+        assert_eq!(
+            calls(&e, ADD_OBJECT_TO_GROUP),
+            vec![vec![0x8ac0, 0x8b40, s.data, 0, 0, 0, 0]]
+        );
+        let fields: Vec<u32> = [4, 0x18, 0x1c, 0x40, 0x44, 0x48, 0x4c, 0x50]
+            .iter()
+            .map(|o| e.mem.u32(s.buffer + o))
+            .collect();
+        assert_eq!(fields, vec![0x01c0_0000, 4, 8, 2, 4, 1, 0, 0]);
+        assert_eq!(e.mem.u32(t + 0x664), 1.0f32.to_bits());
+        assert_eq!(e.mem.u32(t + 0x670), 4.0f32.to_bits());
+        assert_eq!(
+            calls(&e, POINT_INDICES_00E8F360),
+            vec![vec![0x8c00, 1, 2, 0, 0, 1]]
+        );
+        assert_eq!(
+            calls(&e, DEVICE_BASE + DEVICE_SET_TRANSFORM),
+            vec![vec![s.device, 0x100, t + 0x940]]
+        );
+        assert_eq!(e.mem.u32(t + QUAD_UP + 4), 1.0f32.to_bits());
+        assert_eq!(
+            calls(&e, DATA_SET_SECOND_00E8F040),
+            vec![vec![s.buffer, 0xdec1]]
+        );
+        assert_eq!(e.mem.u32(s.strides), 0x24);
+        assert_eq!(
+            calls(&e, STREAMS_BEGIN_00E8BFF0),
+            vec![vec![s.streams, 0x7b00, 0x10, 4 * 0x24, 3]]
+        );
+        // The quad as 00e69ea0 builds it.
+        assert_eq!(e.mem.u32(s.vertices), 9.0f32.to_bits());
+        assert_eq!(e.mem.u32(s.vertices + 0x24 * 2 + 4), 21.0f32.to_bits());
+        assert_eq!(
+            calls(&e, STREAMS_END_00E8C0D0),
+            vec![vec![s.streams, 0x7b00]]
+        );
+        assert_eq!(
+            calls(&e, DEVICE_BASE + DEVICE_SET_STREAM_SOURCE),
+            vec![vec![s.device, 0, 0x7b00, 0, 0x24]]
+        );
+        assert_eq!(
+            calls(&e, DEVICE_BASE + DEVICE_SET_INDICES),
+            vec![vec![s.device, 0x1b00]]
+        );
+        assert_eq!(
+            calls(&e, DEVICE_BASE + DEVICE_DRAW_INDEXED_PRIMITIVE),
+            vec![vec![s.device, 4, 0x38, 0, 4, 0, 2]]
+        );
+        let property = e.mem.u32(s.geometry + 0xc0);
+        assert_eq!(
+            calls(&e, PROPERTY_BASE + 0x88),
+            vec![vec![property, s.geometry + 0x9c, 1]]
+        );
+        assert_eq!(calls(&e, PROPERTY_BASE + 0x8c).len(), 1);
+    }
+
+    #[test]
+    fn indexed_points_with_bytes_fill_the_index_buffer() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e);
+        let r = s.renderer;
+        let array = e.mem.alloc(4);
+        e.mem.set_u16(array, 3);
+        e.mem.set_u32(s.data + 0x44, array);
+        let bytes = e.mem.alloc(4);
+        e.mem.set_u8(bytes, 5);
+        e.mem.set_u32(s.data + 0x64, bytes);
+        let index_buffer = object(&mut e, 0x7000, INDEX_BASE, 0x10);
+        e.register_double(NEW_INDEX_BUFFER_00E8FC50, move |_, _| {
+            index_buffer.into_ret()
+        });
+        let indices = e.mem.alloc(0x10);
+        e.register_double(INDEX_BASE + INDEX_BUFFER_LOCK, move |e, a| {
+            e.mem.set_u32(a[3], indices);
+            Ret::default()
+        });
+        e.register(INDEX_BASE + INDEX_BUFFER_UNLOCK, nop);
+        let vertices = e.mem.alloc(0xa0);
+        e.register_double(STREAMS_BEGIN_00E8BFF0, move |_, _| vertices.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_0140, &args![r, s.geometry]);
+        assert_eq!(
+            calls(&e, NEW_INDEX_BUFFER_00E8FC50),
+            vec![vec![0x8c00, 24, 0, 0x65, 1]]
+        );
+        assert_eq!(e.mem.u32(s.buffer + 0x34), index_buffer);
+        assert_eq!(e.mem.u32(s.buffer + 0x2c), 12);
+        assert_eq!(e.mem.u32(s.buffer + 0x30), 24);
+        assert_eq!(calls(&e, INDEX_BASE + INDEX_BUFFER_LOCK)[0][1..3], [0, 12]);
+        let written: Vec<u16> = (0..6).map(|i| e.mem.u16(indices + 2 * i)).collect();
+        assert_eq!(written, vec![12, 13, 14, 12, 14, 15]);
+        assert_eq!(calls(&e, INDEX_BASE + INDEX_BUFFER_UNLOCK).len(), 1);
+        assert_eq!(
+            calls(&e, DATA_SET_SECOND_00E8F040),
+            vec![vec![s.buffer, 0xdec2]]
+        );
+        assert_eq!(e.mem.u32(s.strides), 0x28);
+        assert_eq!(f32::from_bits(e.mem.u32(vertices + 0x24)), 5.0);
+        assert_eq!(
+            calls(&e, DEVICE_BASE + DEVICE_SET_INDICES),
+            vec![vec![s.device, index_buffer]]
+        );
+    }
+
+    #[test]
+    fn a_failed_lock_releases_the_index_buffer() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e);
+        let array = e.mem.alloc(4);
+        e.mem.set_u32(s.data + 0x44, array);
+        let index_buffer = object(&mut e, 0x7000, INDEX_BASE, 0x10);
+        e.mem.set_u32(s.buffer + 0x34, index_buffer);
+        e.register(INDEX_BASE + INDEX_BUFFER_LOCK, |_, _| {
+            0x8876_086cu32.into_ret()
+        });
+        e.register(INDEX_BASE + INDEX_BUFFER_UNLOCK, nop);
+        e.register(INDEX_BASE + RELEASE, nop);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_0140, &args![s.renderer, s.geometry]);
+        assert_eq!(
+            calls(&e, REPORT_00A29680),
+            vec![vec![LOCK_FAILED_MESSAGE_010EDDD0]]
+        );
+        assert_eq!(calls(&e, INDEX_BASE + RELEASE), vec![vec![index_buffer]]);
+        assert!(calls(&e, DEVICE_BASE + DEVICE_SET_TRANSFORM).is_empty());
+    }
+
+    #[test]
+    fn points_wait_for_the_owner_and_need_vertices() {
+        let mut e = Engine::new();
+        let s = set_up(&mut e);
+        let owner = e.mem.u32(s.renderer.addr() + 0xc);
+        let third = floats(&mut e, &[0.0; 16]);
+        e.mem.set_u32(owner + 8, third);
+        e.mem.set_u8(s.owner_flags + 0x18, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e7_0140, &args![s.renderer, s.geometry]);
+        assert!(calls(&e, DATA_BASE + 0x90).is_empty());
+        // A NaN draws; without vertices it stops there.
+        e.mem.set_u32(third + 0x3c, 0x7fc0_0000);
+        e.register(DATA_BASE + 0x90, |_, _| 0u32.into_ret());
+        e.call(0x00e7_0140, &args![s.renderer, s.geometry]);
+        assert_eq!(calls(&e, DATA_BASE + 0x90).len(), 1);
+        assert!(calls(&e, ADD_OBJECT_TO_GROUP).is_empty());
     }
 }

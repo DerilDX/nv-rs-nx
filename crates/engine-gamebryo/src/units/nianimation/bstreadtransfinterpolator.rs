@@ -379,6 +379,237 @@ pub fn bs_tread_transf_interpolator_scalar_deleting_destructor(
     this
 }
 
+/// `NiKeyBasedInterpolator::RegisterStreamables` (`00aa0ad0`, `thiscall
+/// (this, stream)`) and the base `SaveBinary` this class's runs first
+/// (`00a95ca0`, `thiscall (this, stream)`).
+const BASE_REGISTER_STREAMABLES: u32 = 0x00aa_0ad0;
+const BASE_SAVE_BINARY: u32 = 0x00a9_5ca0;
+/// `NiStream`'s `RegisterFixedString` (vtable +0x20, one word: the string's
+/// address) and `SaveLinkID` (+0x30, one word: the object); the objects'
+/// `RegisterStreamables` (+0x54).
+const STREAM_SLOT_REGISTER_FIXED_STRING: u32 = 0x20;
+const STREAM_SLOT_SAVE_LINK_ID: u32 = 0x30;
+const SLOT_REGISTER_STREAMABLES: u32 = 0x54;
+/// `NiStream::SaveFixedString` (`00a641f0`, `thiscall (stream, &string)`)
+/// and `NiQuatTransform::SaveBinary` (`00a38b60`, `thiscall (transform,
+/// stream)`).
+const STREAM_SAVE_FIXED_STRING: u32 = 0x00a6_41f0;
+const QUAT_TRANSFORM_SAVE_BINARY: u32 = 0x00a3_8b60;
+/// `NiFloatKey::GenInterp` (`00a26b40`, `cdecl (time, keys, type, count,
+/// &last index, key size)`, the value in `ST0`).
+const FLOAT_KEY_GEN_INTERP: u32 = 0x00a2_6b40;
+/// `NiInterpolator::m_fLastTime` (Xbox PDB) +8.
+const LAST_TIME: u32 = 0x8;
+/// `NiFloatData` (Xbox PDB): `m_uiNumKeys` +8, `m_pkKeys` +0xC, `m_eType`
+/// +0x10, `m_ucKeySize` +0x14.
+const DATA_NUM_KEYS: u32 = 0x8;
+const DATA_KEYS: u32 = 0xc;
+const DATA_TYPE: u32 = 0x10;
+const DATA_KEY_SIZE: u32 = 0x14;
+/// The virtual slot `GetChannelPosed` calls (+0xE0, one word: the channel).
+const SLOT_CHANNEL_QUERY: u32 = 0xe0;
+
+// Translated from 00a43350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreadTransfInterpolator::GetKeyContent` (Xbox PDB; `thiscall`, one
+/// stack word): 6 for any channel but 0, 0 for channel 0 (`NEG`/`SBB`/`AND
+/// 6`); `this` is not read.
+pub fn bs_tread_transf_interpolator_get_key_content(
+    _e: &mut Engine,
+    _this: Ptr,
+    channel: u16,
+) -> u32 {
+    if channel != 0 {
+        6
+    } else {
+        0
+    }
+}
+
+// Translated from 00a43450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreadTransfInterpolator::RegisterStreamables` (Xbox PDB): the base
+/// `RegisterStreamables` (`00aa0ad0`); when it is true, each link's name is
+/// registered with the stream (vtable +0x20) and the lerp data registers
+/// itself (vtable +0x54) when there is one. Answers the base's answer (kept
+/// in the stream argument's stack byte).
+pub fn bs_tread_transf_interpolator_register_streamables(
+    e: &mut Engine,
+    this: Ptr,
+    stream: Ptr,
+) -> bool {
+    let this = this.addr();
+    let answer = e
+        .call(BASE_REGISTER_STREAMABLES, &args![this, stream])
+        .bool();
+    if !answer {
+        return false;
+    }
+    let mut index = 0u32;
+    while index < word(e, this + NUM_LINKS) {
+        let links = word(e, this + LINKS);
+        let name = links.wrapping_add(index.wrapping_mul(LINK_INFO_SIZE) + LINK_NAME);
+        e.vcall(
+            stream.addr(),
+            STREAM_SLOT_REGISTER_FIXED_STRING,
+            &args![name],
+        );
+        index = index.wrapping_add(1);
+    }
+    let data = word(e, this + LERP_DATA);
+    if data != 0 {
+        e.vcall(data, SLOT_REGISTER_STREAMABLES, &args![stream]);
+    }
+    answer
+}
+
+// Translated from 00a434b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreadTransfInterpolator::Update` (Xbox PDB; `thiscall`, three stack
+/// words, `RET 0xC`; the object and value words are not read): with lerp
+/// keys, the lerp value `v` at `time` (`NiFloatKey::GenInterp`, the last
+/// index kept); when `time` went back (before the last time) and `v` is
+/// below `fCurrLerp`, the lerp wrapped: `fDiffLerp = (1 - fCurrLerp) + v`;
+/// otherwise `fDiffLerp = v - fCurrLerp`; `fCurrLerp = v`. The last time
+/// takes `time` in every case; true is answered. The key-size argument is
+/// the data's byte in a word whose upper bytes the exe leaves as they were
+/// on its stack; `GenInterp` reads only the byte (`MOVZX` at `00a26b70`).
+pub fn bs_tread_transf_interpolator_update(
+    e: &mut Engine,
+    this: Ptr,
+    time: f32,
+    _unused_2: u32,
+    _unused_3: u32,
+) -> bool {
+    let this = this.addr();
+    let time_bits = x87_quiet_bits(time.to_bits());
+    let data = word(e, this + LERP_DATA);
+    let count = word(e, data + DATA_NUM_KEYS);
+    let key_size = u32::from(e.mem.u8(data + DATA_KEY_SIZE));
+    let key_type = word(e, data + DATA_TYPE);
+    let keys = word(e, data + DATA_KEYS);
+    if count != 0 {
+        let lerp = e.with_stack(4, |e, last_index| {
+            let last_index = last_index.addr();
+            let index = word(e, this + LAST_LERP_INDEX);
+            e.mem.set_u32(last_index, index);
+            let value = e
+                .call(
+                    FLOAT_KEY_GEN_INTERP,
+                    &args![time_bits, keys, key_type, count, last_index, key_size],
+                )
+                .f64();
+            let index = word(e, last_index);
+            e.mem.set_u32(this + LAST_LERP_INDEX, index);
+            x87_store32(value)
+        });
+        let value = x87_load32(lerp);
+        let last = x87_load32(word(e, this + LAST_TIME));
+        let current = x87_load32(word(e, this + CURR_LERP));
+        if x87_load32(time_bits) < last && current > value {
+            let one_minus = x87_sub(1.0, current);
+            let diff = x87_add(one_minus, value);
+            e.mem.set_u32(this + DIFF_LERP, x87_store32(diff));
+        } else {
+            let diff = x87_sub(value, x87_m32(word(e, this + CURR_LERP)));
+            e.mem.set_u32(this + DIFF_LERP, x87_store32(diff));
+        }
+        e.mem.set_u32(this + CURR_LERP, x87_store32(value));
+    }
+    e.mem.set_u32(this + LAST_TIME, time_bits);
+    true
+}
+
+// Translated from 00a43560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreadTransfInterpolator::GetKeyCount` (Xbox PDB): for channel 0 with
+/// lerp data its key count; 0 otherwise.
+pub fn bs_tread_transf_interpolator_get_key_count(e: &mut Engine, this: Ptr, channel: u16) -> u32 {
+    let data = word(e, this.addr() + LERP_DATA);
+    if channel != 0 || data == 0 {
+        return 0;
+    }
+    word(e, data + DATA_NUM_KEYS)
+}
+
+// Translated from 00a43580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreadTransfInterpolator::GetKeyType` (Xbox PDB): for channel 0 with
+/// lerp data its key type; 0 otherwise.
+pub fn bs_tread_transf_interpolator_get_key_type(e: &mut Engine, this: Ptr, channel: u16) -> u32 {
+    let data = word(e, this.addr() + LERP_DATA);
+    if channel != 0 || data == 0 {
+        return 0;
+    }
+    word(e, data + DATA_TYPE)
+}
+
+// Translated from 00a435a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreadTransfInterpolator::GetKeyArray` (Xbox PDB): for channel 0 with
+/// lerp data its keys; null otherwise.
+pub fn bs_tread_transf_interpolator_get_key_array(e: &mut Engine, this: Ptr, channel: u16) -> u32 {
+    let data = word(e, this.addr() + LERP_DATA);
+    if channel != 0 || data == 0 {
+        return 0;
+    }
+    word(e, data + DATA_KEYS)
+}
+
+// Translated from 00a435c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreadTransfInterpolator::GetKeyStride` (Xbox PDB): for channel 0 with
+/// lerp data its key size byte; 0 otherwise (`AL` only).
+pub fn bs_tread_transf_interpolator_get_key_stride(e: &mut Engine, this: Ptr, channel: u16) -> u8 {
+    let data = word(e, this.addr() + LERP_DATA);
+    if channel != 0 || data == 0 {
+        return 0;
+    }
+    e.mem.u8(data + DATA_KEY_SIZE)
+}
+
+// Translated from 00a435e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreadTransfInterpolator::GetChannelPosed` (Xbox PDB): with lerp data
+/// its own virtual slot +0xE0 runs on the channel word (its answer is
+/// dropped); always false.
+pub fn bs_tread_transf_interpolator_get_channel_posed(
+    e: &mut Engine,
+    this: Ptr,
+    channel: u32,
+) -> bool {
+    if word(e, this.addr() + LERP_DATA) != 0 {
+        e.vcall(this.addr(), SLOT_CHANNEL_QUERY, &args![channel]);
+    }
+    false
+}
+
+// Translated from 00a43600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreadTransfInterpolator::SaveBinary` (Xbox PDB): the base
+/// `SaveBinary` (`00a95ca0`), the link count (4 bytes; the component size in
+/// the stream argument's stack word, which then holds the loop counter),
+/// each link's name (`SaveFixedString`) and its two transforms
+/// (`NiQuatTransform::SaveBinary`), then the lerp data's link (`SaveLinkID`,
+/// the stream's vtable +0x30).
+pub fn bs_tread_transf_interpolator_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    use crate::units::nianimation::niblendinterpolator::stream_write;
+    let this = this.addr();
+    e.call(BASE_SAVE_BINARY, &args![this, stream]);
+    e.with_stack(4, |e, argument| {
+        let argument = argument.addr();
+        e.mem.set_u32(argument, stream.addr());
+        stream_write(e, stream, this + NUM_LINKS, 4, argument);
+        e.mem.set_u32(argument, 0);
+        let mut offset = 0u32;
+        while word(e, argument) < word(e, this + NUM_LINKS) {
+            let links = word(e, this + LINKS);
+            let name = links.wrapping_add(offset + LINK_NAME);
+            e.call(STREAM_SAVE_FIXED_STRING, &args![stream, name]);
+            let start = word(e, this + LINKS).wrapping_add(offset);
+            e.call(QUAT_TRANSFORM_SAVE_BINARY, &args![start, stream]);
+            let end = word(e, this + LINKS).wrapping_add(offset + LINK_END);
+            e.call(QUAT_TRANSFORM_SAVE_BINARY, &args![end, stream]);
+            let counter = word(e, argument).wrapping_add(1);
+            offset = offset.wrapping_add(LINK_INFO_SIZE);
+            e.mem.set_u32(argument, counter);
+        }
+    });
+    let data = word(e, this + LERP_DATA);
+    e.vcall(stream.addr(), STREAM_SLOT_SAVE_LINK_ID, &args![data]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -394,6 +625,42 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00a4_39e0, bs_tread_transf_interpolator_create_clone(Ptr, Ptr) -> Ptr),
         entry!(0x00a4_3a50, bs_tread_transf_interpolator_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(
+            0x00a4_3350,
+            bs_tread_transf_interpolator_get_key_content(Ptr, u16) -> u32
+        ),
+        entry!(
+            0x00a4_3450,
+            bs_tread_transf_interpolator_register_streamables(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00a4_34b0,
+            bs_tread_transf_interpolator_update(Ptr, f32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00a4_3560,
+            bs_tread_transf_interpolator_get_key_count(Ptr, u16) -> u32
+        ),
+        entry!(
+            0x00a4_3580,
+            bs_tread_transf_interpolator_get_key_type(Ptr, u16) -> u32
+        ),
+        entry!(
+            0x00a4_35a0,
+            bs_tread_transf_interpolator_get_key_array(Ptr, u16) -> u32
+        ),
+        entry!(
+            0x00a4_35c0,
+            bs_tread_transf_interpolator_get_key_stride(Ptr, u16) -> u8
+        ),
+        entry!(
+            0x00a4_35e0,
+            bs_tread_transf_interpolator_get_channel_posed(Ptr, u32) -> bool
+        ),
+        entry!(
+            0x00a4_3600,
+            bs_tread_transf_interpolator_save_binary(Ptr, Ptr)
+        ),
     ]
 }
 
@@ -732,5 +999,178 @@ mod tests {
         assert_eq!(tread_calls_to(&e, BASE_DESTRUCTOR), vec![vec![this]]);
         e.call(0x00a4_3a50, &args![this, 1u32]);
         assert_eq!(tread_calls_to(&e, SIZED_DELETE), vec![vec![this, 0x24]]);
+    }
+}
+
+#[cfg(test)]
+mod a07_tests {
+    use super::*;
+    use crate::units::nianimation::niblendinterpolator::a07_test_support::{calls, stream};
+
+    const TEST_VTABLE: u32 = 0x7400_0000;
+    fn slot(offset: u32) -> u32 {
+        0x7500_0000 + offset
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        let slots: Vec<u32> = (0..0x40).map(|i| slot(4 * i)).collect();
+        e.put_vtable(TEST_VTABLE, &slots);
+        for i in 0..0x40 {
+            e.register(slot(4 * i), |_, _| Ret::default());
+        }
+        e
+    }
+
+    /// An interpolator with `links` links and lerp data (`count` keys of type
+    /// 1, key size 8) unless `count` is `None`.
+    fn tread(e: &mut Engine, links: u32, count: Option<u32>) -> u32 {
+        let this = e.mem.alloc(OBJECT_SIZE);
+        e.mem.set_u32(this, TEST_VTABLE);
+        let array = e.mem.alloc(LINK_INFO_SIZE * links.max(1));
+        e.mem.set_u32(this + LINKS, array);
+        e.mem.set_u32(this + NUM_LINKS, links);
+        if let Some(count) = count {
+            let data = e.mem.alloc(0x18);
+            e.mem.set_u32(data, TEST_VTABLE);
+            e.mem.set_u32(data + DATA_NUM_KEYS, count);
+            e.mem.set_u32(data + DATA_KEYS, 0x4000);
+            e.mem.set_u32(data + DATA_TYPE, 1);
+            e.mem.set_u8(data + DATA_KEY_SIZE, 8);
+            e.mem.set_u32(this + LERP_DATA, data);
+        }
+        this
+    }
+
+    #[test]
+    fn get_key_content_is_6_for_channels_but_0() {
+        let mut e = engine();
+        assert_eq!(e.call(0x00a4_3350, &args![0u32, 0u32]).u32(), 0);
+        assert_eq!(e.call(0x00a4_3350, &args![0u32, 1u32]).u32(), 6);
+        assert_eq!(e.call(0x00a4_3350, &args![0u32, 0x1_0000u32]).u32(), 0);
+    }
+
+    #[test]
+    fn register_streamables_registers_names_and_the_data() {
+        let mut e = engine();
+        e.register(BASE_REGISTER_STREAMABLES, |e, a| {
+            (e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        let this = tread(&mut e, 2, Some(1));
+        let s = e.mem.alloc(0x10);
+        e.mem.set_u32(s, TEST_VTABLE);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00a4_3450, &args![this, s]).bool());
+        let links = e.mem.u32(this + LINKS);
+        assert_eq!(
+            calls(&e, slot(STREAM_SLOT_REGISTER_FIXED_STRING)),
+            vec![
+                vec![s, links + LINK_NAME],
+                vec![s, links + LINK_INFO_SIZE + LINK_NAME]
+            ]
+        );
+        let data = e.mem.u32(this + LERP_DATA);
+        assert_eq!(
+            calls(&e, slot(SLOT_REGISTER_STREAMABLES)),
+            vec![vec![data, s]]
+        );
+        e.mem.set_u32(this + 4, 1);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00a4_3450, &args![this, s]).bool());
+        assert!(calls(&e, slot(STREAM_SLOT_REGISTER_FIXED_STRING)).is_empty());
+    }
+
+    #[test]
+    fn update_tracks_the_lerp_and_its_wrap() {
+        let mut e = engine();
+        e.register(FLOAT_KEY_GEN_INTERP, |e, a| {
+            e.mem.set_u32(a[4], 3);
+            (f64::from(f32::from_bits(a[0])) / 10.0).into_ret()
+        });
+        let this = tread(&mut e, 0, Some(2));
+        e.call_log = Some(vec![]);
+        // Forward: 0.25 - 0 (the lerp value is time / 10).
+        assert!(e.call(0x00a4_34b0, &args![this, 2.5f32, 0u32, 0u32]).bool());
+        assert_eq!(e.mem.f32(this + DIFF_LERP), 0.25);
+        assert_eq!(e.mem.f32(this + CURR_LERP), 0.25);
+        assert_eq!(e.mem.f32(this + LAST_TIME), 2.5);
+        assert_eq!(e.mem.u32(this + LAST_LERP_INDEX), 3);
+        let gen = calls(&e, FLOAT_KEY_GEN_INTERP);
+        assert_eq!(gen[0][..4], [2.5f32.to_bits(), 0x4000, 1, 2]);
+        assert_eq!(gen[0][5], 8);
+        // Back in time with a smaller lerp: it wrapped, (1 - 0.25) + 0.125.
+        e.call(0x00a4_34b0, &args![this, 1.25f32, 0u32, 0u32]);
+        assert_eq!(e.mem.f32(this + DIFF_LERP), 0.875);
+        assert_eq!(e.mem.f32(this + CURR_LERP), 0.125);
+        // No keys: only the last time.
+        let bare = tread(&mut e, 0, Some(0));
+        e.mem.set_f32(bare + CURR_LERP, 0.5);
+        e.call(0x00a4_34b0, &args![bare, 4.0f32, 0u32, 0u32]);
+        assert_eq!(e.mem.f32(bare + CURR_LERP), 0.5);
+        assert_eq!(e.mem.f32(bare + LAST_TIME), 4.0);
+    }
+
+    #[test]
+    fn key_queries_answer_only_for_channel_0_with_data() {
+        let mut e = engine();
+        let this = tread(&mut e, 0, Some(5));
+        assert_eq!(e.call(0x00a4_3560, &args![this, 0u32]).u32(), 5);
+        assert_eq!(e.call(0x00a4_3580, &args![this, 0u32]).u32(), 1);
+        assert_eq!(e.call(0x00a4_35a0, &args![this, 0u32]).u32(), 0x4000);
+        assert_eq!(e.call(0x00a4_35c0, &args![this, 0u32]).u8(), 8);
+        for addr in [0x00a4_3560u32, 0x00a4_3580, 0x00a4_35a0, 0x00a4_35c0] {
+            assert_eq!(e.call(addr, &args![this, 1u32]).u8(), 0);
+        }
+        let bare = tread(&mut e, 0, None);
+        for addr in [0x00a4_3560u32, 0x00a4_3580, 0x00a4_35a0, 0x00a4_35c0] {
+            assert_eq!(e.call(addr, &args![bare, 0u32]).u8(), 0);
+        }
+    }
+
+    #[test]
+    fn get_channel_posed_asks_its_slot_and_answers_false() {
+        let mut e = engine();
+        e.register(slot(SLOT_CHANNEL_QUERY), |_, _| 1u32.into_ret());
+        let this = tread(&mut e, 0, Some(1));
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00a4_35e0, &args![this, 0x0001_0002u32]).bool());
+        assert_eq!(
+            calls(&e, slot(SLOT_CHANNEL_QUERY)),
+            vec![vec![this, 0x0001_0002]]
+        );
+        let bare = tread(&mut e, 0, None);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00a4_35e0, &args![bare, 0u32]).bool());
+        assert!(calls(&e, slot(SLOT_CHANNEL_QUERY)).is_empty());
+    }
+
+    #[test]
+    fn save_binary_writes_the_links_and_the_data_link() {
+        let mut e = engine();
+        e.register(BASE_SAVE_BINARY, |_, _| Ret::default());
+        e.register(STREAM_SAVE_FIXED_STRING, |_, _| Ret::default());
+        e.register(QUAT_TRANSFORM_SAVE_BINARY, |_, _| Ret::default());
+        let (s, written) = stream(&mut e, 0, &[]);
+        e.mem.set_u32(s.addr(), TEST_VTABLE);
+        let this = tread(&mut e, 2, Some(1));
+        e.call_log = Some(vec![]);
+        e.call(0x00a4_3600, &args![this, s]);
+        assert_eq!(*written.borrow(), 2u32.to_le_bytes().to_vec());
+        let links = e.mem.u32(this + LINKS);
+        assert_eq!(
+            calls(&e, STREAM_SAVE_FIXED_STRING),
+            vec![
+                vec![s.addr(), links + LINK_NAME],
+                vec![s.addr(), links + LINK_INFO_SIZE + LINK_NAME]
+            ]
+        );
+        let saved = calls(&e, QUAT_TRANSFORM_SAVE_BINARY);
+        assert_eq!(saved.len(), 4);
+        assert_eq!(saved[1], vec![links + LINK_END, s.addr()]);
+        let data = e.mem.u32(this + LERP_DATA);
+        assert_eq!(
+            calls(&e, slot(STREAM_SLOT_SAVE_LINK_ID)),
+            vec![vec![s.addr(), data]]
+        );
     }
 }

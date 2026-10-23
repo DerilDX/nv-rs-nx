@@ -382,6 +382,118 @@ pub(crate) mod shader_inline {
         };
         e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, bytes]).u32()
     }
+
+    /// The Ni allocation `00aa13e0` (`cdecl`, size) and
+    /// `NiD3DShaderConstantMap::NiD3DShaderConstantMap` (engine map, `00b7e330`, `thiscall`:
+    /// the renderer and a kind word).
+    pub(crate) const NI_ALLOCATE_00AA13E0: u32 = 0x00aa_13e0;
+    pub(crate) const CONSTANT_MAP_CONSTRUCT_00B7E330: u32 = 0x00b7_e330;
+    /// `""` (`01011584`), the empty string the constant entries pass.
+    pub(crate) const CONSTANT_EMPTY_NAME_01011584: u32 = 0x0101_1584;
+    /// The thread block's word at +0x2b4: the allocation context the shaders set while they
+    /// make their parts.
+    pub(crate) const TLS_ALLOCATION_CONTEXT: u32 = 0x2b4;
+
+    /// One constant map of a shader's `CreateConstantMaps`: 0x44 bytes allocated, a constant
+    /// map constructed in them with the shader's word +0x18 (read only when the allocation
+    /// succeeded) and `kind` (null when it failed), assigned to the `NiPointer` at
+    /// `this + slot`.
+    pub(crate) fn make_constant_map(e: &mut Engine, this: u32, slot: u32, kind: u32) {
+        let block = e.call(NI_ALLOCATE_00AA13E0, &args![0x44u32]).u32();
+        let map = if block != 0 {
+            let renderer = e.mem.u32(this + 0x18);
+            e.call(
+                CONSTANT_MAP_CONSTRUCT_00B7E330,
+                &args![block, renderer, kind],
+            )
+            .u32()
+        } else {
+            0
+        };
+        ni_pointer_assign(e, this + slot, map);
+    }
+
+    /// One constant entry: the map's vtable slot +8 (the map read again through the
+    /// `NiPointer` at `this + slot`) with the ten words.
+    pub(crate) fn add_constant_entry(e: &mut Engine, this: u32, slot: u32, words: [u32; 10]) {
+        let map = e.mem.u32(this + slot);
+        e.vcall(map, 8, &words);
+    }
+
+    /// One indexed compile of a loader: `MakePath` of the file at `frame + block` into the
+    /// path buffer, the compiled name formatted from `format` with `index` (`00406d00`:
+    /// buffer, 0x104, format, index), the vertex or pixel compile (`this`, path, the block's
+    /// macros at +4, profile, name); answers the compiled shader.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn compile_indexed(
+        e: &mut Engine,
+        this: u32,
+        frame: u32,
+        buffers: &ShaderBuffers,
+        block: u32,
+        format: u32,
+        index: u32,
+        profile: u32,
+        pixel: bool,
+    ) -> u32 {
+        let file = e.mem.u32(frame + block);
+        let path = frame + buffers.path;
+        let name = frame + buffers.name;
+        e.call(MAKE_PATH, &args![file, path]);
+        e.call(FORMAT_00406D00, &args![name, 0x104u32, format, index]);
+        let compile = if pixel {
+            COMPILE_PIXEL_SHADER
+        } else {
+            COMPILE_VERTEX_SHADER
+        };
+        e.call(
+            compile,
+            &args![this, path, frame + block + 4, profile, name],
+        )
+        .u32()
+    }
+
+    /// The loaders' loop step: a block with a file is compiled ([`compile_indexed`]) into the
+    /// `NiPointer` at `slot`; a block without one clears that pointer (releasing what it held).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn compile_indexed_or_clear(
+        e: &mut Engine,
+        this: u32,
+        frame: u32,
+        buffers: &ShaderBuffers,
+        block: u32,
+        slot: u32,
+        format: u32,
+        index: u32,
+        profile: u32,
+        pixel: bool,
+    ) {
+        if e.mem.u32(frame + block) == 0 {
+            ni_pointer_clear(e, slot);
+            return;
+        }
+        let shader = compile_indexed(
+            e, this, frame, buffers, block, format, index, profile, pixel,
+        );
+        ni_pointer_assign(e, slot, shader);
+    }
+
+    /// The thread's allocation context (the thread block's +0x2b4) set to `context` for `f`
+    /// and put back afterwards.
+    pub(crate) fn with_allocation_context<R>(
+        e: &mut Engine,
+        context: u32,
+        f: impl FnOnce(&mut Engine) -> R,
+    ) -> R {
+        let tls = e.tls();
+        let saved = e.mem.u32(tls.wrapping_add(TLS_ALLOCATION_CONTEXT));
+        e.mem
+            .set_u32(tls.wrapping_add(TLS_ALLOCATION_CONTEXT), context);
+        let result = f(e);
+        e.mem
+            .set_u32(tls.wrapping_add(TLS_ALLOCATION_CONTEXT), saved);
+        result
+    }
 }
 
 /// Test doubles the shader units' tests share: the interlocked counts on memory, the array
@@ -967,6 +1079,292 @@ pub fn fn_00e80420(e: &mut Engine, this: Ptr, growth: u32) {
     e.mem.set_u32(base + 0xc, block);
 }
 
+/// The `eh vector destructor iterator` (`00ec5fce`, `stdcall`), `BSShader::~BSShader` (engine
+/// map, `00be0f10`, no stack words) and the Ni free (`00aa1460`, `cdecl`: block, size).
+const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
+const BS_SHADER_DESTRUCT: u32 = 0x00be_0f10;
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00bcb210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `geometrydecalshader.cpp`): the decal shader's destructor,
+/// no stack words. Stores the vtable `010bb588`; clears (releasing what they hold) the
+/// constant entries +0x84, +0x88, +0x8c; for each of the two passes the pass +0x6c is dropped
+/// and cleared and the `NiPointer`s +0x74 and +0x7c cleared (then +0x70, +0x78, +0x80); clears
+/// the global declarations `012021e0` and `012021e4`; releases +0x8c, +0x88 and +0x84 again
+/// when not null (they were just cleared); destroys the arrays +0x7c and +0x74 (destructor
+/// `00b66f20`) and +0x6c (`00b79930`) and runs `BSShader::~BSShader` (`00be0f10`).
+// Translation incomplete: 00bcb210 - the C++ exception frame (FS:[0] chain, unwind states 0 to 6 for the members and the base) is not translated.
+pub fn fn_00bcb210(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, GEOMETRY_DECAL_VTABLE_010BB588);
+    for offset in [0x84u32, 0x88, 0x8c] {
+        shader_inline::ni_pointer_clear(e, base + offset);
+    }
+    for index in 0..2u32 {
+        shader_inline::pass_pointer_clear(e, base + 0x6c + 4 * index);
+        shader_inline::ni_pointer_clear(e, base + 0x74 + 4 * index);
+        shader_inline::ni_pointer_clear(e, base + 0x7c + 4 * index);
+    }
+    shader_inline::ni_pointer_clear(e, DECLARATION_POINTER_012021E0);
+    shader_inline::ni_pointer_clear(e, DECLARATION_POINTER_012021E4);
+    for offset in [0x8cu32, 0x88, 0x84] {
+        let held = e.mem.u32(base + offset);
+        if held != 0 {
+            shader_inline::release_reference(e, held);
+        }
+    }
+    for (offset, destructor) in [
+        (0x7cu32, shader_inline::DESTRUCT_00B66F20),
+        (0x74, shader_inline::DESTRUCT_00B66F20),
+        (0x6c, shader_inline::DESTRUCT_00B79930),
+    ] {
+        e.call(
+            VECTOR_DESTRUCT,
+            &args![base + offset, 4u32, 2u32, destructor],
+        );
+    }
+    e.call(BS_SHADER_DESTRUCT, &args![base]);
+}
+
+/// The value of render state 0xc3 (`float`, `01200458`).
+const DECAL_STATE_VALUE_01200458: u32 = 0x0120_0458;
+
+/// The two texture stages a decal pass gets when it has fewer than two (its word +0x18): both
+/// made into the same stack pointer (the first is not dropped when the second is made),
+/// `SetupDefaultStage` with (0, 1, 2, 1) and (1, 3, 2, 1), each put on the pass with its word
+/// +0x14.
+fn decal_stages(e: &mut Engine, pass: u32, local: u32) {
+    if e.mem.u32(pass + 0x18) >= 2 {
+        return;
+    }
+    for (index, setup) in [(0u32, 1u32), (1, 3)] {
+        e.call(shader_inline::CREATE_NEW_STAGE, &args![local]);
+        let stage = e.mem.u32(local);
+        e.call(
+            shader_inline::SETUP_DEFAULT_STAGE,
+            &args![stage, index, setup, 2u32, 1u32],
+        );
+        let stage = e.mem.u32(local);
+        let position = e.mem.u32(pass + 0x14);
+        e.call(shader_inline::PASS_SET_STAGE, &args![pass, position, stage]);
+    }
+}
+
+/// A pass held (its count +0x64 up by one) when it is not null.
+fn hold_pass(e: &mut Engine, pass: u32) {
+    if pass != 0 {
+        let count = e.mem.u32(pass + 0x64).wrapping_add(1);
+        e.mem.set_u32(pass + 0x64, count);
+    }
+}
+
+/// A held pass let go: its count down by one and the pass deleted (`00e80190`) at 0.
+fn let_go_pass(e: &mut Engine, pass: u32) {
+    let left = e.mem.u32(pass + 0x64).wrapping_sub(1);
+    e.mem.set_u32(pass + 0x64, left);
+    if left == 0 {
+        e.call(shader_inline::PASS_DELETE_00E80190, &args![pass]);
+    }
+}
+
+// Translated from 00bcb7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `geometrydecalshader.cpp`; vtable `010bb588` slot +0x13c):
+/// the decal shader's passes, no stack words. Holds the first pass (+0x6c; the code goes on
+/// with it even when null), gives it its two stages when it has fewer than two, assigns the
+/// shader's +0x74 and +0x7c to its vertex (+0x5c) and pixel (+0x44) `NiPointer`s and sets the
+/// render states (0xa8, 0xf), (0x1b, 1), (0x13, 9), (0x14, 6), (0xf, 1), (0x19, 5), (0x18, 0),
+/// (0xe, 0) and (0xc3, the `float` `01200458`). When the second pass (+0x70) is another one,
+/// lets the first go and holds the second; it gets the same stages, +0x78 and +0x80, and the
+/// same states with (0xc3, ...) before (0xe, 0). Then the stage reference is dropped and the
+/// held pass let go (both without a null check on the pass).
+// Translation incomplete: 00bcb7f0 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the stage and the pass) is not translated.
+pub fn fn_00bcb7f0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.with_stack(4, |e, local| {
+        let local = local.addr();
+        e.mem.set_u32(local, 0);
+        let mut pass = e.mem.u32(base + 0x6c);
+        hold_pass(e, pass);
+        decal_stages(e, pass, local);
+        let vertex = e.mem.u32(base + 0x74);
+        shader_inline::ni_pointer_assign(e, pass + 0x5c, vertex);
+        let pixel = e.mem.u32(base + 0x7c);
+        shader_inline::ni_pointer_assign(e, pass + 0x44, pixel);
+        let common = [
+            (0xa8u32, 0xfu32),
+            (0x1b, 1),
+            (0x13, 9),
+            (0x14, 6),
+            (0xf, 1),
+            (0x19, 5),
+            (0x18, 0),
+        ];
+        for (state, value) in common {
+            shader_inline::pass_render_state(e, pass, state, value);
+        }
+        shader_inline::pass_render_state(e, pass, 0xe, 0);
+        let value = x87_quiet_bits(e.global::<u32>(DECAL_STATE_VALUE_01200458));
+        shader_inline::pass_render_state(e, pass, 0xc3, value);
+        let second = e.mem.u32(base + 0x70);
+        if pass != second {
+            let_go_pass(e, pass);
+            pass = e.mem.u32(base + 0x70);
+            hold_pass(e, pass);
+        }
+        decal_stages(e, pass, local);
+        let vertex = e.mem.u32(base + 0x78);
+        shader_inline::ni_pointer_assign(e, pass + 0x5c, vertex);
+        let pixel = e.mem.u32(base + 0x80);
+        shader_inline::ni_pointer_assign(e, pass + 0x44, pixel);
+        for (state, value) in common {
+            shader_inline::pass_render_state(e, pass, state, value);
+        }
+        let value = x87_quiet_bits(e.global::<u32>(DECAL_STATE_VALUE_01200458));
+        shader_inline::pass_render_state(e, pass, 0xc3, value);
+        shader_inline::pass_render_state(e, pass, 0xe, 0);
+        let stage = e.mem.u32(local);
+        shader_inline::stage_release(e, stage);
+        let_go_pass(e, pass);
+    });
+}
+
+// Translated from 00bcc070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `geometrydecalshader.cpp`): the scalar deleting destructor
+/// (vtable `010bb588` slot +0), `thiscall`, `RET 4`. Runs the destructor (`00bcb210`) and, when
+/// bit 0 of the flags is set, frees the 0x90 bytes (`00aa1460`). Answers `this`.
+pub fn fn_00bcc070(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00bcb210(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_00AA1460, &args![this, 0x90u32]);
+    }
+    this
+}
+
+/// The constant names of the decal `CreateConstantMaps` (read in Ghidra) and the data they
+/// point at.
+const DECAL_OFFSET_010BB750: u32 = 0x010b_b750;
+const WORLD_VIEW_PROJ_TRANSPOSE_010A1E50: u32 = 0x010a_1e50;
+const SKIN_WORLD_VIEW_PROJ_TRANSPOSE_010A1D20: u32 = 0x010a_1d20;
+const BONE_MATRIX3_010A1CAC: u32 = 0x010a_1cac;
+const DECAL_FADE_010BB744: u32 = 0x010b_b744;
+const DECAL_OFFSET_012021D0: u32 = 0x0120_21d0;
+const DECAL_FADE_012021C0: u32 = 0x0120_21c0;
+
+/// The constant entry the map answers for `name` (its slot +0x70) assigned to the
+/// `NiPointer` at `slot`.
+fn keep_entry(e: &mut Engine, base: u32, name: u32, slot: u32) {
+    let map = e.mem.u32(base + 0x34);
+    let entry = e.vcall(map, 0x70, &args![name]).u32();
+    shader_inline::ni_pointer_assign(e, base + slot, entry);
+}
+
+// Translated from 00bcc2b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GeometryDecalShader::CreateConstantMaps` (Xbox PDB), no stack words. When the pixel
+/// constant map (+0x30) is null, makes one (kind 2) with `"Decal Offset"` (register 0xf,
+/// `012021d0`). When the vertex one (+0x34) is null, makes one (kind 0) with
+/// `"WorldViewProjTranspose"` (0x20000009, 0, 0, 4), keeping its entry (slot +0x70) in +0x84;
+/// `"SkinWorldViewProjTranspose"` through the map's slot +0x68 (0x20000009, 1, `""`, 0, 0, 0,
+/// 0), kept in +0x88; `"BoneMatrix3"` (0x20000009, 0x120000, 0x2c, 0x36), kept in +0x8c; and
+/// `"decal fade"` (register 0x1f, `012021c0`).
+// Translation incomplete: 00bcc2b0 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the allocations) is not translated.
+pub fn geometry_decal_shader_create_constant_maps(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let empty = shader_inline::CONSTANT_EMPTY_NAME_01011584;
+    if e.mem.u32(base + 0x30) == 0 {
+        shader_inline::make_constant_map(e, base, 0x30, 2);
+        shader_inline::add_constant_entry(
+            e,
+            base,
+            0x30,
+            [
+                DECAL_OFFSET_010BB750,
+                0x1000_0007,
+                0,
+                0xf,
+                1,
+                empty,
+                0x10,
+                4,
+                DECAL_OFFSET_012021D0,
+                0,
+            ],
+        );
+    }
+    if e.mem.u32(base + 0x34) != 0 {
+        return;
+    }
+    shader_inline::make_constant_map(e, base, 0x34, 0);
+    shader_inline::add_constant_entry(
+        e,
+        base,
+        0x34,
+        [
+            WORLD_VIEW_PROJ_TRANSPOSE_010A1E50,
+            0x2000_0009,
+            0,
+            0,
+            4,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ],
+    );
+    keep_entry(e, base, WORLD_VIEW_PROJ_TRANSPOSE_010A1E50, 0x84);
+    let map = e.mem.u32(base + 0x34);
+    e.vcall(
+        map,
+        0x68,
+        &args![
+            SKIN_WORLD_VIEW_PROJ_TRANSPOSE_010A1D20,
+            0x2000_0009u32,
+            1u32,
+            empty,
+            0u32,
+            0u32,
+            0u32,
+            0u32
+        ],
+    );
+    keep_entry(e, base, SKIN_WORLD_VIEW_PROJ_TRANSPOSE_010A1D20, 0x88);
+    shader_inline::add_constant_entry(
+        e,
+        base,
+        0x34,
+        [
+            BONE_MATRIX3_010A1CAC,
+            0x2000_0009,
+            0x12_0000,
+            0x2c,
+            0x36,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ],
+    );
+    keep_entry(e, base, BONE_MATRIX3_010A1CAC, 0x8c);
+    shader_inline::add_constant_entry(
+        e,
+        base,
+        0x34,
+        [
+            DECAL_FADE_010BB744,
+            0x1000_0007,
+            0,
+            0x1f,
+            1,
+            empty,
+            0x10,
+            4,
+            DECAL_FADE_012021C0,
+            0,
+        ],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -978,6 +1376,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             geometry_decal_shader_create_shader() -> Ptr
         ),
         entry!(0x00e8_0420, fn_00e80420(Ptr, u32)),
+        entry!(0x00bc_b210, fn_00bcb210(Ptr)),
+        entry!(0x00bc_b7f0, fn_00bcb7f0(Ptr)),
+        entry!(0x00bc_c070, fn_00bcc070(Ptr, u32) -> Ptr),
+        entry!(0x00bc_c2b0, geometry_decal_shader_create_constant_maps(Ptr)),
     ]
 }
 
@@ -1323,5 +1725,217 @@ mod pool_grow_tests {
         assert_eq!(e.mem.u32(block + 8), 0x0e10_0000);
         assert!(calls(&e, NEW_PASSES_00E80390).is_empty());
         assert!(calls(&e, SET_REALLOC_00A311E0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod decal_function_tests {
+    use super::shader_inline::*;
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    fn noop(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn fn_00bcb210_clears_the_members_and_destroys() {
+        let mut e = rig();
+        e.map(0x0120_2000, 0x1000);
+        noop(&mut e, &[VECTOR_DESTRUCT, BS_SHADER_DESTRUCT]);
+        let this = e.mem.alloc(0x90);
+        let entry = object(&mut e, 1);
+        e.mem.set_u32(this + 0x88, entry);
+        let pass = e.mem.alloc(0x70);
+        e.mem.set_u32(pass + 0x64, 1);
+        e.mem.set_u32(this + 0x70, pass);
+        let shader = object(&mut e, 1);
+        e.mem.set_u32(this + 0x80, shader);
+        let declaration = object(&mut e, 1);
+        e.set_global(DECLARATION_POINTER_012021E4, declaration);
+        e.call(0x00bc_b210, &args![this]);
+        assert_eq!(e.mem.u32(this), GEOMETRY_DECAL_VTABLE_010BB588);
+        assert_eq!(
+            calls(&e, REFERENCE_DELETE),
+            vec![vec![entry], vec![shader], vec![declaration]]
+        );
+        assert_eq!(calls(&e, PASS_DELETE_00E80190), vec![vec![pass]]);
+        assert_eq!(e.mem.u32(this + 0x70), 0);
+        assert_eq!(e.global::<u32>(DECLARATION_POINTER_012021E4), 0);
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCT),
+            vec![
+                vec![this + 0x7c, 4, 2, DESTRUCT_00B66F20],
+                vec![this + 0x74, 4, 2, DESTRUCT_00B66F20],
+                vec![this + 0x6c, 4, 2, DESTRUCT_00B79930],
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00bcc070_destroys_and_frees_with_bit_0() {
+        let mut e = rig();
+        e.map(0x0120_2000, 0x1000);
+        noop(
+            &mut e,
+            &[VECTOR_DESTRUCT, BS_SHADER_DESTRUCT, NI_FREE_00AA1460],
+        );
+        let this = e.mem.alloc(0x90);
+        assert_eq!(e.call(0x00bc_c070, &args![this, 1u32]).u32(), this);
+        assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![this, 0x90]]);
+        e.call(0x00bc_c070, &args![this, 0u32]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460).len(), 1);
+    }
+
+    fn passes_rig(same: bool) -> (Engine, u32, [u32; 2]) {
+        let mut e = pass_rig();
+        e.map(0x0120_0000, 0x1000);
+        e.set_global(DECAL_STATE_VALUE_01200458, 0.5f32);
+        let this = e.mem.alloc(0x90);
+        let first = e.mem.alloc(0x70);
+        e.mem.set_u32(first + 0x64, 1);
+        let second = if same {
+            first
+        } else {
+            let pass = e.mem.alloc(0x70);
+            e.mem.set_u32(pass + 0x64, 1);
+            pass
+        };
+        e.mem.set_u32(this + 0x6c, first);
+        e.mem.set_u32(this + 0x70, second);
+        for offset in [0x74u32, 0x78, 0x7c, 0x80] {
+            let shader = object(&mut e, 1);
+            e.mem.set_u32(this + offset, shader);
+        }
+        e.call(0x00bc_b7f0, &args![this]);
+        (e, this, [first, second])
+    }
+
+    #[test]
+    fn fn_00bcb7f0_sets_up_both_passes() {
+        let (e, this, passes) = passes_rig(false);
+        let half = 0.5f32.to_bits();
+        let common = vec![
+            (0xa8, 0xf),
+            (0x1b, 1),
+            (0x13, 9),
+            (0x14, 6),
+            (0xf, 1),
+            (0x19, 5),
+            (0x18, 0),
+        ];
+        let mut first = common.clone();
+        first.extend([(0xe, 0), (0xc3, half)]);
+        let mut second = common;
+        second.extend([(0xc3, half), (0xe, 0)]);
+        assert_eq!(render_states(&e, passes[0]), first);
+        assert_eq!(render_states(&e, passes[1]), second);
+        assert_eq!(e.mem.u32(passes[0] + 0x5c), e.mem.u32(this + 0x74));
+        assert_eq!(e.mem.u32(passes[0] + 0x44), e.mem.u32(this + 0x7c));
+        assert_eq!(e.mem.u32(passes[1] + 0x5c), e.mem.u32(this + 0x78));
+        assert_eq!(e.mem.u32(passes[1] + 0x44), e.mem.u32(this + 0x80));
+        let setups: Vec<Vec<u32>> = calls(&e, SETUP_DEFAULT_STAGE)
+            .iter()
+            .map(|a| a[1..].to_vec())
+            .collect();
+        assert_eq!(
+            setups,
+            vec![
+                vec![0, 1, 2, 1],
+                vec![1, 3, 2, 1],
+                vec![0, 1, 2, 1],
+                vec![1, 3, 2, 1]
+            ]
+        );
+        // Both passes held and let go again.
+        assert_eq!(e.mem.u32(passes[0] + 0x64), 1);
+        assert_eq!(e.mem.u32(passes[1] + 0x64), 1);
+        assert!(calls(&e, PASS_DELETE_00E80190).is_empty());
+    }
+
+    #[test]
+    fn fn_00bcb7f0_one_pass_for_both_and_no_new_stages() {
+        let mut e = pass_rig();
+        e.map(0x0120_0000, 0x1000);
+        let this = e.mem.alloc(0x90);
+        let pass = e.mem.alloc(0x70);
+        // Count 0 (the hold makes it 1) and two stages already.
+        e.mem.set_u32(pass + 0x18, 2);
+        e.mem.set_u32(this + 0x6c, pass);
+        e.mem.set_u32(this + 0x70, pass);
+        e.call(0x00bc_b7f0, &args![this]);
+        assert!(calls(&e, CREATE_NEW_STAGE).is_empty());
+        assert_eq!(render_states(&e, pass).len(), 18);
+        // Held once, let go once: deleted at 0.
+        assert_eq!(calls(&e, PASS_DELETE_00E80190), vec![vec![pass]]);
+    }
+
+    #[test]
+    fn create_constant_maps_keeps_the_entries() {
+        const MAP_SLOTS: u32 = 0x0e30_0000;
+        const MAP_VTABLE: u32 = 0x0e31_0000;
+        let mut e = rig();
+        let targets: Vec<u32> = (0..0x20u32).map(|i| MAP_SLOTS + 4 * i).collect();
+        e.put_vtable(MAP_VTABLE, &targets);
+        e.register(NI_ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(CONSTANT_MAP_CONSTRUCT_00B7E330, |e, a| {
+            e.mem.set_u32(a[0], MAP_VTABLE);
+            a[0].into_ret()
+        });
+        noop(&mut e, &[MAP_SLOTS + 8, MAP_SLOTS + 0x68]);
+        e.register(MAP_SLOTS + 0x70, |e, _| {
+            let entry = e.mem.alloc(8);
+            e.mem.set_u32(entry, REFERENCE_VTABLE);
+            entry.into_ret()
+        });
+        let this = e.mem.alloc(0x90);
+        e.call(0x00bc_c2b0, &args![this]);
+        let vertex = e.mem.u32(this + 0x34);
+        let entries = calls(&e, MAP_SLOTS + 8);
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0][1], DECAL_OFFSET_010BB750);
+        assert_eq!(entries[0][9], DECAL_OFFSET_012021D0);
+        assert_eq!(
+            entries[2][..6],
+            [
+                vertex,
+                BONE_MATRIX3_010A1CAC,
+                0x2000_0009,
+                0x12_0000,
+                0x2c,
+                0x36
+            ]
+        );
+        assert_eq!(entries[3][1], DECAL_FADE_010BB744);
+        assert_eq!(
+            calls(&e, MAP_SLOTS + 0x68),
+            vec![vec![
+                vertex,
+                SKIN_WORLD_VIEW_PROJ_TRANSPOSE_010A1D20,
+                0x2000_0009,
+                1,
+                CONSTANT_EMPTY_NAME_01011584,
+                0,
+                0,
+                0,
+                0
+            ]]
+        );
+        let kept = calls(&e, MAP_SLOTS + 0x70);
+        assert_eq!(
+            kept.iter().map(|a| a[1]).collect::<Vec<_>>(),
+            vec![
+                WORLD_VIEW_PROJ_TRANSPOSE_010A1E50,
+                SKIN_WORLD_VIEW_PROJ_TRANSPOSE_010A1D20,
+                BONE_MATRIX3_010A1CAC
+            ]
+        );
+        for offset in [0x84u32, 0x88, 0x8c] {
+            let entry = e.mem.u32(this + offset);
+            assert_ne!(entry, 0);
+            assert_eq!(e.mem.u32(entry + 4), 1);
+        }
     }
 }

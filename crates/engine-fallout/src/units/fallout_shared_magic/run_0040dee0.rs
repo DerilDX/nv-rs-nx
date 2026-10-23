@@ -39,11 +39,19 @@ pub fn fn_0040e130(e: &mut Engine, this: Ptr, name: u32, value: u32) -> Ptr {
     this
 }
 
+// Translated from 0040df90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns 0 (cdecl; it reads no argument: one caller, `00804560`, pushes
+/// one word and cleans it, others push none).
+pub fn fn_0040df90(_e: &mut Engine) -> u32 {
+    0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0040e0b0, fn_0040e0b0(Ptr, u32, u32) -> Ptr),
         entry!(0x0040e130, fn_0040e130(Ptr, u32, u32) -> Ptr),
+        entry!(0x0040_df90, fn_0040df90() -> u32),
     ]
 }
 
@@ -84,5 +92,12 @@ mod tests {
         assert_eq!(log[1].0, GAME_SETTINGS);
         assert_eq!(log[2], (0x0090_1000, vec![collection, s]));
         assert_eq!(e.mem.u32(s + 8), 0x55);
+    }
+
+    #[test]
+    fn zero_with_or_without_a_word() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0040_df90, &[]).u32(), 0);
+        assert_eq!(e.call(0x0040_df90, &[7]).u32(), 0);
     }
 }

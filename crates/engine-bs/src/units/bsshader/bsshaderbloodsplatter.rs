@@ -253,6 +253,265 @@ pub fn fn_00b80600(e: &mut Engine, this: Ptr, shader: Ptr) {
     ni_pointer_assign(e, this.addr() + 0x44, shader.addr());
 }
 
+/// The object the splatter direction test runs on (`011f91c8`), its test `00b5bca0` (unit
+/// `shadowscenenode.cpp`, `thiscall`, `RET 0xc`: a point, a direction, the out point), the
+/// projection `00a6fdb0` (unit `nicamera.cpp`, `thiscall`, `RET 0x14`: the point, three out
+/// `float`s, a `float`), the `float` given to it (`010718c0`), the normalize `004a0c10`
+/// (`thiscall` on a point), `2.0` (`double`, `01011590`) and the constants written (`011fed90`
+/// the dot product, then `011fed94` to `011feda0`).
+const SPLATTER_OBJECT_011F91C8: u32 = 0x011f_91c8;
+const SPLATTER_TEST_00B5BCA0: u32 = 0x00b5_bca0;
+const PROJECT_00A6FDB0: u32 = 0x00a6_fdb0;
+const PROJECT_VALUE_010718C0: u32 = 0x0107_18c0;
+const NORMALIZE_004A0C10: u32 = 0x004a_0c10;
+const TWO_01011590: u32 = 0x0101_1590;
+const DOT_011FED90: u32 = 0x011f_ed90;
+
+// Translated from 00b803b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshaderbloodsplatter.cpp`), `cdecl`, one word (the
+/// geometry). Stores 0.0 at `011fed90`; runs `00b5bca0` on the object at `011f91c8` with the
+/// geometry's world translation (+0x8c), the first column of its world rotation (+0x68, +0x74,
+/// +0x80, copied to the stack) and an out point. When that answers false the constants
+/// `011fed94` to `011fed9c` become 0.0 and `011feda0` the `float` at `0101e2bc`. Otherwise:
+/// the column (copied again) and the out point minus the translation are normalized
+/// (`004a0c10`), their dot product goes to `011fed90`, and the projection `00a6fdb0` on the
+/// geometry (the out point, three out `float`s, the first of them the argument's own stack
+/// word, and the `float` at `010718c0`) runs; when it answers false the constants are set as
+/// above, otherwise the first two outputs are clamped to [0, 1] (a NaN kept), and `011fed94`
+/// to `011feda0` get twice the first minus 1, twice the second minus 1, the third and the
+/// `float` at `0101e2bc`.
+pub fn fn_00b803b0(e: &mut Engine, geometry: Ptr) {
+    let geometry = geometry.addr();
+    e.set_global::<u32>(DOT_011FED90, 0);
+    // The frame from the locals to the argument word: L (second output), L+4 (third), L+8
+    // (the difference), L+0x14 (the column), L+0x20 (the out point), L+0x34 (the argument).
+    e.with_stack(0x38, |e, frame| {
+        let frame = frame.addr();
+        let second = frame;
+        let third = frame + 4;
+        let difference = frame + 8;
+        let column = frame + 0x14;
+        let point = frame + 0x20;
+        let first = frame + 0x34;
+        e.mem.set_u32(first, geometry);
+        let copy_column = |e: &mut Engine| {
+            for (index, offset) in [0x68u32, 0x74, 0x80].iter().enumerate() {
+                let value = x87_quiet_bits(e.mem.u32(geometry + offset));
+                e.mem.set_u32(column + 4 * index as u32, value);
+            }
+        };
+        copy_column(e);
+        let object = e.global::<u32>(SPLATTER_OBJECT_011F91C8);
+        let translation = geometry + 0x8c;
+        let hit = e
+            .call(
+                SPLATTER_TEST_00B5BCA0,
+                &args![object, translation, column, point],
+            )
+            .bool();
+        let rest_constants = |e: &mut Engine| {
+            for word in 0..3u32 {
+                e.set_global::<u32>(FLOATS_011FED94 + 4 * word, 0);
+            }
+            let rest = x87_quiet_bits(e.global::<u32>(VALUE_0101E2BC));
+            e.set_global::<u32>(FLOATS_011FED94 + 0xc, rest);
+        };
+        if !hit {
+            rest_constants(e);
+            return;
+        }
+        copy_column(e);
+        for word in 0..3u32 {
+            let value = x87_sub(
+                x87_load32(e.mem.u32(point + 4 * word)),
+                x87_m32(e.mem.u32(translation + 4 * word)),
+            );
+            e.mem.set_u32(difference + 4 * word, x87_store32(value));
+        }
+        e.call(NORMALIZE_004A0C10, &args![column]);
+        e.call(NORMALIZE_004A0C10, &args![difference]);
+        let product = |e: &Engine, word: u32| {
+            x87_mul(
+                x87_load32(e.mem.u32(difference + 4 * word)),
+                x87_m32(e.mem.u32(column + 4 * word)),
+            )
+        };
+        let y = product(e, 1);
+        let x = product(e, 0);
+        let sum = x87_add(y, x);
+        let z = product(e, 2);
+        let dot = x87_add(sum, z);
+        e.set_global::<u32>(DOT_011FED90, x87_store32(dot));
+        let value = x87_quiet_bits(e.global::<u32>(PROJECT_VALUE_010718C0));
+        let projected = e
+            .call(
+                PROJECT_00A6FDB0,
+                &args![geometry, point, first, second, third, value],
+            )
+            .bool();
+        if !projected {
+            rest_constants(e);
+            return;
+        }
+        // FCOM against 0.0 and then 1.0 (TEST AH,5 / AH,0x41): below 0 becomes 0.0, above 1
+        // becomes 1.0, a NaN is left as it is.
+        let a = x87_load32(e.mem.u32(first));
+        if a < 0.0 {
+            e.mem.set_u32(first, 0);
+        } else if 1.0 < a {
+            e.mem.set_u32(first, ONE_BITS);
+        }
+        let b = x87_load32(e.mem.u32(second));
+        if b < 0.0 {
+            e.mem.set_u32(second, 0);
+        } else if b > 1.0 {
+            e.mem.set_u32(second, ONE_BITS);
+        }
+        let a = x87_load32(e.mem.u32(first));
+        let two = x87_load64(e.global::<u64>(TWO_01011590));
+        // FMUL ST(1),ST(0) (`DC C9`), then FSUB ST(2),ST(0) (`DC EA`) with 1.0.
+        let first_constant = x87_sub(x87_mul(a, two), 1.0);
+        e.set_global::<u32>(FLOATS_011FED94, x87_store32(first_constant));
+        // FMUL by the second output, then FSUBRP (`DE E1`): the product minus 1.0.
+        let second_constant = x87_sub(x87_mul(two, x87_m32(e.mem.u32(second))), 1.0);
+        e.set_global::<u32>(FLOATS_011FED94 + 4, x87_store32(second_constant));
+        let third_value = x87_quiet_bits(e.mem.u32(third));
+        e.set_global::<u32>(FLOATS_011FED94 + 8, third_value);
+        let rest = x87_quiet_bits(e.global::<u32>(VALUE_0101E2BC));
+        e.set_global::<u32>(FLOATS_011FED94 + 0xc, rest);
+    });
+}
+
+/// `BSShader::~BSShader` (engine map, `00be0f10`, no stack words), the `eh vector destructor
+/// iterator` (`00ec5fce`, `stdcall`) and the Ni free (`00aa1460`, `cdecl`: block, size).
+const BS_SHADER_DESTRUCT: u32 = 0x00be_0f10;
+const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+/// Bits of `1.0f`.
+const ONE_BITS: u32 = 0x3f80_0000;
+
+// Translated from 00b80650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshaderbloodsplatter.cpp`): the blood splatter shader's
+/// destructor, no stack words. Stores the vtable `010af760`, drops and clears the passes at
+/// +0x6c and +0x70, clears (releasing what they hold) the `NiPointer`s +0x74, +0x78, +0x7c,
+/// +0x80 and the texture at `011fedc4`, destroys the arrays +0x7c and +0x74 (2 each,
+/// destructor `00b66f20`) and +0x6c (2, `00b79930`) and runs `BSShader::~BSShader`
+/// (`00be0f10`).
+// Translation incomplete: 00b80650 - the C++ exception frame (FS:[0] chain, unwind states 0 to 3 for the arrays and the base) is not translated.
+pub fn fn_00b80650(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, BLOOD_SPLATTER_VTABLE_010AF760);
+    for index in 0..2u32 {
+        pass_pointer_clear(e, base + 0x6c + 4 * index);
+    }
+    for index in 0..4u32 {
+        ni_pointer_clear(e, base + 0x74 + 4 * index);
+    }
+    ni_pointer_clear(e, TEXTURE_POINTER_011FEDC4);
+    for (offset, destructor) in [
+        (0x7cu32, DESTRUCT_00B66F20),
+        (0x74, DESTRUCT_00B66F20),
+        (0x6c, DESTRUCT_00B79930),
+    ] {
+        e.call(
+            VECTOR_DESTRUCT,
+            &args![base + offset, 4u32, 2u32, destructor],
+        );
+    }
+    e.call(BS_SHADER_DESTRUCT, &args![base]);
+}
+
+// Translated from 00b807c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (the blood splatter vtable `010af760` slot +0x118, and many other
+/// shader vtables' slot +0x118): answers the word +0x28 (the declaration `NiPointer`).
+/// `thiscall`, `RET 8`; neither stack word is read.
+pub fn fn_00b807c0(e: &mut Engine, this: Ptr, _unused_1: u32, _unused_2: u32) -> u32 {
+    e.mem.u32(this.addr() + 0x28)
+}
+
+// Translated from 00b80e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsshaderbloodsplatter.cpp`): the scalar deleting
+/// destructor (vtable `010af760` slot +0), `thiscall`, `RET 4`. Runs the destructor
+/// (`00b80650`) and, when bit 0 of the flags is set, frees the 0x84 bytes (`00aa1460`).
+/// Answers `this`.
+pub fn fn_00b80e40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b80650(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_00AA1460, &args![this, 0x84u32]);
+    }
+    this
+}
+
+/// The constant names of `CreateConstantMaps` (read in Ghidra) and the data outside the
+/// shader they point at.
+const ALPHA_0103A454: u32 = 0x0103_a454;
+const WORLD_VIEW_PROJ_TRANSPOSE_010A1E50: u32 = 0x010a_1e50;
+const LIGHTLOC_010AF8C4: u32 = 0x010a_f8c4;
+const CTRL_010AF8BC: u32 = 0x010a_f8bc;
+const PIXEL_DATA_011FEDB4: u32 = 0x011f_edb4;
+const VERTEX_DATA_011FEDA4: u32 = 0x011f_eda4;
+
+// Translated from 00b80f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSShaderBloodSplatter::CreateConstantMaps` (Xbox PDB), no stack words. When the pixel
+/// constant map (+0x30) is null, makes one (kind 2) and adds `"alpha"`
+/// (0x10000007, register 0, `011fedb4`); when the vertex one (+0x34) is null, makes one (kind
+/// 0) and adds `"WorldViewProjTranspose"` (0x20000009, 0, 0, 4), `"lightloc"` (register 4,
+/// `011fed94`) and `"ctrl"` (register 5, `011feda4`).
+// Translation incomplete: 00b80f50 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the allocations) is not translated.
+pub fn bs_shader_blood_splatter_create_constant_maps(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let vector = |name: u32, register: u32, data: u32| {
+        [
+            name,
+            0x1000_0007,
+            0,
+            register,
+            1,
+            CONSTANT_EMPTY_NAME_01011584,
+            0x10,
+            4,
+            data,
+            0,
+        ]
+    };
+    if e.mem.u32(base + 0x30) == 0 {
+        make_constant_map(e, base, 0x30, 2);
+        add_constant_entry(
+            e,
+            base,
+            0x30,
+            vector(ALPHA_0103A454, 0, PIXEL_DATA_011FEDB4),
+        );
+    }
+    if e.mem.u32(base + 0x34) == 0 {
+        make_constant_map(e, base, 0x34, 0);
+        add_constant_entry(
+            e,
+            base,
+            0x34,
+            [
+                WORLD_VIEW_PROJ_TRANSPOSE_010A1E50,
+                0x2000_0009,
+                0,
+                0,
+                4,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+        );
+        add_constant_entry(e, base, 0x34, vector(LIGHTLOC_010AF8C4, 4, FLOATS_011FED94));
+        add_constant_entry(
+            e,
+            base,
+            0x34,
+            vector(CTRL_010AF8BC, 5, VERTEX_DATA_011FEDA4),
+        );
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -264,6 +523,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             bs_shader_blood_splatter_create_shader() -> Ptr
         ),
         entry!(0x00b8_0600, fn_00b80600(Ptr, Ptr)),
+        entry!(0x00b8_03b0, fn_00b803b0(Ptr)),
+        entry!(0x00b8_0650, fn_00b80650(Ptr)),
+        entry!(0x00b8_07c0, fn_00b807c0(Ptr, u32, u32) -> u32),
+        entry!(0x00b8_0e40, fn_00b80e40(Ptr, u32) -> Ptr),
+        entry!(
+            0x00b8_0f50,
+            bs_shader_blood_splatter_create_constant_maps(Ptr)
+        ),
     ]
 }
 
@@ -458,5 +725,205 @@ mod pixel_shader_tests {
         e.call(0x00b8_0600, &args![pass, 0u32]);
         assert_eq!(e.mem.u32(pass + 0x44), 0);
         assert_eq!(e.mem.u32(new + 4), 0);
+    }
+}
+
+#[cfg(test)]
+mod splatter_function_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    fn noop(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    fn map_globals(e: &mut Engine) {
+        for page in [
+            0x0101_1000u32,
+            0x0101_e000,
+            0x0107_1000,
+            0x011f_9000,
+            0x011f_e000,
+        ] {
+            e.map(page, 0x1000);
+        }
+    }
+
+    fn constants(e: &Engine) -> Vec<f32> {
+        (0..4)
+            .map(|i| e.global::<f32>(FLOATS_011FED94 + 4 * i))
+            .collect()
+    }
+
+    /// A rig for `00b803b0`: the test answers `hit` with the out point (4, 2, 0), the
+    /// projection answers `projected` with the outputs `outputs`.
+    fn splatter_rig(hit: u32, projected: u32, outputs: [f32; 3]) -> (Engine, u32) {
+        let mut e = rig();
+        map_globals(&mut e);
+        e.set_global(VALUE_0101E2BC, 0.75f32);
+        e.set_global(TWO_01011590, 2.0f64);
+        e.set_global(PROJECT_VALUE_010718C0, 0.125f32);
+        e.set_global(SPLATTER_OBJECT_011F91C8, 0x5000u32);
+        e.set_global(DOT_011FED90, 9.0f32);
+        let geometry = e.mem.alloc(0x98);
+        // Column (1, 0, 0), translation (1, 2, 0).
+        e.mem.set_f32(geometry + 0x68, 1.0);
+        e.mem.set_f32(geometry + 0x8c, 1.0);
+        e.mem.set_f32(geometry + 0x90, 2.0);
+        e.register_double(SPLATTER_TEST_00B5BCA0, move |e, a| {
+            e.mem.set_f32(a[3], 4.0);
+            e.mem.set_f32(a[3] + 4, 2.0);
+            e.mem.set_f32(a[3] + 8, 0.0);
+            hit.into_ret()
+        });
+        e.register(NORMALIZE_004A0C10, |e, a| {
+            let v: Vec<f32> = (0..3).map(|i| e.mem.f32(a[0] + 4 * i)).collect();
+            let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            for (i, c) in v.iter().enumerate() {
+                e.mem.set_f32(a[0] + 4 * i as u32, c / length);
+            }
+            Ret::default()
+        });
+        e.register_double(PROJECT_00A6FDB0, move |e, a| {
+            // The first output is the argument's own word, which held the geometry.
+            assert_eq!(e.mem.f32(a[2] + 4), 0.0);
+            e.mem.set_f32(a[2], outputs[0]);
+            e.mem.set_f32(a[3], outputs[1]);
+            e.mem.set_f32(a[4], outputs[2]);
+            assert_eq!(a[5], 0.125f32.to_bits());
+            projected.into_ret()
+        });
+        (e, geometry)
+    }
+
+    #[test]
+    fn fn_00b803b0_without_a_hit_sets_the_rest_values() {
+        let (mut e, geometry) = splatter_rig(0, 1, [0.0; 3]);
+        e.call(0x00b8_03b0, &args![geometry]);
+        assert_eq!(e.global::<f32>(DOT_011FED90), 0.0);
+        assert_eq!(constants(&e), vec![0.0, 0.0, 0.0, 0.75]);
+        let test = calls(&e, SPLATTER_TEST_00B5BCA0);
+        assert_eq!(&test[0][..2], &[0x5000, geometry + 0x8c]);
+        assert!(calls(&e, PROJECT_00A6FDB0).is_empty());
+    }
+
+    #[test]
+    fn fn_00b803b0_projects_and_clamps() {
+        let (mut e, geometry) = splatter_rig(1, 1, [1.5, -0.5, 0.25]);
+        e.call(0x00b8_03b0, &args![geometry]);
+        // Out point minus translation is (3, 0, 0): along the column, dot 1.
+        assert_eq!(e.global::<f32>(DOT_011FED90), 1.0);
+        // 1.5 clamps to 1 (2 * 1 - 1 = 1), -0.5 to 0 (2 * 0 - 1 = -1).
+        assert_eq!(constants(&e), vec![1.0, -1.0, 0.25, 0.75]);
+        let projection = calls(&e, PROJECT_00A6FDB0);
+        assert_eq!(projection[0][0], geometry);
+        let (mut e, geometry) = splatter_rig(1, 1, [0.25, 0.5, 2.0]);
+        e.call(0x00b8_03b0, &args![geometry]);
+        assert_eq!(constants(&e), vec![-0.5, 0.0, 2.0, 0.75]);
+    }
+
+    #[test]
+    fn fn_00b803b0_keeps_a_nan_output_and_handles_a_failed_projection() {
+        let (mut e, geometry) = splatter_rig(1, 1, [f32::NAN, 3.0, 0.0]);
+        e.call(0x00b8_03b0, &args![geometry]);
+        assert!(constants(&e)[0].is_nan());
+        assert_eq!(constants(&e)[1], 1.0);
+        let (mut e, geometry) = splatter_rig(1, 0, [0.5; 3]);
+        e.call(0x00b8_03b0, &args![geometry]);
+        assert_eq!(e.global::<f32>(DOT_011FED90), 1.0);
+        assert_eq!(constants(&e), vec![0.0, 0.0, 0.0, 0.75]);
+    }
+
+    #[test]
+    fn fn_00b80650_drops_everything_and_destroys() {
+        let mut e = rig();
+        map_globals(&mut e);
+        noop(&mut e, &[VECTOR_DESTRUCT, BS_SHADER_DESTRUCT]);
+        let this = e.mem.alloc(0x84);
+        let pass = e.mem.alloc(0x70);
+        e.mem.set_u32(pass + 0x64, 2);
+        e.mem.set_u32(this + 0x70, pass);
+        let shader = object(&mut e, 1);
+        e.mem.set_u32(this + 0x80, shader);
+        let texture = object(&mut e, 1);
+        e.set_global(TEXTURE_POINTER_011FEDC4, texture);
+        e.call(0x00b8_0650, &args![this]);
+        assert_eq!(e.mem.u32(this), BLOOD_SPLATTER_VTABLE_010AF760);
+        assert_eq!(e.mem.u32(pass + 0x64), 1);
+        assert_eq!(e.mem.u32(this + 0x70), 0);
+        assert!(calls(&e, PASS_DELETE_00E80190).is_empty());
+        assert_eq!(
+            calls(&e, REFERENCE_DELETE),
+            vec![vec![shader], vec![texture]]
+        );
+        assert_eq!(e.global::<u32>(TEXTURE_POINTER_011FEDC4), 0);
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCT),
+            vec![
+                vec![this + 0x7c, 4, 2, DESTRUCT_00B66F20],
+                vec![this + 0x74, 4, 2, DESTRUCT_00B66F20],
+                vec![this + 0x6c, 4, 2, DESTRUCT_00B79930],
+            ]
+        );
+        assert_eq!(calls(&e, BS_SHADER_DESTRUCT), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_00b807c0_answers_the_declaration_word() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x30);
+        e.mem.set_u32(this + 0x28, 0x2828);
+        assert_eq!(e.call(0x00b8_07c0, &args![this, 1u32, 2u32]).u32(), 0x2828);
+    }
+
+    #[test]
+    fn fn_00b80e40_destroys_and_frees_with_bit_0() {
+        let mut e = rig();
+        map_globals(&mut e);
+        noop(
+            &mut e,
+            &[VECTOR_DESTRUCT, BS_SHADER_DESTRUCT, NI_FREE_00AA1460],
+        );
+        let this = e.mem.alloc(0x84);
+        assert_eq!(e.call(0x00b8_0e40, &args![this, 1u32]).u32(), this);
+        assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![this, 0x84]]);
+        e.call(0x00b8_0e40, &args![this, 0u32]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460).len(), 1);
+    }
+
+    #[test]
+    fn create_constant_maps_makes_both_maps() {
+        const MAP_SLOTS: u32 = 0x0e30_0000;
+        const MAP_VTABLE: u32 = 0x0e31_0000;
+        let mut e = rig();
+        let targets: Vec<u32> = (0..0x20u32).map(|i| MAP_SLOTS + 4 * i).collect();
+        e.put_vtable(MAP_VTABLE, &targets);
+        e.register(NI_ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(CONSTANT_MAP_CONSTRUCT_00B7E330, |e, a| {
+            e.mem.set_u32(a[0], MAP_VTABLE);
+            a[0].into_ret()
+        });
+        noop(&mut e, &[MAP_SLOTS + 8]);
+        let this = e.mem.alloc(0x84);
+        e.call(0x00b8_0f50, &args![this]);
+        let pixel = e.mem.u32(this + 0x30);
+        let vertex = e.mem.u32(this + 0x34);
+        let entries = calls(&e, MAP_SLOTS + 8);
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0][..2], [pixel, ALPHA_0103A454]);
+        assert_eq!(entries[0][9], PIXEL_DATA_011FEDB4);
+        assert_eq!(
+            entries[1][..2],
+            [vertex, WORLD_VIEW_PROJ_TRANSPOSE_010A1E50]
+        );
+        assert_eq!(entries[2][4], 4);
+        assert_eq!(entries[2][9], FLOATS_011FED94);
+        assert_eq!(entries[3][1], CTRL_010AF8BC);
+        assert_eq!(entries[3][9], VERTEX_DATA_011FEDA4);
+        let maps = calls(&e, CONSTANT_MAP_CONSTRUCT_00B7E330);
+        assert_eq!(maps[0][2], 2);
+        assert_eq!(maps[1][2], 0);
     }
 }

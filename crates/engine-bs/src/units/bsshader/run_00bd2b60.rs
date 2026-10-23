@@ -126,12 +126,205 @@ pub fn fn_00bd2d50(e: &mut Engine, this: Ptr) {
     });
 }
 
+/// Strings of `00bd2730` (read in Ghidra): `"speedtree\\frond.v.hlsl"` (`010bbe9c`),
+/// `"speedtree\\frond.p.hlsl"` (`010bbe84`), the macros `"FOG"` (`010aece0`) and `"PT"`
+/// (`010b9174`), the empty string, the formats `"STFROND%03i.vso"` (`010bbe74`),
+/// `"STFROND2%03i.pso"` (`010bbe60`) and `"STFROND%03i.pso"` (`010bbe50`) and the vertex
+/// profile `"vs_1_1"` (`010a93ec`).
+const FROND_VERTEX_010BBE9C: u32 = 0x010b_be9c;
+const FROND_PIXEL_010BBE84: u32 = 0x010b_be84;
+const MACRO_FOG_010AECE0: u32 = 0x010a_ece0;
+const MACRO_PT_010B9174: u32 = 0x010b_9174;
+const FROND_EMPTY_01011584: u32 = 0x0101_1584;
+const FORMAT_FROND_VERTEX_010BBE74: u32 = 0x010b_be74;
+const FORMAT_FROND2_PIXEL_010BBE60: u32 = 0x010b_be60;
+const FORMAT_FROND_PIXEL_010BBE50: u32 = 0x010b_be50;
+const PROFILE_VS_1_1_010A93EC: u32 = 0x010a_93ec;
+/// The pixel profile chooser `00b4f380` (`cdecl`, a byte) and the shader model setting
+/// (`011f91c0`).
+const PIXEL_PROFILE_00B4F380: u32 = 0x00b4_f380;
+const SHADER_MODEL_011F91C0: u32 = 0x011f_91c0;
+/// The `00bd2730` frame (saved registers up to the cookie) and its buffers.
+const FROND_FRAME_BYTES: u32 = 0x3f0;
+const FROND_BUFFERS: ShaderBuffers = ShaderBuffers {
+    name: 0x2e8,
+    path: 0x1e4,
+};
+/// The six source blocks in the exe's order of filling (four vertex, two pixel).
+const FROND_SOURCES: [ShaderSource; 6] = [
+    ShaderSource {
+        offset: 0x1c,
+        words: &[FROND_VERTEX_010BBE9C, 0, 0],
+        cleared: 0x40,
+    },
+    ShaderSource {
+        offset: 0x68,
+        words: &[
+            FROND_VERTEX_010BBE9C,
+            MACRO_FOG_010AECE0,
+            FROND_EMPTY_01011584,
+            0,
+            0,
+        ],
+        cleared: 0x38,
+    },
+    ShaderSource {
+        offset: 0xb4,
+        words: &[
+            FROND_VERTEX_010BBE9C,
+            MACRO_PT_010B9174,
+            FROND_EMPTY_01011584,
+            0,
+            0,
+        ],
+        cleared: 0x38,
+    },
+    ShaderSource {
+        offset: 0x100,
+        words: &[
+            FROND_VERTEX_010BBE9C,
+            MACRO_PT_010B9174,
+            FROND_EMPTY_01011584,
+            MACRO_FOG_010AECE0,
+            FROND_EMPTY_01011584,
+            0,
+            0,
+        ],
+        cleared: 0x30,
+    },
+    ShaderSource {
+        offset: 0x14c,
+        words: &[FROND_PIXEL_010BBE84, 0, 0],
+        cleared: 0x40,
+    },
+    ShaderSource {
+        offset: 0x198,
+        words: &[
+            FROND_PIXEL_010BBE84,
+            MACRO_FOG_010AECE0,
+            FROND_EMPTY_01011584,
+            0,
+            0,
+        ],
+        cleared: 0x38,
+    },
+];
+
+// Translated from 00bd2730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010bbeb8` slot +0x13c): shader 5's `LoadShaders`, no stack
+/// words. Fills six source blocks on its stack (`frond.v.hlsl` with none, `FOG`, `PT`, `PT`
+/// and `FOG`; `frond.p.hlsl` with none and `FOG`; the rest of each cleared by `memset`);
+/// compiles the four vertex blocks (`"STFROND%03i.vso"` with the index, `vs_1_1`) into the
+/// `NiPointer`s +0x6c to +0x78; takes the pixel profile from `00b4f380(1)` and compiles the
+/// two pixel blocks into +0x7c and +0x80, named `"STFROND2%03i.pso"` at shader model
+/// (`011f91c0`) 2 or more and `"STFROND%03i.pso"` below. A block without a file clears its
+/// pointer instead.
+// Translation incomplete: 00bd2730 - the /GS cookie check (00ec408c) of the stack frame is not translated.
+pub fn fn_00bd2730(e: &mut Engine, this: Ptr) {
+    let this = this.addr();
+    e.with_stack(FROND_FRAME_BYTES, |e, frame| {
+        let frame = frame.addr();
+        set_up_sources(e, frame, &FROND_SOURCES);
+        for index in 0..4u32 {
+            compile_indexed_or_clear(
+                e,
+                this,
+                frame,
+                &FROND_BUFFERS,
+                0x1c + 0x4c * index,
+                this + 0x6c + 4 * index,
+                FORMAT_FROND_VERTEX_010BBE74,
+                index,
+                PROFILE_VS_1_1_010A93EC,
+                false,
+            );
+        }
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        let format = if e.global::<i32>(SHADER_MODEL_011F91C0) >= 2 {
+            FORMAT_FROND2_PIXEL_010BBE60
+        } else {
+            FORMAT_FROND_PIXEL_010BBE50
+        };
+        for index in 0..2u32 {
+            compile_indexed_or_clear(
+                e,
+                this,
+                frame,
+                &FROND_BUFFERS,
+                0x14c + 0x4c * index,
+                this + 0x7c + 4 * index,
+                format,
+                index,
+                profile,
+                true,
+            );
+        }
+    });
+}
+
+/// The `eh vector destructor iterator`
+/// (`00ec5fce`, `stdcall`: array, element size, count, destructor), `BSShader::~BSShader`
+/// (engine map, `00be0f10`, no stack words) and the Ni free (`00aa1460`, `cdecl`: block, size).
+const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
+const BS_SHADER_DESTRUCT: u32 = 0x00be_0f10;
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00bd2c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bd2b60`): shader 5's destructor, no stack words. Stores
+/// the vtable `010bbeb8`, clears (releasing what they hold) the `NiPointer`s +0x6c to +0x78
+/// and +0x7c, +0x80, drops the pass at +0x84 (its count at +0x64 down by one, deleted through
+/// `00e80190` at 0; the pointer is left as it is), destroys the arrays +0x7c (2) and +0x6c (4)
+/// (destructor `00b66f20`) and runs `BSShader::~BSShader` (`00be0f10`).
+// Translation incomplete: 00bd2c40 - the C++ exception frame (FS:[0] chain, unwind states 0 to 3 for the pass, the arrays and the base) is not translated.
+pub fn fn_00bd2c40(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, VTABLE_010BBEB8);
+    for index in 0..4u32 {
+        ni_pointer_clear(e, base + 0x6c + 4 * index);
+    }
+    for index in 0..2u32 {
+        ni_pointer_clear(e, base + 0x7c + 4 * index);
+    }
+    let pass = e.mem.u32(base + 0x84);
+    if pass != 0 {
+        let left = e.mem.u32(pass + 0x64).wrapping_sub(1);
+        e.mem.set_u32(pass + 0x64, left);
+        if left == 0 {
+            e.call(PASS_DELETE_00E80190, &args![pass]);
+        }
+    }
+    e.call(
+        VECTOR_DESTRUCT,
+        &args![base + 0x7c, 4u32, 2u32, DESTRUCT_00B66F20],
+    );
+    e.call(
+        VECTOR_DESTRUCT,
+        &args![base + 0x6c, 4u32, 4u32, DESTRUCT_00B66F20],
+    );
+    e.call(BS_SHADER_DESTRUCT, &args![base]);
+}
+
+// Translated from 00bd2fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bd2b60`): shader 5's scalar deleting destructor
+/// (vtable `010bbeb8` slot +0), `thiscall`, `RET 4`. Runs the destructor (`00bd2c40`) and,
+/// when bit 0 of the flags is set, frees the 0xa8 bytes (`00aa1460`). Answers `this`.
+pub fn fn_00bd2fd0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00bd2c40(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_00AA1460, &args![this, 0xa8u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00bd_2d50, fn_00bd2d50(Ptr)),
         entry!(0x00bd_2b60, fn_00bd2b60(Ptr) -> Ptr),
         entry!(0x00bd_2e70, fn_00bd2e70() -> Ptr),
+        entry!(0x00bd_2730, fn_00bd2730(Ptr)),
+        entry!(0x00bd_2c40, fn_00bd2c40(Ptr)),
+        entry!(0x00bd_2fd0, fn_00bd2fd0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -228,5 +421,106 @@ mod stages_tests {
         assert_eq!(e.mem.u32(pass + 0x5c), vertex);
         assert_eq!(e.mem.u32(pass + 0x44), pixel);
         assert_eq!(e.mem.u32(vertex + 4), 2);
+    }
+}
+
+#[cfg(test)]
+mod frond_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    fn load(model: i32) -> (Engine, u32) {
+        let mut e = loader_rig();
+        e.map(0x011f_9000, 0x1000);
+        e.set_global::<i32>(SHADER_MODEL_011F91C0, model);
+        e.register(PIXEL_PROFILE_00B4F380, |_, _| 0x0e55_0000u32.into_ret());
+        let this = e.mem.alloc(0xa8);
+        e.call(0x00bd_2730, &args![this]);
+        (e, this)
+    }
+
+    #[test]
+    fn fn_00bd2730_compiles_four_vertex_and_two_pixel_shaders() {
+        let (e, this) = load(2);
+        let vertex: Vec<u32> = (0..4).map(|i| e.mem.u32(this + 0x6c + 4 * i)).collect();
+        assert_eq!(
+            compiled(&e, vertex[0]),
+            Compiled {
+                file: FROND_VERTEX_010BBE9C,
+                output: FORMAT_FROND_VERTEX_010BBE74,
+                profile: PROFILE_VS_1_1_010A93EC,
+                pixel: false,
+                macros: macro_words(&[]),
+            }
+        );
+        assert_eq!(
+            compiled(&e, vertex[3]).macros,
+            macro_words(&[
+                (MACRO_PT_010B9174, FROND_EMPTY_01011584),
+                (MACRO_FOG_010AECE0, FROND_EMPTY_01011584)
+            ])
+        );
+        let pixel = e.mem.u32(this + 0x80);
+        assert_eq!(
+            compiled(&e, pixel),
+            Compiled {
+                file: FROND_PIXEL_010BBE84,
+                output: FORMAT_FROND2_PIXEL_010BBE60,
+                profile: 0x0e55_0000,
+                pixel: true,
+                macros: macro_words(&[(MACRO_FOG_010AECE0, FROND_EMPTY_01011584)]),
+            }
+        );
+        let indices: Vec<u32> = calls(&e, FORMAT_00406D00).iter().map(|a| a[3]).collect();
+        assert_eq!(indices, vec![0, 1, 2, 3, 0, 1]);
+        assert_eq!(calls(&e, MEMSET).len(), 6);
+    }
+
+    #[test]
+    fn fn_00bd2730_names_the_pixel_shaders_by_model() {
+        let (e, this) = load(1);
+        let pixel = e.mem.u32(this + 0x7c);
+        assert_eq!(compiled(&e, pixel).output, FORMAT_FROND_PIXEL_010BBE50);
+    }
+
+    #[test]
+    fn fn_00bd2c40_releases_drops_the_pass_and_destroys() {
+        let mut e = rig();
+        e.register(VECTOR_DESTRUCT, |_, _| Ret::default());
+        e.register(BS_SHADER_DESTRUCT, |_, _| Ret::default());
+        let this = e.mem.alloc(0xa8);
+        let shader = object(&mut e, 1);
+        e.mem.set_u32(this + 0x70, shader);
+        let pass = e.mem.alloc(0x70);
+        e.mem.set_u32(pass + 0x64, 1);
+        e.mem.set_u32(this + 0x84, pass);
+        e.call(0x00bd_2c40, &args![this]);
+        assert_eq!(e.mem.u32(this), VTABLE_010BBEB8);
+        assert_eq!(e.mem.u32(this + 0x70), 0);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![shader]]);
+        assert_eq!(calls(&e, PASS_DELETE_00E80190), vec![vec![pass]]);
+        // The pass pointer itself is left.
+        assert_eq!(e.mem.u32(this + 0x84), pass);
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCT),
+            vec![
+                vec![this + 0x7c, 4, 2, DESTRUCT_00B66F20],
+                vec![this + 0x6c, 4, 4, DESTRUCT_00B66F20],
+            ]
+        );
+        assert_eq!(calls(&e, BS_SHADER_DESTRUCT), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_00bd2fd0_destroys_and_frees_with_bit_0() {
+        let mut e = rig();
+        for addr in [VECTOR_DESTRUCT, BS_SHADER_DESTRUCT, NI_FREE_00AA1460] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0xa8);
+        assert_eq!(e.call(0x00bd_2fd0, &args![this, 0u32]).u32(), this);
+        assert!(calls(&e, NI_FREE_00AA1460).is_empty());
+        e.call(0x00bd_2fd0, &args![this, 1u32]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![this, 0xa8]]);
     }
 }

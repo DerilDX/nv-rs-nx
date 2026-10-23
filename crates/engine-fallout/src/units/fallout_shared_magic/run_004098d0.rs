@@ -52,11 +52,49 @@ pub fn fn_00409b10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 00409b40 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00409b40 - the exception-unwinding frame (FS:[0]) is not translated.
+/// Destructor body of the form `fn_004098f0` constructs (the engine map gives it no name;
+/// the class is unconfirmed): stores the class's nine vtable pointers back, then runs the
+/// component destructors in reverse construction order: `00402ef0` on `this`, `00475380`
+/// on `this + 0x94`, `0048eaf0` on `this + 0x84`, `00402c40` on `this + 0x6c`, `0048a490`
+/// on `this + 0x4c` and the base destructor `00402bc0` on `this`.
+pub fn fn_00409b40(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0101_3284);
+    e.mem.set_u32(base + 0x30, 0x0101_323c);
+    e.mem.set_u32(base + 0x3c, 0x0101_3224);
+    e.mem.set_u32(base + 0x4c, 0x0101_3200);
+    e.mem.set_u32(base + 0x6c, 0x0101_31e0);
+    e.mem.set_u32(base + 0x78, 0x0101_31cc);
+    e.mem.set_u32(base + 0x84, 0x0101_31b8);
+    e.mem.set_u32(base + 0x8c, 0x0101_31a4);
+    e.mem.set_u32(base + 0x94, 0x0101_3190);
+    e.call(0x0040_2ef0, &args![this]);
+    e.call(0x0047_5380, &args![base + 0x94]);
+    e.call(0x0048_eaf0, &args![base + 0x84]);
+    e.call(0x0040_2c40, &args![base + 0x6c]);
+    e.call(0x0048_a490, &args![base + 0x4c]);
+    e.call(0x0040_2bc0, &args![this]);
+}
+
+// Translated from 00409c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Start values of the form `fn_004098f0` constructs (its last call): the word
+/// at +0x9c becomes -1 and the byte at +0xa0 zero, then `00483710`
+/// (`fallout shared/tesform.cpp`, unnamed) runs on `this`.
+pub fn fn_00409c40(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr() + 0x9c, 0xffff_ffff);
+    e.mem.set_u8(this.addr() + 0xa0, 0);
+    e.call(0x0048_3710, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0040_98f0, fn_004098f0(Ptr) -> Ptr),
         entry!(0x0040_98d0, fn_004098d0(Ptr)),
+        entry!(0x0040_9b40, fn_00409b40(Ptr)),
+        entry!(0x0040_9c40, fn_00409c40(Ptr)),
         entry!(0x0040_9b10, fn_00409b10(Ptr, u32) -> Ptr),
     ]
 }
@@ -132,5 +170,70 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+
+    #[test]
+    fn fn_00409b40_restores_vtables_and_destroys_components() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xa4);
+        for callee in [
+            0x0040_2ef0u32,
+            0x0047_5380,
+            0x0048_eaf0,
+            0x0040_2c40,
+            0x0048_a490,
+            0x0040_2bc0,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0040_9b40, &args![this]);
+        let log: Vec<(u32, Vec<u32>)> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 != 0x0040_9b40)
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                (0x0040_2ef0, vec![this]),
+                (0x0047_5380, vec![this + 0x94]),
+                (0x0048_eaf0, vec![this + 0x84]),
+                (0x0040_2c40, vec![this + 0x6c]),
+                (0x0048_a490, vec![this + 0x4c]),
+                (0x0040_2bc0, vec![this]),
+            ]
+        );
+        for (off, vtable) in [
+            (0x0u32, 0x0101_3284u32),
+            (0x30, 0x0101_323c),
+            (0x3c, 0x0101_3224),
+            (0x4c, 0x0101_3200),
+            (0x6c, 0x0101_31e0),
+            (0x78, 0x0101_31cc),
+            (0x84, 0x0101_31b8),
+            (0x8c, 0x0101_31a4),
+            (0x94, 0x0101_3190),
+        ] {
+            assert_eq!(e.mem.u32(this + off), vtable);
+        }
+    }
+
+    #[test]
+    fn fn_00409c40_sets_start_values_then_calls_the_form_helper() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xa4);
+        e.mem.set_u8(this + 0xa0, 7);
+        e.register(0x0048_3710, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0040_9c40, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let inner: Vec<_> = log.iter().filter(|c| c.0 == 0x0048_3710).collect();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].1, vec![this]);
+        assert_eq!(e.mem.u32(this + 0x9c), 0xffff_ffff);
+        assert_eq!(e.mem.u8(this + 0xa0), 0);
     }
 }

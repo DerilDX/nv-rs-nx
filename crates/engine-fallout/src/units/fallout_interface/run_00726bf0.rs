@@ -21,9 +21,33 @@ pub fn fn_00726bf0(e: &mut Engine, _this: Ptr, address: u32, count: u32) {
     }
 }
 
+/// `005ae380` (thiscall on a list; the map names it `VATS::GetCount`): counts the
+/// list's non-null items.
+const LIST_COUNT: u32 = 0x005a_e380;
+
+// Translated from 00726c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed: the item count (`005ae380`) of the list at `this + 4`; the callee's `EAX`
+/// is left as the result.
+pub fn fn_00726c40(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(LIST_COUNT, &args![this.addr() + 4]).u32()
+}
+
+// Translated from 00726c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`RET 4`): copies the word at `source` into `this` unless it is 0.
+pub fn fn_00726c60(e: &mut Engine, this: Ptr, source: u32) {
+    let value = e.mem.u32(source);
+    if value != 0 {
+        e.mem.set_u32(this.addr(), value);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00726bf0, fn_00726bf0(Ptr, u32, u32))]
+    vec![
+        entry!(0x00726bf0, fn_00726bf0(Ptr, u32, u32)),
+        entry!(0x0072_6c40, fn_00726c40(Ptr) -> u32),
+        entry!(0x0072_6c60, fn_00726c60(Ptr, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -52,5 +76,28 @@ mod tests {
         let mut e = Engine::new();
         e.register(WORD_STEP, |_, _| panic!("no words"));
         e.call(0x00726bf0, &args![0u32, 0x6000u32, 0u32]);
+    }
+
+    #[test]
+    fn fn_00726c40_counts_the_list_at_four() {
+        let mut e = Engine::new();
+        e.register(LIST_COUNT, |_, a| Ret {
+            eax: a[0] + 1,
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0072_6c40, &args![0x6000u32]).u32(), 0x6005);
+    }
+
+    #[test]
+    fn fn_00726c60_copies_a_non_zero_word() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(4);
+        let source = e.mem.alloc(4);
+        e.mem.set_u32(this, 7);
+        e.call(0x0072_6c60, &args![this, source]);
+        assert_eq!(e.mem.u32(this), 7);
+        e.mem.set_u32(source, 9);
+        e.call(0x0072_6c60, &args![this, source]);
+        assert_eq!(e.mem.u32(this), 9);
     }
 }

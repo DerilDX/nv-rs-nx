@@ -5,7 +5,8 @@
 use crate::prelude::*;
 
 use crate::units::bsshader::geometrydecalshader::shader_inline::{
-    construct_pointer_array, ni_pointer_assign, ni_pointer_clear, DESTRUCT_00B66F20,
+    construct_pointer_array, ni_pointer_assign, ni_pointer_clear, release_reference,
+    DESTRUCT_00B66F20,
 };
 
 /// `NiObject`'s constructor (`00a5d3a0`, unit `niobject.cpp`; `thiscall`, no stack words) and
@@ -92,9 +93,210 @@ pub fn fn_00b6b380(e: &mut Engine, this: Ptr, texture: Ptr, make_value: u8, word
     this
 }
 
+/// Imported `LeaveCriticalSection` (`kernel32`, `stdcall`: the section).
+const IMPORT_LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
+
+// Translated from 00b6b330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6b330`), `thiscall` on the renderer, no stack words: when
+/// its mode (+0x200) is 1 or 2, its byte +0x208 is 1 and its slot +0x198 answers true, leaves
+/// the critical section at +0x80, clears the byte and answers true; else false (only `AL` is
+/// set).
+pub fn fn_00b6b330(e: &mut Engine, this: Ptr) -> bool {
+    let base = this.addr();
+    let mode = e.mem.u32(base + 0x200);
+    if (mode == 1 || mode == 2)
+        && e.mem.u8(base + 0x208) == 1
+        && e.vcall(base, 0x198, &args![]).bool()
+    {
+        e.call(IMPORT_LEAVE_CRITICAL_SECTION, &args![base + 0x80]);
+        e.mem.set_u8(base + 0x208, 0);
+        return true;
+    }
+    false
+}
+
+/// The Direct3D renderer (`011f9508`), the rendered-texture maker `00a7fc00` (unit
+/// `nirenderedtexture.cpp`, unnamed; `cdecl`, eight words) and `operator new` `00aa13e0`
+/// (unnamed, `cdecl`, the size).
+const D3D_RENDERER_011F9508: u32 = 0x011f_9508;
+const MAKE_RENDERED_TEXTURE_00A7FC00: u32 = 0x00a7_fc00;
+const OPERATOR_NEW_00AA13E0: u32 = 0x00aa_13e0;
+
+// Translated from 00b6b610 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00b6b610 - the C++ exception frame (FS:[0] chain, unwind state 0 for the allocation) is not translated.
+/// Unnamed in the engine map (`run_00b6b330`), `cdecl`, nine words: makes a rendered texture
+/// (`00a7fc00` with the first three words, the renderer `011f9508`, the fourth and fifth and
+/// the eighth and ninth words); with one, a 0x40-byte object (`operator new`; nothing when
+/// that fails) built over it by `00b6b380` with the sixth word (its low byte) and the seventh,
+/// which is answered; else 0.
+pub fn fn_00b6b610(
+    e: &mut Engine,
+    first: u32,
+    second: u32,
+    third: u32,
+    fourth: u32,
+    fifth: u32,
+    make_value: u32,
+    word: u32,
+    eighth: u32,
+    ninth: u32,
+) -> Ptr {
+    let renderer = e.global::<u32>(D3D_RENDERER_011F9508);
+    let texture = e
+        .call(
+            MAKE_RENDERED_TEXTURE_00A7FC00,
+            &args![first, second, third, renderer, fourth, fifth, eighth, ninth],
+        )
+        .u32();
+    if texture == 0 {
+        return Ptr::NULL;
+    }
+    let block = e.call(OPERATOR_NEW_00AA13E0, &args![0x40u32]).u32();
+    if block == 0 {
+        return Ptr::NULL;
+    }
+    fn_00b6b380(
+        e,
+        Ptr::new(block),
+        Ptr::new(texture),
+        make_value as u8,
+        word,
+    )
+}
+
+/// The renderer's held targets: their count (`011fa020`) and the array after it (`011fa024`).
+const TARGET_COUNT_011FA020: u32 = 0x011f_a020;
+const TARGETS_011FA024: u32 = 0x011f_a024;
+
+// Translated from 00b6b6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6b330`), no arguments: pops every held target (the
+/// count at `011fa020` lowered before each one): a non-null one is released (its count at +4,
+/// deleted through its slot +4 at 0) and its slot cleared, the count read again after the
+/// release. Then, with the renderer's (`011f4748`) byte +0x208 set, `00b6b330` on it (a tail
+/// call).
+pub fn fn_00b6b6c0(e: &mut Engine) {
+    let mut count = e.global::<u32>(TARGET_COUNT_011FA020);
+    while count != 0 {
+        count = count.wrapping_sub(1);
+        let slot = TARGETS_011FA024.wrapping_add(count.wrapping_mul(4));
+        let target = e.mem.u32(slot);
+        e.set_global(TARGET_COUNT_011FA020, count);
+        if target != 0 {
+            release_reference(e, target);
+            count = e.global::<u32>(TARGET_COUNT_011FA020);
+            e.mem.set_u32(slot, 0);
+        }
+    }
+    let renderer = e.global::<u32>(GLOBAL_011F4748);
+    if e.mem.u8(renderer + 0x208) != 0 {
+        fn_00b6b330(e, Ptr::new(renderer));
+    }
+}
+
+// Translated from 00b6b730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6b330`), no arguments, on the renderer at `011f4748`
+/// (read before): `00b6b6c0`; then in mode 1 (+0x200) its slot +0x180 answering true moves it
+/// to mode 3, and in mode 3 its slot +0x184 answering true counts +0x204 up and moves it to
+/// mode 0.
+pub fn fn_00b6b730(e: &mut Engine) {
+    let renderer = e.global::<u32>(GLOBAL_011F4748);
+    fn_00b6b6c0(e);
+    if e.mem.u32(renderer + 0x200) == 1 && e.vcall(renderer, 0x180, &args![]).bool() {
+        e.mem.set_u32(renderer + 0x200, 3);
+    }
+    if e.mem.u32(renderer + 0x200) == 3 && e.vcall(renderer, 0x184, &args![]).bool() {
+        let frames = e.mem.u32(renderer + 0x204).wrapping_add(1);
+        e.mem.set_u32(renderer + 0x204, frames);
+        e.mem.set_u32(renderer + 0x200, 0);
+    }
+}
+
+// Translated from 00b6b790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6b330`), no arguments, on the renderer at `011f4748`
+/// (read before): `00b6b6c0`; then in mode 2 (+0x200) its slot +0x180 answering true moves it
+/// to mode 0.
+pub fn fn_00b6b790(e: &mut Engine) {
+    let renderer = e.global::<u32>(GLOBAL_011F4748);
+    fn_00b6b6c0(e);
+    if e.mem.u32(renderer + 0x200) == 2 && e.vcall(renderer, 0x180, &args![]).bool() {
+        e.mem.set_u32(renderer + 0x200, 0);
+    }
+}
+
+/// `NiXenonRenderer::BeginUsingRenderTargetGroup` (engine map, `00b6b2a0`, `thiscall` on the
+/// renderer: the group, the flags) and `00b6b050` (unnamed, `cdecl`, the group).
+const BEGIN_USING_TARGET_00B6B2A0: u32 = 0x00b6_b2a0;
+const KEEP_TARGET_00B6B050: u32 = 0x00b6_b050;
+
+// Translated from 00b6b7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6b330`), `cdecl`, two words (a render-target group, the
+/// flags), on the renderer at `011f4748`: without a group the renderer's slot +0xc8 answers
+/// one; with the byte +0x208 set `00b6b330` runs first; then the group (asked of slot +0xc8
+/// again when still null) begins (`BeginUsingRenderTargetGroup` with the flags) and `00b6b050`
+/// is given the group.
+pub fn fn_00b6b7d0(e: &mut Engine, group: u32, flags: u32) {
+    let renderer = e.global::<u32>(GLOBAL_011F4748);
+    let group = if group != 0 {
+        group
+    } else {
+        e.vcall(renderer, 0xc8, &args![]).u32()
+    };
+    if e.mem.u8(renderer + 0x208) != 0 {
+        fn_00b6b330(e, Ptr::new(renderer));
+    }
+    let begun = if group != 0 {
+        group
+    } else {
+        let renderer = e.global::<u32>(GLOBAL_011F4748);
+        e.vcall(renderer, 0xc8, &args![]).u32()
+    };
+    let renderer = e.global::<u32>(GLOBAL_011F4748);
+    e.call(BEGIN_USING_TARGET_00B6B2A0, &args![renderer, begun, flags]);
+    e.call(KEEP_TARGET_00B6B050, &args![group]);
+}
+
+/// `00b6b890` and `00b6b8d0`: with the renderer (`011f4748`) in mode 0 and its slot +0x17c
+/// answering true, the mode becomes `mode`; then `00b6b7d0(group, flags)`.
+fn begin_targets(e: &mut Engine, mode: u32, flags: u32, group: u32) {
+    let renderer = e.global::<u32>(GLOBAL_011F4748);
+    if e.mem.u32(renderer + 0x200) == 0 && e.vcall(renderer, 0x17c, &args![]).bool() {
+        e.mem.set_u32(renderer + 0x200, mode);
+    }
+    fn_00b6b7d0(e, group, flags);
+}
+
+// Translated from 00b6b890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6b330`), `cdecl`, two words (the flags, a render-target
+/// group): in mode 0 the renderer's slot +0x17c answering true moves it to mode 1; then
+/// `00b6b7d0` with the group and the flags.
+pub fn fn_00b6b890(e: &mut Engine, flags: u32, group: u32) {
+    begin_targets(e, 1, flags, group);
+}
+
+// Translated from 00b6b8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6b330`), `cdecl`, two words (the flags, a render-target
+/// group): in mode 0 the renderer's slot +0x17c answering true moves it to mode 2; then
+/// `00b6b7d0` with the group and the flags.
+pub fn fn_00b6b8d0(e: &mut Engine, flags: u32, group: u32) {
+    begin_targets(e, 2, flags, group);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00b6_b380, fn_00b6b380(Ptr, Ptr, u8, u32) -> Ptr)]
+    vec![
+        entry!(0x00b6_b380, fn_00b6b380(Ptr, Ptr, u8, u32) -> Ptr),
+        entry!(0x00b6_b330, fn_00b6b330(Ptr) -> bool),
+        entry!(
+            0x00b6_b610,
+            fn_00b6b610(u32, u32, u32, u32, u32, u32, u32, u32, u32) -> Ptr
+        ),
+        entry!(0x00b6_b6c0, fn_00b6b6c0()),
+        entry!(0x00b6_b730, fn_00b6b730()),
+        entry!(0x00b6_b790, fn_00b6b790()),
+        entry!(0x00b6_b7d0, fn_00b6b7d0(u32, u32)),
+        entry!(0x00b6_b890, fn_00b6b890(u32, u32)),
+        entry!(0x00b6_b8d0, fn_00b6b8d0(u32, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -179,5 +381,211 @@ mod tests {
         assert_ne!(e.mem.u32(this + 8), 0);
         assert_eq!(e.mem.bytes(this + 0xc, 0x14), vec![0; 0x14]);
         assert_eq!(calls(&e, GET_RTTI), vec![vec![texture]]);
+    }
+}
+
+#[cfg(test)]
+mod renderer_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    const RENDERER_SLOTS: u32 = 0x0e7a_0000;
+
+    /// A renderer at `011f4748` in `mode`, its byte +0x208 as given, its slots +0xc8, +0x17c,
+    /// +0x180, +0x184 and +0x198 answering the given words, `LeaveCriticalSection`, the
+    /// begin and keep calls doubled.
+    fn renderer_rig(mode: u32, held: u8, answers: [u32; 5]) -> (Engine, u32) {
+        let mut e = rig();
+        e.map(0x011f_4000, 0x1000);
+        e.map(0x011f_a000, 0x1000);
+        let mut slots = vec![0u32; 0x67];
+        for (offset, answer) in [0xc8u32, 0x17c, 0x180, 0x184, 0x198].iter().zip(answers) {
+            let target = RENDERER_SLOTS + 0x1000 + offset;
+            slots[(offset / 4) as usize] = target;
+            e.register_double(target, move |_, _| answer.into_ret());
+        }
+        e.put_vtable(RENDERER_SLOTS, &slots);
+        for callee in [
+            IMPORT_LEAVE_CRITICAL_SECTION,
+            BEGIN_USING_TARGET_00B6B2A0,
+            KEEP_TARGET_00B6B050,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        let renderer = e.mem.alloc(0x210);
+        e.mem.set_u32(renderer, RENDERER_SLOTS);
+        e.mem.set_u32(renderer + 0x200, mode);
+        e.mem.set_u8(renderer + 0x208, held);
+        e.set_global(GLOBAL_011F4748, renderer);
+        (e, renderer)
+    }
+
+    fn slot(offset: u32) -> u32 {
+        RENDERER_SLOTS + 0x1000 + offset
+    }
+
+    #[test]
+    fn fn_00b6b330_leaves_the_section_in_modes_1_and_2() {
+        let (mut e, renderer) = renderer_rig(2, 1, [0, 0, 0, 0, 1]);
+        assert!(e.call(0x00b6_b330, &args![renderer]).bool());
+        assert_eq!(
+            calls(&e, IMPORT_LEAVE_CRITICAL_SECTION),
+            vec![vec![renderer + 0x80]]
+        );
+        assert_eq!(e.mem.u8(renderer + 0x208), 0);
+        // The byte now clear, mode 0, and a slot answering false: nothing.
+        assert!(!e.call(0x00b6_b330, &args![renderer]).bool());
+        let (mut e, renderer) = renderer_rig(0, 1, [0, 0, 0, 0, 1]);
+        assert!(!e.call(0x00b6_b330, &args![renderer]).bool());
+        let (mut e, renderer) = renderer_rig(1, 1, [0, 0, 0, 0, 0]);
+        assert!(!e.call(0x00b6_b330, &args![renderer]).bool());
+        assert_eq!(e.mem.u8(renderer + 0x208), 1);
+        assert!(calls(&e, IMPORT_LEAVE_CRITICAL_SECTION).is_empty());
+    }
+
+    #[test]
+    fn fn_00b6b610_wraps_a_rendered_texture() {
+        let mut e = rig();
+        e.map(0x011f_9000, 0x1000);
+        e.set_global(D3D_RENDERER_011F9508, 0x0e7b_0000u32);
+        e.register(MAKE_RENDERED_TEXTURE_00A7FC00, |_, _| Ret::default());
+        e.register(OPERATOR_NEW_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        let words = args![1u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32, 8u32, 9u32];
+        assert_eq!(e.call(0x00b6_b610, &words).u32(), 0);
+        assert_eq!(
+            calls(&e, MAKE_RENDERED_TEXTURE_00A7FC00),
+            vec![vec![1, 2, 3, 0x0e7b_0000, 4, 5, 8, 9]]
+        );
+        assert!(calls(&e, OPERATOR_NEW_00AA13E0).is_empty());
+        // A texture but no memory: 0 too.
+        e.register(MAKE_RENDERED_TEXTURE_00A7FC00, |_, _| {
+            0x0e7c_0000u32.into_ret()
+        });
+        e.register(OPERATOR_NEW_00AA13E0, |_, _| Ret::default());
+        assert_eq!(e.call(0x00b6_b610, &words).u32(), 0);
+        assert_eq!(calls(&e, OPERATOR_NEW_00AA13E0), vec![vec![0x40]]);
+    }
+
+    #[test]
+    fn fn_00b6b610_builds_the_object_over_the_texture() {
+        let mut e = rig();
+        e.map(0x011f_9000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        e.set_global(GLOBAL_011F4748, 0x0e7f_0000u32);
+        let mut slots = vec![0u32; 0x2a];
+        slots[1] = REFERENCE_DELETE;
+        slots[2] = 0x0e80_0008;
+        slots[0x29] = 0x0e80_00a4;
+        e.put_vtable(0x0e81_0000, &slots);
+        e.register(0x0e80_0008, |_, _| Ret::default());
+        e.register(0x0e80_00a4, |_, _| 0x0e82_0000u32.into_ret());
+        let texture = e.mem.alloc(0x70);
+        e.mem.set_u32(texture, 0x0e81_0000);
+        e.register_double(MAKE_RENDERED_TEXTURE_00A7FC00, move |_, _| {
+            texture.into_ret()
+        });
+        e.register(OPERATOR_NEW_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(NI_OBJECT_CONSTRUCT_00A5D3A0, |_, a| a[0].into_ret());
+        e.register(VALUE_00B6B180, |_, _| 0x66u32.into_ret());
+        e.register(RENDER_TARGET_00EE8760, |e, _| object(e, 0).into_ret());
+        let words = args![1u32, 2u32, 3u32, 4u32, 5u32, 0x101u32, 7u32, 8u32, 9u32];
+        let built = e.call(0x00b6_b610, &words).u32();
+        assert_ne!(built, 0);
+        assert_eq!(e.mem.u32(built), VTABLE_010AE500);
+        assert_eq!(e.mem.u32(built + 0x30), texture);
+        // The sixth word's low byte (1) asks for the value with the seventh word.
+        assert_eq!(calls(&e, VALUE_00B6B180), vec![vec![texture, 7]]);
+        assert_eq!(
+            calls(&e, RENDER_TARGET_00EE8760),
+            vec![vec![0x0e82_0000, 0x0e7f_0000, 0x66]]
+        );
+    }
+
+    #[test]
+    fn fn_00b6b6c0_releases_every_held_target() {
+        let (mut e, renderer) = renderer_rig(1, 1, [0, 0, 0, 0, 1]);
+        let first = object(&mut e, 1);
+        let second = object(&mut e, 2);
+        e.set_global(TARGET_COUNT_011FA020, 3u32);
+        e.set_global(TARGETS_011FA024, first);
+        e.set_global(TARGETS_011FA024 + 8, second);
+        e.call(0x00b6_b6c0, &args![]);
+        assert_eq!(e.global::<u32>(TARGET_COUNT_011FA020), 0);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![first]]);
+        assert_eq!(e.mem.u32(second + 4), 1);
+        assert_eq!(e.global::<u32>(TARGETS_011FA024), 0);
+        assert_eq!(e.global::<u32>(TARGETS_011FA024 + 8), 0);
+        // The byte +0x208 was set: 00b6b330 ran on the renderer.
+        assert_eq!(e.mem.u8(renderer + 0x208), 0);
+    }
+
+    #[test]
+    fn fn_00b6b730_steps_the_modes() {
+        let (mut e, renderer) = renderer_rig(1, 0, [0, 0, 1, 1, 0]);
+        e.call(0x00b6_b730, &args![]);
+        assert_eq!(e.mem.u32(renderer + 0x200), 0);
+        assert_eq!(e.mem.u32(renderer + 0x204), 1);
+        let (mut e, renderer) = renderer_rig(1, 0, [0, 0, 1, 0, 0]);
+        e.call(0x00b6_b730, &args![]);
+        assert_eq!(e.mem.u32(renderer + 0x200), 3);
+        let (mut e, renderer) = renderer_rig(2, 0, [0, 0, 1, 1, 0]);
+        e.call(0x00b6_b730, &args![]);
+        assert_eq!(e.mem.u32(renderer + 0x200), 2);
+        assert!(calls(&e, slot(0x180)).is_empty());
+    }
+
+    #[test]
+    fn fn_00b6b790_leaves_mode_2() {
+        let (mut e, renderer) = renderer_rig(2, 0, [0, 0, 1, 0, 0]);
+        e.call(0x00b6_b790, &args![]);
+        assert_eq!(e.mem.u32(renderer + 0x200), 0);
+        let (mut e, renderer) = renderer_rig(2, 0, [0, 0, 0, 0, 0]);
+        e.call(0x00b6_b790, &args![]);
+        assert_eq!(e.mem.u32(renderer + 0x200), 2);
+        let (mut e, renderer) = renderer_rig(1, 0, [0, 0, 1, 0, 0]);
+        e.call(0x00b6_b790, &args![]);
+        assert_eq!(e.mem.u32(renderer + 0x200), 1);
+    }
+
+    #[test]
+    fn fn_00b6b7d0_begins_the_group() {
+        let (mut e, renderer) = renderer_rig(0, 0, [0x0e7d_0000, 0, 0, 0, 0]);
+        e.call(0x00b6_b7d0, &args![0x0e7e_0000u32, 5u32]);
+        assert!(calls(&e, slot(0xc8)).is_empty());
+        assert_eq!(
+            calls(&e, BEGIN_USING_TARGET_00B6B2A0),
+            vec![vec![renderer, 0x0e7e_0000, 5]]
+        );
+        assert_eq!(calls(&e, KEEP_TARGET_00B6B050), vec![vec![0x0e7e_0000]]);
+        e.call(0x00b6_b7d0, &args![0u32, 6u32]);
+        assert_eq!(calls(&e, slot(0xc8)).len(), 1);
+        assert_eq!(
+            calls(&e, BEGIN_USING_TARGET_00B6B2A0)[1],
+            vec![renderer, 0x0e7d_0000, 6]
+        );
+        // The renderer's group null too: it is asked again and the null kept.
+        let (mut e, _) = renderer_rig(0, 0, [0, 0, 0, 0, 0]);
+        e.call(0x00b6_b7d0, &args![0u32, 6u32]);
+        assert_eq!(calls(&e, slot(0xc8)).len(), 2);
+        assert_eq!(calls(&e, KEEP_TARGET_00B6B050), vec![vec![0]]);
+    }
+
+    #[test]
+    fn fn_00b6b890_and_00b6b8d0_set_the_mode_and_begin() {
+        let (mut e, renderer) = renderer_rig(0, 0, [0, 1, 0, 0, 0]);
+        e.call(0x00b6_b890, &args![7u32, 0x0e7e_0000u32]);
+        assert_eq!(e.mem.u32(renderer + 0x200), 1);
+        assert_eq!(
+            calls(&e, BEGIN_USING_TARGET_00B6B2A0),
+            vec![vec![renderer, 0x0e7e_0000, 7]]
+        );
+        let (mut e, renderer) = renderer_rig(0, 0, [0, 1, 0, 0, 0]);
+        e.call(0x00b6_b8d0, &args![7u32, 0x0e7e_0000u32]);
+        assert_eq!(e.mem.u32(renderer + 0x200), 2);
+        // Not in mode 0: the mode stays and the slot is not asked.
+        let (mut e, renderer) = renderer_rig(3, 0, [0, 1, 0, 0, 0]);
+        e.call(0x00b6_b8d0, &args![7u32, 0x0e7e_0000u32]);
+        assert_eq!(e.mem.u32(renderer + 0x200), 3);
+        assert!(calls(&e, slot(0x17c)).is_empty());
     }
 }

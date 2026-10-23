@@ -263,9 +263,179 @@ pub fn bs_distant_tree_shader_load_stages_and_passes(e: &mut Engine, this: Ptr) 
     true
 }
 
+/// The memory manager's deallocate (`00aa4060`, `thiscall` on `011f6238`, one word), the
+/// `eh vector destructor iterator` (`00ec5fce`, `stdcall`), `BSShader::~BSShader` (engine
+/// map, `00be0f10`, no stack words) and the Ni free (`00aa1460`, `cdecl`: block, size).
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
+const BS_SHADER_DESTRUCT: u32 = 0x00be_0f10;
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00bb6300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsdistanttreeshader.cpp`): the distant tree shader's
+/// destructor, no stack words. Stores the vtable `010b9aa8`, drops and clears the passes +0x6c
+/// and +0x70, clears (releasing what they hold) the `NiPointer`s +0x74, +0x78 and +0x7c, gives
+/// the instance array (+0xa8) back to the memory manager (`00aa4060`), clears +0x80, releases
+/// +0x80 again when not null (it was just cleared), destroys the arrays +0x78 (2) and +0x74 (1)
+/// (destructor `00b66f20`) and +0x6c (2, `00b79930`) and runs `BSShader::~BSShader`
+/// (`00be0f10`).
+// Translation incomplete: 00bb6300 - the C++ exception frame (FS:[0] chain, unwind states 0 to 4 for the members and the base) is not translated.
+pub fn fn_00bb6300(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, DISTANT_TREE_VTABLE_010B9AA8);
+    for index in 0..2u32 {
+        pass_pointer_clear(e, base + 0x6c + 4 * index);
+    }
+    ni_pointer_clear(e, base + 0x74);
+    for index in 0..2u32 {
+        ni_pointer_clear(e, base + 0x78 + 4 * index);
+    }
+    let instances = e.mem.u32(base + 0xa8);
+    e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, instances]);
+    ni_pointer_clear(e, base + 0x80);
+    let held = e.mem.u32(base + 0x80);
+    if held != 0 {
+        release_reference(e, held);
+    }
+    for (offset, count, destructor) in [
+        (0x78u32, 2u32, DESTRUCT_00B66F20),
+        (0x74, 1, DESTRUCT_00B66F20),
+        (0x6c, 2, DESTRUCT_00B79930),
+    ] {
+        e.call(
+            VECTOR_DESTRUCT,
+            &args![base + offset, 4u32, count, destructor],
+        );
+    }
+    e.call(BS_SHADER_DESTRUCT, &args![base]);
+}
+
+// Translated from 00bb6e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `bsdistanttreeshader.cpp`): the scalar deleting destructor
+/// (vtable `010b9aa8` slot +0), `thiscall`, `RET 4`. Runs the destructor (`00bb6300`) and, when
+/// bit 0 of the flags is set, frees the 0xfc bytes (`00aa1460`). Answers `this`.
+pub fn fn_00bb6e00(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00bb6300(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_00AA1460, &args![this, 0xfcu32]);
+    }
+    this
+}
+
+/// The constant names of `CreateConstantMaps` (read in Ghidra).
+const WORLD_VIEW_PROJ_TRANSPOSE_010A1E50: u32 = 0x010a_1e50;
+const FOG_0103BFC8: u32 = 0x0103_bfc8;
+const INSTANCES_010B9C18: u32 = 0x010b_9c18;
+const DIFFUSE_LIGHT_DIRECTION_010B9C00: u32 = 0x010b_9c00;
+const DIFFUSE_LIGHT_COLOR_010B9BEC: u32 = 0x010b_9bec;
+const AMBIENT_COLOR_010B8FE4: u32 = 0x010b_8fe4;
+
+// Translated from 00bb6f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSDistantTreeShader::CreateConstantMaps` (Xbox PDB), no stack words. When the pixel
+/// constant map (+0x30) is null, makes one (kind 2) without entries; when the vertex one
+/// (+0x34) is null, makes one (kind 0) with `"WorldViewProjTranspose"` (0x20000009, 0, 0,
+/// 4), `"fog"` (0x10000009, register 4, 2 registers, 0x20 bytes at +0x84), `"instances"`
+/// (register 9, twice the instance count `012007b8` registers, 0x20 bytes each, the array
+/// +0xa8), `"Diffuse Light direction"` (+0xbc, 6), `"Diffuse Light color"` (+0xcc, 7) and
+/// `"ambient color"` (+0xac, 8).
+// Translation incomplete: 00bb6f40 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the allocations) is not translated.
+pub fn bs_distant_tree_shader_create_constant_maps(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let empty = CONSTANT_EMPTY_NAME_01011584;
+    if e.mem.u32(base + 0x30) == 0 {
+        make_constant_map(e, base, 0x30, 2);
+    }
+    if e.mem.u32(base + 0x34) != 0 {
+        return;
+    }
+    make_constant_map(e, base, 0x34, 0);
+    add_constant_entry(
+        e,
+        base,
+        0x34,
+        [
+            WORLD_VIEW_PROJ_TRANSPOSE_010A1E50,
+            0x2000_0009,
+            0,
+            0,
+            4,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ],
+    );
+    add_constant_entry(
+        e,
+        base,
+        0x34,
+        [
+            FOG_0103BFC8,
+            0x1000_0009,
+            0,
+            4,
+            2,
+            empty,
+            0x20,
+            4,
+            base + 0x84,
+            0,
+        ],
+    );
+    let instances = e.mem.u32(base + 0xa8);
+    let count = e.global::<u32>(INSTANCE_COUNT_012007B8);
+    add_constant_entry(
+        e,
+        base,
+        0x34,
+        [
+            INSTANCES_010B9C18,
+            0x1000_0009,
+            0,
+            9,
+            count.wrapping_add(count),
+            empty,
+            count << 5,
+            4,
+            instances,
+            0,
+        ],
+    );
+    for (name, register, offset) in [
+        (DIFFUSE_LIGHT_DIRECTION_010B9C00, 6u32, 0xbcu32),
+        (DIFFUSE_LIGHT_COLOR_010B9BEC, 7, 0xcc),
+        (AMBIENT_COLOR_010B8FE4, 8, 0xac),
+    ] {
+        add_constant_entry(
+            e,
+            base,
+            0x34,
+            [
+                name,
+                0x1000_0007,
+                0,
+                register,
+                1,
+                empty,
+                0x10,
+                4,
+                base + offset,
+                0,
+            ],
+        );
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00bb_6300, fn_00bb6300(Ptr)),
+        entry!(0x00bb_6e00, fn_00bb6e00(Ptr, u32) -> Ptr),
+        entry!(
+            0x00bb_6f40,
+            bs_distant_tree_shader_create_constant_maps(Ptr)
+        ),
         entry!(0x00bb_6c30, bs_distant_tree_shader_bs_distant_tree_shader(Ptr, Ptr) -> Ptr),
         entry!(0x00bb_6060, bs_distant_tree_shader_load_shaders(Ptr)),
         entry!(0x00bb_64a0, bs_distant_tree_shader_load_stages_and_passes(Ptr) -> bool),
@@ -447,5 +617,120 @@ mod b000h_tests {
         for a in calls(&e, PASS_SET_STAGE) {
             assert_eq!(e.mem.u32(a[2] + 0x60), 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod distant_tree_function_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    fn noop(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn fn_00bb6300_drops_the_members_and_destroys() {
+        let mut e = rig();
+        noop(
+            &mut e,
+            &[MEMORY_DEALLOCATE, VECTOR_DESTRUCT, BS_SHADER_DESTRUCT],
+        );
+        let this = e.mem.alloc(0xfc);
+        let pass = e.mem.alloc(0x70);
+        e.mem.set_u32(pass + 0x64, 1);
+        e.mem.set_u32(this + 0x6c, pass);
+        let texture = object(&mut e, 1);
+        e.mem.set_u32(this + 0x74, texture);
+        let held = object(&mut e, 2);
+        e.mem.set_u32(this + 0x80, held);
+        e.mem.set_u32(this + 0xa8, 0x9000);
+        e.call(0x00bb_6300, &args![this]);
+        assert_eq!(e.mem.u32(this), DISTANT_TREE_VTABLE_010B9AA8);
+        assert_eq!(calls(&e, PASS_DELETE_00E80190), vec![vec![pass]]);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![texture]]);
+        assert_eq!(e.mem.u32(held + 4), 1);
+        assert_eq!(e.mem.u32(this + 0x80), 0);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, 0x9000]]
+        );
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCT),
+            vec![
+                vec![this + 0x78, 4, 2, DESTRUCT_00B66F20],
+                vec![this + 0x74, 4, 1, DESTRUCT_00B66F20],
+                vec![this + 0x6c, 4, 2, DESTRUCT_00B79930],
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00bb6e00_destroys_and_frees_with_bit_0() {
+        let mut e = rig();
+        noop(
+            &mut e,
+            &[
+                MEMORY_DEALLOCATE,
+                VECTOR_DESTRUCT,
+                BS_SHADER_DESTRUCT,
+                NI_FREE_00AA1460,
+            ],
+        );
+        let this = e.mem.alloc(0xfc);
+        assert_eq!(e.call(0x00bb_6e00, &args![this, 1u32]).u32(), this);
+        assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![this, 0xfc]]);
+        e.call(0x00bb_6e00, &args![this, 0u32]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460).len(), 1);
+    }
+
+    #[test]
+    fn create_constant_maps_adds_the_tree_constants() {
+        const MAP_SLOTS: u32 = 0x0e30_0000;
+        const MAP_VTABLE: u32 = 0x0e31_0000;
+        let mut e = rig();
+        e.map(0x0120_0000, 0x1000);
+        e.set_global(INSTANCE_COUNT_012007B8, 0x20u32);
+        let targets: Vec<u32> = (0..0x20u32).map(|i| MAP_SLOTS + 4 * i).collect();
+        e.put_vtable(MAP_VTABLE, &targets);
+        e.register(NI_ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(CONSTANT_MAP_CONSTRUCT_00B7E330, |e, a| {
+            e.mem.set_u32(a[0], MAP_VTABLE);
+            a[0].into_ret()
+        });
+        noop(&mut e, &[MAP_SLOTS + 8]);
+        let this = e.mem.alloc(0xfc);
+        e.mem.set_u32(this + 0xa8, 0x9000);
+        e.call(0x00bb_6f40, &args![this]);
+        let vertex = e.mem.u32(this + 0x34);
+        let entries = calls(&e, MAP_SLOTS + 8);
+        assert_eq!(entries.len(), 6);
+        assert_eq!(
+            entries[2],
+            vec![
+                vertex,
+                INSTANCES_010B9C18,
+                0x1000_0009,
+                0,
+                9,
+                0x40,
+                CONSTANT_EMPTY_NAME_01011584,
+                0x400,
+                4,
+                0x9000,
+                0
+            ]
+        );
+        assert_eq!(entries[1][..2], [vertex, FOG_0103BFC8]);
+        assert_eq!(entries[5][1], AMBIENT_COLOR_010B8FE4);
+        assert_eq!(entries[5][9], this + 0xac);
+        let maps = calls(&e, CONSTANT_MAP_CONSTRUCT_00B7E330);
+        assert_eq!((maps[0][2], maps[1][2]), (2, 0));
+        // The vertex map present: nothing more.
+        e.call_log = Some(vec![]);
+        e.call(0x00bb_6f40, &args![this]);
+        assert!(calls(&e, MAP_SLOTS + 8).is_empty());
     }
 }

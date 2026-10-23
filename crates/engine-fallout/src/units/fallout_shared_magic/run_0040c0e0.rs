@@ -156,11 +156,144 @@ pub fn fn_0040c650(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// The string constructor `00403970` (`thiscall`, no stack words) and the assignment
+/// `004037f0` (`thiscall`, two words: the text and 0).
+const STRING_CONSTRUCT_00403970: u32 = 0x0040_3970;
+const STRING_SET_004037F0: u32 = 0x0040_37f0;
+/// `WaitForSingleObjectEx` (engine map name of `004019a0`, `cdecl`, one word).
+const WAIT_004019A0: u32 = 0x0040_19a0;
+/// `004013e0` (`thiscall`, no stack words; answers a byte).
+const QUERY_004013E0: u32 = 0x0040_13e0;
+/// `MagicItem::MagicItemInitItem` (engine map, `0040c030`, `thiscall` on the component at
+/// `+0x18`, one word: the form).
+const MAGIC_ITEM_INIT_ITEM: u32 = 0x0040_c030;
+/// `00484ab0` (`fallout shared/tesform.cpp`, `thiscall`, one word).
+const FORM_SET_00484AB0: u32 = 0x0048_4ab0;
+/// The object's virtual slot called when the file's flag at `+0x299` is set after the
+/// `+0x18` component read its own chunk (`fn_0040c230`).
+const SLOT_AFTER_LOAD_0040C230: u32 = 0x138;
+
+// Translated from 0040c0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: a string constructor from text (`thiscall`, one word):
+/// `00403970` on `this`, then `004037f0(text, 0)`. Answers `this`.
+pub fn fn_0040c0e0(e: &mut Engine, this: Ptr, text: u32) -> Ptr {
+    e.call(STRING_CONSTRUCT_00403970, &args![this]);
+    e.call(STRING_SET_004037F0, &args![this, text, 0u32]);
+    this
+}
+
+// Translated from 0040c110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: when the word at `this` is non-null, [`fn_0040c130`] on it.
+pub fn fn_0040c110(e: &mut Engine, this: Ptr) {
+    let object = e.mem.u32(this.addr());
+    if object != 0 {
+        fn_0040c130(e, Ptr::new(object));
+    }
+}
+
+// Translated from 0040c130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: `WaitForSingleObjectEx` (`004019a0`) on `this + 4`.
+pub fn fn_0040c130(e: &mut Engine, this: Ptr) {
+    e.call(WAIT_004019A0, &args![this.addr().wrapping_add(4)]);
+}
+
+// Translated from 0040c230 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0040c230 - the /GS stack cookie check (00ec408c) is not translated.
+/// The engine map gives it no name. The same load as [`fn_0040c650`] for an object whose
+/// name component is at `+0x18`, effect list at `+0x24` and item list at `+0x28`
+/// (`thiscall`, `RET 4`, `file`; answers true): `TESForm::LoadForm`, then for every chunk:
+/// `EFID`/`CTDA` to `EffectItemList::Load` on `+0x24` with the `+0x18` component's name
+/// text; `EDID` read into a stack buffer (the chunk size rounded up to 16 bytes, at most
+/// 0x200 bytes read) and passed to slot `0x134`; `OBND` to slot `0xe0`; `FULL` to `00487050`
+/// with the `+0x18` component (null for a null object). Every chunk is offered to the
+/// component's slot `0x40`; its own chunk (slot `0x24`) is zeroed and read into its block
+/// (slots `0x28`, `0x2c`), and with the file's flag at `+0x299` set the object's slot
+/// `0x138` runs. A record whose `+0x28` list holds no item prints the `GAME EFFECTS`
+/// message with the form id and name.
+pub fn fn_0040c230(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
+    let object = this.addr();
+    let component = object.wrapping_add(0x18);
+    e.call(TES_FORM_LOAD_FORM, &args![this, file]);
+    loop {
+        let chunk = e.call(GET_TES_CHUNK, &args![file]).u32();
+        if chunk == 0 {
+            break;
+        }
+        match chunk {
+            CHUNK_EFID | CHUNK_CTDA => {
+                let name = e.call(FULL_NAME_TEXT, &args![component]).u32();
+                e.call(
+                    EFFECT_ITEM_LIST_LOAD,
+                    &args![object.wrapping_add(0x24), file, name],
+                );
+            }
+            CHUNK_EDID => {
+                let size = e.call(CHUNK_SIZE, &args![file]).u32();
+                // `_alloca_probe_16`: the buffer is the size rounded up to 16 bytes.
+                let reserved = size.wrapping_add(15) & !15;
+                e.with_stack(reserved, |e, buffer| {
+                    e.call(GET_CHUNK_DATA, &args![file, buffer, 0x200u32]);
+                    e.vcall(object, SLOT_SET_EDITOR_ID, &args![buffer]);
+                });
+            }
+            CHUNK_OBND => {
+                e.vcall(object, SLOT_LOAD_BOUNDS, &args![file]);
+            }
+            CHUNK_FULL => {
+                let target = if object == 0 { 0 } else { component };
+                e.call(LOAD_FULL_NAME, &args![target, file]);
+            }
+            _ => {}
+        }
+        e.vcall(component, SLOT_OFFER_CHUNK, &args![file, chunk]);
+        if chunk == e.vcall(component, SLOT_OWN_CHUNK_ID, &[]).u32() {
+            let size = e.vcall(component, SLOT_OWN_BLOCK_SIZE, &[]).u32();
+            let block = e.vcall(component, SLOT_OWN_BLOCK, &[]).u32();
+            e.call(MEMSET, &args![block, 0u32, size]);
+            let size = e.vcall(component, SLOT_OWN_BLOCK_SIZE, &[]).u32();
+            let block = e.vcall(component, SLOT_OWN_BLOCK, &[]).u32();
+            e.call(GET_CHUNK_DATA, &args![file, block, size]);
+            if e.call(FILE_FLAG_299, &args![file]).bool() {
+                e.vcall(object, SLOT_AFTER_LOAD_0040C230, &[]);
+            }
+        }
+        if !e.call(NEXT_CHUNK, &args![file]).bool() {
+            break;
+        }
+    }
+    if e.call(LIST_COUNT, &args![object.wrapping_add(0x28)]).u32() == 0 {
+        let name = e.call(FULL_NAME_TEXT, &args![component]).u32();
+        let form_id = e.call(FORM_ID, &args![this]).u32();
+        e.call(PRINT, &args![MESSAGE_NO_EFFECTS, form_id, name]);
+    }
+    true
+}
+
+// Translated from 0040c5b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: unless `004013e0` answers non-zero (its low byte), runs
+/// `MagicItem::MagicItemInitItem` on the component at `+0x18` with the form and then
+/// `00484ab0(1)` on the form.
+pub fn fn_0040c5b0(e: &mut Engine, this: Ptr) {
+    if e.call(QUERY_004013E0, &args![this]).bool() {
+        return;
+    }
+    e.call(
+        MAGIC_ITEM_INIT_ITEM,
+        &args![this.addr().wrapping_add(0x18), this],
+    );
+    e.call(FORM_SET_00484AB0, &args![this, 1u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0040c150, fn_0040c150(Ptr, u32, u32) -> Ptr),
         entry!(0x0040c650, fn_0040c650(Ptr, Ptr) -> bool),
+        entry!(0x0040_c0e0, fn_0040c0e0(Ptr, u32) -> Ptr),
+        entry!(0x0040_c110, fn_0040c110(Ptr)),
+        entry!(0x0040_c130, fn_0040c130(Ptr)),
+        entry!(0x0040_c230, fn_0040c230(Ptr, Ptr) -> bool),
+        entry!(0x0040_c5b0, fn_0040c5b0(Ptr)),
     ]
 }
 
@@ -368,6 +501,183 @@ mod load_tests {
         assert_eq!(calls_to(&log, LIST_COUNT), vec![vec![object + 0x40]]);
         assert_eq!(
             calls_to(&log, PRINT),
+            vec![vec![MESSAGE_NO_EFFECTS, 0x77, 0x5000]]
+        );
+    }
+}
+
+#[cfg(test)]
+mod b060_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    const FILE: u32 = 0x6000;
+    const OBJECT_TABLE: u32 = 0x0700_0000;
+    const COMPONENT_TABLE: u32 = 0x0710_0000;
+    const OWN_CHUNK: u32 = 0x1234;
+    const TARGET_LOAD_BOUNDS: u32 = 0x0050_0001;
+    const TARGET_SET_EDITOR_ID: u32 = 0x0050_0002;
+    const TARGET_AFTER_LOAD: u32 = 0x0050_0003;
+    const TARGET_OFFER_CHUNK: u32 = 0x0050_0004;
+    const TARGET_OWN_CHUNK_ID: u32 = 0x0050_0005;
+    const TARGET_OWN_BLOCK: u32 = 0x0050_0006;
+    const TARGET_OWN_BLOCK_SIZE: u32 = 0x0050_0007;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_0040c0e0_constructs_and_sets_the_text() {
+        let mut e = Engine::new();
+        e.register(STRING_CONSTRUCT_00403970, |_, _| Ret::default());
+        e.register(STRING_SET_004037F0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0040_c0e0, &args![0x5000u32, 0x7000u32]).u32(),
+            0x5000
+        );
+        assert_eq!(calls(&e, STRING_CONSTRUCT_00403970), vec![vec![0x5000]]);
+        assert_eq!(
+            calls(&e, STRING_SET_004037F0),
+            vec![vec![0x5000, 0x7000, 0]]
+        );
+    }
+
+    #[test]
+    fn fn_0040c110_waits_on_the_held_object_only() {
+        let mut e = Engine::new();
+        e.register(WAIT_004019A0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let holder = e.mem.alloc(4);
+        e.call(0x0040_c110, &args![holder]);
+        assert!(calls(&e, WAIT_004019A0).is_empty());
+        e.mem.set_u32(holder, 0x8000);
+        e.call(0x0040_c110, &args![holder]);
+        e.call(0x0040_c130, &args![0x9000u32]);
+        assert_eq!(calls(&e, WAIT_004019A0), vec![vec![0x8004], vec![0x9004]]);
+    }
+
+    #[test]
+    fn fn_0040c5b0_inits_unless_the_query_answers() {
+        let mut e = Engine::new();
+        e.map(0x0f00_0000, 0x1000);
+        e.register(QUERY_004013E0, |e, _| e.mem.u32(0x0f00_0000).into_ret());
+        e.register(MAGIC_ITEM_INIT_ITEM, |_, _| Ret::default());
+        e.register(FORM_SET_00484AB0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.mem.set_u32(0x0f00_0000, 0x100);
+        e.call(0x0040_c5b0, &args![0x5000u32]);
+        assert_eq!(calls(&e, MAGIC_ITEM_INIT_ITEM), vec![vec![0x5018, 0x5000]]);
+        assert_eq!(calls(&e, FORM_SET_00484AB0), vec![vec![0x5000, 1]]);
+        e.mem.set_u32(0x0f00_0000, 1);
+        e.call(0x0040_c5b0, &args![0x5000u32]);
+        assert_eq!(calls(&e, MAGIC_ITEM_INIT_ITEM).len(), 1);
+    }
+
+    /// Runs `0040c230` on a record of `chunks`; `count` is what the list count answers,
+    /// `flag` the file flag at `+0x299`. Returns the engine and the object.
+    fn run(chunks: Vec<u32>, count: u32, flag: u32) -> (Engine, u32) {
+        let mut e = Engine::new();
+        let position = Rc::new(Cell::new(0usize));
+        let (list, at) = (chunks.clone(), position.clone());
+        e.register_double(GET_TES_CHUNK, move |_, _| {
+            list.get(at.get()).copied().unwrap_or(0).into_ret()
+        });
+        let total = chunks.len();
+        e.register_double(NEXT_CHUNK, move |_, _| {
+            position.set(position.get() + 1);
+            u32::from(position.get() < total).into_ret()
+        });
+        for addr in [
+            TES_FORM_LOAD_FORM,
+            GET_CHUNK_DATA,
+            MEMSET,
+            LOAD_FULL_NAME,
+            EFFECT_ITEM_LIST_LOAD,
+            PRINT,
+            TARGET_LOAD_BOUNDS,
+            TARGET_SET_EDITOR_ID,
+            TARGET_AFTER_LOAD,
+            TARGET_OFFER_CHUNK,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(CHUNK_SIZE, |_, _| 5u32.into_ret());
+        e.register_double(FILE_FLAG_299, move |_, _| flag.into_ret());
+        e.register(FULL_NAME_TEXT, |_, _| 0x5000u32.into_ret());
+        e.register(FORM_ID, |_, _| 0x77u32.into_ret());
+        e.register_double(LIST_COUNT, move |_, _| count.into_ret());
+        e.register(TARGET_OWN_CHUNK_ID, |_, _| OWN_CHUNK.into_ret());
+        e.register(TARGET_OWN_BLOCK, |_, _| 0x9000u32.into_ret());
+        e.register(TARGET_OWN_BLOCK_SIZE, |_, _| 20u32.into_ret());
+        let mut object_table = vec![0u32; 0x61];
+        object_table[0xe0 / 4] = TARGET_LOAD_BOUNDS;
+        object_table[0x134 / 4] = TARGET_SET_EDITOR_ID;
+        object_table[0x138 / 4] = TARGET_AFTER_LOAD;
+        e.put_vtable(OBJECT_TABLE, &object_table);
+        let mut component_table = vec![0u32; 0x11];
+        component_table[0x24 / 4] = TARGET_OWN_CHUNK_ID;
+        component_table[0x28 / 4] = TARGET_OWN_BLOCK;
+        component_table[0x2c / 4] = TARGET_OWN_BLOCK_SIZE;
+        component_table[0x40 / 4] = TARGET_OFFER_CHUNK;
+        e.put_vtable(COMPONENT_TABLE, &component_table);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object, OBJECT_TABLE);
+        e.mem.set_u32(object + 0x18, COMPONENT_TABLE);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0040_c230, &args![object, FILE]).bool());
+        (e, object)
+    }
+
+    #[test]
+    fn fn_0040c230_reads_each_chunk_kind() {
+        let chunks = vec![
+            CHUNK_EDID, CHUNK_FULL, CHUNK_OBND, CHUNK_EFID, CHUNK_CTDA, 7,
+        ];
+        let (e, object) = run(chunks.clone(), 1, 0);
+        let component = object + 0x18;
+        assert_eq!(calls(&e, TES_FORM_LOAD_FORM), vec![vec![object, FILE]]);
+        let data = calls(&e, GET_CHUNK_DATA);
+        assert_eq!((data[0][0], data[0][2]), (FILE, 0x200));
+        assert_eq!(
+            calls(&e, TARGET_SET_EDITOR_ID),
+            vec![vec![object, data[0][1]]]
+        );
+        assert_eq!(calls(&e, LOAD_FULL_NAME), vec![vec![component, FILE]]);
+        assert_eq!(calls(&e, TARGET_LOAD_BOUNDS), vec![vec![object, FILE]]);
+        assert_eq!(
+            calls(&e, EFFECT_ITEM_LIST_LOAD),
+            vec![vec![object + 0x24, FILE, 0x5000]; 2]
+        );
+        let offered: Vec<u32> = calls(&e, TARGET_OFFER_CHUNK).iter().map(|c| c[2]).collect();
+        assert_eq!(offered, chunks);
+        assert!(calls(&e, PRINT).is_empty());
+    }
+
+    #[test]
+    fn fn_0040c230_reads_the_components_own_chunk() {
+        let (e, object) = run(vec![OWN_CHUNK], 1, 1);
+        assert_eq!(calls(&e, MEMSET), vec![vec![0x9000, 0, 20]]);
+        assert_eq!(calls(&e, GET_CHUNK_DATA), vec![vec![FILE, 0x9000, 20]]);
+        assert_eq!(calls(&e, TARGET_AFTER_LOAD), vec![vec![object]]);
+        let (e, _) = run(vec![OWN_CHUNK], 1, 0);
+        assert!(calls(&e, TARGET_AFTER_LOAD).is_empty());
+    }
+
+    #[test]
+    fn fn_0040c230_reports_a_record_without_effects() {
+        let (e, object) = run(vec![], 0, 0);
+        assert_eq!(calls(&e, LIST_COUNT), vec![vec![object + 0x28]]);
+        assert_eq!(
+            calls(&e, PRINT),
             vec![vec![MESSAGE_NO_EFFECTS, 0x77, 0x5000]]
         );
     }

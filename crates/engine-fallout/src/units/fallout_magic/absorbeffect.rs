@@ -45,13 +45,37 @@ pub fn value_modifier_effect_load_game(e: &mut Engine, this: Ptr, argument: Ptr)
     e.call(LOAD_GAME_TARGET_00805330, &args![this, argument]);
 }
 
+// Translated from 00803a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`RET 4`): stores `value` in the `float` at `this + 0x13c` (`FLD`/`FSTP`: a
+/// signalling NaN arrives quiet). The class is unconfirmed.
+pub fn fn_00803a90(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem
+        .set_u32(this.addr() + 0x13c, x87_quiet_bits(value.to_bits()));
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0080_2d90, value_modifier_effect_get_save_size(Ptr, Ptr) -> u16),
         entry!(0x0080_2db0, value_modifier_effect_save_game(Ptr, Ptr)),
         entry!(0x0080_2dd0, value_modifier_effect_load_game(Ptr, Ptr)),
+        entry!(0x0080_3a90, fn_00803a90(Ptr, f32)),
     ]
+}
+
+#[cfg(test)]
+mod b066_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00803a90_stores_the_float_at_0x13c() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x140);
+        e.call(0x0080_3a90, &args![this, 1.25f32]);
+        assert_eq!(e.mem.f32(this + 0x13c), 1.25);
+        e.call(0x0080_3a90, &args![this, 0xff80_0001u32]);
+        assert_eq!(e.mem.u32(this + 0x13c), 0xffc0_0001);
+    }
 }
 
 #[cfg(test)]

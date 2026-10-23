@@ -38,11 +38,59 @@ pub fn fn_00402ea0(e: &mut Engine, this: Ptr) {
     e.call(0x0048_3710, &args![this]);
 }
 
+/// The vtables `fn_00402d50` stores back, by offset.
+const DESTRUCTOR_VTABLES: [(u32, u32); 11] = [
+    (0x00, 0x0101_1964),
+    (0x30, 0x0101_191c),
+    (0x3c, 0x0101_1900),
+    (0x4c, 0x0101_18dc),
+    (0x6c, 0x0101_18bc),
+    (0x78, 0x0101_18a8),
+    (0x88, 0x0101_1894),
+    (0x94, 0x0101_1880),
+    (0x9c, 0x0101_186c),
+    (0xa4, 0x0101_1858),
+    (0xac, 0x0101_1844),
+];
+
+// Translated from 00402d50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00402d50 - the exception-unwinding frame (FS:[0]) is not translated.
+/// Destructor body (the engine map gives it no name; the class is unconfirmed): stores
+/// its eleven vtable pointers back, then runs the member destructors in reverse order:
+/// `fn_00402ef0` on `this`, `00402c40` on `this + 0xcc`, `0047b520` on `+0xac`,
+/// `00475380` on `+0xa4`, `0048eaf0` on `+0x94`, `0047a1a0` on `+0x78`, `00402c40` on
+/// `+0x6c`, `0048a490` on `+0x4c` and the base destructor `00402bc0` on `this`.
+pub fn fn_00402d50(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for (offset, vtable) in DESTRUCTOR_VTABLES {
+        e.mem.set_u32(base + offset, vtable);
+    }
+    fn_00402ef0(e, this);
+    e.call(0x0040_2c40, &args![base + 0xcc]);
+    e.call(0x0047_b520, &args![base + 0xac]);
+    e.call(0x0047_5380, &args![base + 0xa4]);
+    e.call(0x0048_eaf0, &args![base + 0x94]);
+    e.call(0x0047_a1a0, &args![base + 0x78]);
+    e.call(0x0040_2c40, &args![base + 0x6c]);
+    e.call(0x0048_a490, &args![base + 0x4c]);
+    e.call(0x0040_2bc0, &args![this]);
+}
+
+// Translated from 00402ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (Ghidra shows a library-match name): runs `00406340`
+/// (`effectitemlist.cpp`) on `this + 0x3c`, then `00483710` on `this`.
+pub fn fn_00402ef0(e: &mut Engine, this: Ptr) {
+    e.call(0x0040_6340, &args![this.addr() + 0x3c]);
+    e.call(0x0048_3710, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00402d00, fn_00402d00(Ptr) -> Ptr),
         entry!(0x00402ea0, fn_00402ea0(Ptr)),
+        entry!(0x0040_2d50, fn_00402d50(Ptr)),
+        entry!(0x0040_2ef0, fn_00402ef0(Ptr)),
     ]
 }
 
@@ -90,5 +138,70 @@ mod start_value_tests {
         expected[0xbc] = 0;
         expected[0xc0..0xcc].fill(0);
         assert_eq!(e.mem.bytes(this, 0xcc), expected);
+    }
+}
+
+#[cfg(test)]
+mod destructor_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00402d50_restores_vtables_and_destroys_members() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xd0);
+        for callee in [
+            0x0040_6340u32,
+            0x0048_3710,
+            0x0040_2c40,
+            0x0047_b520,
+            0x0047_5380,
+            0x0048_eaf0,
+            0x0047_a1a0,
+            0x0048_a490,
+            0x0040_2bc0,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0040_2d50, &args![this]);
+        let log: Vec<(u32, Vec<u32>)> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.0 != 0x0040_2d50)
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                (0x0040_6340, vec![this + 0x3c]),
+                (0x0048_3710, vec![this]),
+                (0x0040_2c40, vec![this + 0xcc]),
+                (0x0047_b520, vec![this + 0xac]),
+                (0x0047_5380, vec![this + 0xa4]),
+                (0x0048_eaf0, vec![this + 0x94]),
+                (0x0047_a1a0, vec![this + 0x78]),
+                (0x0040_2c40, vec![this + 0x6c]),
+                (0x0048_a490, vec![this + 0x4c]),
+                (0x0040_2bc0, vec![this]),
+            ]
+        );
+        for (offset, vtable) in DESTRUCTOR_VTABLES {
+            assert_eq!(e.mem.u32(this + offset), vtable);
+        }
+    }
+
+    #[test]
+    fn fn_00402ef0_destroys_the_list_then_the_base() {
+        let mut e = Engine::new();
+        e.register(0x0040_6340, |_, _| Ret::default());
+        e.register(0x0048_3710, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0040_2ef0, &args![0x7000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..],
+            [(0x0040_6340, vec![0x703c]), (0x0048_3710, vec![0x7000])]
+        );
     }
 }

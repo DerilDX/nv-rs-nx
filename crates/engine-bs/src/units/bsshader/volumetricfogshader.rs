@@ -68,6 +68,54 @@ pub fn volumetric_fog_shader_volumetric_fog_shader(e: &mut Engine, this: Ptr) ->
     this
 }
 
+/// `eh vector destructor iterator` (`00ec5fce`, `stdcall`: array, element size, count,
+/// destructor; `RET 0x10`).
+const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
+/// `BSShader::~BSShader` (engine map, `00be0f10`, `thiscall`, no stack words).
+const BS_SHADER_DESTRUCT: u32 = 0x00be_0f10;
+/// The sized Ni free `00aa1460` (`cdecl`: block, size).
+const NI_DELETE: u32 = 0x00aa_1460;
+
+// Translated from 00bc5320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `volumetricfogshader.cpp`; `thiscall`, no stack words): the
+/// volumetric fog shader's destructor body. Stores the vtable `010baf60`, releases and clears
+/// the two `NiPointer`s at +0x78 and the two at +0x80 (each when set), runs the
+/// `eh vector destructor iterator` on the arrays at +0x80 (2, `00b66f20`), +0x78 (2,
+/// `00b66f20`) and +0x6c (3, `00b79930`), then `BSShader::~BSShader`.
+// Translation incomplete: 00bc5320 - the C++ exception frame (FS:[0] chain, unwind states 3 to 0 for the arrays and the base) is not translated.
+pub fn fn_00bc5320(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, VOLUMETRIC_FOG_VTABLE_010BAF60);
+    for offset in [0x78u32, 0x7c, 0x80, 0x84] {
+        ni_pointer_clear(e, base + offset);
+    }
+    e.call(
+        VECTOR_DESTRUCT,
+        &args![base + 0x80, 4u32, 2u32, DESTRUCT_00B66F20],
+    );
+    e.call(
+        VECTOR_DESTRUCT,
+        &args![base + 0x78, 4u32, 2u32, DESTRUCT_00B66F20],
+    );
+    e.call(
+        VECTOR_DESTRUCT,
+        &args![base + 0x6c, 4u32, 3u32, DESTRUCT_00B79930],
+    );
+    e.call(BS_SHADER_DESTRUCT, &args![this]);
+}
+
+// Translated from 00bc5980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `volumetricfogshader.cpp`; `thiscall`, one stack word,
+/// `RET 4`): the scalar deleting destructor. Runs the destructor body ([`fn_00bc5320`]), then
+/// frees the 0xa8 bytes of `this` when bit 0 of `flags` is set. Answers `this`.
+pub fn fn_00bc5980(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00bc5320(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_DELETE, &args![this, 0xa8u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -76,6 +124,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00bc_59b0,
             volumetric_fog_shader_create_shader() -> Ptr
         ),
+        entry!(0x00bc_5320, fn_00bc5320(Ptr)),
+        entry!(0x00bc_5980, fn_00bc5980(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -133,5 +183,63 @@ mod constructor_tests {
             assert_eq!(e.mem.u32(this + offset), 0, "{offset:#x}");
         }
         assert_eq!(e.mem.u32(this + 0x68), 0x13);
+    }
+}
+
+#[cfg(test)]
+mod destructor_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    #[test]
+    fn fn_00bc5320_releases_the_pointers_then_destroys_the_arrays_and_base() {
+        let mut e = rig();
+        e.register(VECTOR_DESTRUCT, |_, _| Ret::default());
+        e.register(BS_SHADER_DESTRUCT, |_, _| Ret::default());
+        let this = e.mem.alloc(0xa8);
+        let last = object(&mut e, 1);
+        let kept = object(&mut e, 2);
+        e.mem.set_u32(this + 0x78, last);
+        e.mem.set_u32(this + 0x84, kept);
+        e.call_log = Some(vec![]);
+        e.call(0x00bc_5320, &args![this]);
+        assert_eq!(e.mem.u32(this), VOLUMETRIC_FOG_VTABLE_010BAF60);
+        for offset in [0x78u32, 0x7c, 0x80, 0x84] {
+            assert_eq!(e.mem.u32(this + offset), 0, "{offset:#x}");
+        }
+        assert_eq!(
+            calls(&e, IMPORT_INTERLOCKED_DECREMENT),
+            vec![vec![last + 4], vec![kept + 4]]
+        );
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![last]]);
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCT),
+            vec![
+                vec![this + 0x80, 4, 2, DESTRUCT_00B66F20],
+                vec![this + 0x78, 4, 2, DESTRUCT_00B66F20],
+                vec![this + 0x6c, 4, 3, DESTRUCT_00B79930],
+            ]
+        );
+        assert_eq!(calls(&e, BS_SHADER_DESTRUCT), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_00bc5980_destructs_then_frees_on_bit_zero() {
+        for (flags, frees) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            let mut e = rig();
+            e.register(VECTOR_DESTRUCT, |_, _| Ret::default());
+            e.register(BS_SHADER_DESTRUCT, |_, _| Ret::default());
+            e.register(NI_DELETE, |_, _| Ret::default());
+            let this = e.mem.alloc(0xa8);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x00bc_5980, &args![this, flags]).u32(), this);
+            assert_eq!(calls(&e, BS_SHADER_DESTRUCT), vec![vec![this]]);
+            let expected = if frees {
+                vec![vec![this, 0xa8]]
+            } else {
+                vec![]
+            };
+            assert_eq!(calls(&e, NI_DELETE), expected);
+        }
     }
 }

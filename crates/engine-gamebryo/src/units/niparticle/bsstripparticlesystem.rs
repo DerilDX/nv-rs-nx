@@ -68,10 +68,39 @@ pub fn b_s_strip_particle_system_get_r_t_t_i(_e: &mut Engine) -> u32 {
     0x0120_2560
 }
 
+/// `NiTPointerListBase<..., NiPointer<NiPSysModifier>>::RemoveAll` (engine map, `00e74d40`,
+/// `thiscall` on the list, no stack words).
+const MODIFIER_LIST_REMOVE_ALL: u32 = 0x00e7_4d40;
+/// `NiGeometry::~NiGeometry` (engine map, `00a80580`, `thiscall`, no stack words).
+const GEOMETRY_DESTRUCT: u32 = 0x00a8_0580;
+/// The sized Ni free `00aa1460` (`cdecl`: block, size).
+const NI_DELETE: u32 = 0x00aa_1460;
+
+// Translated from 00c1b9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSStripParticleSystem::_scalar_deleting_destructor_` (engine map): `thiscall`, one stack
+/// word, `RET 4`. Empties the modifier list at +0xc8, runs `NiGeometry::~NiGeometry`, then
+/// frees the 0x110 bytes of `this` when bit 0 of `flags` is set. Answers `this`.
+pub fn bs_strip_particle_system_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(MODIFIER_LIST_REMOVE_ALL, &args![this.byte_add(0xc8)]);
+    e.call(GEOMETRY_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_DELETE, &args![this, 0x110u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00c257c0, b_s_strip_particle_system_get_r_t_t_i() -> u32),
+        entry!(
+            0x00c1_b9b0,
+            bs_strip_particle_system_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(0x00c2_1940, bs_strip_particle_system_register_streamables(Ptr, Ptr) -> bool),
         entry!(0x00c2_1950, bs_strip_particle_system_is_equal(Ptr, Ptr) -> bool),
         entry!(0x00c2_56f0, bs_strip_particle_system_on_visible(Ptr, Ptr)),
@@ -183,5 +212,34 @@ mod tests {
     fn b_s_strip_particle_system_get_r_t_t_i_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c2_57c0, &args![]).u32(), 0x0120_2560);
+    }
+}
+
+#[cfg(test)]
+mod destructor_tests {
+    use super::*;
+
+    #[test]
+    fn scalar_deleting_destructor_empties_the_list_destructs_and_frees_on_bit_zero() {
+        for (flags, frees) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            let mut e = Engine::new();
+            e.register(MODIFIER_LIST_REMOVE_ALL, |_, _| Ret::default());
+            e.register(GEOMETRY_DESTRUCT, |_, _| Ret::default());
+            e.register(NI_DELETE, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                e.call(0x00c1_b9b0, &args![0x0e00_3000u32, flags]).u32(),
+                0x0e00_3000
+            );
+            let log = e.call_log.take().unwrap();
+            let mut expected = vec![
+                (MODIFIER_LIST_REMOVE_ALL, vec![0x0e00_30c8]),
+                (GEOMETRY_DESTRUCT, vec![0x0e00_3000]),
+            ];
+            if frees {
+                expected.push((NI_DELETE, vec![0x0e00_3000, 0x110]));
+            }
+            assert_eq!(log[1..].to_vec(), expected);
+        }
     }
 }

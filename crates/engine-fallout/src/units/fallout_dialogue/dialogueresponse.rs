@@ -14,9 +14,291 @@ pub fn fn_0083d890(e: &mut Engine, this: Ptr) -> u32 {
     e.call(0x0040_48e0, &args![this]).u32()
 }
 
+layout! {
+    /// `DialogueResponse` (Xbox PDB), 0x2c bytes (the PC code allocates 0x2c).
+    pub struct DialogueResponse: 0x2c {
+        /// `cText` (Xbox PDB): a `BSStringT<char>`.
+        0x00 cText: Inline<crate::types::BSStringT>,
+        /// `eEmotion` (Xbox PDB).
+        0x08 eEmotion: u32,
+        /// `uiEmotion` (Xbox PDB).
+        0x0C uiEmotion: u32,
+        /// `cVoice` (Xbox PDB): a `BSStringT<char>`.
+        0x10 cVoice: Inline<crate::types::BSStringT>,
+        /// `pSpeakerIdle` (Xbox PDB): `TESIdleForm*`.
+        0x18 pSpeakerIdle: u32,
+        /// `pListenIdle` (Xbox PDB): `TESIdleForm*`.
+        0x1C pListenIdle: u32,
+        /// `pVoiceSound` (Xbox PDB): `TESSound*`.
+        0x20 pVoiceSound: u32,
+        /// `bUseEmotion` (Xbox PDB).
+        0x24 bUseEmotion: u8,
+        /// `nResponseID` (Xbox PDB).
+        0x28 nResponseID: u32,
+    }
+}
+
+/// The `BSStringT<char>` constructor `004037b0`, `Set` from a C string `004037f0`
+/// (`thiscall`, two words), `BSStringT<char>::Set` from a string `00438470` (`thiscall`,
+/// one word) and the destructor `004037d0`.
+const STRING_CONSTRUCTOR: u32 = 0x0040_37b0;
+const STRING_SET_TEXT: u32 = 0x0040_37f0;
+const STRING_SET: u32 = 0x0043_8470;
+const STRING_DESTRUCTOR: u32 = 0x0040_37d0;
+/// `TESResponse::GetResponseText` (engine map, `00616de0`, `thiscall`).
+const GET_RESPONSE_TEXT: u32 = 0x0061_6de0;
+/// `0083d8b0` (`thiscall`, one word: the string to fill): the text as shown.
+const DISPLAY_STRING_0083D8B0: u32 = 0x0083_d8b0;
+/// Getters of the response record (`thiscall`): `00559450` (+0, the emotion), `00726070`
+/// (+4, the emotion value), `BGSSaveFormBuffer::GetForm` (`007af430`), `0059bb30`,
+/// `BaseProcess::GetCurrentProcedureIndex` (`0044edb0`) and `00843150` (folded getters as
+/// the engine map names them), `006174b0`.
+const RECORD_WORD_0: u32 = 0x0055_9450;
+const RECORD_WORD_4: u32 = 0x0072_6070;
+const RECORD_SPEAKER_IDLE_007AF430: u32 = 0x007a_f430;
+const RECORD_LISTEN_IDLE_0059BB30: u32 = 0x0059_bb30;
+const RECORD_SOUND_0044EDB0: u32 = 0x0044_edb0;
+const RECORD_USE_EMOTION_00843150: u32 = 0x0084_3150;
+const RECORD_ID_006174B0: u32 = 0x0061_74b0;
+/// `TESTopic::GetOwnerTopic` (engine map, `0061a310`, `cdecl`, one word).
+const GET_OWNER_TOPIC: u32 = 0x0061_a310;
+/// `00616f40` (`tesresponse.cpp`, `thiscall`, five words): fills the voice file name.
+const VOICE_FILE_NAME_00616F40: u32 = 0x0061_6f40;
+/// `BGSSaveGameBuffer::SaveString` (`00865e70`, two words), the raw write `00865e50`
+/// (three words: address, size, 0) and `SaveFormID_ov2` (`00865df0`, two words).
+const SAVE_STRING: u32 = 0x0086_5e70;
+const SAVE_DATA: u32 = 0x0086_5e50;
+const SAVE_FORM_ID: u32 = 0x0086_5df0;
+
+// Translated from 0083d280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `DialogueResponse` constructor (unnamed in the engine map; `DialogueItem`'s
+/// constructor calls it on 0x2c-byte blocks; `thiscall`, `RET 0x14`: quest, an unread
+/// word, info, speaker, the response record). Constructs `cText` and `cVoice`. Without a
+/// record it clears the idles, emotion, sound and id and sets `bUseEmotion`. With one:
+/// `cText` is set from the record's text (`TESResponse::GetResponseText` into a stack
+/// string, `0083d8b0` into a second one, `BSStringT::Set`), the emotion from its words +0
+/// and +4, `cVoice` from `00616f40` (speaker, quest, the info's owner topic, info), and the
+/// idles, sound, `bUseEmotion` and `nResponseID` from the record's getters. Returns `this`.
+///
+/// The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 0083d280 - the FS:[0] exception frame (unwinding on a throw) is not translated
+pub fn dialogue_response_constructor(
+    e: &mut Engine,
+    this: Ptr<DialogueResponse>,
+    quest: u32,
+    _unused_2: u32,
+    info: u32,
+    speaker: u32,
+    record: u32,
+) -> Ptr<DialogueResponse> {
+    let text = this.at(DialogueResponse::cText).addr();
+    let voice = this.at(DialogueResponse::cVoice).addr();
+    e.call(STRING_CONSTRUCTOR, &args![text]);
+    e.call(STRING_CONSTRUCTOR, &args![voice]);
+    if record == 0 {
+        e.set(this, DialogueResponse::pSpeakerIdle, 0);
+        e.set(this, DialogueResponse::pListenIdle, 0);
+        e.set(this, DialogueResponse::eEmotion, 0);
+        e.set(this, DialogueResponse::uiEmotion, 0);
+        e.set(this, DialogueResponse::pVoiceSound, 0);
+        e.set(this, DialogueResponse::bUseEmotion, 1);
+        e.set(this, DialogueResponse::nResponseID, 0);
+        return this;
+    }
+    e.with_stack(0x10, |e, locals| {
+        let shown = locals.addr();
+        let raw = shown + 8;
+        e.call(STRING_CONSTRUCTOR, &args![raw]);
+        let response_text = e.call(GET_RESPONSE_TEXT, &args![record]).u32();
+        e.call(STRING_SET_TEXT, &args![raw, response_text, 0u32]);
+        let shown = e.call(DISPLAY_STRING_0083D8B0, &args![raw, shown]).u32();
+        e.call(STRING_SET, &args![text, shown]);
+        e.call(STRING_DESTRUCTOR, &args![locals]);
+        let emotion = e.call(RECORD_WORD_0, &args![record]).u32();
+        e.set(this, DialogueResponse::eEmotion, emotion);
+        let value = e.call(RECORD_WORD_4, &args![record]).u32();
+        e.set(this, DialogueResponse::uiEmotion, value);
+        let owner = e.call(GET_OWNER_TOPIC, &args![info]).u32();
+        e.call(
+            VOICE_FILE_NAME_00616F40,
+            &args![record, speaker, quest, owner, info, voice],
+        );
+        let idle = e.call(RECORD_SPEAKER_IDLE_007AF430, &args![record]).u32();
+        e.set(this, DialogueResponse::pSpeakerIdle, idle);
+        let idle = e.call(RECORD_LISTEN_IDLE_0059BB30, &args![record]).u32();
+        e.set(this, DialogueResponse::pListenIdle, idle);
+        let sound = e.call(RECORD_SOUND_0044EDB0, &args![record]).u32();
+        e.set(this, DialogueResponse::pVoiceSound, sound);
+        let use_emotion = e.call(RECORD_USE_EMOTION_00843150, &args![record]).u8();
+        e.set(this, DialogueResponse::bUseEmotion, use_emotion);
+        let id = e.call(RECORD_ID_006174B0, &args![record]).u32();
+        e.set(this, DialogueResponse::nResponseID, id);
+        e.call(STRING_DESTRUCTOR, &args![raw]);
+    });
+    this
+}
+
+// Translated from 0083d690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DialogueResponse::SaveGame` (engine map; `thiscall`, `RET 4`: the save buffer): saves
+/// `cText` and `cVoice` (their character pointers, `SaveString` with 0), `eEmotion` and
+/// `uiEmotion` (4 bytes each), `bUseEmotion` (1 byte), and the form ids of the two idles
+/// and the voice sound.
+pub fn dialogue_response_save_game(e: &mut Engine, this: Ptr<DialogueResponse>, buffer: u32) {
+    for string in [0u32, 0x10] {
+        let chars = e.call(RECORD_WORD_0, &args![this.addr() + string]).u32();
+        e.call(SAVE_STRING, &args![buffer, chars, 0u32]);
+    }
+    for (offset, size) in [(8u32, 4u32), (0xc, 4), (0x24, 1)] {
+        e.call(SAVE_DATA, &args![buffer, this.addr() + offset, size, 0u32]);
+    }
+    for field in [
+        DialogueResponse::pSpeakerIdle,
+        DialogueResponse::pListenIdle,
+        DialogueResponse::pVoiceSound,
+    ] {
+        let form = e.get(this, field);
+        e.call(SAVE_FORM_ID, &args![buffer, form, 0u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0083_d890, fn_0083d890(Ptr) -> u32)]
+    vec![
+        entry!(0x0083_d890, fn_0083d890(Ptr) -> u32),
+        entry!(
+            0x0083_d280,
+            dialogue_response_constructor(
+                Ptr<DialogueResponse>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> Ptr<DialogueResponse>
+        ),
+        entry!(
+            0x0083_d690,
+            dialogue_response_save_game(Ptr<DialogueResponse>, u32)
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+
+    fn called(e: &Engine, target: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == target)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for address in [
+            STRING_CONSTRUCTOR,
+            STRING_SET_TEXT,
+            STRING_SET,
+            STRING_DESTRUCTOR,
+            VOICE_FILE_NAME_00616F40,
+            SAVE_STRING,
+            SAVE_DATA,
+            SAVE_FORM_ID,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(GET_RESPONSE_TEXT, |_, _| 0x7e47u32.into_ret());
+        e.register(DISPLAY_STRING_0083D8B0, |_, a| a[1].into_ret());
+        e.register(RECORD_WORD_0, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(RECORD_WORD_4, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(RECORD_SPEAKER_IDLE_007AF430, |_, _| 0x1801u32.into_ret());
+        e.register(RECORD_LISTEN_IDLE_0059BB30, |_, _| 0x1c01u32.into_ret());
+        e.register(RECORD_SOUND_0044EDB0, |_, _| 0x2001u32.into_ret());
+        e.register(RECORD_USE_EMOTION_00843150, |_, _| 0x100u32.into_ret());
+        e.register(RECORD_ID_006174B0, |_, _| 0x2801u32.into_ret());
+        e.register(GET_OWNER_TOPIC, |_, a| (a[0] + 1).into_ret());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    #[test]
+    fn constructor_without_a_record_clears_the_fields() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x2c);
+        e.mem.write(this, &[0xee; 0x2c]);
+        assert_eq!(e.call(0x0083_d280, &[this, 1, 2, 3, 4, 0]).u32(), this);
+        assert_eq!(
+            called(&e, STRING_CONSTRUCTOR),
+            vec![vec![this], vec![this + 0x10]]
+        );
+        for offset in [8u32, 0xc, 0x18, 0x1c, 0x20, 0x28] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        assert_eq!(e.mem.u8(this + 0x24), 1);
+        assert!(called(&e, GET_RESPONSE_TEXT).is_empty());
+    }
+
+    #[test]
+    fn constructor_reads_the_record() {
+        let mut e = engine();
+        let record = e.mem.alloc(8);
+        e.mem.set_u32(record, 5);
+        e.mem.set_u32(record + 4, 50);
+        let this = e.mem.alloc(0x2c);
+        e.call(0x0083_d280, &[this, 0x51, 0x52, 0x53, 0x54, record]);
+        let set_text = called(&e, STRING_SET_TEXT);
+        assert_eq!(set_text[0][1..], [0x7e47, 0]);
+        let raw = set_text[0][0];
+        let shown = called(&e, DISPLAY_STRING_0083D8B0);
+        assert_eq!(shown[0][0], raw);
+        assert_eq!(called(&e, STRING_SET), vec![vec![this, shown[0][1]]]);
+        assert_eq!(
+            called(&e, STRING_DESTRUCTOR),
+            vec![vec![shown[0][1]], vec![raw]]
+        );
+        assert_eq!(
+            called(&e, VOICE_FILE_NAME_00616F40),
+            vec![vec![record, 0x54, 0x51, 0x54, 0x53, this + 0x10]]
+        );
+        assert_eq!(called(&e, GET_OWNER_TOPIC), vec![vec![0x53]]);
+        assert_eq!(e.mem.u32(this + 8), 5);
+        assert_eq!(e.mem.u32(this + 0xc), 50);
+        assert_eq!(e.mem.u32(this + 0x18), 0x1801);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x1c01);
+        assert_eq!(e.mem.u32(this + 0x20), 0x2001);
+        assert_eq!(e.mem.u8(this + 0x24), 0);
+        assert_eq!(e.mem.u32(this + 0x28), 0x2801);
+    }
+
+    #[test]
+    fn save_game_writes_strings_emotion_and_forms() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x2c);
+        e.mem.set_u32(this, 0x7e47);
+        e.mem.set_u32(this + 0x10, 0x5010);
+        e.mem.set_u32(this + 0x18, 0x18);
+        e.mem.set_u32(this + 0x1c, 0x1c);
+        e.mem.set_u32(this + 0x20, 0x20);
+        e.call(0x0083_d690, &[this, 0xb0]);
+        assert_eq!(
+            called(&e, SAVE_STRING),
+            vec![vec![0xb0, 0x7e47, 0], vec![0xb0, 0x5010, 0]]
+        );
+        assert_eq!(
+            called(&e, SAVE_DATA),
+            vec![
+                vec![0xb0, this + 8, 4, 0],
+                vec![0xb0, this + 0xc, 4, 0],
+                vec![0xb0, this + 0x24, 1, 0]
+            ]
+        );
+        let forms: Vec<u32> = called(&e, SAVE_FORM_ID).iter().map(|w| w[1]).collect();
+        assert_eq!(forms, vec![0x18, 0x1c, 0x20]);
+    }
 }
 
 #[cfg(test)]

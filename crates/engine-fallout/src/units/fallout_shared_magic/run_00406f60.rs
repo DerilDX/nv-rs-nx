@@ -130,7 +130,40 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00407000, fn_00407000(Ptr, Ptr, Ptr) -> u32),
         entry!(0x0040_7020, fn_00407020(Ptr) -> Ptr),
         entry!(0x0040_7200, fn_00407200(Ptr, u32) -> Ptr),
+        entry!(0x0040_7230, fn_00407230(Ptr)),
     ]
+}
+
+/// The destructor steps of `fn_00407230`, in the exe's order, with the offset of `this` each
+/// runs on (all `thiscall`, no stack words): `00483710` (unit `tesform.cpp`), the chained
+/// container's `0046ffb0`, `00402c40`, `00591300`, `00489070` (unit
+/// `tesmodel.cpp`) and `TESForm::~TESForm` (`00483630`).
+const EFFECT_SETTING_DESTRUCT_STEPS: [(u32, u32); 6] = [
+    (0x0048_3710, 0),
+    (0x0046_ffb0, 0xa0),
+    (0x0040_2c40, 0x44),
+    (0x0059_1300, 0x38),
+    (0x0048_9070, 0x18),
+    (0x0048_3630, 0),
+];
+
+// Translated from 00407230 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00407230 - the C++ exception frame (FS:[0] chain, unwind states 4 to 0 for the members and the base) is not translated.
+/// Unnamed in the engine map (`thiscall`, no stack words): the destructor body of
+/// `EffectSetting` (the RTTI name of the vtable `01012834` it stores at +0, as the
+/// constructor [`fn_00407020`] does). Stores the five vtables the constructor stores (+0,
+/// +0x18, +0x30, +0x38, +0x44), then runs `00483710` on `this`, the member destructors on
+/// +0xa0, +0x44, +0x38 and +0x18 and `TESForm::~TESForm` on `this`.
+pub fn fn_00407230(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0101_2834);
+    e.mem.set_u32(base + 0x18, 0x0101_280c);
+    e.mem.set_u32(base + 0x30, 0x0101_27f4);
+    e.mem.set_u32(base + 0x38, 0x0101_27e0);
+    e.mem.set_u32(base + 0x44, 0x0101_27c0);
+    for (step, offset) in EFFECT_SETTING_DESTRUCT_STEPS {
+        e.call(step, &args![base + offset]);
+    }
 }
 
 #[cfg(test)]
@@ -278,5 +311,42 @@ mod ctor_tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod destructor_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00407230_stores_the_vtables_then_runs_the_member_destructors() {
+        let mut e = Engine::new();
+        for (step, _) in EFFECT_SETTING_DESTRUCT_STEPS {
+            e.register(step, |_, _| Ret::default());
+        }
+        let this = e.mem.alloc(0xb0);
+        e.call_log = Some(vec![]);
+        e.call(0x0040_7230, &args![this]);
+        for (offset, vtable) in [
+            (0u32, 0x0101_2834u32),
+            (0x18, 0x0101_280c),
+            (0x30, 0x0101_27f4),
+            (0x38, 0x0101_27e0),
+            (0x44, 0x0101_27c0),
+        ] {
+            assert_eq!(e.mem.u32(this + offset), vtable, "{offset:#x}");
+        }
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (0x0048_3710, vec![this]),
+                (0x0046_ffb0, vec![this + 0xa0]),
+                (0x0040_2c40, vec![this + 0x44]),
+                (0x0059_1300, vec![this + 0x38]),
+                (0x0048_9070, vec![this + 0x18]),
+                (0x0048_3630, vec![this]),
+            ]
+        );
     }
 }

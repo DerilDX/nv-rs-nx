@@ -78,9 +78,136 @@ pub fn fn_00ba15e0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+use crate::units::bsshader::geometrydecalshader::shader_inline::{MEMORY_ALLOCATE, MEMORY_MANAGER};
+
+/// `ImageSpaceTexture::GetTexture` (`00ba3780`), `::ReturnRenderedTexture` (`00ba39a0`) and
+/// the destructor (`00ba3a00`) (unit `imagespacetexture.cpp`, `thiscall`).
+const TEXTURE_GET_TEXTURE_00BA3780: u32 = 0x00ba_3780;
+const TEXTURE_RETURN_RENDERED_00BA39A0: u32 = 0x00ba_39a0;
+const TEXTURE_DESTRUCT_00BA3A00: u32 = 0x00ba_3a00;
+
+// Translated from 00ba1250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceEffectWaterFFT::FreeUpTextureMemory` (Xbox PDB), `thiscall`, no stack words: each
+/// of the effect's textures at +0x78, +0x88, +0x58, +0x68 and +0x98 (in that order) that has a
+/// texture is returned to the texture manager (`ReturnRenderedTexture`); then the byte +0xb8
+/// is cleared.
+pub fn image_space_effect_water_fft_free_up_texture_memory(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    for offset in [0x78u32, 0x88, 0x58, 0x68, 0x98] {
+        let holder = base + offset;
+        if e.call(TEXTURE_GET_TEXTURE_00BA3780, &args![holder]).u32() != 0 {
+            e.call(TEXTURE_RETURN_RENDERED_00BA39A0, &args![holder]);
+        }
+    }
+    e.mem.set_u8(base + 0xb8, 0);
+}
+
+/// The array setter `00ba3aa0` (`thiscall` on an `NiTPrimitiveArray`: index, the address of
+/// the word), `ImageSpaceEffect::~ImageSpaceEffect` (engine map, `00ba3d30`) and
+/// `MemoryManager::Deallocate` (`00aa4060`, `thiscall` on the manager, one word).
+const ARRAY_SET_AT_00BA3AA0: u32 = 0x00ba_3aa0;
+const EFFECT_DESTRUCT_00BA3D30: u32 = 0x00ba_3d30;
+const MEMORY_DEALLOCATE_00AA4060: u32 = 0x00aa_4060;
+
+/// Element `index` of the `NiTPrimitiveArray` at `array` set to `value` through `00ba3aa0`
+/// (the word in a local).
+fn set_at(e: &mut Engine, array: u32, index: u32, value: u32) {
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), value);
+        e.call(ARRAY_SET_AT_00BA3AA0, &args![array, index, local.addr()]);
+    });
+}
+
+// Translated from 00ba12d0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ba12d0 - the C++ exception frame (FS:[0] chain, unwind states 5 to 0 for the textures and the base) is not translated.
+/// Unnamed in the engine map (unit `imagespaceeffectwaterfft.cpp`): the water FFT effect's
+/// destructor, `thiscall`, no stack words. Stores the vtable `010b7f10`; each of the 12 effect
+/// parameters (+0x1c elements) that is set is deleted through its slot +0 with 1 (the element
+/// tested twice) and its element set to null; the textures at +0x98, +0x88, +0x78, +0x68 and
+/// +0x58 are destroyed; then `ImageSpaceEffect::~ImageSpaceEffect`.
+pub fn fn_00ba12d0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, VTABLE_010B7F10);
+    for index in 0..0xcu32 {
+        let element = e.mem.u32(base + 0x1c).wrapping_add(4 * index);
+        if e.mem.u32(element) != 0 {
+            let param = e.mem.u32(element);
+            if param != 0 {
+                e.vcall(param, 0, &args![1u32]);
+            }
+            set_at(e, base + 0x18, index, 0);
+        }
+    }
+    for offset in [0x98u32, 0x88, 0x78, 0x68, 0x58] {
+        e.call(TEXTURE_DESTRUCT_00BA3A00, &args![base + offset]);
+    }
+    e.call(EFFECT_DESTRUCT_00BA3D30, &args![base]);
+}
+
+// Translated from 00ba1750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `imagespaceeffectwaterfft.cpp`): the water FFT effect's
+/// scalar deleting destructor, `thiscall`, one word: `00ba12d0`, then the memory freed when
+/// bit 0 of `flags` is set. Answers `this`.
+pub fn fn_00ba1750(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00ba12d0(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_DEALLOCATE_00AA4060, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
+/// The effect-array sizer `00ba3f90` (unnamed; `thiscall`, one word),
+/// `ImageSpaceShaderParam`'s constructor (`00b8a9e0`) and `InitConstantMap` (`00b8ab10`, two
+/// words), and the effect setter `00ba3c70` (unit `run_00ba3aa0`).
+const SIZE_ARRAYS_00BA3F90: u32 = 0x00ba_3f90;
+const PARAM_CONSTRUCT_00B8A9E0: u32 = 0x00b8_a9e0;
+const PARAM_INIT_CONSTANT_MAP_00B8AB10: u32 = 0x00b8_ab10;
+const SET_EFFECT_00BA3C70: u32 = 0x00ba_3c70;
+
+// Translated from 00ba1770 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ba1770 - the C++ exception frame (FS:[0] chain, unwind states 0 to 6 for the parameter allocations) is not translated.
+/// Unnamed in the engine map (unit `imagespaceeffectwaterfft.cpp`): the water FFT effect's
+/// `Setup` slot, `thiscall`, two words (the manager; a word it does not read). Sizes the
+/// arrays to 12 (`00ba3f90`) and `pTextures` to 10; then seven parameters (0x88 bytes each
+/// from the memory manager; the constructor only on a block) with `InitConstantMap(2, 3)` and
+/// the byte +0x55 cleared, parameter `i` stored at `i` and given with the manager's effect at
+/// +0x174 + 4 `i` to effect `i` (output 0).
+pub fn fn_00ba1770(e: &mut Engine, this: Ptr, manager: u32, _unused_1: u32) {
+    let base = this.addr();
+    e.call(SIZE_ARRAYS_00BA3F90, &args![base, 0xcu32]);
+    e.call(ARRAY_SET_SIZE_00A90180, &args![base + 0x28, 0xau32]);
+    for index in 0..7u32 {
+        let block = e
+            .call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 0x88u32])
+            .u32();
+        let param = if block != 0 {
+            e.call(PARAM_CONSTRUCT_00B8A9E0, &args![block]).u32()
+        } else {
+            0
+        };
+        e.call(PARAM_INIT_CONSTANT_MAP_00B8AB10, &args![param, 2u32, 3u32]);
+        e.mem.set_u8(param + 0x55, 0);
+        set_at(e, base + 0x18, index, param);
+        let effect = e.mem.u32(e.mem.u32(manager + 8) + 0x174 + 4 * index);
+        e.call(
+            SET_EFFECT_00BA3C70,
+            &args![base, index, effect, param, 0u32],
+        );
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00ba_15e0, fn_00ba15e0(Ptr) -> Ptr)]
+    vec![
+        entry!(0x00ba_15e0, fn_00ba15e0(Ptr) -> Ptr),
+        entry!(
+            0x00ba_1250,
+            image_space_effect_water_fft_free_up_texture_memory(Ptr)
+        ),
+        entry!(0x00ba_12d0, fn_00ba12d0(Ptr)),
+        entry!(0x00ba_1750, fn_00ba1750(Ptr, u32) -> Ptr),
+        entry!(0x00ba_1770, fn_00ba1770(Ptr, u32, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -134,6 +261,135 @@ mod tests {
                 (ARRAY_SET_SIZE_00A90180, vec![this + 0x28, 10]),
             ]
         );
+    }
+
+    #[test]
+    fn fn_00ba1250_returns_the_held_textures() {
+        let mut e = Engine::new();
+        e.register(TEXTURE_GET_TEXTURE_00BA3780, |e, a| {
+            e.mem.u32(a[0] + 4).into_ret()
+        });
+        e.register(TEXTURE_RETURN_RENDERED_00BA39A0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0xbc);
+        for offset in [0x88u32, 0x58] {
+            e.mem.set_u32(this + offset + 4, 0x77);
+        }
+        e.mem.set_u8(this + 0xb8, 1);
+        e.call(0x00ba_1250, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let asked: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == TEXTURE_GET_TEXTURE_00BA3780)
+            .map(|c| c.1[0] - this)
+            .collect();
+        assert_eq!(asked, vec![0x78, 0x88, 0x58, 0x68, 0x98]);
+        let returned: Vec<u32> = log
+            .iter()
+            .filter(|c| c.0 == TEXTURE_RETURN_RENDERED_00BA39A0)
+            .map(|c| c.1[0] - this)
+            .collect();
+        assert_eq!(returned, vec![0x88, 0x58]);
+        assert_eq!(e.mem.u8(this + 0xb8), 0);
+    }
+
+    #[test]
+    fn fn_00ba12d0_and_00ba1750_delete_the_parameters_and_textures() {
+        let mut e = Engine::new();
+        for callee in [
+            ARRAY_SET_AT_00BA3AA0,
+            EFFECT_DESTRUCT_00BA3D30,
+            MEMORY_DEALLOCATE_00AA4060,
+            TEXTURE_DESTRUCT_00BA3A00,
+            0x0e6e_0000,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.put_vtable(0x0e6f_0000, &[0x0e6e_0000]);
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0xbc);
+        let list = e.mem.alloc(0x30);
+        let param = e.mem.alloc(8);
+        e.mem.set_u32(param, 0x0e6f_0000);
+        e.mem.set_u32(list + 4 * 0xb, param);
+        e.mem.set_u32(this + 0x1c, list);
+        assert_eq!(e.call(0x00ba_1750, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), VTABLE_010B7F10);
+        let log = e.call_log.take().unwrap();
+        let of = |addr: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|c| c.0 == addr)
+                .map(|c| c.1.clone())
+                .collect()
+        };
+        assert_eq!(of(0x0e6e_0000), vec![vec![param, 1]]);
+        assert_eq!(of(ARRAY_SET_AT_00BA3AA0)[0][..2], [this + 0x18, 0xb]);
+        let destroyed: Vec<u32> = of(TEXTURE_DESTRUCT_00BA3A00)
+            .iter()
+            .map(|c| c[0] - this)
+            .collect();
+        assert_eq!(destroyed, vec![0x98, 0x88, 0x78, 0x68, 0x58]);
+        assert_eq!(of(EFFECT_DESTRUCT_00BA3D30), vec![vec![this]]);
+        assert_eq!(
+            of(MEMORY_DEALLOCATE_00AA4060),
+            vec![vec![MEMORY_MANAGER, this]]
+        );
+    }
+
+    #[test]
+    fn fn_00ba1770_sets_up_seven_parameters() {
+        let mut e = Engine::new();
+        e.map(0x0e70_0000, 0x1000);
+        e.mem.write(0x0e70_0000, &[0xcc; 0x1000]);
+        e.register(MEMORY_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        let mut next = 0x0e70_0000u32;
+        e.register_double(PARAM_CONSTRUCT_00B8A9E0, move |_, _| {
+            next += 0x100;
+            next.into_ret()
+        });
+        for callee in [
+            SIZE_ARRAYS_00BA3F90,
+            ARRAY_SET_SIZE_00A90180,
+            PARAM_INIT_CONSTANT_MAP_00B8AB10,
+            ARRAY_SET_AT_00BA3AA0,
+            SET_EFFECT_00BA3C70,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0xbc);
+        let manager = e.mem.alloc(0x10);
+        let effects = e.mem.alloc(0x190);
+        for index in 0..7u32 {
+            e.mem
+                .set_u32(effects + 0x174 + 4 * index, 0x0e71_0000 + index);
+        }
+        e.mem.set_u32(manager + 8, effects);
+        e.call(0x00ba_1770, &args![this, manager, 0u32]);
+        let log = e.call_log.take().unwrap();
+        let of = |addr: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|c| c.0 == addr)
+                .map(|c| c.1.clone())
+                .collect()
+        };
+        assert_eq!(of(SIZE_ARRAYS_00BA3F90), vec![vec![this, 0xc]]);
+        assert_eq!(of(ARRAY_SET_SIZE_00A90180), vec![vec![this + 0x28, 0xa]]);
+        let expected: Vec<Vec<u32>> = (0..7u32)
+            .map(|i| vec![this, i, 0x0e71_0000 + i, 0x0e70_0100 + 0x100 * i, 0])
+            .collect();
+        assert_eq!(of(SET_EFFECT_00BA3C70), expected);
+        let maps: Vec<Vec<u32>> = (0..7u32)
+            .map(|i| vec![0x0e70_0100 + 0x100 * i, 2, 3])
+            .collect();
+        assert_eq!(of(PARAM_INIT_CONSTANT_MAP_00B8AB10), maps);
+        for i in 0..7u32 {
+            let param = 0x0e70_0100 + 0x100 * i;
+            assert_eq!(e.mem.u8(param + 0x55), 0);
+            assert_eq!(e.mem.u8(param + 0x56), 0xcc);
+        }
+        let indexes: Vec<u32> = of(ARRAY_SET_AT_00BA3AA0).iter().map(|c| c[1]).collect();
+        assert_eq!(indexes, (0..7).collect::<Vec<u32>>());
     }
 
     #[test]

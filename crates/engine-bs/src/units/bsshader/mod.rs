@@ -89,6 +89,7 @@ pub mod run_00ba6cf0;
 pub mod run_00ba8a00;
 pub mod run_00baa0e0;
 pub mod run_00baa660;
+pub mod run_00bae560;
 pub mod run_00bae980;
 pub mod run_00bb04b0;
 pub mod run_00bb2fc0;
@@ -226,6 +227,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00ba8a00::funcs());
     out.extend(run_00baa0e0::funcs());
     out.extend(run_00baa660::funcs());
+    out.extend(run_00bae560::funcs());
     out.extend(run_00bae980::funcs());
     out.extend(run_00bb04b0::funcs());
     out.extend(run_00bb2fc0::funcs());

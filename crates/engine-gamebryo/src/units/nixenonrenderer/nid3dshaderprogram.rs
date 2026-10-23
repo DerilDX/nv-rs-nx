@@ -74,6 +74,40 @@ pub fn ni_d3d_shader_program_set_d3d_renderer(e: &mut Engine, this: Ptr, rendere
     e.mem.set_u32(base + 0x20, 0);
 }
 
+/// Imported `InterlockedDecrement` (import slot) and the Ni free `00aa10f0` (unnamed, `cdecl`,
+/// one word).
+const IMPORT_INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+const NI_FREE_00AA10F0: u32 = 0x00aa_10f0;
+
+// Translated from 00e89840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `nid3dshaderprogram.cpp`): `NiD3DShaderProgram`'s destructor
+/// body, `thiscall`, no stack words. The vtable `010ef73c`; the blocks at +0xc, +0x10 and +0x18
+/// freed (`00aa10f0`); +0x24 and +0x28 cleared; the device at +0x20 released (its vtable slot
+/// +8) and cleared; then the `NiRefObject` vtable `0101dce4` and `ms_uiObjects` (`011f4400`)
+/// lowered.
+pub fn fn_00e89840(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let first = e.mem.u32(base + 0xc);
+    e.mem.set_u32(base, SHADER_PROGRAM_VTABLE_010EF73C);
+    e.call(NI_FREE_00AA10F0, &args![first]);
+    for offset in [0x10u32, 0x18] {
+        let block = e.mem.u32(base + offset);
+        e.call(NI_FREE_00AA10F0, &args![block]);
+    }
+    let device = e.mem.u32(base + 0x20);
+    e.mem.set_u32(base + 0x24, 0);
+    e.mem.set_u32(base + 0x28, 0);
+    if device != 0 {
+        e.vcall(device, 8, &args![]);
+    }
+    e.mem.set_u32(base + 0x20, 0);
+    e.mem.set_u32(base, NI_REF_OBJECT_VTABLE_0101DCE4);
+    e.call(
+        IMPORT_INTERLOCKED_DECREMENT,
+        &args![NI_REF_OBJECT_COUNT_011F4400],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -85,6 +119,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00e8_9760,
             ni_d3d_shader_program_set_d3d_renderer(Ptr, Ptr)
         ),
+        entry!(0x00e8_9840, fn_00e89840(Ptr)),
     ]
 }
 
@@ -166,5 +201,51 @@ mod set_renderer_tests {
             .map(|c| c.1[0])
             .collect();
         assert_eq!(referenced, vec![device]);
+    }
+}
+
+#[cfg(test)]
+mod b054_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00e89840_frees_the_blocks_and_releases_the_device() {
+        let mut e = Engine::new();
+        e.register(NI_FREE_00AA10F0, |_, _| Ret::default());
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |_, _| Ret::default());
+        e.register(0x0e01_0008, |_, _| Ret::default());
+        e.put_vtable(0x0e00_0000, &[0, 0, 0x0e01_0008]);
+        e.call_log = Some(vec![]);
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(device, 0x0e00_0000);
+        let this = e.mem.alloc(0x2c);
+        for (offset, word) in [(0xcu32, 1u32), (0x10, 2), (0x18, 3), (0x24, 4), (0x28, 5)] {
+            e.mem.set_u32(this + offset, word);
+        }
+        e.mem.set_u32(this + 0x20, device);
+        e.call(0x00e8_9840, &args![this]);
+        assert_eq!(e.mem.u32(this), NI_REF_OBJECT_VTABLE_0101DCE4);
+        for offset in [0x20u32, 0x24, 0x28] {
+            assert_eq!(e.mem.u32(this + offset), 0);
+        }
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log[1..].to_vec(),
+            vec![
+                (NI_FREE_00AA10F0, vec![1]),
+                (NI_FREE_00AA10F0, vec![2]),
+                (NI_FREE_00AA10F0, vec![3]),
+                (0x0e01_0008, vec![device]),
+                (
+                    IMPORT_INTERLOCKED_DECREMENT,
+                    vec![NI_REF_OBJECT_COUNT_011F4400]
+                ),
+            ]
+        );
+        // Without a device nothing is released.
+        e.call_log = Some(vec![]);
+        e.call(0x00e8_9840, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|c| c.0 != 0x0e01_0008));
     }
 }

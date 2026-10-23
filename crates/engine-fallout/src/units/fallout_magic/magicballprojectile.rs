@@ -77,9 +77,33 @@ pub fn fn_00810660(e: &mut Engine, this: Ptr) -> u32 {
         .u32()
 }
 
+// Translated from 00810530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): stores the byte argument at `+0x94` of
+/// `this` (the class is unconfirmed; `00408e40` calls the neighbouring `00810570` on an
+/// `EffectSetting`).
+pub fn fn_00810530(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr().wrapping_add(0x94), value);
+}
+
+// Translated from 00810570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): stores the word argument at `+0x9c` of
+/// `this` (`EffectSettingCollection` passes its sixth value through it).
+pub fn fn_00810570(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr().wrapping_add(0x9c), value);
+}
+
+// Translated from 00810fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`__fastcall`): the word at `+0x98` of `this`.
+pub fn fn_00810fd0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr().wrapping_add(0x98))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0081_0530, fn_00810530(Ptr, u8)),
+        entry!(0x0081_0570, fn_00810570(Ptr, u32)),
+        entry!(0x0081_0fd0, fn_00810fd0(Ptr) -> u32),
         entry!(0x0081_0510, fn_00810510(Ptr, Ptr)),
         entry!(0x0081_0550, fn_00810550(Ptr, f32)),
         entry!(0x0081_0610, fn_00810610(Ptr, u8)),
@@ -229,5 +253,24 @@ mod physics_work_ahead_tests {
         assert_eq!(e.call(0x0081_0660, &args![this]).u32(), 0x7010);
         assert_eq!(calls(&e, 0x00c8_5c80), vec![vec![0x7000, 0]]);
         assert_eq!(calls(&e, 0x0055_9450).last(), Some(&vec![this + 0x594]));
+    }
+}
+
+#[cfg(test)]
+mod field_accessor_tests {
+    use super::*;
+
+    #[test]
+    fn byte_at_0x94_word_at_0x9c_and_word_at_0x98() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xa0);
+        e.mem.set_u32(this + 0x94, 0x1111_1111);
+        e.call(0x0081_0530, &args![this, 0x1ffu32]);
+        // Only the low byte of the word is stored.
+        assert_eq!(e.mem.u32(this + 0x94), 0x1111_11ff);
+        e.call(0x0081_0570, &args![this, 0xdead_beefu32]);
+        assert_eq!(e.mem.u32(this + 0x9c), 0xdead_beef);
+        e.mem.set_u32(this + 0x98, 0x2468);
+        assert_eq!(e.call(0x0081_0fd0, &args![this]).u32(), 0x2468);
     }
 }

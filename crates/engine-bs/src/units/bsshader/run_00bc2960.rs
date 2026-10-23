@@ -31,9 +31,159 @@ pub fn fn_00bc2980(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The flag `00bc2960` tests and clears (`01201f70`).
+const PENDING_FLAG_01201F70: u32 = 0x0120_1f70;
+/// The two cdecl calls `00bc2960` makes when the flag is set (`00b4e380`,
+/// in `BSShader/bsfadenode.cpp` by the engine map, and `00b6c130`).
+const PENDING_CALL_B4E380: u32 = 0x00b4_e380;
+const PENDING_CALL_B6C130: u32 = 0x00b6_c130;
+/// The `NiNode` destructor body (`00a5e930`, thiscall).
+const NI_NODE_DESTROY: u32 = 0x00a5_e930;
+/// cdecl (block, size): frees an Ni object of the given size (`00aa1460`).
+const NI_FREE_SIZED: u32 = 0x00aa_1460;
+/// `NiNode::OnVisible` (engine map), thiscall (node, culler).
+const NI_NODE_ON_VISIBLE: u32 = 0x00a5_dbe0;
+
+// Translated from 00bc2960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map, cdecl without words: when the byte at
+/// `01201f70` is set, calls `00b4e380` and `00b6c130` and clears it.
+pub fn fn_00bc2960(e: &mut Engine) {
+    if e.global::<u8>(PENDING_FLAG_01201F70) != 0 {
+        e.call(PENDING_CALL_B4E380, &args![]);
+        e.call(PENDING_CALL_B6C130, &args![]);
+        e.set_global(PENDING_FLAG_01201F70, 0u8);
+    }
+}
+
+// Translated from 00bc29e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// (Ghidra has no function here; translated from the disassembled bytes.)
+/// The scalar deleting destructor of the class `00bc2980` constructs (its
+/// vtable `010ba608`; unnamed in the engine map), thiscall `(flags)`: the
+/// class's destructor body writes the same fields as the constructor (the
+/// float at `01016410` to `+0xb4`, the vtable, the float at `010ba600` to
+/// `+0xb0`, both through `FLD`/`FSTP`, and clears the bytes at `+0xad` and
+/// `+0xac`), then the `NiNode` destructor runs; with bit 0 of the flags the
+/// object (0xb8 bytes) is freed. Answers `this`.
+pub fn fn_00bc29e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    let base = this.addr();
+    let first = x87_quiet_bits(e.global::<u32>(VALUE_FOR_B4_01016410));
+    e.mem.set_u32(base.wrapping_add(0xb4), first);
+    let second = x87_quiet_bits(e.global::<u32>(VALUE_FOR_B0_010BA600));
+    e.mem.set_u32(base, VTABLE_010BA608);
+    e.mem.set_u32(base.wrapping_add(0xb0), second);
+    e.mem.set_u8(base.wrapping_add(0xad), 0);
+    e.mem.set_u8(base.wrapping_add(0xac), 0);
+    e.call(NI_NODE_DESTROY, &args![base]);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_SIZED, &args![base, 0xb8u32]);
+    }
+    this
+}
+
+// Translated from 00bc2ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// (Ghidra has no function here; translated from the disassembled bytes.)
+/// An `OnVisible` override (unnamed in the engine map; it calls
+/// `NiNode::OnVisible` with `ECX` unchanged), thiscall `(culler)`: when
+/// the culler's object at `+0xc4` exists, clears its byte at `+0x84` and
+/// sets its word at `+0x34` to 2 around the base `OnVisible`, then sets the
+/// byte to 1 and the word to 0.
+pub fn fn_00bc2ae0(e: &mut Engine, this: Ptr, culler: u32) {
+    let state = e.mem.u32(culler.wrapping_add(0xc4));
+    if state != 0 {
+        e.mem.set_u8(state + 0x84, 0);
+        e.mem.set_u32(state + 0x34, 2);
+    }
+    e.call(NI_NODE_ON_VISIBLE, &args![this, culler]);
+    if state != 0 {
+        e.mem.set_u8(state + 0x84, 1);
+        e.mem.set_u32(state + 0x34, 0);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00bc_2980, fn_00bc2980(Ptr) -> Ptr)]
+    vec![
+        entry!(0x00bc_2980, fn_00bc2980(Ptr) -> Ptr),
+        entry!(0x00bc2960, fn_00bc2960()),
+        entry!(0x00bc29e0, fn_00bc29e0(Ptr, u32) -> Ptr),
+        entry!(0x00bc2ae0, fn_00bc2ae0(Ptr, u32)),
+    ]
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::*;
+
+    fn calls(e: &Engine, callee: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| *address == callee)
+            .map(|(_, words)| words.clone())
+            .collect()
+    }
+
+    #[test]
+    fn pending_calls_run_once_while_the_flag_is_set() {
+        let mut e = Engine::new();
+        e.map(0x0120_1000, 0x1000);
+        e.register(PENDING_CALL_B4E380, |_, _| Ret::default());
+        e.register(PENDING_CALL_B6C130, |_, _| Ret::default());
+        e.set_global(PENDING_FLAG_01201F70, 1u8);
+        e.call_log = Some(vec![]);
+        e.call(0x00bc_2960, &args![]);
+        e.call(0x00bc_2960, &args![]);
+        assert_eq!(calls(&e, PENDING_CALL_B4E380).len(), 1);
+        assert_eq!(calls(&e, PENDING_CALL_B6C130).len(), 1);
+        assert_eq!(e.global::<u8>(PENDING_FLAG_01201F70), 0);
+    }
+
+    #[test]
+    fn deleting_destructor_resets_the_fields_and_frees_on_bit_0() {
+        let mut e = Engine::new();
+        e.map(0x0101_6000, 0x1000);
+        e.map(0x010b_a000, 0x1000);
+        e.set_global(VALUE_FOR_B4_01016410, 0x7f80_0001u32);
+        e.set_global(VALUE_FOR_B0_010BA600, 2.5f32);
+        e.register(NI_NODE_DESTROY, |_, _| Ret::default());
+        e.register(NI_FREE_SIZED, |_, _| Ret::default());
+        let this = e.mem.alloc(0xb8);
+        e.mem.set_u16(this + 0xac, 0xffff);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00bc_29e0, &args![this, 1u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), VTABLE_010BA608);
+        assert_eq!(e.mem.u32(this + 0xb4), 0x7fc0_0001);
+        assert_eq!(e.mem.f32(this + 0xb0), 2.5);
+        assert_eq!(e.mem.u16(this + 0xac), 0);
+        assert_eq!(calls(&e, NI_NODE_DESTROY), vec![vec![this]]);
+        assert_eq!(calls(&e, NI_FREE_SIZED), vec![vec![this, 0xb8]]);
+        e.call_log = Some(vec![]);
+        e.call(0x00bc_29e0, &args![this, 0u32]);
+        assert!(calls(&e, NI_FREE_SIZED).is_empty());
+    }
+
+    #[test]
+    fn on_visible_marks_the_culler_state_around_the_base() {
+        let mut e = Engine::new();
+        let culler = e.mem.alloc(0xc8);
+        let state = e.mem.alloc(0x88);
+        e.mem.set_u32(culler + 0xc4, state);
+        e.register_double(NI_NODE_ON_VISIBLE, move |e, _| {
+            assert_eq!(e.mem.u8(state + 0x84), 0);
+            assert_eq!(e.mem.u32(state + 0x34), 2);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x00bc_2ae0, &args![0x900u32, culler]);
+        assert_eq!(calls(&e, NI_NODE_ON_VISIBLE), vec![vec![0x900, culler]]);
+        assert_eq!(e.mem.u8(state + 0x84), 1);
+        assert_eq!(e.mem.u32(state + 0x34), 0);
+        e.mem.set_u32(culler + 0xc4, 0);
+        e.register(NI_NODE_ON_VISIBLE, |_, _| Ret::default());
+        e.call(0x00bc_2ae0, &args![0x900u32, culler]);
+        assert_eq!(e.mem.u8(state + 0x84), 1);
+    }
 }
 
 #[cfg(test)]

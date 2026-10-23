@@ -341,6 +341,81 @@ pub fn ni_blend_bool_interpolator_load_binary(e: &mut Engine, this: Ptr, stream:
         .set_u32(input + INPUT_POSITION, position.wrapping_add(count));
 }
 
+/// `NiInterpolator::IsBoolValueSupported` (vtable +0xA4, Xbox PDB slot
+/// order).
+const SLOT_IS_BOOL_VALUE_SUPPORTED: u32 = 0xa4;
+/// `NiBlendInterpolator::IsEqual` (`00a36fd0`), `SaveBinary` (`00a37ec0`)
+/// and `GetViewerStrings` (`00a38080`).
+const NI_BLEND_INTERPOLATOR_IS_EQUAL: u32 = 0x00a3_6fd0;
+const NI_BLEND_INTERPOLATOR_SAVE_BINARY: u32 = 0x00a3_7ec0;
+const NI_BLEND_INTERPOLATOR_GET_VIEWER_STRINGS: u32 = 0x00a3_8080;
+/// `NiGetViewerString` (`00a7d330`, the class name) and its byte form
+/// (`00a7d410`, `(name, value)`), both `cdecl`; the name `"m_bBoolValue"`.
+const VIEWER_STRING: u32 = 0x00a7_d330;
+const VIEWER_STRING_BYTE: u32 = 0x00a7_d410;
+const BOOL_VALUE_NAME: u32 = 0x0109_a1bc;
+
+// Translated from 00a565a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendBoolInterpolator::InterpolatorIsCorrectType` (Xbox PDB;
+/// `thiscall`, one stack word): the interpolator's `IsBoolValueSupported`
+/// (vtable +0xA4); `this` is not read.
+pub fn ni_blend_bool_interpolator_interpolator_is_correct_type(
+    e: &mut Engine,
+    _this: Ptr,
+    interpolator: Ptr,
+) -> bool {
+    e.vcall(interpolator.addr(), SLOT_IS_BOOL_VALUE_SUPPORTED, &args![])
+        .bool()
+}
+
+// Translated from 00a565f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendBoolInterpolator::IsEqual` (Xbox PDB): `NiBlendInterpolator`'s
+/// `IsEqual`, then the bool value bytes equal.
+pub fn ni_blend_bool_interpolator_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e
+        .call(NI_BLEND_INTERPOLATOR_IS_EQUAL, &args![this, other])
+        .bool()
+    {
+        return false;
+    }
+    e.mem.u8(this.addr() + BOOL_VALUE) == e.mem.u8(other.addr() + BOOL_VALUE)
+}
+
+// Translated from 00a56920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendBoolInterpolator::SaveBinary` (Xbox PDB): `NiBlendInterpolator`'s
+/// `SaveBinary`, then the bool value (1 byte; the component size in the
+/// stream argument's stack word).
+pub fn ni_blend_bool_interpolator_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    use crate::units::nianimation::niblendinterpolator::stream_write;
+    e.call(NI_BLEND_INTERPOLATOR_SAVE_BINARY, &args![this, stream]);
+    e.with_stack(4, |e, argument| {
+        stream_write(e, stream, this.addr() + BOOL_VALUE, 1, argument.addr());
+    });
+}
+
+// Translated from 00a56960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendBoolInterpolator::GetViewerStrings` (Xbox PDB):
+/// `NiBlendInterpolator`'s strings, then the class name and `m_bBoolValue`
+/// (the value byte, zero-extended; both through the argument's stack word).
+pub fn ni_blend_bool_interpolator_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    use crate::units::nianimation::niblendinterpolator::append_viewer_string;
+    e.call(
+        NI_BLEND_INTERPOLATOR_GET_VIEWER_STRINGS,
+        &args![this, strings],
+    );
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        let class_name = e.mem.u32(NI_BLEND_BOOL_INTERPOLATOR_RTTI);
+        let text = e.call(VIEWER_STRING, &args![class_name]).u32();
+        append_viewer_string(e, strings, slot, text);
+        let value = u32::from(e.mem.u8(this.addr() + BOOL_VALUE));
+        let text = e
+            .call(VIEWER_STRING_BYTE, &args![BOOL_VALUE_NAME, value])
+            .u32();
+        append_viewer_string(e, strings, slot, text);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -362,6 +437,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00a56880, ni_blend_bool_interpolator_update(Ptr, f32, Ptr, Ptr) -> bool),
         entry!(0x00a568e0, ni_blend_bool_interpolator_load_binary(Ptr, Ptr)),
+        entry!(
+            0x00a5_65a0,
+            ni_blend_bool_interpolator_interpolator_is_correct_type(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00a5_65f0,
+            ni_blend_bool_interpolator_is_equal(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00a5_6920,
+            ni_blend_bool_interpolator_save_binary(Ptr, Ptr)
+        ),
+        entry!(
+            0x00a5_6960,
+            ni_blend_bool_interpolator_get_viewer_strings(Ptr, Ptr)
+        ),
     ]
 }
 
@@ -622,5 +713,75 @@ mod tests {
         assert_eq!(read[0][4], 1);
         assert_eq!(e.mem.u8(this + BOOL_VALUE), 1);
         assert_eq!(e.mem.u32(input + INPUT_POSITION), 1);
+    }
+}
+
+#[cfg(test)]
+mod a07_tests {
+    use super::*;
+    use crate::units::nianimation::niblendinterpolator::a07_test_support::{
+        calls, stream, viewer_strings,
+    };
+
+    const VTABLE: u32 = 0x7400_0000;
+    const SUPPORTED: u32 = 0x7500_0000;
+
+    #[test]
+    fn interpolator_is_correct_type_asks_for_bool_support() {
+        let mut e = Engine::new();
+        let mut slots = vec![0u32; 0x40];
+        slots[(SLOT_IS_BOOL_VALUE_SUPPORTED / 4) as usize] = SUPPORTED;
+        e.put_vtable(VTABLE, &slots);
+        e.register(SUPPORTED, |_, _| 0u32.into_ret());
+        let interp = e.mem.alloc(8);
+        e.mem.set_u32(interp, VTABLE);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x00a5_65a0, &args![0u32, interp]).bool());
+        assert_eq!(calls(&e, SUPPORTED), vec![vec![interp]]);
+    }
+
+    #[test]
+    fn is_equal_compares_the_value_bytes() {
+        let mut e = Engine::new();
+        e.register(NI_BLEND_INTERPOLATOR_IS_EQUAL, |_, _| 1u32.into_ret());
+        let (a, b) = (e.mem.alloc(0x34), e.mem.alloc(0x34));
+        e.mem.set_u8(a + BOOL_VALUE, 2);
+        e.mem.set_u8(b + BOOL_VALUE, 2);
+        assert!(e.call(0x00a5_65f0, &args![a, b]).bool());
+        e.mem.set_u8(b + BOOL_VALUE, 1);
+        assert!(!e.call(0x00a5_65f0, &args![a, b]).bool());
+        e.register(NI_BLEND_INTERPOLATOR_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a5_65f0, &args![a, a]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_the_value_byte() {
+        let mut e = Engine::new();
+        e.register(NI_BLEND_INTERPOLATOR_SAVE_BINARY, |_, _| Ret::default());
+        let (s, written) = stream(&mut e, 0, &[]);
+        let this = e.mem.alloc(0x34);
+        e.mem.set_u8(this + BOOL_VALUE, 1);
+        e.call(0x00a5_6920, &args![this, s]);
+        assert_eq!(*written.borrow(), vec![1]);
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_the_class_and_the_value() {
+        let mut e = Engine::new();
+        e.register(NI_BLEND_INTERPOLATOR_GET_VIEWER_STRINGS, |_, _| {
+            Ret::default()
+        });
+        let (strings, stored) = viewer_strings(&mut e);
+        e.map(0x011f_4000, 0x1000);
+        e.mem.set_u32(NI_BLEND_BOOL_INTERPOLATOR_RTTI, 0x0109_a000);
+        let this = e.mem.alloc(0x34);
+        e.mem.set_u8(this + BOOL_VALUE, 0xff);
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_6960, &args![this, strings]);
+        assert_eq!(*stored.borrow(), vec![0x0109_a000, BOOL_VALUE_NAME]);
+        assert_eq!(
+            calls(&e, VIEWER_STRING_BYTE),
+            vec![vec![BOOL_VALUE_NAME, 0xff]]
+        );
     }
 }

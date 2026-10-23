@@ -165,7 +165,7 @@ pub fn fn_00e7de30(e: &mut Engine, this: Ptr) {
 /// format), the report `00a29680` and its message (`"NiDX9Renderer::Create> Using %s
 /// backbuffer format\n"`), the object at `011f4748` and the two globals filled from its slots
 /// 0xd8 and 0xdc (`0126f594`, the byte `0126f598`), and the render target group's maker
-/// `00a8f2c0` (unnamed; `cdecl`: buffer, width, height) and attacher `00a8f140` (unnamed;
+/// `00a8f2c0` (unnamed; `cdecl`: width, height, buffer) and attacher `00a8f140` (unnamed;
 /// `thiscall`, the buffer).
 const NEW_BUFFER_OBJECT: u32 = 0x00aa_13e0;
 const NI_REF_OBJECT_VTABLE: u32 = 0x0101_dce4;
@@ -252,7 +252,7 @@ pub fn fn_00e7d6b0(e: &mut Engine, device: u32, present: Ptr, group_out: Ptr) ->
             let width = e.mem.u32(desc.addr() + 0x18);
             let height = e.mem.u32(desc.addr() + 0x1c);
             let group = e
-                .call(MAKE_GROUP_00A8F2C0, &args![data, width, height])
+                .call(MAKE_GROUP_00A8F2C0, &args![width, height, data])
                 .u32();
             e.mem.set_u32(group_out.addr(), group);
             e.mem.set_u32(data.wrapping_add(8), group);
@@ -553,7 +553,7 @@ pub fn fn_00e7d250(e: &mut Engine, texture: u32, group_out: Ptr, kind: u32, word
             let width = e.mem.u32(desc.addr() + 0x18);
             let height = e.mem.u32(desc.addr() + 0x1c);
             let group = e
-                .call(MAKE_GROUP_00A8F2C0, &args![data, width, height])
+                .call(MAKE_GROUP_00A8F2C0, &args![width, height, data])
                 .u32();
             e.mem.set_u32(group_out.addr(), group);
             e.mem.set_u32(data.wrapping_add(8), group);
@@ -1257,7 +1257,7 @@ mod b000v_tests {
         );
         assert_eq!(e.mem.u32(SLOT_D8_0126F594), 0x55);
         assert_eq!(e.mem.u8(SLOT_DC_0126F598), 1);
-        assert_eq!(calls(&e, MAKE_GROUP_00A8F2C0), vec![vec![data, 640, 480]]);
+        assert_eq!(calls(&e, MAKE_GROUP_00A8F2C0), vec![vec![640, 480, data]]);
         assert_eq!(e.mem.u32(group), 0x4444);
         assert_eq!(e.mem.u32(data + 8), 0x4444);
         // A second buffer is attached to the group; the globals are not read again.
@@ -1523,7 +1523,7 @@ mod b051_tests {
         assert_eq!(e.mem.u32(data + 0x18), 0x77);
         assert_eq!(e.mem.u32(data + 0xc), 0x116);
         assert_eq!(calls(&e, 0x7048), vec![vec![texture, 0, data + 0x14]]);
-        assert_eq!(calls(&e, MAKE_GROUP_00A8F2C0), vec![vec![data, 640, 480]]);
+        assert_eq!(calls(&e, MAKE_GROUP_00A8F2C0), vec![vec![640, 480, data]]);
         assert_eq!(e.mem.u32(group), 0x4444);
         assert_eq!(e.mem.u32(data + 8), 0x4444);
         let data = e

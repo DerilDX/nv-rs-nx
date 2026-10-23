@@ -25,12 +25,67 @@ pub fn fn_0072ce30(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 007273f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether all fourteen tile pointers from +0x28 of the menu (`this`) are
+/// set (the recipe menu's tile table; the class layout is not declared
+/// here).
+pub fn fn_007273f0(e: &mut Engine, this: Ptr) -> bool {
+    (0..0xe).all(|i| e.mem.u32(this.addr().wrapping_add(0x28 + 4 * i)) != 0)
+}
+
+/// `qsort` (cdecl: base, count, element size, compare).
+const QSORT: u32 = 0x00ec_6f20;
+
+// Translated from 00729970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sorts the array of `this` (a `BSSimpleArray`-shaped object: data pointer
+/// at +4, count at +8) with `qsort` and the compare function `compare`,
+/// four-byte elements.
+pub fn fn_00729970(e: &mut Engine, this: Ptr, compare: u32) {
+    let data = e.mem.u32(this.addr().wrapping_add(4));
+    let count = e.mem.u32(this.addr().wrapping_add(8));
+    e.call(QSORT, &args![data, count, 4u32, compare]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0072ba80, fn_0072ba80(Ptr, u32, u32)),
         entry!(0x0072_ce30, fn_0072ce30(Ptr) -> Ptr),
+        entry!(0x0072_73f0, fn_007273f0(Ptr) -> bool),
+        entry!(0x0072_9970, fn_00729970(Ptr, u32)),
     ]
+}
+
+#[cfg(test)]
+mod b070_tests {
+    use super::*;
+
+    #[test]
+    fn all_fourteen_tiles_must_be_set() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x60);
+        for i in 0..14 {
+            e.mem.set_u32(this + 0x28 + 4 * i, 1 + i);
+        }
+        assert!(e.call(0x0072_73f0, &args![this]).bool());
+        e.mem.set_u32(this + 0x28 + 4 * 13, 0);
+        assert!(!e.call(0x0072_73f0, &args![this]).bool());
+    }
+
+    #[test]
+    fn sorts_the_array_with_qsort() {
+        let mut e = Engine::new();
+        e.register(QSORT, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 4, 0x5000);
+        e.mem.set_u32(this + 8, 7);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_9970, &args![this, 0x0072_0000u32]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log.iter().filter(|c| c.0 == QSORT).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, vec![0x5000, 7, 4, 0x0072_0000]);
+    }
 }
 
 #[cfg(test)]

@@ -86,11 +86,419 @@ pub fn fn_00bc4830(e: &mut Engine, this: Ptr, declaration: Ptr) -> Ptr {
     this
 }
 
+/// `00be0870` (unnamed, `thiscall`, no stack words).
+const CALL_00BE0870: u32 = 0x00be_0870;
+
+// Translated from 00bc4600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (the vtables `010b80a8` and `010bad98` slot +0x4c): a 5-byte jump to
+/// `00be0870`, passing on `this`; answers what it answers.
+pub fn fn_00bc4600(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(CALL_00BE0870, &args![this]).u32()
+}
+
+/// The global `NiPointer` `00bc4610` clears (`01201fc4`).
+const GLOBAL_POINTER_01201FC4: u32 = 0x0120_1fc4;
+
+// Translated from 00bc4610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bc4340`), no arguments: clears the global `NiPointer` at
+/// `01201fc4` (releasing what it holds).
+pub fn fn_00bc4610(e: &mut Engine) {
+    ni_pointer_clear(e, GLOBAL_POINTER_01201FC4);
+}
+
+/// Strings of the beam loader (read in Ghidra): `"beam\\v\\beam.v.hlsl"` (`010bad80`),
+/// `"BEAM.vso"` (`010bad74`), `"beam\\p\\beam.p.hlsl"` (`010bad60`), `"BEAM.pso"`
+/// (`010bad54`), the vertex profile `"vs_1_1"` (`010a93ec`); the pixel profile chooser
+/// `00b4f380` (`cdecl`, a byte).
+const BEAM_VERTEX_010BAD80: u32 = 0x010b_ad80;
+const BEAM_VSO_010BAD74: u32 = 0x010b_ad74;
+const BEAM_PIXEL_010BAD60: u32 = 0x010b_ad60;
+const BEAM_PSO_010BAD54: u32 = 0x010b_ad54;
+const PROFILE_VS_1_1_010A93EC: u32 = 0x010a_93ec;
+const PIXEL_PROFILE_00B4F380: u32 = 0x00b4_f380;
+/// The beam loader's frame (saved registers up to the cookie) and buffers.
+const BEAM_FRAME_BYTES: u32 = 0x2b4;
+const BEAM_BUFFERS: ShaderBuffers = ShaderBuffers {
+    name: 0xa8,
+    path: 0x1ac,
+};
+
+// Translated from 00bc4680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010bad98` slot +0x13c): the beam shader's `LoadShaders`, no
+/// stack words. Fills the vertex block (`beam.v.hlsl`, no macros, the rest cleared by
+/// `memset`) and compiles it (`MakePath`, the name `"BEAM.vso"`, `vs_1_1`) into the `NiPointer`
+/// +0xb8; then takes the pixel profile (`00b4f380(1)`), fills the pixel block
+/// (`beam.p.hlsl`) and compiles it (`"BEAM.pso"`) into +0xbc.
+// Translation incomplete: 00bc4680 - the /GS cookie check (00ec408c) of the stack frame is not translated.
+pub fn fn_00bc4680(e: &mut Engine, this: Ptr) {
+    let this = this.addr();
+    e.with_stack(BEAM_FRAME_BYTES, |e, frame| {
+        let frame = frame.addr();
+        set_up_sources(
+            e,
+            frame,
+            &[ShaderSource {
+                offset: 0x5c,
+                words: &[BEAM_VERTEX_010BAD80, 0, 0],
+                cleared: 0x40,
+            }],
+        );
+        let vertex = ShaderCompile {
+            source: 0x5c,
+            output: BEAM_VSO_010BAD74,
+            profile: PROFILE_VS_1_1_010A93EC,
+            pixel: false,
+            slot: 0xb8,
+        };
+        let shader = compile_shader(e, this, frame, &BEAM_BUFFERS, &vertex);
+        ni_pointer_assign(e, this + vertex.slot, shader);
+        let profile = e.call(PIXEL_PROFILE_00B4F380, &args![1u32]).u32();
+        set_up_sources(
+            e,
+            frame,
+            &[ShaderSource {
+                offset: 0x10,
+                words: &[BEAM_PIXEL_010BAD60, 0, 0],
+                cleared: 0x40,
+            }],
+        );
+        let pixel = ShaderCompile {
+            source: 0x10,
+            output: BEAM_PSO_010BAD54,
+            profile,
+            pixel: true,
+            slot: 0xbc,
+        };
+        let shader = compile_shader(e, this, frame, &BEAM_BUFFERS, &pixel);
+        ni_pointer_assign(e, this + pixel.slot, shader);
+    });
+}
+
+/// `BSShader::~BSShader` (engine map, `00be0f10`, no stack words) and the Ni free
+/// (`00aa1460`, `cdecl`: block, size).
+const BS_SHADER_DESTRUCT: u32 = 0x00be_0f10;
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00bc49a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bc4340`): the beam shader's destructor, no stack words.
+/// Stores the vtable `010bad98`, clears the global `NiPointer` `01201fc4`, drops and clears
+/// the pass +0xb4, clears the `NiPointer`s +0xb8 and +0xbc (releasing what they hold); then
+/// the members' own destructors release +0xbc and +0xb8 and drop the pass +0xb4 again when
+/// they are not null (they were just cleared), and `BSShader::~BSShader` (`00be0f10`) runs.
+// Translation incomplete: 00bc49a0 - the C++ exception frame (FS:[0] chain, unwind states 0 to 3 for the members and the base) is not translated.
+pub fn fn_00bc49a0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, SHADER_VTABLE_010BAD98);
+    ni_pointer_clear(e, GLOBAL_POINTER_01201FC4);
+    pass_pointer_clear(e, base + 0xb4);
+    ni_pointer_clear(e, base + 0xb8);
+    ni_pointer_clear(e, base + 0xbc);
+    for offset in [0xbcu32, 0xb8] {
+        let held = e.mem.u32(base + offset);
+        if held != 0 {
+            release_reference(e, held);
+        }
+    }
+    let pass = e.mem.u32(base + 0xb4);
+    if pass != 0 {
+        let left = e.mem.u32(pass + 0x64).wrapping_sub(1);
+        e.mem.set_u32(pass + 0x64, left);
+        if left == 0 {
+            e.call(PASS_DELETE_00E80190, &args![pass]);
+        }
+    }
+    e.call(BS_SHADER_DESTRUCT, &args![base]);
+}
+
+/// The stage call `00e890c0` (unit `NiXenonRenderer`, unnamed; `thiscall` on the stage's
+/// +0x10, four words).
+const STAGE_CALL_00E890C0: u32 = 0x00e8_90c0;
+/// The beam pass's render states, in order.
+const BEAM_RENDER_STATES: [(u32, u32); 10] = [
+    (0x16, 1),
+    (0xa8, 0xf),
+    (0x1b, 1),
+    (0x13, 5),
+    (0x14, 6),
+    (0xf, 0),
+    (0x34, 0),
+    (7, 1),
+    (0x17, 4),
+    (0xe, 0),
+];
+
+// Translated from 00bc4c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bc4340`): the beam pass, no stack words. Holds the pass
+/// +0xb4 (its count +0x64 up by one when not null; the code goes on with it even when null).
+/// When the pass has no stage yet (word +0x18 below 1): a stage (`CreateNewStage` into a
+/// stack pointer cleared first), `SetupDefaultStage(stage, 0, 1, 2, 1)`, `00e890c0` on the
+/// stage's +0x10 with (7, 0, 0, 0) and `NiD3DPass::SetStage` with the pass's word +0x14. The
+/// pass's vertex (+0x5c) and pixel (+0x44) `NiPointer`s take the shader's +0xb8 and +0xbc;
+/// the render states (0x16, 1), (0xa8, 0xf), (0x1b, 1), (0x13, 5), (0x14, 6), (0xf, 0),
+/// (0x34, 0), (7, 1), (0x17, 4), (0xe, 0) are set on it; then the stage reference is dropped
+/// and the pass let go (count down by one, `00e80190` at 0, without a null check).
+// Translation incomplete: 00bc4c00 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the stage and the pass) is not translated.
+pub fn fn_00bc4c00(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.with_stack(4, |e, local| {
+        let local = local.addr();
+        e.mem.set_u32(local, 0);
+        let pass = e.mem.u32(base + 0xb4);
+        if pass != 0 {
+            let count = e.mem.u32(pass + 0x64).wrapping_add(1);
+            e.mem.set_u32(pass + 0x64, count);
+        }
+        if e.mem.u32(pass + 0x18) < 1 {
+            e.call(CREATE_NEW_STAGE, &args![local]);
+            let stage = e.mem.u32(local);
+            e.call(SETUP_DEFAULT_STAGE, &args![stage, 0u32, 1u32, 2u32, 1u32]);
+            let stage = e.mem.u32(local);
+            let target = e.mem.u32(stage + 0x10);
+            e.call(STAGE_CALL_00E890C0, &args![target, 7u32, 0u32, 0u32, 0u32]);
+            let stage = e.mem.u32(local);
+            let position = e.mem.u32(pass + 0x14);
+            e.call(PASS_SET_STAGE, &args![pass, position, stage]);
+        }
+        let vertex = e.mem.u32(base + 0xb8);
+        ni_pointer_assign(e, pass + 0x5c, vertex);
+        let pixel = e.mem.u32(base + 0xbc);
+        ni_pointer_assign(e, pass + 0x44, pixel);
+        for (state, value) in BEAM_RENDER_STATES {
+            pass_render_state(e, pass, state, value);
+        }
+        let stage = e.mem.u32(local);
+        stage_release(e, stage);
+        let left = e.mem.u32(pass + 0x64).wrapping_sub(1);
+        e.mem.set_u32(pass + 0x64, left);
+        if left == 0 {
+            e.call(PASS_DELETE_00E80190, &args![pass]);
+        }
+    });
+}
+
+// Translated from 00bc4e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bc4340`): the beam shader's scalar deleting destructor
+/// (vtable `010bad98` slot +0), `thiscall`, `RET 4`. Runs the destructor (`00bc49a0`) and,
+/// when bit 0 of the flags is set, frees the 0xc0 bytes (`00aa1460`). Answers `this`.
+pub fn fn_00bc4e70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00bc49a0(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_00AA1460, &args![this, 0xc0u32]);
+    }
+    this
+}
+
+// Translated from 00bc4ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bc4340`; vtable `010bad98` slot +0x140), no stack words.
+/// Gives the pass pointer +0xb4 a new pass (`00e804d0`) when it is null, sets the pass up
+/// (`00bc4c00`) and answers true.
+pub fn fn_00bc4ea0(e: &mut Engine, this: Ptr) -> bool {
+    let base = this.addr();
+    if e.mem.u32(base + 0xb4) == 0 {
+        e.call(NEW_PASS_00E804D0, &args![base + 0xb4]);
+    }
+    fn_00bc4c00(e, this);
+    true
+}
+
+/// The constant names of the beam `CreateConstantMaps` (read in Ghidra).
+const WORLD_VIEW_PROJ_TRANSPOSE_010A1E50: u32 = 0x010a_1e50;
+const FVARS_010AF454: u32 = 0x010a_f454;
+
+// Translated from 00bc4ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bc4340`; vtable `010bad98` slot +0x11c): the beam
+/// shader's `CreateConstantMaps`, no stack words. When the vertex constant map (+0x34) is
+/// null, makes one (kind 0) with `"WorldViewProjTranspose"` (0x20000009, 0, 0, 4) and
+/// `"fVars"` (0x10000009, register 4, 4 registers, 0x40 bytes at +0x74); when the pixel one
+/// (+0x30) is null, makes one (kind 2) without entries.
+// Translation incomplete: 00bc4ed0 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the allocations) is not translated.
+pub fn fn_00bc4ed0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    if e.mem.u32(base + 0x34) == 0 {
+        make_constant_map(e, base, 0x34, 0);
+        add_constant_entry(
+            e,
+            base,
+            0x34,
+            [
+                WORLD_VIEW_PROJ_TRANSPOSE_010A1E50,
+                0x2000_0009,
+                0,
+                0,
+                4,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+        );
+        add_constant_entry(
+            e,
+            base,
+            0x34,
+            [
+                FVARS_010AF454,
+                0x1000_0009,
+                0,
+                4,
+                4,
+                CONSTANT_EMPTY_NAME_01011584,
+                0x40,
+                4,
+                base + 0x74,
+                0,
+            ],
+        );
+    }
+    if e.mem.u32(base + 0x30) == 0 {
+        make_constant_map(e, base, 0x30, 2);
+    }
+}
+
+// Translated from 00bc5030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00bc4340`; vtable `010baf60` slot +0x13c): runs the
+/// shader's slot +0x140 and then, as a tail jump, its slot +0x144, answering what that one
+/// answers. No stack words.
+pub fn fn_00bc5030(e: &mut Engine, this: Ptr) -> u32 {
+    let this = this.addr();
+    e.vcall(this, 0x140, &args![]);
+    e.vcall(this, 0x144, &args![]).u32()
+}
+
+/// Strings of the volumetric fog loaders (read in Ghidra): `"vfog\\VolumetricFog.v.hlsl"`
+/// (`010baf00`), `"vfog\\VolumetricFog.p.hlsl"` (`010baf40`), the macro `"SINGLE_PASS"`
+/// (`010baf34`), the formats `"VolumetricFog%03d.vso"` (`010baee8`) and
+/// `"VolumetricFog%03d.pso"` (`010baf1c`), the profiles `"vs_2_0"` (`010a93e4`), `"vs_3_0"`
+/// (`010a93dc`), `"ps_2_a"` (`010a93c4`) and `"ps_3_0"` (`010a93b4`), and the byte that turns
+/// the second shader of each on (`011ad80e`).
+const FOG_VERTEX_010BAF00: u32 = 0x010b_af00;
+const FOG_PIXEL_010BAF40: u32 = 0x010b_af40;
+const MACRO_SINGLE_PASS_010BAF34: u32 = 0x010b_af34;
+const FORMAT_FOG_VERTEX_010BAEE8: u32 = 0x010b_aee8;
+const FORMAT_FOG_PIXEL_010BAF1C: u32 = 0x010b_af1c;
+const PROFILE_VS_2_0_010A93E4: u32 = 0x010a_93e4;
+const PROFILE_VS_3_0_010A93DC: u32 = 0x010a_93dc;
+const PROFILE_PS_2_A_010A93C4: u32 = 0x010a_93c4;
+const PROFILE_PS_3_0_010A93B4: u32 = 0x010a_93b4;
+const SECOND_SHADERS_011AD80E: u32 = 0x011a_d80e;
+const FOG_EMPTY_01011584: u32 = 0x0101_1584;
+/// The volumetric fog loaders' frame (saved registers up to the cookie) and buffers.
+const FOG_FRAME_BYTES: u32 = 0x2bc;
+const FOG_BUFFERS: ShaderBuffers = ShaderBuffers {
+    name: 0xb0,
+    path: 0x1b4,
+};
+
+/// The two volumetric fog compiles: block `index` (0x4c bytes apart from +0x18), the second
+/// only with the byte `011ad80e` set, each with its own profile, into `slot + 4 * index`.
+fn compile_fog_pair(e: &mut Engine, this: u32, frame: u32, format: u32, slot: u32, pixel: bool) {
+    for index in 0..2u32 {
+        if index == 1 && e.global::<u8>(SECOND_SHADERS_011AD80E) == 0 {
+            continue;
+        }
+        let profile = e.mem.u32(frame + 0x10 + 4 * index);
+        let shader = compile_indexed(
+            e,
+            this,
+            frame,
+            &FOG_BUFFERS,
+            0x18 + 0x4c * index,
+            format,
+            index,
+            profile,
+            pixel,
+        );
+        ni_pointer_assign(e, this + slot + 4 * index, shader);
+    }
+}
+
+// Translated from 00bc5070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010baf60` slot +0x140): the volumetric fog vertex shaders,
+/// no stack words. Two blocks of `VolumetricFog.v.hlsl` without macros (the rest cleared by
+/// `memset`) with the profiles `vs_2_0` and `vs_3_0`; each is compiled (`MakePath`,
+/// `"VolumetricFog%03d.vso"` with the index) into the `NiPointer`s +0x78 and +0x7c, the second
+/// only when the byte `011ad80e` is set.
+// Translation incomplete: 00bc5070 - the /GS cookie check (00ec408c) of the stack frame is not translated.
+pub fn fn_00bc5070(e: &mut Engine, this: Ptr) {
+    let this = this.addr();
+    e.with_stack(FOG_FRAME_BYTES, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x10, PROFILE_VS_2_0_010A93E4);
+        e.mem.set_u32(frame + 0x14, PROFILE_VS_3_0_010A93DC);
+        set_up_sources(
+            e,
+            frame,
+            &[
+                ShaderSource {
+                    offset: 0x18,
+                    words: &[FOG_VERTEX_010BAF00, 0],
+                    cleared: 0x44,
+                },
+                ShaderSource {
+                    offset: 0x64,
+                    words: &[FOG_VERTEX_010BAF00, 0],
+                    cleared: 0x44,
+                },
+            ],
+        );
+        compile_fog_pair(e, this, frame, FORMAT_FOG_VERTEX_010BAEE8, 0x78, false);
+    });
+}
+
+// Translated from 00bc51a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010baf60` slot +0x144): the volumetric fog pixel shaders, no
+/// stack words. `VolumetricFog.p.hlsl` without macros (profile `ps_2_a`) and with
+/// `SINGLE_PASS` (`ps_3_0`), each compiled (`"VolumetricFog%03d.pso"` with the index) into the
+/// `NiPointer`s +0x80 and +0x84, the second only when the byte `011ad80e` is set.
+// Translation incomplete: 00bc51a0 - the /GS cookie check (00ec408c) of the stack frame is not translated.
+pub fn fn_00bc51a0(e: &mut Engine, this: Ptr) {
+    let this = this.addr();
+    e.with_stack(FOG_FRAME_BYTES, |e, frame| {
+        let frame = frame.addr();
+        e.mem.set_u32(frame + 0x10, PROFILE_PS_2_A_010A93C4);
+        e.mem.set_u32(frame + 0x14, PROFILE_PS_3_0_010A93B4);
+        set_up_sources(
+            e,
+            frame,
+            &[
+                ShaderSource {
+                    offset: 0x18,
+                    words: &[FOG_PIXEL_010BAF40, 0],
+                    cleared: 0x44,
+                },
+                ShaderSource {
+                    offset: 0x64,
+                    words: &[
+                        FOG_PIXEL_010BAF40,
+                        MACRO_SINGLE_PASS_010BAF34,
+                        FOG_EMPTY_01011584,
+                        0,
+                    ],
+                    cleared: 0x3c,
+                },
+            ],
+        );
+        compile_fog_pair(e, this, frame, FORMAT_FOG_PIXEL_010BAF1C, 0x80, true);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00bc_4830, fn_00bc4830(Ptr, Ptr) -> Ptr),
         entry!(0x00bc_4af0, fn_00bc4af0() -> Ptr),
+        entry!(0x00bc_4600, fn_00bc4600(Ptr) -> u32),
+        entry!(0x00bc_4610, fn_00bc4610()),
+        entry!(0x00bc_4680, fn_00bc4680(Ptr)),
+        entry!(0x00bc_49a0, fn_00bc49a0(Ptr)),
+        entry!(0x00bc_4c00, fn_00bc4c00(Ptr)),
+        entry!(0x00bc_4e70, fn_00bc4e70(Ptr, u32) -> Ptr),
+        entry!(0x00bc_4ea0, fn_00bc4ea0(Ptr) -> bool),
+        entry!(0x00bc_4ed0, fn_00bc4ed0(Ptr)),
+        entry!(0x00bc_5030, fn_00bc5030(Ptr) -> u32),
+        entry!(0x00bc_5070, fn_00bc5070(Ptr)),
+        entry!(0x00bc_51a0, fn_00bc51a0(Ptr)),
     ]
 }
 
@@ -155,5 +563,266 @@ mod constructor_tests {
         assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![old]]);
         assert!(calls(&e, PASS_DELETE_00E80190).is_empty());
         assert_eq!(calls(&e, MEMSET), vec![vec![this + 0x74, 0, 0x40]]);
+    }
+}
+
+#[cfg(test)]
+mod beam_and_fog_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    const SLOTS: u32 = 0x0e00_0000;
+    const VTABLE: u32 = 0x0e80_0000;
+
+    fn vtable(e: &mut Engine) -> u32 {
+        let targets: Vec<u32> = (0..0x60u32).map(|i| SLOTS + 4 * i).collect();
+        e.put_vtable(VTABLE, &targets);
+        VTABLE
+    }
+
+    fn noop(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    #[test]
+    fn fn_00bc4600_jumps_to_00be0870() {
+        let mut e = rig();
+        e.register(CALL_00BE0870, |_, a| (a[0] + 1).into_ret());
+        assert_eq!(e.call(0x00bc_4600, &args![0x1000u32]).u32(), 0x1001);
+    }
+
+    #[test]
+    fn fn_00bc4610_clears_the_global_pointer() {
+        let mut e = rig();
+        e.map(0x0120_1000, 0x1000);
+        let held = object(&mut e, 1);
+        e.set_global(GLOBAL_POINTER_01201FC4, held);
+        e.call(0x00bc_4610, &args![]);
+        assert_eq!(e.global::<u32>(GLOBAL_POINTER_01201FC4), 0);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![held]]);
+        // Already clear: nothing.
+        e.call(0x00bc_4610, &args![]);
+        assert_eq!(calls(&e, REFERENCE_DELETE).len(), 1);
+    }
+
+    #[test]
+    fn fn_00bc4680_compiles_the_beam_shaders() {
+        let mut e = loader_rig();
+        e.register(PIXEL_PROFILE_00B4F380, |_, _| 0x0e55_0000u32.into_ret());
+        let this = e.mem.alloc(0xc0);
+        e.call(0x00bc_4680, &args![this]);
+        assert_eq!(
+            compiled(&e, e.mem.u32(this + 0xb8)),
+            Compiled {
+                file: BEAM_VERTEX_010BAD80,
+                output: BEAM_VSO_010BAD74,
+                profile: PROFILE_VS_1_1_010A93EC,
+                pixel: false,
+                macros: macro_words(&[]),
+            }
+        );
+        assert_eq!(
+            compiled(&e, e.mem.u32(this + 0xbc)),
+            Compiled {
+                file: BEAM_PIXEL_010BAD60,
+                output: BEAM_PSO_010BAD54,
+                profile: 0x0e55_0000,
+                pixel: true,
+                macros: macro_words(&[]),
+            }
+        );
+        // The pixel profile is asked for after the vertex compile.
+        let log = e.call_log.as_ref().unwrap();
+        let order: Vec<u32> = log
+            .iter()
+            .map(|c| c.0)
+            .filter(|a| *a == COMPILE_VERTEX_SHADER || *a == PIXEL_PROFILE_00B4F380)
+            .collect();
+        assert_eq!(order, vec![COMPILE_VERTEX_SHADER, PIXEL_PROFILE_00B4F380]);
+    }
+
+    #[test]
+    fn fn_00bc49a0_clears_the_members_and_destroys() {
+        let mut e = rig();
+        e.map(0x0120_1000, 0x1000);
+        noop(&mut e, &[BS_SHADER_DESTRUCT]);
+        let this = e.mem.alloc(0xc0);
+        let pass = e.mem.alloc(0x70);
+        e.mem.set_u32(pass + 0x64, 1);
+        e.mem.set_u32(this + 0xb4, pass);
+        let vertex = object(&mut e, 1);
+        e.mem.set_u32(this + 0xb8, vertex);
+        e.call(0x00bc_49a0, &args![this]);
+        assert_eq!(e.mem.u32(this), SHADER_VTABLE_010BAD98);
+        assert_eq!(calls(&e, PASS_DELETE_00E80190), vec![vec![pass]]);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![vertex]]);
+        assert_eq!(e.mem.u32(this + 0xb4), 0);
+        assert_eq!(e.mem.u32(this + 0xb8), 0);
+        assert_eq!(calls(&e, BS_SHADER_DESTRUCT), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_00bc4e70_destroys_and_frees_with_bit_0() {
+        let mut e = rig();
+        e.map(0x0120_1000, 0x1000);
+        noop(&mut e, &[BS_SHADER_DESTRUCT, NI_FREE_00AA1460]);
+        let this = e.mem.alloc(0xc0);
+        assert_eq!(e.call(0x00bc_4e70, &args![this, 1u32]).u32(), this);
+        assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![this, 0xc0]]);
+        e.call(0x00bc_4e70, &args![this, 0u32]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460).len(), 1);
+    }
+
+    #[test]
+    fn fn_00bc4ea0_makes_the_pass_once_and_sets_it_up() {
+        let mut e = pass_rig();
+        noop(&mut e, &[STAGE_CALL_00E890C0]);
+        let this = e.mem.alloc(0xc0);
+        let shaders = [object(&mut e, 1), object(&mut e, 1)];
+        e.mem.set_u32(this + 0xb8, shaders[0]);
+        e.mem.set_u32(this + 0xbc, shaders[1]);
+        assert!(e.call(0x00bc_4ea0, &args![this]).bool());
+        let pass = e.mem.u32(this + 0xb4);
+        assert_eq!(calls(&e, NEW_PASS_00E804D0), vec![vec![this + 0xb4]]);
+        let setups = calls(&e, SETUP_DEFAULT_STAGE);
+        assert_eq!(&setups[0][1..], &[0, 1, 2, 1]);
+        let stage = calls(&e, PASS_SET_STAGE)[0][2];
+        assert_eq!(
+            calls(&e, STAGE_CALL_00E890C0),
+            vec![vec![e.mem.u32(stage + 0x10), 7, 0, 0, 0]]
+        );
+        assert_eq!(e.mem.u32(pass + 0x5c), shaders[0]);
+        assert_eq!(e.mem.u32(pass + 0x44), shaders[1]);
+        assert_eq!(render_states(&e, pass), BEAM_RENDER_STATES.to_vec());
+        // The pass was held and let go again; the stage is held by the pass only.
+        assert_eq!(e.mem.u32(pass + 0x64), 1);
+        assert_eq!(e.mem.u32(stage + 0x60), 1);
+        // Again: no new pass, and with its stage count +0x18 set no new stage.
+        e.mem.set_u32(pass + 0x18, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00bc_4ea0, &args![this]);
+        assert!(calls(&e, NEW_PASS_00E804D0).is_empty());
+        assert!(calls(&e, CREATE_NEW_STAGE).is_empty());
+        assert_eq!(render_states(&e, pass).len(), 10);
+    }
+
+    #[test]
+    fn fn_00bc4c00_deletes_a_pass_it_held_alone() {
+        let mut e = pass_rig();
+        let this = e.mem.alloc(0xc0);
+        let pass = e.mem.alloc(0x70);
+        // Count 0 and a stage already: held to 1, let go to 0, deleted.
+        e.mem.set_u32(pass + 0x18, 1);
+        e.mem.set_u32(this + 0xb4, pass);
+        e.call(0x00bc_4c00, &args![this]);
+        assert_eq!(calls(&e, PASS_DELETE_00E80190), vec![vec![pass]]);
+        assert!(calls(&e, CREATE_NEW_STAGE).is_empty());
+    }
+
+    #[test]
+    fn fn_00bc4ed0_makes_the_beam_maps() {
+        const MAP_SLOTS: u32 = 0x0e30_0000;
+        const MAP_VTABLE: u32 = 0x0e31_0000;
+        let mut e = rig();
+        let targets: Vec<u32> = (0..0x20u32).map(|i| MAP_SLOTS + 4 * i).collect();
+        e.put_vtable(MAP_VTABLE, &targets);
+        e.register(NI_ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(CONSTANT_MAP_CONSTRUCT_00B7E330, |e, a| {
+            e.mem.set_u32(a[0], MAP_VTABLE);
+            a[0].into_ret()
+        });
+        noop(&mut e, &[MAP_SLOTS + 8]);
+        let this = e.mem.alloc(0xc0);
+        e.call(0x00bc_4ed0, &args![this]);
+        let vertex = e.mem.u32(this + 0x34);
+        assert_ne!(e.mem.u32(this + 0x30), 0);
+        let entries = calls(&e, MAP_SLOTS + 8);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[1],
+            vec![
+                vertex,
+                FVARS_010AF454,
+                0x1000_0009,
+                0,
+                4,
+                4,
+                CONSTANT_EMPTY_NAME_01011584,
+                0x40,
+                4,
+                this + 0x74,
+                0
+            ]
+        );
+        let maps = calls(&e, CONSTANT_MAP_CONSTRUCT_00B7E330);
+        assert_eq!((maps[0][2], maps[1][2]), (0, 2));
+    }
+
+    #[test]
+    fn fn_00bc5030_runs_both_loaders() {
+        let mut e = rig();
+        let table = vtable(&mut e);
+        noop(&mut e, &[SLOTS + 0x140]);
+        e.register(SLOTS + 0x144, |_, _| 0x44u32.into_ret());
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this, table);
+        assert_eq!(e.call(0x00bc_5030, &args![this]).u32(), 0x44);
+        let log = e.call_log.as_ref().unwrap();
+        let order: Vec<u32> = log.iter().skip(1).map(|c| c.0).collect();
+        assert_eq!(order, vec![SLOTS + 0x140, SLOTS + 0x144]);
+    }
+
+    fn fog_load(addr: u32, second: u8) -> (Engine, u32) {
+        let mut e = loader_rig();
+        e.map(0x011a_d000, 0x1000);
+        e.set_global(SECOND_SHADERS_011AD80E, second);
+        let this = e.mem.alloc(0x90);
+        e.call(addr, &args![this]);
+        (e, this)
+    }
+
+    #[test]
+    fn fn_00bc5070_compiles_the_fog_vertex_shaders() {
+        let (e, this) = fog_load(0x00bc_5070, 1);
+        assert_eq!(
+            compiled(&e, e.mem.u32(this + 0x78)),
+            Compiled {
+                file: FOG_VERTEX_010BAF00,
+                output: FORMAT_FOG_VERTEX_010BAEE8,
+                profile: PROFILE_VS_2_0_010A93E4,
+                pixel: false,
+                macros: macro_words(&[]),
+            }
+        );
+        assert_eq!(
+            compiled(&e, e.mem.u32(this + 0x7c)).profile,
+            PROFILE_VS_3_0_010A93DC
+        );
+        let (e, this) = fog_load(0x00bc_5070, 0);
+        assert_eq!(e.mem.u32(this + 0x7c), 0);
+        assert_eq!(calls(&e, COMPILE_VERTEX_SHADER).len(), 1);
+    }
+
+    #[test]
+    fn fn_00bc51a0_compiles_the_fog_pixel_shaders() {
+        let (e, this) = fog_load(0x00bc_51a0, 1);
+        assert_eq!(
+            compiled(&e, e.mem.u32(this + 0x80)).profile,
+            PROFILE_PS_2_A_010A93C4
+        );
+        assert_eq!(
+            compiled(&e, e.mem.u32(this + 0x84)),
+            Compiled {
+                file: FOG_PIXEL_010BAF40,
+                output: FORMAT_FOG_PIXEL_010BAF1C,
+                profile: PROFILE_PS_3_0_010A93B4,
+                pixel: true,
+                macros: macro_words(&[(MACRO_SINGLE_PASS_010BAF34, FOG_EMPTY_01011584)]),
+            }
+        );
+        let indices: Vec<u32> = calls(&e, FORMAT_00406D00).iter().map(|a| a[3]).collect();
+        assert_eq!(indices, vec![0, 1]);
     }
 }

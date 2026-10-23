@@ -36,6 +36,36 @@ pub fn ni_p_sys_emitter_speed_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
     0x0120_2728
 }
 
+/// `00aa13e0` (`cdecl`, one word): the object allocation.
+const NI_NEW: u32 = 0x00aa_13e0;
+/// `00c32d80`: the `NiPSysModifierFloatCtlr` constructor (`thiscall`; it
+/// stores that class's vtable `010c0e44`).
+const FLOAT_CTLR_CONSTRUCTOR: u32 = 0x00c3_2d80;
+/// `00c32de0` (a 5-byte jump to `00c312f0`): the base member copy,
+/// `thiscall`, `(clone, process)`.
+const BASE_COPY_MEMBERS: u32 = 0x00c3_2de0;
+/// The vtable of `NiPSysEmitterSpeedCtlr` (RTTI
+/// `.?AVNiPSysEmitterSpeedCtlr@@`).
+const VTABLE: u32 = 0x010b_f654;
+
+// Translated from 00c2b380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysEmitterSpeedCtlr::CreateClone` (Xbox PDB): a 0x40-byte object
+/// from `00aa13e0` through the `NiPSysModifierFloatCtlr` constructor and this
+/// class's vtable (0 when the allocation fails), then the base member copy
+/// into it (which still runs for a null clone). Returns the clone.
+pub fn ni_p_sys_emitter_speed_ctlr_create_clone(e: &mut Engine, this: Ptr, process: Ptr) -> Ptr {
+    let block = e.call(NI_NEW, &args![0x40u32]).u32();
+    let clone = if block == 0 {
+        Ptr::NULL
+    } else {
+        e.call(FLOAT_CTLR_CONSTRUCTOR, &args![block]);
+        e.mem.set_u32(block, VTABLE);
+        Ptr::new(block)
+    };
+    e.call(BASE_COPY_MEMBERS, &args![this, clone, process]);
+    clone
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -43,6 +73,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00c2b3d0,
             ni_p_sys_emitter_speed_ctlr_get_viewer_strings(Ptr, Ptr)
+        ),
+        entry!(
+            0x00c2_b380,
+            ni_p_sys_emitter_speed_ctlr_create_clone(Ptr, Ptr) -> Ptr
         ),
     ]
 }
@@ -109,5 +143,50 @@ mod tests {
     fn ni_p_sys_emitter_speed_ctlr_get_r_t_t_i_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c2_b360, &args![]).u32(), 0x0120_2728);
+    }
+
+    #[test]
+    fn create_clone_constructs_sets_the_vtable_and_copies() {
+        let calls_to = |e: &Engine, addr: u32| -> Vec<Vec<u32>> {
+            e.call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|c| c.0 == addr)
+                .map(|c| c.1.clone())
+                .collect()
+        };
+        let mut e = Engine::new();
+        e.register(NI_NEW, |e, a| Ret {
+            eax: e.mem.alloc(a[0]),
+            ..Ret::default()
+        });
+        e.register(FLOAT_CTLR_CONSTRUCTOR, |e, a| {
+            e.mem.set_u32(a[0], 0x1234);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        e.register(BASE_COPY_MEMBERS, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let clone = e.call(0x00c2_b380, &args![0x5000u32, 0x6000u32]).u32();
+        assert_ne!(clone, 0);
+        assert_eq!(e.mem.u32(clone), VTABLE);
+        assert_eq!(calls_to(&e, NI_NEW), vec![vec![0x40]]);
+        assert_eq!(calls_to(&e, FLOAT_CTLR_CONSTRUCTOR), vec![vec![clone]]);
+        assert_eq!(
+            calls_to(&e, BASE_COPY_MEMBERS),
+            vec![vec![0x5000, clone, 0x6000]]
+        );
+
+        e.register(NI_NEW, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00c2_b380, &args![0x5000u32, 0x6000u32]).u32(), 0);
+        assert!(calls_to(&e, FLOAT_CTLR_CONSTRUCTOR).is_empty());
+        assert_eq!(
+            calls_to(&e, BASE_COPY_MEMBERS),
+            vec![vec![0x5000, 0, 0x6000]]
+        );
     }
 }

@@ -26,12 +26,36 @@ pub fn bhk_character_controller_get_position(e: &mut Engine, this: Ptr, out: Ptr
     });
 }
 
+// Translated from 008133b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A float getter (unnamed in the engine map; its class is not confirmed,
+/// several units call it): answers the float at `+0x144` of `this` in
+/// `ST0` (`FLD dword`: a signalling NaN is quieted on the load).
+pub fn fn_008133b0(e: &mut Engine, this: Ptr) -> f64 {
+    x87_load32(e.mem.u32(this.addr() + 0x144))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00812b00,
-        bhk_character_controller_get_position(Ptr, Ptr)
-    )]
+    vec![
+        entry!(0x00812b00, bhk_character_controller_get_position(Ptr, Ptr)),
+        entry!(0x008133b0, fn_008133b0(Ptr) -> f64),
+    ]
+}
+
+#[cfg(test)]
+mod getter_tests {
+    use super::*;
+
+    #[test]
+    fn answers_the_float_at_0x144() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x148);
+        e.mem.set_f32(object + 0x144, 3.25);
+        assert_eq!(e.call(0x0081_33b0, &args![object]).f64(), 3.25);
+        e.mem.set_u32(object + 0x144, 0x7f80_0001);
+        let value = e.call(0x0081_33b0, &args![object]).f64();
+        assert_eq!((value as f32).to_bits(), 0x7fc0_0001);
+    }
 }
 
 #[cfg(test)]

@@ -611,12 +611,338 @@ pub fn fn_00b6e110(
     })
 }
 
+/// The memory manager object and its deallocation (`00aa4060`, `thiscall`, one word).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
+/// The list removal `00e7d7f0` (`thiscall` on a list, `RET 4`: the address of the position,
+/// which it moves on).
+const LIST_REMOVE_AT_00E7D7F0: u32 = 0x00e7_d7f0;
+/// The list operation `00b9e850` (`thiscall` on a list, `RET 4`: the address of an
+/// `NiPointer` it fills with a taken entry).
+const LIST_TAKE_00B9E850: u32 = 0x00b9_e850;
+/// The list operation `00a5a310` (`thiscall` on a list, `RET 4`: the address of an
+/// `NiPointer` it adds).
+const LIST_ADD_00A5A310: u32 = 0x00a5_a310;
+/// The rendered texture's target lookup `00b6b260` (`thiscall` on the texture).
+const RENDERED_TARGET_00B6B260: u32 = 0x00b6_b260;
+/// The `LinkObject` jump target `00ba8a70` (`thiscall`, one word).
+const LINK_OBJECT_00BA8A70: u32 = 0x00ba_8a70;
+/// The byte at `011a2fe4` that skips the destructor's trim of the +0x90 list.
+const FLAG_011A2FE4: u32 = 0x011a_2fe4;
+/// The list-node pool: the free node chain (`011c5f58`) and its spin lock (`011c5f80`, the
+/// owner word; `011c5f84`, the count), entered with `0040fbf0` (`thiscall`, `RET 4`).
+const NODE_POOL_FREE_011C5F58: u32 = 0x011c_5f58;
+const NODE_POOL_LOCK_011C5F80: u32 = 0x011c_5f80;
+const NODE_POOL_LOCK_COUNT_011C5F84: u32 = 0x011c_5f84;
+const SPIN_LOCK_ENTER_0040FBF0: u32 = 0x0040_fbf0;
+/// `NiTPointerListBase<..>::RemoveAll` (engine map, `00b71300`, `thiscall` on a list).
+const LIST_REMOVE_ALL_00B71300: u32 = 0x00b7_1300;
+/// The compiler's `eh vector destructor iterator` (`00ec5fce`, four stack words cleaned by
+/// the callee: array, element size, count, destructor).
+const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
+/// The thread block's word at `+0x2b4` (the allocation context), 0x20 while `00b6ee70` runs.
+const TLS_ALLOCATION_CONTEXT: u32 = 0x2b4;
+
+// Translated from 00b6dd00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6dd00`): `thiscall`, two stack words (an unread word and
+/// a byte). Walks the list at `+0x78`; with the byte 0, each entry whose byte at `+0x10` is 0
+/// and whose word at `+0xc` lacks bit 9 (`0x200`) is removed (`00e7d7f0`, which moves the
+/// position on), its `NiPointer` at `+0` released and the entry freed; the other entries get
+/// their `+0x10` byte cleared. With a non-zero byte nothing changes.
+pub fn fn_00b6dd00(e: &mut Engine, this: Ptr, _unused_1: u32, keep: u8) {
+    let list = this.addr().wrapping_add(0x78);
+    e.with_stack(4, |e, position| {
+        let position = position.addr();
+        let mut node = e.mem.u32(list);
+        e.mem.set_u32(position, node);
+        while node != 0 {
+            let entry = e.mem.u32(node.wrapping_add(8));
+            if keep == 0 {
+                if e.mem.u8(entry.wrapping_add(0x10)) == 0
+                    && e.mem.u32(entry.wrapping_add(0xc)) & 0x200 == 0
+                {
+                    e.call(LIST_REMOVE_AT_00E7D7F0, &args![list, position]);
+                    let object = e.mem.u32(entry);
+                    if object != 0 {
+                        release(e, object);
+                    }
+                    e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, entry]);
+                    node = e.mem.u32(position);
+                    continue;
+                }
+                e.mem.set_u8(entry.wrapping_add(0x10), 0);
+            }
+            node = e.mem.u32(node);
+            e.mem.set_u32(position, node);
+        }
+    });
+}
+
+/// `00b6ee70`'s stack slots, by offset in its block: the two argument slots the exe reuses as
+/// `NiPointer`s, the six out parameters of the texture query (in the order the query takes
+/// them: `[ESP+0x34]`, `+0x30`, `+0x28`, `+0x24`, `+0x2c`, `+0x20` after the prologue) and
+/// the `NiPointer` local (`[ESP+0x38]`).
+const FRAME_RENDERER: u32 = 0;
+const FRAME_COUNT: u32 = 4;
+const FRAME_QUERY_OUTS: [u32; 6] = [0x8, 0xc, 0x10, 0x14, 0x18, 0x1c];
+const FRAME_POINTER: u32 = 0x20;
+
+// Translated from 00b6ee70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6dd00`): `thiscall`, two stack words (a renderer and a
+/// count). Brings the list at `+0x90` (count at `+0x98`) to `count + 1` textures, unless the
+/// word at `+0xa4` is non-zero, with the thread's allocation context (TLS `+0x2b4`) at 0x20
+/// meanwhile (restored on every way out). Too many: each one over is taken off the list
+/// (`00b9e850`), its target (`00b6b260`) gets slot +0xac with 0, it is returned
+/// (`BSTextureManager::ReturnRenderedTexture`) and released. Too few: each one missing is the
+/// head of the free list at `+0` when its count (`+8`) is not 0 (moved to the in-use list at
+/// `+0x3c` and taken off the free list, as `00b6e110` does), else a texture of kind 0x2b
+/// borrowed for the renderer; its target gets slot +0xac with the word at `+0xa8`, and it is
+/// added to the `+0x90` list (`00a5a310`).
+///
+/// The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 00b6ee70 - the C++ exception frame (FS:[0] chain, unwind states 0 to 7 for the temporary pointers) is not translated
+pub fn fn_00b6ee70(e: &mut Engine, this: Ptr, renderer: u32, count: u32) {
+    let base = this.addr();
+    let context = e.tls().wrapping_add(TLS_ALLOCATION_CONTEXT);
+    let saved = e.mem.u32(context);
+    e.mem.set_u32(context, 0x20);
+    if e.mem.u32(base.wrapping_add(0xa4)) != 0 {
+        e.mem.set_u32(context, saved);
+        return;
+    }
+    e.with_stack(0x24, |e, frame| {
+        let frame = frame.addr();
+        let renderer_slot = frame + FRAME_RENDERER;
+        let count_slot = frame + FRAME_COUNT;
+        let pointer = frame + FRAME_POINTER;
+        e.mem.set_u32(renderer_slot, renderer);
+        e.mem.set_u32(count_slot, count);
+        let wanted = count.wrapping_add(1);
+        let have = e.mem.u32(base.wrapping_add(0x98));
+        if have > wanted {
+            let mut left = have - wanted;
+            loop {
+                e.call(
+                    LIST_TAKE_00B9E850,
+                    &args![base.wrapping_add(0x90), count_slot],
+                );
+                let texture = e.mem.u32(count_slot);
+                let target = e.call(RENDERED_TARGET_00B6B260, &args![texture]).u32();
+                e.vcall(target, 0xac, &args![0u32]);
+                let texture = e.mem.u32(count_slot);
+                e.call(RETURN_RENDERED_TEXTURE, &args![this, texture]);
+                let texture = e.mem.u32(count_slot);
+                if texture != 0 {
+                    release(e, texture);
+                }
+                left -= 1;
+                if left == 0 {
+                    break;
+                }
+            }
+        } else if have < wanted {
+            let mut left = wanted - have;
+            loop {
+                let texture = if e.mem.u32(base.wrapping_add(8)) != 0 {
+                    let head = e.mem.u32(base);
+                    let texture = e.mem.u32(head.wrapping_add(8));
+                    e.call(NI_POINTER_FROM_00633C90, &args![count_slot, texture]);
+                    e.call(
+                        LIST_ADD_00C1B4A0,
+                        &args![base.wrapping_add(0x3c), count_slot],
+                    );
+                    e.call(NI_POINTER_DESTRUCT_0045CEC0, &args![count_slot]);
+                    e.call(LIST_TAKE_00B9E7C0, &args![base, renderer_slot]);
+                    e.call(NI_POINTER_DESTRUCT_0045CEC0, &args![renderer_slot]);
+                    texture
+                } else {
+                    let outs = FRAME_QUERY_OUTS.map(|offset| frame + offset);
+                    borrow_of_kind(e, this, renderer, 0x2b, outs)
+                };
+                e.mem.set_u32(pointer, texture);
+                if texture != 0 {
+                    e.call(
+                        IMPORT_INTERLOCKED_INCREMENT,
+                        &args![texture.wrapping_add(4)],
+                    );
+                }
+                let target = e.call(RENDERED_TARGET_00B6B260, &args![texture]).u32();
+                let word = e.mem.u32(base.wrapping_add(0xa8));
+                e.vcall(target, 0xac, &args![word]);
+                e.call(LIST_ADD_00A5A310, &args![base.wrapping_add(0x90), pointer]);
+                if texture != 0 {
+                    release(e, texture);
+                }
+                left -= 1;
+                if left == 0 {
+                    break;
+                }
+            }
+        }
+    });
+    e.mem.set_u32(context, saved);
+}
+
+/// The destructor's removal of the head of the list at `list` (head, tail, count): the
+/// entry's `NiPointer` (`+0` of the entry the node holds) released and cleared, the node
+/// unlinked and given back to the node pool under its spin lock, the count lowered, the
+/// pointer released again when set, and the entry freed.
+fn remove_head_entry(e: &mut Engine, list: u32) {
+    let node = e.mem.u32(list);
+    let entry = e.mem.u32(node.wrapping_add(8));
+    let object = e.mem.u32(entry);
+    if object != 0 {
+        release(e, object);
+        e.mem.set_u32(entry, 0);
+    }
+    let node = e.mem.u32(list);
+    let next = e.mem.u32(node);
+    e.mem.set_u32(list, next);
+    if next != 0 {
+        e.mem.set_u32(next.wrapping_add(4), 0);
+    } else {
+        e.mem.set_u32(list.wrapping_add(4), 0);
+    }
+    e.mem.set_u32(node.wrapping_add(8), 0);
+    e.call(
+        SPIN_LOCK_ENTER_0040FBF0,
+        &args![NODE_POOL_LOCK_011C5F80, 0u32],
+    );
+    e.mem.set_u32(node.wrapping_add(4), 0);
+    let free = e.mem.u32(NODE_POOL_FREE_011C5F58);
+    e.mem.set_u32(node, free);
+    let lock_count = e.mem.u32(NODE_POOL_LOCK_COUNT_011C5F84).wrapping_sub(1);
+    e.mem.set_u32(NODE_POOL_LOCK_COUNT_011C5F84, lock_count);
+    e.mem.set_u32(NODE_POOL_FREE_011C5F58, node);
+    if lock_count == 0 {
+        e.mem.set_u32(NODE_POOL_LOCK_011C5F80, 0);
+    }
+    let count = e.mem.u32(list.wrapping_add(8)).wrapping_sub(1);
+    e.mem.set_u32(list.wrapping_add(8), count);
+    let object = e.mem.u32(entry);
+    if object != 0 {
+        release(e, object);
+    }
+    e.call(MEMORY_DEALLOCATE, &args![MEMORY_MANAGER, entry]);
+}
+
+// Translated from 00b6f0b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b6dd00`): the texture manager's destructor (`thiscall`).
+/// Empties the lists at `+0x9c` and `+0x90` (`00b9e850`, each taken pointer released) and the
+/// entry lists at `+0x84` and `+0x78` (see `remove_head_entry`); unless the byte at
+/// `011a2fe4` is set, trims the `+0x90` list ([`fn_00b6ee70`] with the object at `011f4748`
+/// and 0); empties the five free lists at `+0` .. `+0x30` (`00b9e7c0`, each taken pointer
+/// released); releases and clears the pointers at `+0xa8` and `+0xac` (then their member
+/// destructors release them again when set); removes all from the lists at `+0x9c`, `+0x90`
+/// (`00e74d40`), `+0x84` and `+0x78` (`00b71300`); and destroys both arrays of five lists
+/// (`00ec5fce` with `00b5c7c0`, the in-use array at `+0x3c` first).
+///
+/// The exception frame (`FS:[0]`) is not translated.
+// Translation incomplete: 00b6f0b0 - the C++ exception frame (FS:[0] chain, unwind states 0 to 7 for the members) is not translated
+pub fn fn_00b6f0b0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.with_stack(0xc, |e, frame| {
+        let frame = frame.addr();
+        for (list, count, slot) in [(0x9cu32, 0xa4u32, frame), (0x90, 0x98, frame + 4)] {
+            if e.mem.u32(base.wrapping_add(count)) == 0 {
+                continue;
+            }
+            loop {
+                e.call(LIST_TAKE_00B9E850, &args![base.wrapping_add(list), slot]);
+                let taken = e.mem.u32(slot);
+                if taken != 0 {
+                    release(e, taken);
+                }
+                if e.mem.u32(base.wrapping_add(count)) == 0 {
+                    break;
+                }
+            }
+        }
+        for list in [0x84u32, 0x78] {
+            let list = base.wrapping_add(list);
+            if e.mem.u32(list.wrapping_add(8)) == 0 {
+                continue;
+            }
+            loop {
+                remove_head_entry(e, list);
+                if e.mem.u32(list.wrapping_add(8)) == 0 {
+                    break;
+                }
+            }
+        }
+        if e.mem.u8(FLAG_011A2FE4) == 0 {
+            let renderer = e.mem.u32(OBJECT_011F4748);
+            fn_00b6ee70(e, this, renderer, 0);
+        }
+        let taken = frame + 8;
+        for index in 0..5u32 {
+            let list = base.wrapping_add(index * 0xc);
+            if e.mem.u32(list.wrapping_add(8)) == 0 {
+                continue;
+            }
+            loop {
+                e.call(LIST_TAKE_00B9E7C0, &args![list, taken]);
+                let object = e.mem.u32(taken);
+                if object != 0 {
+                    release(e, object);
+                }
+                if e.mem.u32(list.wrapping_add(8)) == 0 {
+                    break;
+                }
+            }
+        }
+    });
+    for offset in [0xa8u32, 0xac] {
+        let member = base.wrapping_add(offset);
+        let object = e.mem.u32(member);
+        if object != 0 {
+            release(e, object);
+            e.mem.set_u32(member, 0);
+        }
+    }
+    for offset in [0xacu32, 0xa8] {
+        let object = e.mem.u32(base.wrapping_add(offset));
+        if object != 0 {
+            release(e, object);
+        }
+    }
+    e.call(LIST_REMOVE_ALL, &args![base.wrapping_add(0x9c)]);
+    e.call(LIST_REMOVE_ALL, &args![base.wrapping_add(0x90)]);
+    e.call(LIST_REMOVE_ALL_00B71300, &args![base.wrapping_add(0x84)]);
+    e.call(LIST_REMOVE_ALL_00B71300, &args![base.wrapping_add(0x78)]);
+    for array in [base.wrapping_add(0x3c), base] {
+        e.call(
+            VECTOR_DESTRUCT,
+            &args![array, 0xcu32, 5u32, LIST_DESTRUCT_00B5C7C0],
+        );
+    }
+}
+
+// Translated from 00b6f460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A jump to `00ba8a70` (vtable slot +0x50, `LinkObject`, of the vtable at `010b9d28` and
+/// others): `thiscall`, one word (the stream), passed on unchanged.
+pub fn fn_00b6f460(e: &mut Engine, this: Ptr, stream: u32) {
+    e.call(LINK_OBJECT_00BA8A70, &args![this, stream]);
+}
+
+// Translated from 00b6f470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: answers 1 (`MOV EAX,1; RET`). It sits in many vtables; it
+/// reads neither `ECX` nor the stack.
+pub fn fn_00b6f470(_e: &mut Engine, _this: Ptr) -> u32 {
+    1
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00b6_e110, fn_00b6e110(Ptr, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00b6_dd80, fn_00b6dd80(Ptr) -> Ptr),
         entry!(0x00b6_e450, fn_00b6e450(Ptr, u32)),
+        entry!(0x00b6_dd00, fn_00b6dd00(Ptr, u32, u8)),
+        entry!(0x00b6_ee70, fn_00b6ee70(Ptr, u32, u32)),
+        entry!(0x00b6_f0b0, fn_00b6f0b0(Ptr)),
+        entry!(0x00b6_f460, fn_00b6f460(Ptr, u32)),
+        entry!(0x00b6_f470, fn_00b6f470(Ptr) -> u32),
     ]
 }
 
@@ -930,6 +1256,335 @@ mod tests {
         assert_eq!(e.mem.u32(texture + 0x2c), 0x11);
         assert_eq!(e.mem.u32(texture + 4), 1);
         assert_eq!(calls(&e, 0x0f00_5094)[1], vec![inner]);
+    }
+}
+
+#[cfg(test)]
+mod manager_lifetime_tests {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// Reference counting on the word at +4, objects deleted through 0x0f00_0004 (vtable
+    /// 0x0f00_1000), frees recorded.
+    fn rig() -> Engine {
+        let mut e = Engine::new();
+        e.register(IMPORT_INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        e.register(IMPORT_INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], v);
+            v.into_ret()
+        });
+        let mut slots = [0u32; 0x2c];
+        slots[1] = 0x0f00_0004;
+        slots[0xac / 4] = 0x0f00_00ac;
+        e.put_vtable(0x0f00_1000, &slots);
+        for addr in [0x0f00_0004, 0x0f00_00ac, MEMORY_DEALLOCATE] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn object(e: &mut Engine, references: u32) -> u32 {
+        let o = e.mem.alloc(0x40);
+        e.mem.set_u32(o, 0x0f00_1000);
+        e.mem.set_u32(o + 4, references);
+        o
+    }
+
+    #[test]
+    fn fn_00b6dd00_removes_unflagged_entries_and_clears_the_rest() {
+        let mut e = rig();
+        // The removal unlinks the node at the position and moves the position on.
+        e.register(LIST_REMOVE_AT_00E7D7F0, |e, a| {
+            let node = e.mem.u32(a[1]);
+            let next = e.mem.u32(node);
+            let previous = e.mem.u32(node + 4);
+            if previous == 0 {
+                e.mem.set_u32(a[0], next);
+            } else {
+                e.mem.set_u32(previous, next);
+            }
+            e.mem.set_u32(a[1], next);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0xb0);
+        let texture = object(&mut e, 1);
+        let mut entries = vec![];
+        let mut nodes = vec![];
+        for (byte, flags) in [(0u8, 0u32), (1, 0), (0, 0x200)] {
+            let entry = e.mem.alloc(0x14);
+            e.mem.set_u32(entry, texture);
+            e.mem.set_u8(entry + 0x10, byte);
+            e.mem.set_u32(entry + 0xc, flags);
+            let node = e.mem.alloc(0xc);
+            e.mem.set_u32(node + 8, entry);
+            entries.push(entry);
+            nodes.push(node);
+        }
+        e.mem.set_u32(this + 0x78, nodes[0]);
+        e.mem.set_u32(nodes[0], nodes[1]);
+        e.mem.set_u32(nodes[1], nodes[2]);
+        e.mem.set_u32(nodes[1] + 4, nodes[0]);
+        e.mem.set_u32(nodes[2] + 4, nodes[1]);
+        // A non-zero byte: nothing changes.
+        e.call(0x00b6_dd00, &args![this, 0u32, 1u32]);
+        assert!(calls(&e, LIST_REMOVE_AT_00E7D7F0).is_empty());
+        assert_eq!(e.mem.u8(entries[1] + 0x10), 1);
+        e.call(0x00b6_dd00, &args![this, 0u32, 0x100u32]);
+        assert_eq!(calls(&e, LIST_REMOVE_AT_00E7D7F0).len(), 1);
+        assert_eq!(e.mem.u32(this + 0x78), nodes[1]);
+        assert_eq!(calls(&e, 0x0f00_0004), vec![vec![texture]]);
+        assert_eq!(
+            calls(&e, MEMORY_DEALLOCATE),
+            vec![vec![MEMORY_MANAGER, entries[0]]]
+        );
+        assert_eq!(e.mem.u8(entries[1] + 0x10), 0);
+    }
+
+    fn manager(e: &mut Engine) -> u32 {
+        let this = e.mem.alloc(0xb0);
+        e.register(RENDERED_TARGET_00B6B260, |e, a| {
+            e.mem.u32(a[0] + 0x10).into_ret()
+        });
+        for addr in [
+            RETURN_RENDERED_TEXTURE,
+            NI_POINTER_FROM_00633C90,
+            NI_POINTER_DESTRUCT_0045CEC0,
+            LIST_ADD_00C1B4A0,
+            LIST_TAKE_00B9E7C0,
+            TEXTURE_QUERY_00B6C2C0,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        // The +0x90 and +0x9c lists as counts: taking hands out the word at the list's +4.
+        e.register(LIST_TAKE_00B9E850, |e, a| {
+            let count = e.mem.u32(a[0] + 8);
+            e.mem.set_u32(a[0] + 8, count - 1);
+            let texture = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(a[1], texture);
+            Ret::default()
+        });
+        e.register(LIST_ADD_00A5A310, |e, a| {
+            let count = e.mem.u32(a[0] + 8);
+            e.mem.set_u32(a[0] + 8, count + 1);
+            Ret::default()
+        });
+        this
+    }
+
+    fn texture_with_target(e: &mut Engine, references: u32) -> u32 {
+        let texture = object(e, references);
+        let target = object(e, 1);
+        e.mem.set_u32(texture + 0x10, target);
+        texture
+    }
+
+    #[test]
+    fn fn_00b6ee70_returns_the_extra_textures() {
+        let mut e = rig();
+        let this = manager(&mut e);
+        let texture = texture_with_target(&mut e, 3);
+        e.mem.set_u32(this + 0x94, texture);
+        e.mem.set_u32(this + 0x98, 4);
+        let context = e.tls() + TLS_ALLOCATION_CONTEXT;
+        e.mem.set_u32(context, 7);
+        e.call(0x00b6_ee70, &args![this, 0x5000u32, 1u32]);
+        assert_eq!(e.mem.u32(this + 0x98), 2);
+        assert_eq!(calls(&e, RETURN_RENDERED_TEXTURE).len(), 2);
+        assert_eq!(calls(&e, RETURN_RENDERED_TEXTURE)[0], vec![this, texture]);
+        let target = e.mem.u32(texture + 0x10);
+        assert_eq!(calls(&e, 0x0f00_00ac), vec![vec![target, 0]; 2]);
+        assert_eq!(e.mem.u32(texture + 4), 1);
+        assert_eq!(e.mem.u32(context), 7);
+    }
+
+    #[test]
+    fn fn_00b6ee70_fills_up_from_the_free_list_or_by_borrowing() {
+        let mut e = rig();
+        let this = manager(&mut e);
+        let listed = texture_with_target(&mut e, 1);
+        let borrowed = texture_with_target(&mut e, 1);
+        e.register_double(BORROW_RENDERED_TEXTURE, move |_, _| borrowed.into_ret());
+        // The free list holds one texture; taking it empties the list.
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(node + 8, listed);
+        e.mem.set_u32(this, node);
+        e.mem.set_u32(this + 8, 1);
+        e.register(LIST_TAKE_00B9E7C0, |e, a| {
+            e.mem.set_u32(a[0] + 8, 0);
+            Ret::default()
+        });
+        e.mem.set_u32(this + 0xa8, 0x77);
+        let context = e.tls() + TLS_ALLOCATION_CONTEXT;
+        e.register(TEXTURE_QUERY_00B6C2C0, |e, _| {
+            let context = e.tls() + 0x2b4;
+            assert_eq!(e.mem.u32(context), 0x20);
+            Ret::default()
+        });
+        e.mem.set_u32(context, 9);
+        e.call(0x00b6_ee70, &args![this, 0x5000u32, 1u32]);
+        assert_eq!(e.mem.u32(this + 0x98), 2);
+        assert_eq!(calls(&e, LIST_ADD_00C1B4A0)[0][0], this + 0x3c);
+        assert_eq!(calls(&e, NI_POINTER_FROM_00633C90)[0][1], listed);
+        assert_eq!(calls(&e, LIST_TAKE_00B9E7C0)[0][0], this);
+        let borrows = calls(&e, BORROW_RENDERED_TEXTURE);
+        assert_eq!(borrows.len(), 1);
+        assert_eq!((borrows[0][1], borrows[0][7]), (0x5000, 0x2b));
+        let targets: Vec<Vec<u32>> = calls(&e, 0x0f00_00ac);
+        assert_eq!(
+            targets,
+            vec![
+                vec![e.mem.u32(listed + 0x10), 0x77],
+                vec![e.mem.u32(borrowed + 0x10), 0x77]
+            ]
+        );
+        assert_eq!(e.mem.u32(listed + 4), 1);
+        assert_eq!(e.mem.u32(context), 9);
+    }
+
+    #[test]
+    fn fn_00b6ee70_does_nothing_with_the_word_at_0xa4() {
+        let mut e = rig();
+        let this = manager(&mut e);
+        e.mem.set_u32(this + 0xa4, 1);
+        e.mem.set_u32(this + 0x98, 5);
+        e.call(0x00b6_ee70, &args![this, 0x5000u32, 1u32]);
+        assert_eq!(e.mem.u32(this + 0x98), 5);
+        assert!(calls(&e, LIST_TAKE_00B9E850).is_empty());
+    }
+
+    #[test]
+    fn fn_00b6f0b0_empties_everything() {
+        let mut e = rig();
+        let this = manager(&mut e);
+        e.map(0x011a_2000, 0x1000);
+        e.map(0x011c_5000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        e.set_global(FLAG_011A2FE4, 1u8);
+        for addr in [
+            SPIN_LOCK_ENTER_0040FBF0,
+            LIST_REMOVE_ALL,
+            LIST_REMOVE_ALL_00B71300,
+            VECTOR_DESTRUCT,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(LIST_TAKE_00B9E7C0, |e, a| {
+            let count = e.mem.u32(a[0] + 8);
+            e.mem.set_u32(a[0] + 8, count - 1);
+            e.mem.set_u32(a[1], 0);
+            Ret::default()
+        });
+        // The +0x9c list (count at +0xa4) is taken like the +0x90 one.
+        let texture = object(&mut e, 10);
+        e.mem.set_u32(this + 0x94, texture);
+        e.mem.set_u32(this + 0xa0, texture);
+        e.mem.set_u32(this + 0xa4, 1);
+        e.mem.set_u32(this + 0x98, 2);
+        // One entry in the +0x84 list.
+        let held = object(&mut e, 1);
+        let entry = e.mem.alloc(8);
+        e.mem.set_u32(entry, held);
+        let node = e.mem.alloc(0xc);
+        e.mem.set_u32(node + 8, entry);
+        e.mem.set_u32(this + 0x84, node);
+        e.mem.set_u32(this + 0x88, node);
+        e.mem.set_u32(this + 0x8c, 1);
+        e.mem.set_u32(NODE_POOL_FREE_011C5F58, 0x4444);
+        e.mem.set_u32(NODE_POOL_LOCK_COUNT_011C5F84, 1);
+        e.mem.set_u32(NODE_POOL_LOCK_011C5F80, 0x99);
+        // Two free lists hold entries.
+        e.mem.set_u32(this + 0x8, 2);
+        e.mem.set_u32(this + 0x24 + 8, 1);
+        let shared = object(&mut e, 1);
+        e.mem.set_u32(this + 0xa8, shared);
+        e.call(0x00b6_f0b0, &args![this]);
+        assert_eq!(e.mem.u32(texture + 4), 7);
+        assert_eq!(e.mem.u32(this + 0xa4), 0);
+        assert_eq!(e.mem.u32(this + 0x98), 0);
+        assert_eq!(calls(&e, LIST_TAKE_00B9E850).len(), 3);
+        assert_eq!(e.mem.u32(this + 0x8c), 0);
+        assert_eq!(e.mem.u32(this + 0x84), 0);
+        assert_eq!(e.mem.u32(this + 0x88), 0);
+        assert_eq!(e.mem.u32(entry), 0);
+        assert_eq!(e.mem.u32(NODE_POOL_FREE_011C5F58), node);
+        assert_eq!(e.mem.u32(node), 0x4444);
+        assert_eq!(e.mem.u32(NODE_POOL_LOCK_011C5F80), 0);
+        assert_eq!(
+            calls(&e, SPIN_LOCK_ENTER_0040FBF0),
+            vec![vec![NODE_POOL_LOCK_011C5F80, 0]]
+        );
+        assert!(calls(&e, MEMORY_DEALLOCATE).contains(&vec![MEMORY_MANAGER, entry]));
+        // The free lists: two takes from +0, one from +0x24.
+        let takes: Vec<u32> = calls(&e, LIST_TAKE_00B9E7C0).iter().map(|c| c[0]).collect();
+        assert_eq!(takes, vec![this, this, this + 0x24]);
+        assert_eq!(e.mem.u32(this + 0xa8), 0);
+        assert_eq!(
+            calls(&e, 0x0f00_0004)
+                .iter()
+                .filter(|c| c[0] == shared)
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCT),
+            vec![
+                vec![this + 0x3c, 0xc, 5, LIST_DESTRUCT_00B5C7C0],
+                vec![this, 0xc, 5, LIST_DESTRUCT_00B5C7C0]
+            ]
+        );
+        assert_eq!(
+            calls(&e, LIST_REMOVE_ALL),
+            vec![vec![this + 0x9c], vec![this + 0x90]]
+        );
+        assert_eq!(
+            calls(&e, LIST_REMOVE_ALL_00B71300),
+            vec![vec![this + 0x84], vec![this + 0x78]]
+        );
+    }
+
+    #[test]
+    fn fn_00b6f0b0_trims_the_list_without_the_flag() {
+        let mut e = rig();
+        let this = manager(&mut e);
+        e.map(0x011a_2000, 0x1000);
+        e.map(0x011f_4000, 0x1000);
+        e.set_global(OBJECT_011F4748, 0x6000u32);
+        for addr in [LIST_REMOVE_ALL, LIST_REMOVE_ALL_00B71300, VECTOR_DESTRUCT] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(BORROW_RENDERED_TEXTURE, |_, _| Ret::default());
+        e.register(RENDERED_TARGET_00B6B260, |_, _| 0x0f00_2000u32.into_ret());
+        e.map(0x0f00_2000, 0x10);
+        e.mem.set_u32(0x0f00_2000, 0x0f00_1000);
+        e.call(0x00b6_f0b0, &args![this]);
+        // An empty +0x90 list is filled to one texture for the renderer at 011f4748.
+        let borrows = calls(&e, BORROW_RENDERED_TEXTURE);
+        assert_eq!(borrows.len(), 1);
+        assert_eq!(borrows[0][1], 0x6000);
+    }
+
+    #[test]
+    fn fn_00b6f460_and_fn_00b6f470() {
+        let mut e = rig();
+        e.register(LINK_OBJECT_00BA8A70, |_, _| Ret::default());
+        e.call(0x00b6_f460, &args![0x5000u32, 0x6000u32]);
+        assert_eq!(calls(&e, LINK_OBJECT_00BA8A70), vec![vec![0x5000, 0x6000]]);
+        assert_eq!(e.call(0x00b6_f470, &args![0x5000u32]).u32(), 1);
     }
 }
 

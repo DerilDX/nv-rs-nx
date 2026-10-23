@@ -232,6 +232,349 @@ pub fn debug_shader_load_stages_and_passes(e: &mut Engine, this: Ptr) -> bool {
     true
 }
 
+/// The `eh vector destructor iterator` (`00ec5fce`, `stdcall`: array, element size, count,
+/// destructor), `BSShader::~BSShader` (engine map, `00be0f10`, no stack words) and the Ni free
+/// (`00aa1460`, `cdecl`: block, size).
+const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
+const BS_SHADER_DESTRUCT: u32 = 0x00be_0f10;
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00bd1ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `debugshader.cpp`): the debug shader's destructor, no stack
+/// words. Stores the vtable `010bbd08`, clears (releasing what they hold) the `NiPointer`s
+/// +0xb0, +0xb4, +0xb8, +0xac and +0x6c to +0xa8, destroys the array +0xb4 (2, destructor
+/// `00b66f20`), releases +0xb0 and +0xac again when not null (they were just cleared),
+/// destroys the 0x10 pointers at +0x6c (destructor `0045cec0`) and runs `BSShader::~BSShader`
+/// (`00be0f10`).
+// Translation incomplete: 00bd1ab0 - the C++ exception frame (FS:[0] chain, unwind states 0 to 4 for the members and the base) is not translated.
+pub fn fn_00bd1ab0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, DEBUG_SHADER_VTABLE_010BBD08);
+    ni_pointer_clear(e, base + 0xb0);
+    for index in 0..2u32 {
+        ni_pointer_clear(e, base + 0xb4 + 4 * index);
+    }
+    ni_pointer_clear(e, base + 0xac);
+    for index in 0..0x10u32 {
+        ni_pointer_clear(e, base + 0x6c + 4 * index);
+    }
+    e.call(
+        VECTOR_DESTRUCT,
+        &args![base + 0xb4, 4u32, 2u32, DESTRUCT_00B66F20],
+    );
+    for offset in [0xb0u32, 0xac] {
+        let held = e.mem.u32(base + offset);
+        if held != 0 {
+            release_reference(e, held);
+        }
+    }
+    e.call(
+        VECTOR_DESTRUCT,
+        &args![base + 0x6c, 4u32, 0x10u32, POINTER_DESTRUCT_0045CEC0],
+    );
+    e.call(BS_SHADER_DESTRUCT, &args![base]);
+}
+
+/// The renderer object (`011f4748`), `2^32` (`float`, `01099378`, added to a negative
+/// `FILD`), the constants of the debug rectangles (`float` `010181bc`, `double`s `0103c7c8`,
+/// `01011588`, `01011598`, `0106b168`, `010760f0`), `NiScreenElementsData::SetRectangle`
+/// (`00a88020`, `thiscall`, `RET 0x14`), `::UpdateBound` (`00a87900`, no stack words) and
+/// `NiScreenElements::Draw` (`00a87790`, `thiscall`, `RET 4`) (engine map).
+const RENDERER_OBJECT_011F4748: u32 = 0x011f_4748;
+const TWO_POWER_32_01099378: u32 = 0x0109_9378;
+const RECT_LEFT_010181BC: u32 = 0x0101_81bc;
+const RECT_OFFSET_0103C7C8: u32 = 0x0103_c7c8;
+const COLUMN_STEP_01011588: u32 = 0x0101_1588;
+const ROW_STEP_01011598: u32 = 0x0101_1598;
+const WIDTH_SCALE_0106B168: u32 = 0x0106_b168;
+const HEIGHT_SCALE_010760F0: u32 = 0x0107_60f0;
+const SET_RECTANGLE: u32 = 0x00a8_8020;
+const UPDATE_BOUND: u32 = 0x00a8_7900;
+const SCREEN_ELEMENTS_DRAW: u32 = 0x00a8_7790;
+/// Bits of `1.0f`.
+const ONE_BITS: u32 = 0x3f80_0000;
+
+/// `FILD dword` of an unsigned value as the compiler converts it: `2^32` (the `float` at
+/// `01099378`) added when the signed value is negative.
+fn unsigned_load(e: &Engine, value: u32) -> f64 {
+    let loaded = f64::from(value as i32);
+    if (value as i32) < 0 {
+        x87_add(loaded, x87_m32(e.global::<u32>(TWO_POWER_32_01099378)))
+    } else {
+        loaded
+    }
+}
+
+/// The two ratios the debug quads are scaled by: `ratio / max(ratio_f, 1)` and
+/// `1 / max(ratio_f, 1)` as the code's compares give them (a NaN ratio kept), where `ratio`
+/// is the quotient as the FPU holds it and `ratio_f` the same stored as a `float`.
+fn fitted(ratio: f64) -> (u32, u32) {
+    let ratio_bits = x87_store32(ratio);
+    let ratio_f = x87_load32(ratio_bits);
+    // FCOM 1.0 with the ratio; TEST AH,0x41: below 1 takes 1.0, else (and NaN) the ratio.
+    let first = if 1.0 > ratio_f { ONE_BITS } else { ratio_bits };
+    let scaled = x87_store32(x87_div(ratio, x87_load32(first)));
+    // FCOM the ratio with 1.0; TEST AH,5: below 1 takes 1.0, else (and NaN) the ratio.
+    let second = if ratio_f < 1.0 { ONE_BITS } else { ratio_bits };
+    (scaled, second)
+}
+
+// Translated from 00bd1cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `debugshader.cpp`; `00b55a10` calls it), `thiscall`, `RET 4`
+/// (a target, or null for the screen). Draws the shader's sixteen textures (+0x6c) as quads
+/// in a 4 by 4 grid through its screen elements (+0xac). The target's size is its +0x30
+/// object's slots +0x94 and +0x98 (0 without one), the screen's the renderer's (`011f4748`)
+/// slot +0xc8 object's slots +0x8c and +0x90 (with 0); from the height over the width the
+/// fitted ratios give the rectangle (`010181bc`, the width ratio, the height ratio minus the
+/// `double` `0103c7c8`, 0.0) the renderer's slot +0x190 gets. For each texture present, with
+/// the loop index kept in the shader's word +0xbc: its own size gives the fitted ratios, the
+/// quad's `SetRectangle(0, column * 0.5 - 1, 1 - row * 0.5, ...)` with the two ratios scaled by
+/// the `double`s `0106b168` and `010760f0` (`00a88020` on the screen elements' +0xb8), then
+/// `UpdateBound`, the screen elements' +0xc0 set to the shader, the shader's slot +0x50 with
+/// them, the renderer's slot +0x190 with the rectangle when its word +0x200 is 1 or 2 and
+/// its byte +0x208 is 1, `NiScreenElements::Draw` with the renderer, and the texture's
+/// pointer cleared (releasing it) and +0xc0 cleared. The screen elements are held for the
+/// loop as an `NiPointer`.
+// Translation incomplete: 00bd1cf0 - the C++ exception frame (FS:[0] chain, unwind state 0 for the held screen elements) is not translated.
+pub fn fn_00bd1cf0(e: &mut Engine, this: Ptr, target: Ptr) {
+    let this = this.addr();
+    let target = target.addr();
+    let (width, height) = if target != 0 {
+        let maps = e.mem.u32(target + 0x30);
+        let width = if maps != 0 {
+            e.vcall(maps, 0x94, &args![]).u32()
+        } else {
+            0
+        };
+        let width = x87_store32(unsigned_load(e, width));
+        let maps = e.mem.u32(target + 0x30);
+        let height = if maps != 0 {
+            e.vcall(maps, 0x98, &args![]).u32()
+        } else {
+            0
+        };
+        (width, height)
+    } else {
+        let renderer = e.global::<u32>(RENDERER_OBJECT_011F4748);
+        let screen = e.vcall(renderer, 0xc8, &args![]).u32();
+        let width = e.vcall(screen, 0x8c, &args![0u32]).u32();
+        let width = x87_store32(unsigned_load(e, width));
+        let renderer = e.global::<u32>(RENDERER_OBJECT_011F4748);
+        let screen = e.vcall(renderer, 0xc8, &args![]).u32();
+        let height = e.vcall(screen, 0x90, &args![0u32]).u32();
+        (width, height)
+    };
+    let height = x87_store32(unsigned_load(e, height));
+    let ratio = x87_div(x87_load32(height), x87_m32(width));
+    let (scaled, second) = fitted(ratio);
+    let inverse = x87_store32(x87_div(1.0, x87_m32(second)));
+    e.with_stack(0x10, |e, rectangle| {
+        let rectangle = rectangle.addr();
+        let left = x87_quiet_bits(e.global::<u32>(RECT_LEFT_010181BC));
+        e.mem.set_u32(rectangle, left);
+        e.mem.set_u32(rectangle + 4, x87_quiet_bits(scaled));
+        let offset = f64::from_bits(e.global::<u64>(RECT_OFFSET_0103C7C8));
+        let bottom = x87_store32(x87_sub(x87_load32(inverse), offset));
+        e.mem.set_u32(rectangle + 8, bottom);
+        e.mem.set_u32(rectangle + 0xc, 0);
+        let screen = e.mem.u32(this + 0xac);
+        if screen != 0 {
+            e.call(IMPORT_INTERLOCKED_INCREMENT, &args![screen.wrapping_add(4)]);
+        }
+        e.mem.set_u32(this + 0xbc, 0);
+        loop {
+            let index = e.mem.u32(this + 0xbc);
+            let texture = e.mem.u32(this + 0x6c + 4 * index);
+            if texture != 0 {
+                let width = e.vcall(texture, 0x94, &args![]).u32();
+                let width = x87_store32(unsigned_load(e, width));
+                let index = e.mem.u32(this + 0xbc);
+                let texture = e.mem.u32(this + 0x6c + 4 * index);
+                let height = e.vcall(texture, 0x98, &args![]).u32();
+                let height = x87_store32(unsigned_load(e, height));
+                let ratio = x87_div(x87_load32(width), x87_m32(height));
+                let (scaled, second) = fitted(ratio);
+                // FDIVR ST(0),ST(1) (`D8 F9`): 1.0 over the loaded value.
+                let inverse = x87_store32(x87_div(1.0, x87_load32(second)));
+                let index = e.mem.u32(this + 0xbc);
+                let row = x87_store32(unsigned_load(e, index >> 2));
+                let column = x87_store32(unsigned_load(e, index & 3));
+                let data = e.mem.u32(screen + 0xb8);
+                let step = f64::from_bits(e.global::<u64>(COLUMN_STEP_01011588));
+                // FSUB ST(0),ST(1) (`D8 E1`): minus the 1.0 below it.
+                let x = x87_store32(x87_sub(x87_mul(x87_load32(column), step), 1.0));
+                let step = f64::from_bits(e.global::<u64>(ROW_STEP_01011598));
+                let y = x87_store32(x87_add(1.0, x87_mul(x87_load32(row), step)));
+                let factor = f64::from_bits(e.global::<u64>(WIDTH_SCALE_0106B168));
+                let w = x87_store32(x87_mul(x87_load32(scaled), factor));
+                let factor = f64::from_bits(e.global::<u64>(HEIGHT_SCALE_010760F0));
+                let h = x87_store32(x87_mul(x87_load32(inverse), factor));
+                e.call(
+                    SET_RECTANGLE,
+                    &args![
+                        data,
+                        0u32,
+                        x87_quiet_bits(x),
+                        x87_quiet_bits(y),
+                        x87_quiet_bits(w),
+                        x87_quiet_bits(h)
+                    ],
+                );
+                let data = e.mem.u32(screen + 0xb8);
+                e.call(UPDATE_BOUND, &args![data]);
+                e.mem.set_u32(screen + 0xc0, this);
+                e.vcall(this, 0x50, &args![screen]);
+                let renderer = e.global::<u32>(RENDERER_OBJECT_011F4748);
+                let mode = e.mem.u32(renderer + 0x200);
+                let renderer = if (mode == 1 || mode == 2) && e.mem.u8(renderer + 0x208) == 1 {
+                    e.vcall(renderer, 0x190, &args![rectangle]);
+                    e.global::<u32>(RENDERER_OBJECT_011F4748)
+                } else {
+                    renderer
+                };
+                e.call(SCREEN_ELEMENTS_DRAW, &args![screen, renderer]);
+                let index = e.mem.u32(this + 0xbc);
+                ni_pointer_clear(e, this + 0x6c + 4 * index);
+                e.mem.set_u32(screen + 0xc0, 0);
+            }
+            let next = e.mem.u32(this + 0xbc).wrapping_add(1);
+            e.mem.set_u32(this + 0xbc, next);
+            if next >= 0x10 {
+                break;
+            }
+        }
+        if screen != 0 {
+            release_reference(e, screen);
+        }
+    });
+}
+
+// Translated from 00bd23c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `debugshader.cpp`): the scalar deleting destructor (vtable
+/// `010bbd08` slot +0), `thiscall`, `RET 4`. Runs the destructor (`00bd1ab0`) and, when bit 0
+/// of the flags is set, frees the 0xc0 bytes (`00aa1460`). Answers `this`.
+pub fn fn_00bd23c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00bd1ab0(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_00AA1460, &args![this, 0xc0u32]);
+    }
+    this
+}
+
+/// `00be0870` (unnamed, `thiscall`, no stack words; answers a bool),
+/// `NiScreenElementsData::NiScreenElementsData` (`00a881e0`, `thiscall`, nine words),
+/// `NiScreenElements::NiScreenElements` (`00a87810`, `thiscall`, the data),
+/// `NiScreenElementsData::Insert` (`00a87ae0`, `thiscall`, three words) and `::SetTextures`
+/// (`00a88130`, `thiscall`, six words), `NiAVObject::UpdateProperties` (`00a5a040`, no stack
+/// words) and `00a59c60` (unit `NiMain`, unnamed; `thiscall`, the address of an update
+/// record) (engine map).
+const CALL_00BE0870: u32 = 0x00be_0870;
+const SCREEN_ELEMENTS_DATA_CONSTRUCT: u32 = 0x00a8_81e0;
+const SCREEN_ELEMENTS_CONSTRUCT: u32 = 0x00a8_7810;
+const SCREEN_ELEMENTS_DATA_INSERT: u32 = 0x00a8_7ae0;
+const SCREEN_ELEMENTS_DATA_SET_TEXTURES: u32 = 0x00a8_8130;
+const UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+const UPDATE_00A59C60: u32 = 0x00a5_9c60;
+/// The rectangle's `float`s (`01012054`, `010162c0`, `0104a494`), the `"ChannelMask"` name
+/// (`010bbe44`) and the mask data (`011ae620`).
+const RECT_LEFT_01012054: u32 = 0x0101_2054;
+const RECT_WIDTH_010162C0: u32 = 0x0101_62c0;
+const RECT_HEIGHT_0104A494: u32 = 0x0104_a494;
+const CHANNEL_MASK_010BBE44: u32 = 0x010b_be44;
+const CHANNEL_MASK_011AE620: u32 = 0x011a_e620;
+
+// Translated from 00bd24c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DebugShader::Initialize` (Xbox PDB), no stack words. Runs `00be0870` (its answer is the
+/// answer); makes the screen elements (0xc4 bytes; their data 0x70 bytes,
+/// `NiScreenElementsData(0, 0, 1, 1, 1, 4, 1, 2, 1)`, null when that allocation failed; the
+/// elements null when theirs failed) into the `NiPointer` +0xac; on their data (+0xb8):
+/// `Insert(4, 0, 0)`, `SetRectangle(0, ...)` with the `float`s `01012054`, 1.0, `010162c0`,
+/// `0104a494`, `SetTextures(0, 0, 0.0, 0.0, 1.0, 1.0)`, `UpdateBound`; on the elements
+/// `UpdateProperties` and `00a59c60` with a stack record (0.0 and five zero bytes). When the
+/// pixel constant map (+0x30) is null, makes one (kind 2) with `"ChannelMask"` (register 5,
+/// `011ae620`).
+// Translation incomplete: 00bd24c0 - the C++ exception frame (FS:[0] chain, unwind states 0 to 2 for the allocations) is not translated.
+pub fn debug_shader_initialize(e: &mut Engine, this: Ptr) -> bool {
+    let base = this.addr();
+    let result = e.call(CALL_00BE0870, &args![base]).bool();
+    e.with_stack(0xc, |e, record| {
+        let record = record.addr();
+        e.mem.set_u32(record, 0);
+        for offset in 4..9u32 {
+            e.mem.set_u8(record + offset, 0);
+        }
+        let block = e.call(NI_ALLOCATE_00AA13E0, &args![0xc4u32]).u32();
+        let elements = if block == 0 {
+            0
+        } else {
+            let data_block = e.call(NI_ALLOCATE_00AA13E0, &args![0x70u32]).u32();
+            let data = if data_block != 0 {
+                e.call(
+                    SCREEN_ELEMENTS_DATA_CONSTRUCT,
+                    &args![data_block, 0u32, 0u32, 1u32, 1u32, 1u32, 4u32, 1u32, 2u32, 1u32],
+                )
+                .u32()
+            } else {
+                0
+            };
+            e.call(SCREEN_ELEMENTS_CONSTRUCT, &args![block, data]).u32()
+        };
+        ni_pointer_assign(e, base + 0xac, elements);
+        let data = e.mem.u32(e.mem.u32(base + 0xac) + 0xb8);
+        e.call(SCREEN_ELEMENTS_DATA_INSERT, &args![data, 4u32, 0u32, 0u32]);
+        let data = e.mem.u32(e.mem.u32(base + 0xac) + 0xb8);
+        let floats = [
+            RECT_LEFT_01012054,
+            0,
+            RECT_WIDTH_010162C0,
+            RECT_HEIGHT_0104A494,
+        ]
+        .map(|at| {
+            if at == 0 {
+                ONE_BITS
+            } else {
+                x87_quiet_bits(e.global::<u32>(at))
+            }
+        });
+        e.call(
+            SET_RECTANGLE,
+            &args![data, 0u32, floats[0], floats[1], floats[2], floats[3]],
+        );
+        let data = e.mem.u32(e.mem.u32(base + 0xac) + 0xb8);
+        e.call(
+            SCREEN_ELEMENTS_DATA_SET_TEXTURES,
+            &args![data, 0u32, 0u32, 0u32, 0u32, ONE_BITS, ONE_BITS],
+        );
+        let data = e.mem.u32(e.mem.u32(base + 0xac) + 0xb8);
+        e.call(UPDATE_BOUND, &args![data]);
+        let elements = e.mem.u32(base + 0xac);
+        e.call(UPDATE_PROPERTIES, &args![elements]);
+        let elements = e.mem.u32(base + 0xac);
+        e.call(UPDATE_00A59C60, &args![elements, record]);
+    });
+    if e.mem.u32(base + 0x30) == 0 {
+        make_constant_map(e, base, 0x30, 2);
+        add_constant_entry(
+            e,
+            base,
+            0x30,
+            [
+                CHANNEL_MASK_010BBE44,
+                0x1000_0007,
+                0,
+                5,
+                1,
+                CONSTANT_EMPTY_NAME_01011584,
+                0x10,
+                4,
+                CHANNEL_MASK_011AE620,
+                0,
+            ],
+        );
+    }
+    result
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -239,6 +582,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00bd_16f0, debug_shader_load_shaders(Ptr)),
         entry!(0x00bd_20e0, debug_shader_load_stages_and_passes(Ptr) -> bool),
         entry!(0x00bd_23f0, debug_shader_create_shader() -> Ptr),
+        entry!(0x00bd_1ab0, fn_00bd1ab0(Ptr)),
+        entry!(0x00bd_1cf0, fn_00bd1cf0(Ptr, Ptr)),
+        entry!(0x00bd_23c0, fn_00bd23c0(Ptr, u32) -> Ptr),
+        entry!(0x00bd_24c0, debug_shader_initialize(Ptr) -> bool),
     ]
 }
 
@@ -383,5 +730,304 @@ mod b000h_tests {
         );
         let stage = calls(&e, PASS_SET_STAGE)[0][2];
         assert_eq!(e.mem.u32(stage + 0x60), 1);
+    }
+}
+
+#[cfg(test)]
+mod debug_function_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    const SLOTS: u32 = 0x0e00_0000;
+    const VTABLE: u32 = 0x0e80_0000;
+
+    fn vtable(e: &mut Engine, n: u32) -> u32 {
+        let table = VTABLE + n * 0x1000;
+        let targets: Vec<u32> = (0..0x70u32).map(|i| SLOTS + n * 0x1000 + 4 * i).collect();
+        e.put_vtable(table, &targets);
+        table
+    }
+
+    fn slot(n: u32, offset: u32) -> u32 {
+        SLOTS + n * 0x1000 + offset
+    }
+
+    fn noop(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    fn map_globals(e: &mut Engine) {
+        for page in [
+            0x0101_1000u32,
+            0x0101_2000,
+            0x0101_6000,
+            0x0101_8000,
+            0x0103_c000,
+            0x0104_a000,
+            0x0106_b000,
+            0x0107_6000,
+            0x0109_9000,
+            0x011a_e000,
+            0x011f_4000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(TWO_POWER_32_01099378, 4_294_967_296.0f32);
+        e.set_global(RECT_LEFT_010181BC, 0.05f32);
+        e.set_global(RECT_OFFSET_0103C7C8, 0.05f64);
+        e.set_global(COLUMN_STEP_01011588, 0.5f64);
+        e.set_global(ROW_STEP_01011598, -0.5f64);
+        e.set_global(WIDTH_SCALE_0106B168, 0.5f64);
+        e.set_global(HEIGHT_SCALE_010760F0, -0.5f64);
+    }
+
+    #[test]
+    fn fn_00bd1ab0_clears_the_members_and_destroys() {
+        let mut e = rig();
+        noop(&mut e, &[VECTOR_DESTRUCT, BS_SHADER_DESTRUCT]);
+        let this = e.mem.alloc(0xc0);
+        let held = [object(&mut e, 1), object(&mut e, 1)];
+        e.mem.set_u32(this + 0xac, held[0]);
+        e.mem.set_u32(this + 0x6c + 4 * 15, held[1]);
+        e.call(0x00bd_1ab0, &args![this]);
+        assert_eq!(e.mem.u32(this), DEBUG_SHADER_VTABLE_010BBD08);
+        assert_eq!(
+            calls(&e, REFERENCE_DELETE),
+            vec![vec![held[0]], vec![held[1]]]
+        );
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCT),
+            vec![
+                vec![this + 0xb4, 4, 2, DESTRUCT_00B66F20],
+                vec![this + 0x6c, 4, 0x10, POINTER_DESTRUCT_0045CEC0],
+            ]
+        );
+        assert_eq!(calls(&e, BS_SHADER_DESTRUCT), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_00bd23c0_destroys_and_frees_with_bit_0() {
+        let mut e = rig();
+        noop(
+            &mut e,
+            &[VECTOR_DESTRUCT, BS_SHADER_DESTRUCT, NI_FREE_00AA1460],
+        );
+        let this = e.mem.alloc(0xc0);
+        assert_eq!(e.call(0x00bd_23c0, &args![this, 1u32]).u32(), this);
+        assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![this, 0xc0]]);
+        e.call(0x00bd_23c0, &args![this, 0u32]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460).len(), 1);
+    }
+
+    /// A debug shader with the screen elements (vtable 0, data at +0xb8), textures (vtable 1)
+    /// in the given slots with the given sizes, and a renderer (vtable 2) of mode `mode`.
+    fn draw_rig(textures: &[(u32, u32, u32)], mode: u32) -> (Engine, u32, u32, Vec<u32>) {
+        let mut e = rig();
+        map_globals(&mut e);
+        let this = e.mem.alloc(0xc0);
+        let table3 = vtable(&mut e, 3);
+        e.mem.set_u32(this, table3);
+        let screen = e.mem.alloc(0xc4);
+        let table0 = vtable(&mut e, 0);
+        e.mem.set_u32(screen, table0);
+        e.mem.set_u32(screen + 4, 1);
+        e.mem.set_u32(screen + 0xb8, 0x5555);
+        e.mem.set_u32(this + 0xac, screen);
+        let table1 = vtable(&mut e, 1);
+        let mut made = vec![];
+        for (index, width, height) in textures {
+            let texture = object(&mut e, 1);
+            e.mem.set_u32(texture, table1);
+            e.mem.set_u32(texture + 0x40, *width);
+            e.mem.set_u32(texture + 0x44, *height);
+            e.mem.set_u32(this + 0x6c + 4 * index, texture);
+            made.push(texture);
+        }
+        e.register(slot(1, 0x94), |e, a| e.mem.u32(a[0] + 0x40).into_ret());
+        e.register(slot(1, 0x98), |e, a| e.mem.u32(a[0] + 0x44).into_ret());
+        e.register(slot(1, 4), |_, _| Ret::default());
+        let renderer = e.mem.alloc(0x210);
+        let table2 = vtable(&mut e, 2);
+        e.mem.set_u32(renderer, table2);
+        e.mem.set_u32(renderer + 0x200, mode);
+        e.mem.set_u8(renderer + 0x208, 1);
+        e.set_global(RENDERER_OBJECT_011F4748, renderer);
+        let output = e.mem.alloc(0x10);
+        let table4 = vtable(&mut e, 4);
+        e.mem.set_u32(output, table4);
+        e.register_double(slot(2, 0xc8), move |_, _| output.into_ret());
+        e.register(slot(4, 0x8c), |_, _| 800u32.into_ret());
+        e.register(slot(4, 0x90), |_, _| 600u32.into_ret());
+        noop(
+            &mut e,
+            &[
+                slot(2, 0x190),
+                slot(3, 0x50),
+                SET_RECTANGLE,
+                UPDATE_BOUND,
+                SCREEN_ELEMENTS_DRAW,
+            ],
+        );
+        (e, this, screen, made)
+    }
+
+    #[test]
+    fn fn_00bd1cf0_draws_each_texture_in_its_grid_cell() {
+        let (mut e, this, screen, textures) = draw_rig(&[(0, 64, 64), (5, 128, 64)], 1);
+        e.call(0x00bd_1cf0, &args![this, 0u32]);
+        let rectangles = calls(&e, SET_RECTANGLE);
+        assert_eq!(rectangles.len(), 2);
+        let floats = |a: &[u32]| {
+            a[2..]
+                .iter()
+                .map(|b| f32::from_bits(*b))
+                .collect::<Vec<_>>()
+        };
+        // Cell 0: column 0, row 0; a square texture: 0.5 by -0.5.
+        assert_eq!(rectangles[0][..2], [0x5555, 0]);
+        assert_eq!(floats(&rectangles[0]), vec![-1.0, 1.0, 0.5, -0.5]);
+        // Cell 5: column 1, row 1; twice as wide: the width ratio 2 / 2 = 1, height 1 / 2.
+        assert_eq!(floats(&rectangles[1]), vec![-0.5, 0.5, 0.5, -0.25]);
+        // The renderer's slot +0x190 got the screen rectangle (mode 1, byte 1).
+        let screen_rect = calls(&e, slot(2, 0x190));
+        assert_eq!(screen_rect.len(), 2);
+        assert_eq!(calls(&e, SCREEN_ELEMENTS_DRAW).len(), 2);
+        assert_eq!(calls(&e, slot(3, 0x50)), vec![vec![this, screen]; 2]);
+        // The textures were released and their pointers cleared; the loop index ends at 0x10.
+        assert_eq!(
+            calls(&e, slot(1, 4)),
+            vec![vec![textures[0]], vec![textures[1]]]
+        );
+        assert_eq!(e.mem.u32(this + 0x6c + 4 * 5), 0);
+        assert_eq!(e.mem.u32(this + 0xbc), 0x10);
+        assert_eq!(e.mem.u32(screen + 0xc0), 0);
+        // The screen elements were held for the loop and let go.
+        assert_eq!(e.mem.u32(screen + 4), 1);
+    }
+
+    #[test]
+    fn fn_00bd1cf0_uses_the_target_size_and_skips_the_renderer_hook() {
+        let (mut e, this, _, _) = draw_rig(&[(3, 32, 32)], 3);
+        let target = e.mem.alloc(0x40);
+        let maps = e.mem.alloc(0x10);
+        let table5 = vtable(&mut e, 5);
+        e.mem.set_u32(maps, table5);
+        e.mem.set_u32(target + 0x30, maps);
+        e.register(slot(5, 0x94), |_, _| 100u32.into_ret());
+        e.register(slot(5, 0x98), |_, _| 50u32.into_ret());
+        e.call(0x00bd_1cf0, &args![this, target]);
+        assert!(calls(&e, slot(2, 0x190)).is_empty());
+        assert!(calls(&e, slot(2, 0xc8)).is_empty());
+        let rectangles = calls(&e, SET_RECTANGLE);
+        assert_eq!(f32::from_bits(rectangles[0][2]), 0.5);
+        assert_eq!(f32::from_bits(rectangles[0][3]), 1.0);
+    }
+
+    #[test]
+    fn debug_shader_initialize_builds_the_screen_elements_and_the_mask() {
+        const MAP_SLOTS: u32 = 0x0e30_0000;
+        const MAP_VTABLE: u32 = 0x0e31_0000;
+        let mut e = rig();
+        map_globals(&mut e);
+        e.set_global(RECT_LEFT_01012054, -1.0f32);
+        e.set_global(RECT_WIDTH_010162C0, 2.0f32);
+        e.set_global(RECT_HEIGHT_0104A494, -2.0f32);
+        e.register(CALL_00BE0870, |_, _| 1u32.into_ret());
+        e.register(NI_ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(SCREEN_ELEMENTS_DATA_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(SCREEN_ELEMENTS_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 0xb8, a[1]);
+            a[0].into_ret()
+        });
+        noop(
+            &mut e,
+            &[
+                SCREEN_ELEMENTS_DATA_INSERT,
+                SET_RECTANGLE,
+                SCREEN_ELEMENTS_DATA_SET_TEXTURES,
+                UPDATE_BOUND,
+                UPDATE_PROPERTIES,
+                UPDATE_00A59C60,
+                MAP_SLOTS + 8,
+            ],
+        );
+        let targets: Vec<u32> = (0..0x20u32).map(|i| MAP_SLOTS + 4 * i).collect();
+        e.put_vtable(MAP_VTABLE, &targets);
+        e.register(CONSTANT_MAP_CONSTRUCT_00B7E330, |e, a| {
+            e.mem.set_u32(a[0], MAP_VTABLE);
+            a[0].into_ret()
+        });
+        let this = e.mem.alloc(0xc0);
+        assert!(e.call(0x00bd_24c0, &args![this]).bool());
+        let elements = e.mem.u32(this + 0xac);
+        let data = e.mem.u32(elements + 0xb8);
+        assert_eq!(e.mem.u32(elements + 4), 1);
+        let construct = calls(&e, SCREEN_ELEMENTS_DATA_CONSTRUCT);
+        assert_eq!(&construct[0][1..], &[0, 0, 1, 1, 1, 4, 1, 2, 1]);
+        assert_eq!(
+            calls(&e, SCREEN_ELEMENTS_DATA_INSERT),
+            vec![vec![data, 4, 0, 0]]
+        );
+        assert_eq!(
+            calls(&e, SET_RECTANGLE),
+            vec![vec![
+                data,
+                0,
+                (-1.0f32).to_bits(),
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                (-2.0f32).to_bits()
+            ]]
+        );
+        assert_eq!(
+            calls(&e, SCREEN_ELEMENTS_DATA_SET_TEXTURES),
+            vec![vec![data, 0, 0, 0, 0, ONE_BITS, ONE_BITS]]
+        );
+        assert_eq!(calls(&e, UPDATE_PROPERTIES), vec![vec![elements]]);
+        let update = calls(&e, UPDATE_00A59C60);
+        assert_eq!(update[0][0], elements);
+        let entries = calls(&e, MAP_SLOTS + 8);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0][1], CHANNEL_MASK_010BBE44);
+        assert_eq!(entries[0][9], CHANNEL_MASK_011AE620);
+    }
+
+    #[test]
+    fn debug_shader_initialize_passes_a_null_data_when_its_allocation_fails() {
+        let mut e = rig();
+        map_globals(&mut e);
+        e.register(CALL_00BE0870, |_, _| Ret::default());
+        e.register_double(NI_ALLOCATE_00AA13E0, |e, a| {
+            if a[0] == 0x70 {
+                Ret::default()
+            } else {
+                e.mem.alloc(a[0]).into_ret()
+            }
+        });
+        e.register(SCREEN_ELEMENTS_CONSTRUCT, |e, a| {
+            assert_eq!(a[1], 0);
+            let data = e.mem.alloc(0x10);
+            e.mem.set_u32(a[0] + 0xb8, data);
+            a[0].into_ret()
+        });
+        noop(
+            &mut e,
+            &[
+                SCREEN_ELEMENTS_DATA_INSERT,
+                SET_RECTANGLE,
+                SCREEN_ELEMENTS_DATA_SET_TEXTURES,
+                UPDATE_BOUND,
+                UPDATE_PROPERTIES,
+                UPDATE_00A59C60,
+            ],
+        );
+        let this = e.mem.alloc(0xc0);
+        let map = object(&mut e, 1);
+        e.mem.set_u32(this + 0x30, map);
+        assert!(!e.call(0x00bd_24c0, &args![this]).bool());
+        assert!(calls(&e, SCREEN_ELEMENTS_DATA_CONSTRUCT).is_empty());
+        assert!(calls(&e, CONSTANT_MAP_CONSTRUCT_00B7E330).is_empty());
     }
 }

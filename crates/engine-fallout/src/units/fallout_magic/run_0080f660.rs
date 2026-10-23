@@ -18,9 +18,26 @@ pub fn fn_0080f790(e: &mut Engine, this: Ptr, _unused_1: u32) -> f32 {
     x87_quiet(e.mem.f32(record + 8))
 }
 
+// Translated from 0080f7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name: stores the byte argument at `this + 0x87` (`RET 4`).
+pub fn fn_0080f7b0(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x87, value);
+}
+
+// Translated from 0080f7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name: `__thiscall` with two stack words it never reads
+/// (`RET 8`); returns `true` (`MOV AL,1`).
+pub fn fn_0080f7d0(_e: &mut Engine, _this: Ptr, _unused_1: u32, _unused_2: u32) -> bool {
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0080f790, fn_0080f790(Ptr, u32) -> f32)]
+    vec![
+        entry!(0x0080f790, fn_0080f790(Ptr, u32) -> f32),
+        entry!(0x0080_f7b0, fn_0080f7b0(Ptr, u8)),
+        entry!(0x0080_f7d0, fn_0080f7d0(Ptr, u32, u32) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -46,5 +63,23 @@ mod tests {
         e.mem.set_u32(record + 8, 0x7f80_0001);
         let nan = e.call(0x0080f790, &args![0x1234u32, 0u32]).f32();
         assert!(nan.is_nan());
+    }
+
+    #[test]
+    fn fn_0080f7b0_stores_the_byte_at_0x87() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x90);
+        e.mem.set_u8(this + 0x86, 0x11);
+        e.mem.set_u8(this + 0x88, 0x22);
+        e.call(0x0080_f7b0, &args![this, 0xffff_ff5au32]);
+        assert_eq!(e.mem.u8(this + 0x87), 0x5a);
+        assert_eq!(e.mem.u8(this + 0x86), 0x11);
+        assert_eq!(e.mem.u8(this + 0x88), 0x22);
+    }
+
+    #[test]
+    fn fn_0080f7d0_returns_true() {
+        let mut e = Engine::new();
+        assert!(e.call(0x0080_f7d0, &args![0x1000u32, 0u32, 0u32]).bool());
     }
 }

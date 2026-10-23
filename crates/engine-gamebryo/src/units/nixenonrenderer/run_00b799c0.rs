@@ -115,9 +115,55 @@ pub fn fn_00b799c0(e: &mut Engine, this: Ptr) {
     e.mem.set_u16(base + 0xc, 0);
 }
 
+/// The memory manager singleton (`011f6238`) and its allocate (`00aa3e40`, `thiscall`, size).
+const MEMORY_MANAGER: u32 = 0x011f_6238;
+const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
+/// `eh vector constructor iterator` (`00ec782f`, `stdcall`: array, element size, count,
+/// constructor, destructor), the `NiPointer` element constructor (`00b54620`) and the element
+/// destructor the array is given (`0045cec0`).
+const VECTOR_CONSTRUCT: u32 = 0x00ec_782f;
+const NI_POINTER_CONSTRUCT_00B54620: u32 = 0x00b5_4620;
+const NI_POINTER_DESTRUCT_0045CEC0: u32 = 0x0045_cec0;
+
+// Translated from 00b79a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`run_00b799c0`): `new NiPointer<T>[count]`, `cdecl`, one word
+/// (the count). Allocates `count * 4 + 4` bytes from the memory manager (all ones when the
+/// product or the sum overflows: `MUL`/`SETO` and `ADD`/`SETC`), stores the count in the first
+/// word and constructs the `count` pointers after it (`eh vector constructor iterator`,
+/// element size 4, `00b54620`, destructor `0045cec0`); answers the address after the count, or
+/// 0 when the allocation failed.
+// Translation incomplete: 00b79a60 - the C++ exception frame (FS:[0] chain, unwind state 0 for the allocation) is not translated.
+pub fn fn_00b79a60(e: &mut Engine, count: u32) -> Ptr {
+    let product = u64::from(count) * 4;
+    let bytes = if product > u64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        product as u32
+    };
+    let bytes = bytes.checked_add(4).unwrap_or(u32::MAX);
+    let block = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, bytes]).u32();
+    if block == 0 {
+        return Ptr::NULL;
+    }
+    let array = block.wrapping_add(4);
+    e.mem.set_u32(block, count);
+    e.call(
+        VECTOR_CONSTRUCT,
+        &args![
+            array,
+            4u32,
+            count,
+            NI_POINTER_CONSTRUCT_00B54620,
+            NI_POINTER_DESTRUCT_0045CEC0
+        ],
+    );
+    Ptr::new(array)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b7_9a60, fn_00b79a60(u32) -> Ptr),
         entry!(0x00b7_9b00, fn_00b79b00(Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00b7_99c0, fn_00b799c0(Ptr)),
     ]
@@ -243,5 +289,62 @@ mod remove_all_tests {
         let log = e.call_log.take().unwrap();
         let deleted: Vec<_> = log.iter().filter(|c| c.0 == DELETE).collect();
         assert_eq!(deleted, vec![&(DELETE, vec![objects[0]])]);
+    }
+}
+
+#[cfg(test)]
+mod new_array_tests {
+    use super::*;
+
+    fn rig(answer: u32) -> Engine {
+        let mut e = Engine::new();
+        e.register_double(MEMORY_ALLOCATE, move |_, _| answer.into_ret());
+        e.register(VECTOR_CONSTRUCT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        let log = e.call_log.as_ref().unwrap();
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn fn_00b79a60_stores_the_count_and_constructs_the_pointers() {
+        let mut e = rig(0);
+        let block = e.mem.alloc(0x20);
+        e.register_double(MEMORY_ALLOCATE, move |_, _| block.into_ret());
+        let array = e.call(0x00b7_9a60, &args![3u32]).u32();
+        assert_eq!(array, block + 4);
+        assert_eq!(e.mem.u32(block), 3);
+        assert_eq!(calls(&e, MEMORY_ALLOCATE), vec![vec![MEMORY_MANAGER, 0x10]]);
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCT),
+            vec![vec![
+                block + 4,
+                4,
+                3,
+                NI_POINTER_CONSTRUCT_00B54620,
+                NI_POINTER_DESTRUCT_0045CEC0
+            ]]
+        );
+    }
+
+    #[test]
+    fn fn_00b79a60_saturates_the_size_and_answers_0_without_memory() {
+        let mut e = rig(0);
+        assert_eq!(e.call(0x00b7_9a60, &args![0x4000_0000u32]).u32(), 0);
+        e.call(0x00b7_9a60, &args![0x3fff_ffffu32]);
+        assert_eq!(
+            calls(&e, MEMORY_ALLOCATE),
+            vec![
+                vec![MEMORY_MANAGER, u32::MAX],
+                vec![MEMORY_MANAGER, u32::MAX]
+            ]
+        );
+        assert!(calls(&e, VECTOR_CONSTRUCT).is_empty());
     }
 }

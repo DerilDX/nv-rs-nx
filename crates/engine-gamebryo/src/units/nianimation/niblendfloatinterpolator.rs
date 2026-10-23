@@ -318,6 +318,84 @@ pub fn ni_blend_float_interpolator_load_binary(e: &mut Engine, this: Ptr, stream
         .set_u32(input + INPUT_POSITION, position.wrapping_add(count));
 }
 
+/// `NiInterpolator::IsFloatValueSupported` (vtable +0xA8, Xbox PDB slot
+/// order).
+const SLOT_IS_FLOAT_VALUE_SUPPORTED: u32 = 0xa8;
+/// `NiBlendInterpolator::IsEqual` (`00a36fd0`), `SaveBinary` (`00a37ec0`)
+/// and `GetViewerStrings` (`00a38080`), all `thiscall (this, other or
+/// stream or strings)`.
+const NI_BLEND_INTERPOLATOR_IS_EQUAL: u32 = 0x00a3_6fd0;
+const NI_BLEND_INTERPOLATOR_SAVE_BINARY: u32 = 0x00a3_7ec0;
+const NI_BLEND_INTERPOLATOR_GET_VIEWER_STRINGS: u32 = 0x00a3_8080;
+/// `NiGetViewerString` (`00a7d330`, the class name) and its float form
+/// (`00a7d550`, `(name, value)`), both `cdecl`; the name `"m_fFloatValue"`.
+const VIEWER_STRING: u32 = 0x00a7_d330;
+const VIEWER_STRING_FLOAT: u32 = 0x00a7_d550;
+const FLOAT_VALUE_NAME: u32 = 0x0109_703c;
+
+// Translated from 00a40560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendFloatInterpolator::InterpolatorIsCorrectType` (Xbox PDB;
+/// `thiscall`, one stack word): the interpolator's `IsFloatValueSupported`
+/// (vtable +0xA8); `this` is not read.
+pub fn ni_blend_float_interpolator_interpolator_is_correct_type(
+    e: &mut Engine,
+    _this: Ptr,
+    interpolator: Ptr,
+) -> bool {
+    e.vcall(interpolator.addr(), SLOT_IS_FLOAT_VALUE_SUPPORTED, &args![])
+        .bool()
+}
+
+// Translated from 00a405b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendFloatInterpolator::IsEqual` (Xbox PDB): `NiBlendInterpolator`'s
+/// `IsEqual`, then the float values equal (x87 compare: a NaN is never
+/// equal).
+pub fn ni_blend_float_interpolator_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e
+        .call(NI_BLEND_INTERPOLATOR_IS_EQUAL, &args![this, other])
+        .bool()
+    {
+        return false;
+    }
+    x87_load32(e.mem.u32(this.addr() + FLOAT_VALUE))
+        == x87_load32(e.mem.u32(other.addr() + FLOAT_VALUE))
+}
+
+// Translated from 00a408b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendFloatInterpolator::SaveBinary` (Xbox PDB): `NiBlendInterpolator`'s
+/// `SaveBinary`, then the float value (4 bytes; the component size in the
+/// stream argument's stack word).
+pub fn ni_blend_float_interpolator_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    use crate::units::nianimation::niblendinterpolator::stream_write;
+    e.call(NI_BLEND_INTERPOLATOR_SAVE_BINARY, &args![this, stream]);
+    e.with_stack(4, |e, argument| {
+        stream_write(e, stream, this.addr() + FLOAT_VALUE, 4, argument.addr());
+    });
+}
+
+// Translated from 00a408f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendFloatInterpolator::GetViewerStrings` (Xbox PDB):
+/// `NiBlendInterpolator`'s strings, then the class name and
+/// `m_fFloatValue` (through the argument's stack word).
+pub fn ni_blend_float_interpolator_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    use crate::units::nianimation::niblendinterpolator::append_viewer_string;
+    e.call(
+        NI_BLEND_INTERPOLATOR_GET_VIEWER_STRINGS,
+        &args![this, strings],
+    );
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        let class_name = e.mem.u32(NI_BLEND_FLOAT_INTERPOLATOR_RTTI);
+        let text = e.call(VIEWER_STRING, &args![class_name]).u32();
+        append_viewer_string(e, strings, slot, text);
+        let value = x87_quiet_bits(e.mem.u32(this.addr() + FLOAT_VALUE));
+        let text = e
+            .call(VIEWER_STRING_FLOAT, &args![FLOAT_VALUE_NAME, value])
+            .u32();
+        append_viewer_string(e, strings, slot, text);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -340,6 +418,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00a40870,
             ni_blend_float_interpolator_load_binary(Ptr, Ptr)
+        ),
+        entry!(
+            0x00a4_0560,
+            ni_blend_float_interpolator_interpolator_is_correct_type(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00a4_05b0,
+            ni_blend_float_interpolator_is_equal(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00a4_08b0,
+            ni_blend_float_interpolator_save_binary(Ptr, Ptr)
+        ),
+        entry!(
+            0x00a4_08f0,
+            ni_blend_float_interpolator_get_viewer_strings(Ptr, Ptr)
         ),
     ]
 }
@@ -618,5 +712,82 @@ mod tests {
         assert_eq!(read[0][4], 1);
         assert_eq!(e.mem.f32(this + FLOAT_VALUE), 7.25);
         assert_eq!(e.mem.u32(input + INPUT_POSITION), 0x14);
+    }
+}
+
+#[cfg(test)]
+mod a07_tests {
+    use super::*;
+    use crate::units::nianimation::niblendinterpolator::a07_test_support::{
+        calls, stream, viewer_strings,
+    };
+
+    const VTABLE: u32 = 0x7400_0000;
+    const SUPPORTED: u32 = 0x7500_0000;
+
+    #[test]
+    fn interpolator_is_correct_type_asks_for_float_support() {
+        let mut e = Engine::new();
+        let mut slots = vec![0u32; 0x40];
+        slots[(SLOT_IS_FLOAT_VALUE_SUPPORTED / 4) as usize] = SUPPORTED;
+        e.put_vtable(VTABLE, &slots);
+        e.register(SUPPORTED, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let interp = e.mem.alloc(8);
+        e.mem.set_u32(interp, VTABLE);
+        e.mem.set_u32(interp + 4, 1);
+        assert!(e.call(0x00a4_0560, &args![0u32, interp]).bool());
+        e.mem.set_u32(interp + 4, 0);
+        assert!(!e.call(0x00a4_0560, &args![0u32, interp]).bool());
+    }
+
+    #[test]
+    fn is_equal_compares_the_float_value_after_the_base() {
+        let mut e = Engine::new();
+        e.register(NI_BLEND_INTERPOLATOR_IS_EQUAL, |_, _| 1u32.into_ret());
+        let (a, b) = (e.mem.alloc(0x34), e.mem.alloc(0x34));
+        e.mem.set_f32(a + FLOAT_VALUE, 2.5);
+        e.mem.set_f32(b + FLOAT_VALUE, 2.5);
+        assert!(e.call(0x00a4_05b0, &args![a, b]).bool());
+        e.mem.set_f32(b + FLOAT_VALUE, f32::NAN);
+        e.mem.set_f32(a + FLOAT_VALUE, f32::NAN);
+        assert!(!e.call(0x00a4_05b0, &args![a, b]).bool());
+        e.register(NI_BLEND_INTERPOLATOR_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a4_05b0, &args![a, a]).bool());
+    }
+
+    #[test]
+    fn save_binary_writes_the_float_value() {
+        let mut e = Engine::new();
+        e.register(NI_BLEND_INTERPOLATOR_SAVE_BINARY, |_, _| Ret::default());
+        let (s, written) = stream(&mut e, 0, &[]);
+        let this = e.mem.alloc(0x34);
+        e.mem.set_f32(this + FLOAT_VALUE, -1.5);
+        e.call_log = Some(vec![]);
+        e.call(0x00a4_08b0, &args![this, s]);
+        assert_eq!(*written.borrow(), (-1.5f32).to_le_bytes().to_vec());
+        assert_eq!(
+            calls(&e, NI_BLEND_INTERPOLATOR_SAVE_BINARY),
+            vec![vec![this, s.addr()]]
+        );
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_the_class_and_the_value() {
+        let mut e = Engine::new();
+        e.register(NI_BLEND_INTERPOLATOR_GET_VIEWER_STRINGS, |_, _| {
+            Ret::default()
+        });
+        let (strings, stored) = viewer_strings(&mut e);
+        e.map(0x011f_3000, 0x1000);
+        e.mem.set_u32(NI_BLEND_FLOAT_INTERPOLATOR_RTTI, 0x0109_7000);
+        let this = e.mem.alloc(0x34);
+        e.mem.set_u32(this + FLOAT_VALUE, 0x7f80_0001);
+        e.call_log = Some(vec![]);
+        e.call(0x00a4_08f0, &args![this, strings]);
+        assert_eq!(*stored.borrow(), vec![0x0109_7000, FLOAT_VALUE_NAME]);
+        assert_eq!(
+            calls(&e, VIEWER_STRING_FLOAT),
+            vec![vec![FLOAT_VALUE_NAME, 0x7fc0_0001]]
+        );
     }
 }

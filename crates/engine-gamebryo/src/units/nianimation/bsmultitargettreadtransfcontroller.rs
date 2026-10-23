@@ -468,6 +468,291 @@ pub fn bs_multi_target_tread_transf_controller_scalar_deleting_destructor(
     this
 }
 
+/// `NiInterpolator::IsTransformValueSupported` (vtable +0xB8, Xbox PDB slot
+/// order) and `GuaranteeTimeRange` (+0xC4).
+const SLOT_IS_TRANSFORM_VALUE_SUPPORTED: u32 = 0xb8;
+const SLOT_GUARANTEE_TIME_RANGE: u32 = 0xc4;
+/// `00aa13e0` (`cdecl`, one word): allocates from the Ni allocator.
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+/// The base constructor `CreateObject` and `CreateClone` run (`00a2f8c0`,
+/// `thiscall`) and the base member copy `CreateClone` runs (`00a2f8a0`,
+/// `thiscall (this, clone, cloning)`).
+const BASE_CONSTRUCTOR: u32 = 0x00a2_f8c0;
+const BASE_COPY_MEMBERS: u32 = 0x00a2_f8a0;
+/// `NiObjectNET::m_kName` (+8 on PC): the target's name.
+const TARGET_NAME: u32 = 0x8;
+
+// Translated from 00a2fac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiTargetTreadTransfController::InterpolatorIsCorrectType` (Xbox
+/// PDB; `thiscall`, two stack words, `RET 8`): the interpolator's
+/// `IsTransformValueSupported` (vtable +0xB8); `this` and the index are not
+/// read.
+pub fn bs_multi_target_tread_transf_controller_interpolator_is_correct_type(
+    e: &mut Engine,
+    _this: Ptr,
+    interpolator: Ptr,
+    _unused_2: u32,
+) -> bool {
+    e.vcall(
+        interpolator.addr(),
+        SLOT_IS_TRANSFORM_VALUE_SUPPORTED,
+        &args![],
+    )
+    .bool()
+}
+
+// Translated from 00a35890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiTargetTreadTransfController::GetInterpolatorCount` (Xbox PDB):
+/// `usNumInterps`.
+pub fn bs_multi_target_tread_transf_controller_get_interpolator_count(
+    e: &mut Engine,
+    this: Ptr,
+) -> u16 {
+    e.mem.u16(this.addr() + NUM_INTERPS)
+}
+
+// Translated from 00a358b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiTargetTreadTransfController::GuaranteeTimeRange` (Xbox PDB): both
+/// times (each through `FLD`/`FSTP`) passed to `GuaranteeTimeRange` (vtable
+/// +0xC4) of every blend interpolator.
+pub fn bs_multi_target_tread_transf_controller_guarantee_time_range(
+    e: &mut Engine,
+    this: Ptr,
+    start: f32,
+    end: f32,
+) {
+    let object = this.addr();
+    let start = x87_quiet_bits(start.to_bits());
+    let end = x87_quiet_bits(end.to_bits());
+    let mut index = 0u16;
+    while index < e.mem.u16(object + NUM_INTERPS) {
+        let interps = e.mem.u32(object + BLEND_INTERPS);
+        let interp = interps.wrapping_add(u32::from(index) * BLEND_INTERPOLATOR_SIZE);
+        e.vcall(interp, SLOT_GUARANTEE_TIME_RANGE, &args![start, end]);
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 00a35900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiTargetTreadTransfController::CreateBlendInterpolator` (Xbox PDB;
+/// five stack words, `RET 0x14`): the address of blend interpolator `index`;
+/// the other four words are not read.
+pub fn bs_multi_target_tread_transf_controller_create_blend_interpolator(
+    e: &mut Engine,
+    this: Ptr,
+    index: u16,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+) -> Ptr {
+    let interps = e.mem.u32(this.addr() + BLEND_INTERPS);
+    Ptr::new((u32::from(index) * BLEND_INTERPOLATOR_SIZE).wrapping_add(interps))
+}
+
+/// The fields a new controller gets after the base constructor (in the
+/// exe's order for `CreateObject`): no links, no interpolators.
+fn init_controller(e: &mut Engine, object: u32) {
+    e.mem.set_u16(object + NUM_INTERPS, 0);
+    e.mem.set_u32(object + LINKS, 0);
+    e.mem.set_u32(object, MULTI_TARGET_VTABLE);
+    e.mem.set_u32(object + BLEND_INTERPS, 0);
+    e.mem.set_u16(object + NUM_LINKS, 0);
+}
+
+// Translated from 00a359d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The class factory (registered through `NiStream::RegisterLoader` at
+/// `00a2d8ad`; Ghidra made no function of it): 0x44 bytes from the Ni
+/// allocator, the base constructor (`00a2f8c0`), then no interpolators, no
+/// links and the class's vtable. Null when the allocation fails.
+pub fn fn_00a359d0(e: &mut Engine) -> Ptr {
+    let object = e.call(NI_ALLOCATE, &args![MULTI_TARGET_SIZE]).u32();
+    if object == 0 {
+        return Ptr::NULL;
+    }
+    e.call(BASE_CONSTRUCTOR, &args![object]);
+    init_controller(e, object);
+    Ptr::new(object)
+}
+
+// Translated from 00a35a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiTargetTreadTransfController::CreateClone` (Xbox PDB): a new
+/// object as the factory makes it, then the base member copy (`00a2f8a0`)
+/// into it; when the allocation fails the copy still runs, into address 0,
+/// and 0 is answered.
+pub fn bs_multi_target_tread_transf_controller_create_clone(
+    e: &mut Engine,
+    this: Ptr,
+    cloning: Ptr,
+) -> Ptr {
+    let object = e.call(NI_ALLOCATE, &args![MULTI_TARGET_SIZE]).u32();
+    if object == 0 {
+        e.call(BASE_COPY_MEMBERS, &args![this, 0u32, cloning]);
+        return Ptr::NULL;
+    }
+    e.call(BASE_CONSTRUCTOR, &args![object]);
+    e.mem.set_u16(object + NUM_LINKS, 0);
+    e.mem.set_u32(object, MULTI_TARGET_VTABLE);
+    e.mem.set_u32(object + BLEND_INTERPS, 0);
+    e.mem.set_u16(object + NUM_INTERPS, 0);
+    e.mem.set_u32(object + LINKS, 0);
+    e.call(BASE_COPY_MEMBERS, &args![this, object, cloning]);
+    Ptr::new(object)
+}
+
+// Translated from 00a35e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiTargetTreadTransfController::GetInterpolatorID` (Xbox PDB): the
+/// name (`m_kName` +8) of link `index`'s target (the exe reads through a
+/// null target).
+pub fn bs_multi_target_tread_transf_controller_get_interpolator_id(
+    e: &mut Engine,
+    this: Ptr,
+    index: u16,
+) -> u32 {
+    let item = link(e, this.addr(), u32::from(index));
+    let target = e.mem.u32(item.wrapping_add(LINK_TARGET));
+    e.mem.u32(target.wrapping_add(TARGET_NAME))
+}
+
+/// The inline `strcmp` the exe uses: whether the strings at `a` and `b` are
+/// equal (it compares two bytes a step, stopping at the first difference or
+/// at the end of `a`).
+fn strings_equal(e: &Engine, a: u32, b: u32) -> bool {
+    let mut offset = 0u32;
+    loop {
+        let byte = e.mem.u8(a.wrapping_add(offset));
+        if byte != e.mem.u8(b.wrapping_add(offset)) {
+            return false;
+        }
+        if byte == 0 {
+            return true;
+        }
+        let byte = e.mem.u8(a.wrapping_add(offset + 1));
+        if byte != e.mem.u8(b.wrapping_add(offset + 1)) {
+            return false;
+        }
+        offset = offset.wrapping_add(2);
+        if byte == 0 {
+            return true;
+        }
+    }
+}
+
+// Translated from 00a35eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiTargetTreadTransfController::GetInterpolatorIndex` (Xbox PDB,
+/// the name form): the index of the first link whose target's name equals
+/// `name` (the link count and array read once); the "no link" value at
+/// `01096320` for a null name or when none does.
+pub fn bs_multi_target_tread_transf_controller_get_interpolator_index(
+    e: &mut Engine,
+    this: Ptr,
+    name: Ptr,
+) -> u16 {
+    if name.is_null() {
+        return e.global::<u16>(INVALID_LINK_INDEX);
+    }
+    let object = this.addr();
+    let count = e.mem.u16(object + NUM_LINKS);
+    let mut index = 0u16;
+    if index < count {
+        let links = e.mem.u32(object + LINKS);
+        loop {
+            let item = e.mem.u32(links.wrapping_add(u32::from(index) * 4));
+            let target = e.mem.u32(item.wrapping_add(LINK_TARGET));
+            if target != 0 {
+                let target_name = e.mem.u32(target.wrapping_add(TARGET_NAME));
+                if strings_equal(e, target_name, name.addr()) {
+                    return index;
+                }
+            }
+            index = index.wrapping_add(1);
+            if index >= count {
+                break;
+            }
+        }
+    }
+    e.global::<u16>(INVALID_LINK_INDEX)
+}
+
+// Translated from 00a35f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiTargetTreadTransfController::GetInterpolatorIndexFx` (Xbox PDB,
+/// the `NiFixedString` form): the index of the first link whose target's
+/// name handle equals `*name`; the loop runs over the interpolator count
+/// (`usNumInterps`, read once) though it reads the links. The "no link"
+/// value at `01096320` when none does.
+pub fn bs_multi_target_tread_transf_controller_get_interpolator_index_fx(
+    e: &mut Engine,
+    this: Ptr,
+    name: Ptr,
+) -> u16 {
+    let object = this.addr();
+    let count = e.mem.u16(object + NUM_INTERPS);
+    let mut index = 0u16;
+    if index < count {
+        let links = e.mem.u32(object + LINKS);
+        loop {
+            let item = e.mem.u32(links.wrapping_add(u32::from(index) * 4));
+            let target = e.mem.u32(item.wrapping_add(LINK_TARGET));
+            if target != 0 && e.mem.u32(target.wrapping_add(TARGET_NAME)) == e.mem.u32(name.addr())
+            {
+                return index;
+            }
+            index = index.wrapping_add(1);
+            if index >= count {
+                break;
+            }
+        }
+    }
+    e.global::<u16>(INVALID_LINK_INDEX)
+}
+
+// Translated from 00a35fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: sets link `index`'s target; a non-null target
+/// gets bit 7 (0x80) of its flags set.
+pub fn fn_00a35fc0(e: &mut Engine, this: Ptr, index: u16, target: Ptr) {
+    let item = link(e, this.addr(), u32::from(index));
+    e.mem.set_u32(item.wrapping_add(LINK_TARGET), target.addr());
+    if !target.is_null() {
+        let flags = e.mem.u32(target.addr() + AV_FLAGS) | 0x80;
+        e.mem.set_u32(target.addr() + AV_FLAGS, flags);
+    }
+}
+
+// Translated from 00a35fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: fills the first link without a target (the
+/// link count and array read once for the search) with `info`, `blend_index`
+/// and `target`, sets bit 7 (0x80) of the target's flags (the exe does not
+/// test it for null) and answers the link's index; the "no link" value at
+/// `01096320` when every link has a target.
+pub fn fn_00a35fe0(e: &mut Engine, this: Ptr, target: Ptr, blend_index: u16, info: Ptr) -> u16 {
+    let object = this.addr();
+    let count = e.mem.u16(object + NUM_LINKS);
+    let mut index = 0u16;
+    if index < count {
+        let links = e.mem.u32(object + LINKS);
+        loop {
+            let offset = u32::from(index) * 4;
+            let item = e.mem.u32(links.wrapping_add(offset));
+            if e.mem.u32(item.wrapping_add(LINK_TARGET)) == 0 {
+                e.mem.set_u32(item.wrapping_add(LINK_INFO), info.addr());
+                let item = e.mem.u32(e.mem.u32(object + LINKS).wrapping_add(offset));
+                e.mem
+                    .set_u16(item.wrapping_add(LINK_BLEND_INDEX), blend_index);
+                let item = e.mem.u32(e.mem.u32(object + LINKS).wrapping_add(offset));
+                e.mem.set_u32(item.wrapping_add(LINK_TARGET), target.addr());
+                let flags = e.mem.u32(target.addr().wrapping_add(AV_FLAGS)) | 0x80;
+                e.mem.set_u32(target.addr().wrapping_add(AV_FLAGS), flags);
+                return index;
+            }
+            index = index.wrapping_add(1);
+            if index >= count {
+                break;
+            }
+        }
+    }
+    e.global::<u16>(INVALID_LINK_INDEX)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -492,6 +777,41 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00a3_5f70, fn_00a35f70(Ptr, u16, Ptr, u16, Ptr)),
         entry!(0x00a3_6050, bs_multi_target_tread_transf_controller_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(
+            0x00a2_fac0,
+            bs_multi_target_tread_transf_controller_interpolator_is_correct_type(Ptr, Ptr, u32) -> bool
+        ),
+        entry!(
+            0x00a3_5890,
+            bs_multi_target_tread_transf_controller_get_interpolator_count(Ptr) -> u16
+        ),
+        entry!(
+            0x00a3_58b0,
+            bs_multi_target_tread_transf_controller_guarantee_time_range(Ptr, f32, f32)
+        ),
+        entry!(
+            0x00a3_5900,
+            bs_multi_target_tread_transf_controller_create_blend_interpolator(Ptr, u16, u32, u32, u32, u32) -> Ptr
+        ),
+        entry!(0x00a3_59d0, fn_00a359d0() -> Ptr),
+        entry!(
+            0x00a3_5a10,
+            bs_multi_target_tread_transf_controller_create_clone(Ptr, Ptr) -> Ptr
+        ),
+        entry!(
+            0x00a3_5e90,
+            bs_multi_target_tread_transf_controller_get_interpolator_id(Ptr, u16) -> u32
+        ),
+        entry!(
+            0x00a3_5eb0,
+            bs_multi_target_tread_transf_controller_get_interpolator_index(Ptr, Ptr) -> u16
+        ),
+        entry!(
+            0x00a3_5f30,
+            bs_multi_target_tread_transf_controller_get_interpolator_index_fx(Ptr, Ptr) -> u16
+        ),
+        entry!(0x00a3_5fc0, fn_00a35fc0(Ptr, u16, Ptr)),
+        entry!(0x00a3_5fe0, fn_00a35fe0(Ptr, Ptr, u16, Ptr) -> u16),
     ]
 }
 
@@ -833,5 +1153,234 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00a3_5c00, &args![this, data]);
         assert!(mt_calls_to(&e, UPDATE).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod a07_tests {
+    use super::*;
+    use crate::units::nianimation::niblendinterpolator::a07_test_support::calls;
+
+    const VTABLE: u32 = 0x7400_0000;
+    fn slot(offset: u32) -> u32 {
+        0x7500_0000 + offset
+    }
+
+    /// An engine with a test vtable (every slot a double answering 1) and
+    /// the "no link" value 0xFFFF.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        let slots: Vec<u32> = (0..0x40).map(|i| slot(4 * i)).collect();
+        e.put_vtable(VTABLE, &slots);
+        for i in 0..0x40 {
+            e.register(slot(4 * i), |_, _| 1u32.into_ret());
+        }
+        e.map(0x0109_6000, 0x1000);
+        e.mem.set_u16(INVALID_LINK_INDEX, 0xffff);
+        e
+    }
+
+    /// A controller with `links` empty links (each a zeroed `LinkAVObj`).
+    fn controller(e: &mut Engine, links: u16) -> Ptr {
+        let this = e.mem.alloc(MULTI_TARGET_SIZE);
+        let array = e.mem.alloc(4 * u32::from(links).max(1));
+        for i in 0..u32::from(links) {
+            let item = e.mem.alloc(0xc);
+            e.mem.set_u32(array + 4 * i, item);
+        }
+        e.mem.set_u32(this + LINKS, array);
+        e.mem.set_u16(this + NUM_LINKS, links);
+        Ptr::new(this)
+    }
+
+    /// A target object named by the string at `name`.
+    fn target(e: &mut Engine, name: u32) -> u32 {
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object + TARGET_NAME, name);
+        object
+    }
+
+    fn text(e: &mut Engine, s: &str) -> u32 {
+        let at = e.mem.alloc(s.len() as u32 + 1);
+        for (i, b) in s.bytes().enumerate() {
+            e.mem.set_u8(at + i as u32, b);
+        }
+        at
+    }
+
+    #[test]
+    fn interpolator_is_correct_type_asks_the_interpolator() {
+        let mut e = engine();
+        let interp = e.mem.alloc(8);
+        e.mem.set_u32(interp, VTABLE);
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x00a2_fac0, &args![0x10u32, interp, 3u32]).bool();
+        assert!(answer);
+        assert_eq!(
+            calls(&e, slot(SLOT_IS_TRANSFORM_VALUE_SUPPORTED)),
+            vec![vec![interp]]
+        );
+        e.register(slot(SLOT_IS_TRANSFORM_VALUE_SUPPORTED), |_, _| {
+            0u32.into_ret()
+        });
+        assert!(!e.call(0x00a2_fac0, &args![0x10u32, interp, 3u32]).bool());
+    }
+
+    #[test]
+    fn get_interpolator_count_reads_the_count() {
+        let mut e = engine();
+        let this = controller(&mut e, 0);
+        e.mem.set_u16(this.addr() + NUM_INTERPS, 5);
+        assert_eq!(e.call(0x00a3_5890, &args![this]).u16(), 5);
+    }
+
+    #[test]
+    fn guarantee_time_range_reaches_every_blend_interpolator() {
+        let mut e = engine();
+        let this = controller(&mut e, 0);
+        let interps = e.mem.alloc(2 * BLEND_INTERPOLATOR_SIZE);
+        for i in 0..2 {
+            e.mem.set_u32(interps + i * BLEND_INTERPOLATOR_SIZE, VTABLE);
+        }
+        e.mem.set_u32(this.addr() + BLEND_INTERPS, interps);
+        e.mem.set_u16(this.addr() + NUM_INTERPS, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_58b0, &args![this, 0x7f80_0001u32, 2.0f32]);
+        let second = interps + BLEND_INTERPOLATOR_SIZE;
+        let two = 2.0f32.to_bits();
+        assert_eq!(
+            calls(&e, slot(SLOT_GUARANTEE_TIME_RANGE)),
+            vec![
+                vec![interps, 0x7fc0_0001, two],
+                vec![second, 0x7fc0_0001, two]
+            ]
+        );
+    }
+
+    #[test]
+    fn create_blend_interpolator_answers_the_element() {
+        let mut e = engine();
+        let this = controller(&mut e, 0);
+        e.mem.set_u32(this.addr() + BLEND_INTERPS, 0x1000);
+        let words = args![this, 3u32, 9u32, 9u32, 9u32, 9u32];
+        assert_eq!(e.call(0x00a3_5900, &words).u32(), 0x1000 + 3 * 0x34);
+    }
+
+    #[test]
+    fn create_object_builds_an_empty_controller() {
+        let mut e = engine();
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(BASE_CONSTRUCTOR, |e, a| {
+            for i in 0..0x11 {
+                e.mem.set_u32(a[0] + 4 * i, 0xcdcd_cdcd);
+            }
+            Ret::default()
+        });
+        let object = e.call(0x00a3_59d0, &args![]).u32();
+        assert_eq!(e.mem.u32(object), MULTI_TARGET_VTABLE);
+        assert_eq!(e.mem.u32(object + BLEND_INTERPS), 0);
+        assert_eq!(e.mem.u16(object + NUM_INTERPS), 0);
+        assert_eq!(e.mem.u32(object + LINKS), 0);
+        assert_eq!(e.mem.u16(object + NUM_LINKS), 0);
+        e.register(NI_ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a3_59d0, &args![]).u32(), 0);
+    }
+
+    #[test]
+    fn create_clone_copies_members_even_without_an_object() {
+        let mut e = engine();
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(BASE_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(BASE_COPY_MEMBERS, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let clone = e.call(0x00a3_5a10, &args![0x500u32, 0x600u32]).u32();
+        assert_eq!(e.mem.u32(clone), MULTI_TARGET_VTABLE);
+        assert_eq!(
+            calls(&e, BASE_COPY_MEMBERS),
+            vec![vec![0x500, clone, 0x600]]
+        );
+        e.register(NI_ALLOCATE, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x00a3_5a10, &args![0x500u32, 0x600u32]).u32(), 0);
+        assert_eq!(calls(&e, BASE_COPY_MEMBERS), vec![vec![0x500, 0, 0x600]]);
+        assert!(calls(&e, BASE_CONSTRUCTOR).is_empty());
+    }
+
+    #[test]
+    fn get_interpolator_id_is_the_target_name() {
+        let mut e = engine();
+        let this = controller(&mut e, 2);
+        let object = target(&mut e, 0x4321);
+        e.call(0x00a3_5fc0, &args![this, 1u32, object]);
+        assert_eq!(e.call(0x00a3_5e90, &args![this, 1u32]).u32(), 0x4321);
+    }
+
+    #[test]
+    fn get_interpolator_index_compares_names() {
+        let mut e = engine();
+        let this = controller(&mut e, 3);
+        let (bip, spine, query) = (
+            text(&mut e, "Bip"),
+            text(&mut e, "Spine1"),
+            text(&mut e, "Spine1"),
+        );
+        let first = target(&mut e, bip);
+        let second = target(&mut e, spine);
+        e.call(0x00a3_5fc0, &args![this, 0u32, first]);
+        e.call(0x00a3_5fc0, &args![this, 2u32, second]);
+        assert_eq!(e.call(0x00a3_5eb0, &args![this, query]).u16(), 2);
+        let other = text(&mut e, "Spine2");
+        assert_eq!(e.call(0x00a3_5eb0, &args![this, other]).u16(), 0xffff);
+        assert_eq!(e.call(0x00a3_5eb0, &args![this, 0u32]).u16(), 0xffff);
+    }
+
+    #[test]
+    fn get_interpolator_index_fx_compares_handles_over_the_interp_count() {
+        let mut e = engine();
+        let this = controller(&mut e, 3);
+        let object = target(&mut e, 0x777);
+        e.call(0x00a3_5fc0, &args![this, 2u32, object]);
+        let handle = e.mem.alloc(4);
+        e.mem.set_u32(handle, 0x777);
+        e.mem.set_u16(this.addr() + NUM_INTERPS, 2);
+        assert_eq!(e.call(0x00a3_5f30, &args![this, handle]).u16(), 0xffff);
+        e.mem.set_u16(this.addr() + NUM_INTERPS, 3);
+        assert_eq!(e.call(0x00a3_5f30, &args![this, handle]).u16(), 2);
+    }
+
+    #[test]
+    fn set_target_marks_a_target() {
+        let mut e = engine();
+        let this = controller(&mut e, 1);
+        let object = target(&mut e, 0);
+        e.mem.set_u32(object + AV_FLAGS, 1);
+        e.call(0x00a3_5fc0, &args![this, 0u32, object]);
+        assert_eq!(e.mem.u32(object + AV_FLAGS), 0x81);
+        e.call(0x00a3_5fc0, &args![this, 0u32, 0u32]);
+        let item = link(&e, this.addr(), 0);
+        assert_eq!(e.mem.u32(item + LINK_TARGET), 0);
+    }
+
+    #[test]
+    fn add_link_fills_the_first_free_link() {
+        let mut e = engine();
+        let this = controller(&mut e, 2);
+        let busy = target(&mut e, 0);
+        e.call(0x00a3_5fc0, &args![this, 0u32, busy]);
+        let object = target(&mut e, 0);
+        let index = e
+            .call(0x00a3_5fe0, &args![this, object, 5u32, 0x900u32])
+            .u16();
+        assert_eq!(index, 1);
+        let item = link(&e, this.addr(), 1);
+        assert_eq!(e.mem.u32(item + LINK_TARGET), object);
+        assert_eq!(e.mem.u32(item + LINK_INFO), 0x900);
+        assert_eq!(e.mem.u16(item + LINK_BLEND_INDEX), 5);
+        assert_eq!(e.mem.u32(object + AV_FLAGS), 0x80);
+        let more = target(&mut e, 0);
+        assert_eq!(
+            e.call(0x00a3_5fe0, &args![this, more, 1u32, 0u32]).u16(),
+            0xffff
+        );
     }
 }

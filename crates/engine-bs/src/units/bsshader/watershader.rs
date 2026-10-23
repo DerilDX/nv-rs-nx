@@ -1253,9 +1253,642 @@ pub fn fn_00b83dd0(e: &mut Engine, this: Ptr) -> bool {
     true
 }
 
+/// The `eh vector destructor iterator` (`00ec5fce`, `stdcall`), `BSShader::~BSShader` (engine
+/// map, `00be0f10`, no stack words), the Ni free (`00aa1460`, `cdecl`: block, size) and
+/// `00be0870` (unnamed, `thiscall`, no stack words; answers a bool).
+const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
+const BS_SHADER_DESTRUCT: u32 = 0x00be_0f10;
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+const CALL_00BE0870: u32 = 0x00be_0870;
+/// The four default words (`011a9bd0`) and the two global blocks the water shader resets with
+/// them (`011ff4c8`, 0xb0 bytes, and `011ff578`, 0x1f0 bytes).
+const DEFAULT_WORDS_011A9BD0: u32 = 0x011a_9bd0;
+const BLOCK_011FF4C8: u32 = 0x011f_f4c8;
+const BLOCK_011FF578: u32 = 0x011f_f578;
+/// The water shader's global constant entries (`011ff4a0` to `011ff4c4`).
+const ENTRIES_011FF4A0: u32 = 0x011f_f4a0;
+const ENTRIES_011FF4AC: u32 = 0x011f_f4ac;
+const ENTRIES_END_011FF4C4: u32 = 0x011f_f4c4;
+
+/// `REP MOVSD` of `count` words from `source` to `destination`, word by word upwards (the
+/// blocks overlap, so the first words repeat through the destination).
+fn move_words_up(e: &mut Engine, destination: u32, source: u32, count: u32) {
+    for index in 0..count {
+        let word = e.mem.u32(source + 4 * index);
+        e.mem.set_u32(destination + 4 * index, word);
+    }
+}
+
+// Translated from 00b824b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `watershader.cpp`): the water shader's destructor, no stack
+/// words. Stores the vtable `010af9e0`; clears (releasing what they hold) the `NiPointer`s
+/// +0x194, +0x198, +0x19c; drops and clears the 0x4a passes at +0x6c; clears the 0x26
+/// `NiPointer`s at +0x1a0; fills the global blocks `011ff4c8` (0x2c words) and `011ff578` (0x7c
+/// words) with the four words at `011a9bd0` (four set, then `REP MOVSD` up the block); then
+/// the members' destructors release +0x24c down to +0x238 (not cleared before), destroy the
+/// array +0x1a0 (0x26, destructor `00b66f20`), release +0x19c, +0x198, +0x194 again when not
+/// null, destroy the array +0x6c (0x4a, `00b79930`), and `BSShader::~BSShader` (`00be0f10`)
+/// runs.
+// Translation incomplete: 00b824b0 - the C++ exception frame (FS:[0] chain, unwind states 0 to 0xb for the members and the base) is not translated.
+pub fn fn_00b824b0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, WATER_SHADER_VTABLE_010AF9E0);
+    for offset in [0x194u32, 0x198, 0x19c] {
+        ni_pointer_clear(e, base + offset);
+    }
+    for index in 0..0x4au32 {
+        pass_pointer_clear(e, base + 0x6c + 4 * index);
+    }
+    for index in 0..0x26u32 {
+        ni_pointer_clear(e, base + 0x1a0 + 4 * index);
+    }
+    let words = [0u32, 4, 8, 0xc].map(|offset| e.global::<u32>(DEFAULT_WORDS_011A9BD0 + offset));
+    e.set_global::<u32>(BLOCK_011FF4C8 + 0xc, words[3]);
+    e.set_global::<u32>(BLOCK_011FF4C8 + 4, words[1]);
+    e.set_global::<u32>(BLOCK_011FF578 + 4, words[1]);
+    let last = e.global::<u32>(DEFAULT_WORDS_011A9BD0 + 0xc);
+    e.set_global::<u32>(BLOCK_011FF4C8, words[0]);
+    e.set_global::<u32>(BLOCK_011FF4C8 + 8, words[2]);
+    move_words_up(e, BLOCK_011FF4C8 + 0x10, BLOCK_011FF4C8, 0x28);
+    e.set_global::<u32>(BLOCK_011FF578, words[0]);
+    e.set_global::<u32>(BLOCK_011FF578 + 8, words[2]);
+    e.set_global::<u32>(BLOCK_011FF578 + 0xc, last);
+    move_words_up(e, BLOCK_011FF578 + 0x10, BLOCK_011FF578, 0x78);
+    for offset in [0x24cu32, 0x248, 0x244, 0x240, 0x23c, 0x238] {
+        let held = e.mem.u32(base + offset);
+        if held != 0 {
+            release_reference(e, held);
+        }
+    }
+    e.call(
+        VECTOR_DESTRUCT,
+        &args![base + 0x1a0, 4u32, 0x26u32, DESTRUCT_00B66F20],
+    );
+    for offset in [0x19cu32, 0x198, 0x194] {
+        let held = e.mem.u32(base + offset);
+        if held != 0 {
+            release_reference(e, held);
+        }
+    }
+    e.call(
+        VECTOR_DESTRUCT,
+        &args![base + 0x6c, 4u32, 0x4au32, DESTRUCT_00B79930],
+    );
+    e.call(BS_SHADER_DESTRUCT, &args![base]);
+}
+
+/// The record whose address `00b827b0` answers (`011ff498`).
+const RECORD_011FF498: u32 = 0x011f_f498;
+
+// Translated from 00b827b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010af9e0` slot +8, where the Xbox PDB's `NiObject` order has
+/// `GetRTTI`): answers the address `011ff498`. No arguments.
+pub fn fn_00b827b0(_e: &mut Engine) -> Ptr {
+    Ptr::new(RECORD_011FF498)
+}
+
+// Translated from 00b861d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010af9e0` slot +0x4c), no stack words. Runs `00be0870`;
+/// clears (releasing what they hold) +0x194, +0x198, +0x19c, drops and clears the 0x4a passes
+/// at +0x6c, clears the 0x26 `NiPointer`s at +0x1a0 and the global entries `011ff4a0` to
+/// `011ff4c4`; fills the global blocks `011ff4c8` and `011ff578` with the four words at
+/// `011a9bd0`; answers what `00be0870` answered.
+pub fn fn_00b861d0(e: &mut Engine, this: Ptr) -> bool {
+    let base = this.addr();
+    let result = e.call(CALL_00BE0870, &args![base]).bool();
+    for offset in [0x194u32, 0x198, 0x19c] {
+        ni_pointer_clear(e, base + offset);
+    }
+    for index in 0..0x4au32 {
+        pass_pointer_clear(e, base + 0x6c + 4 * index);
+    }
+    for index in 0..0x26u32 {
+        ni_pointer_clear(e, base + 0x1a0 + 4 * index);
+    }
+    let mut slot = ENTRIES_011FF4A0;
+    while slot < ENTRIES_011FF4AC {
+        ni_pointer_clear(e, slot);
+        slot += 4;
+    }
+    let mut slot = ENTRIES_011FF4AC;
+    while slot < ENTRIES_END_011FF4C4 {
+        ni_pointer_clear(e, slot);
+        slot += 4;
+    }
+    let words = [0u32, 4, 8, 0xc].map(|offset| e.global::<u32>(DEFAULT_WORDS_011A9BD0 + offset));
+    e.set_global::<u32>(BLOCK_011FF4C8, words[0]);
+    e.set_global::<u32>(BLOCK_011FF4C8 + 8, words[2]);
+    e.set_global::<u32>(BLOCK_011FF4C8 + 0xc, words[3]);
+    e.set_global::<u32>(BLOCK_011FF4C8 + 4, words[1]);
+    move_words_up(e, BLOCK_011FF4C8 + 0x10, BLOCK_011FF4C8, 0x28);
+    e.set_global::<u32>(BLOCK_011FF578, words[0]);
+    e.set_global::<u32>(BLOCK_011FF578 + 8, words[2]);
+    e.set_global::<u32>(BLOCK_011FF578 + 0xc, words[3]);
+    e.set_global::<u32>(BLOCK_011FF578 + 4, words[1]);
+    move_words_up(e, BLOCK_011FF578 + 0x10, BLOCK_011FF578, 0x78);
+    result
+}
+
+/// The shader manager's pass state (`0126f74c`, its +0x24 the table of constant blocks), the
+/// pass number (`011f91e4`), the default texture (`011f9510`), the texture `011f943c`
+/// (another rendered texture) and `BSRenderedTexture::GetTexture` (engine map, `004bc320`,
+/// `thiscall`, one word).
+const PASS_STATE_0126F74C: u32 = 0x0126_f74c;
+const CURRENT_PASS_011F91E4: u32 = 0x011f_91e4;
+const DEFAULT_TEXTURE_011F9510: u32 = 0x011f_9510;
+const RENDERED_TEXTURE_011F943C: u32 = 0x011f_943c;
+const RENDERED_TEXTURE_GET_TEXTURE: u32 = 0x004b_c320;
+
+/// The pass state's constant block at `offset` of its table.
+fn water_block(e: &Engine, state: u32, offset: u32) -> u32 {
+    e.mem.u32(e.mem.u32(state + 0x24) + offset)
+}
+
+// Translated from 00b863a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010af9e0` slot +0x78), `thiscall`, `RET 4` (the property
+/// state). Clears +8 of the pass state's (`0126f74c`) first five constant blocks; on passes
+/// other than 0x288 and 0x289, with the state's +0xc water property: block 0 gets its +0x13c
+/// rendered texture (`GetTexture(0)`) when set and its byte +0x80 is set, else the default
+/// texture `011f9510`; block 1 the texture of `011f943c` when set and the byte +0x81 is set;
+/// block 2 its +0x138 texture when set, else the default; block 3 its +0x148 when the byte +0x60
+/// is set and it is not null; block 4 its +0x144 texture when set and the byte +0x63 is set;
+/// then the shader's slot +0x108 runs.
+pub fn fn_00b863a0(e: &mut Engine, this: Ptr, state: Ptr) {
+    let pass = e.global::<u32>(CURRENT_PASS_011F91E4);
+    let pass_state = e.global::<u32>(PASS_STATE_0126F74C);
+    let property = e.mem.u32(state.addr() + 0xc);
+    for offset in [0u32, 4, 8, 0xc, 0x10] {
+        let block = water_block(e, pass_state, offset);
+        e.mem.set_u32(block + 8, 0);
+    }
+    if pass == 0x288 || pass == 0x289 {
+        return;
+    }
+    let texture = e.mem.u32(property + 0x13c);
+    if texture != 0 && e.mem.u8(property + 0x80) != 0 {
+        let block = water_block(e, pass_state, 0);
+        let value = e
+            .call(RENDERED_TEXTURE_GET_TEXTURE, &args![texture, 0u32])
+            .u32();
+        e.mem.set_u32(block + 8, value);
+    } else {
+        let block = water_block(e, pass_state, 0);
+        let value = e.global::<u32>(DEFAULT_TEXTURE_011F9510);
+        e.mem.set_u32(block + 8, value);
+    }
+    let texture = e.global::<u32>(RENDERED_TEXTURE_011F943C);
+    if texture != 0 && e.mem.u8(property + 0x81) != 0 {
+        let block = water_block(e, pass_state, 4);
+        let value = e
+            .call(RENDERED_TEXTURE_GET_TEXTURE, &args![texture, 0u32])
+            .u32();
+        e.mem.set_u32(block + 8, value);
+    }
+    let texture = e.mem.u32(property + 0x138);
+    if texture != 0 {
+        let block = water_block(e, pass_state, 8);
+        let value = e
+            .call(RENDERED_TEXTURE_GET_TEXTURE, &args![texture, 0u32])
+            .u32();
+        e.mem.set_u32(block + 8, value);
+    } else {
+        let block = water_block(e, pass_state, 8);
+        let value = e.global::<u32>(DEFAULT_TEXTURE_011F9510);
+        e.mem.set_u32(block + 8, value);
+    }
+    if e.mem.u8(property + 0x60) != 0 {
+        let texture = e.mem.u32(property + 0x148);
+        if texture != 0 {
+            let block = water_block(e, pass_state, 0xc);
+            e.mem.set_u32(block + 8, texture);
+        }
+    }
+    let texture = e.mem.u32(property + 0x144);
+    if texture != 0 && e.mem.u8(property + 0x63) != 0 {
+        let block = water_block(e, pass_state, 0x10);
+        let value = e
+            .call(RENDERED_TEXTURE_GET_TEXTURE, &args![texture, 0u32])
+            .u32();
+        e.mem.set_u32(block + 8, value);
+    }
+    e.vcall(this.addr(), 0x108, &args![]);
+}
+
+/// The current record (`011f91e0`), the default bound (`011f4288`), the renderer's `00e6fbb0`
+/// (`thiscall` on the shader's +0x18, `RET 8`), the sun position (`011fa2a0`) and origin
+/// (`011f474c`), the doubles `10.0` (`01020758`) and `1.0` (`01012070`), the `float`
+/// `011ff108`, the extra block `011ff398`, `BSShaderManager::GetFogProperty` (engine map,
+/// `00b55520`, `cdecl`, the byte `011f91c4`), `2^32` (`float`, `01099378`), the render-state
+/// setters of `bsrenderstate_xenon.cpp` (`00b98070`, `00b98180`, `00b980c0`, `00b98230`,
+/// `cdecl`) and the water constants written.
+const CURRENT_RECORD_011F91E0: u32 = 0x011f_91e0;
+const DEFAULT_BOUND_011F4288: u32 = 0x011f_4288;
+const RENDERER_CALL_00E6FBB0: u32 = 0x00e6_fbb0;
+const SUN_POSITION_011FA2A0: u32 = 0x011f_a2a0;
+const ORIGIN_011F474C: u32 = 0x011f_474c;
+const TEN_01020758: u32 = 0x0102_0758;
+const ONE_01012070: u32 = 0x0101_2070;
+const WATER_VALUE_011FF108: u32 = 0x011f_f108;
+const EXTRA_011FF398: u32 = 0x011f_f398;
+const GET_FOG_PROPERTY: u32 = 0x00b5_5520;
+const FOG_KIND_011F91C4: u32 = 0x011f_91c4;
+const TWO_POWER_32_01099378: u32 = 0x0109_9378;
+const RENDER_STATE_00B98070: u32 = 0x00b9_8070;
+const RENDER_STATE_00B98180: u32 = 0x00b9_8180;
+const RENDER_STATE_00B980C0: u32 = 0x00b9_80c0;
+const RENDER_STATE_00B98230: u32 = 0x00b9_8230;
+const COMMON_011FF588: u32 = 0x011f_f588;
+const ORIGIN_COPY_011FF558: u32 = 0x011f_f558;
+const COMMON_011FF548: u32 = 0x011f_f548;
+const COLOR_011FF568: u32 = 0x011f_f568;
+const LIGHT_COUNT_011FF658: u32 = 0x011f_f658;
+const LIGHT_COLORS_011FF6E8: u32 = 0x011f_f6e8;
+/// Bits of `1.0f`.
+const WATER_ONE_BITS: u32 = 0x3f80_0000;
+
+// Translated from 00b864d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010af9e0` slot +0x7c), `thiscall`, `RET 4` (the property
+/// state). With the current record's geometry and the state's +0xc water property: runs the
+/// renderer's `00e6fbb0` with the world transform; fills the pixel constants from `011ff588`:
+/// the sun position (`011fa2a0`) minus the origin (`011f474c`) with 0.0, the property's twelve
+/// words +0x88, its floats +0x118 (`011ff5c8`) and +0x100 (`011ff5d0`), its +0x104 over 10.0
+/// raised to 1.0 when below (`011ff5d4`), its +0x6c, +0x70, +0xd0 and the `float` `011ff108`
+/// (`011ff5d8` on), the origin (`011ff5e8` and `011ff558`), its words +0xb8 to +0xc4
+/// (`011ff5f8`); with a fog property (`GetFogProperty`): its far distance, far minus near, the
+/// water property's +0x74, +0x78, its colour +0x20..+0x28 and the property's +0x120
+/// (`011ff608`), its power (`011ff5cc`); the property's words +0xd8 to +0xe4 and the eight
+/// words at `011ff398` (`011ff628`), its +0x124 four times (`011ff548`); the render states for
+/// the pass (none of these for passes 0x288 and 0x289, which only get `00b98230` with the
+/// property's +0x84; with the byte +0x60 set: `00b98070(1, 0)`, `00b98180(2, 0xff, +0x84, 0)`,
+/// `00b980c0(0, 0, 3, 0)` (0 in the third word for passes 0x29a and 0x2ab) and
+/// `00b98230(0xff, 0)`); its byte +0x82 four times as a `float` (`011ff568`); its light count
+/// +0x130 as an unsigned `float` (`011ff658`); for each light of its list (+0x128) the
+/// position (+0x8c) with its +0xe0 at `011ff668` + 0x10 * n and its colour (+0xd4..+0xdc times
+/// its +0xc4, times the property's +0xd4) with 1.0 at `011ff6e8` + 0x10 * n; and last the slot
+/// +0x78 of the shader's +0x30 and +0x34 objects with the pass state's +0x44 and +0x5c objects
+/// and the geometry's words.
+pub fn fn_00b864d0(e: &mut Engine, this: Ptr, state: Ptr) {
+    let this = this.addr();
+    let state = state.addr();
+    let record = e.global::<u32>(CURRENT_RECORD_011F91E0);
+    let pass = e.global::<u32>(CURRENT_PASS_011F91E4);
+    let geometry = e.mem.u32(record);
+    let mut bound = e.mem.u32(geometry + 0x20);
+    if bound == 0 {
+        bound = DEFAULT_BOUND_011F4288;
+    }
+    let world = geometry + 0x68;
+    let passes = e.mem.u32(e.mem.u32(geometry + 0xb8) + 0x34);
+    let word_bc = e.mem.u32(geometry + 0xbc);
+    let renderer = e.mem.u32(this + 0x18);
+    e.call(RENDERER_CALL_00E6FBB0, &args![renderer, world, 0u32]);
+    let mut sun = [0u32; 3];
+    for (index, slot) in sun.iter_mut().enumerate() {
+        let offset = 4 * index as u32;
+        let value = x87_sub(
+            x87_load32(e.global::<u32>(SUN_POSITION_011FA2A0 + offset)),
+            x87_m32(e.global::<u32>(ORIGIN_011F474C + offset)),
+        );
+        *slot = x87_store32(value);
+    }
+    for (index, value) in sun.iter().enumerate() {
+        e.set_global::<u32>(COMMON_011FF588 + 4 * index as u32, x87_quiet_bits(*value));
+    }
+    e.set_global::<u32>(COMMON_011FF588 + 0xc, 0);
+    let property = e.mem.u32(state + 0xc);
+    for word in 0..12u32 {
+        let value = e.mem.u32(property + 0x88 + 4 * word);
+        e.set_global::<u32>(COMMON_011FF588 + 0x10 + 4 * word, value);
+    }
+    let value = x87_quiet_bits(e.mem.u32(property + 0x118));
+    e.set_global::<u32>(COMMON_011FF588 + 0x40, value);
+    let value = x87_quiet_bits(e.mem.u32(property + 0x100));
+    e.set_global::<u32>(COMMON_011FF588 + 0x48, value);
+    let ten = f64::from_bits(e.global::<u64>(TEN_01020758));
+    let scaled = x87_store32(x87_div(x87_load32(e.mem.u32(property + 0x104)), ten));
+    let one = f64::from_bits(e.global::<u64>(ONE_01012070));
+    // FCOM double; TEST AH,5: below the double the value becomes 1.0 (FLD1).
+    let scaled = if x87_load32(scaled) < one {
+        WATER_ONE_BITS
+    } else {
+        scaled
+    };
+    let origin = [0u32, 4, 8].map(|offset| e.global::<u32>(ORIGIN_011F474C + offset));
+    e.set_global::<u32>(COMMON_011FF588 + 0x4c, scaled);
+    for (index, offset) in [0x6cu32, 0x70, 0xd0].iter().enumerate() {
+        let value = x87_quiet_bits(e.mem.u32(property + offset));
+        e.set_global::<u32>(COMMON_011FF588 + 0x50 + 4 * index as u32, value);
+    }
+    let value = x87_quiet_bits(e.global::<u32>(WATER_VALUE_011FF108));
+    e.set_global::<u32>(COMMON_011FF588 + 0x5c, value);
+    for (index, value) in origin.iter().enumerate() {
+        let value = x87_quiet_bits(*value);
+        e.set_global::<u32>(COMMON_011FF588 + 0x60 + 4 * index as u32, value);
+        e.set_global::<u32>(ORIGIN_COPY_011FF558 + 4 * index as u32, value);
+    }
+    for word in 0..4u32 {
+        let value = e.mem.u32(property + 0xb8 + 4 * word);
+        e.set_global::<u32>(COMMON_011FF588 + 0x70 + 4 * word, value);
+    }
+    let kind = u32::from(e.global::<u8>(FOG_KIND_011F91C4));
+    let fog = e.call(GET_FOG_PROPERTY, &args![kind]).u32();
+    if fog != 0 {
+        let far = x87_quiet_bits(e.mem.u32(fog + 0x30));
+        let color = [0x20u32, 0x24, 0x28].map(|offset| e.mem.u32(fog + offset));
+        let power = x87_quiet_bits(e.mem.u32(fog + 0x60));
+        let range = x87_store32(x87_sub(x87_load32(far), x87_m32(e.mem.u32(fog + 0x2c))));
+        let first = x87_quiet_bits(e.mem.u32(property + 0x74));
+        let second = x87_quiet_bits(e.mem.u32(property + 0x78));
+        let last = x87_quiet_bits(e.mem.u32(property + 0x120));
+        let values = [
+            far,
+            range,
+            first,
+            second,
+            x87_quiet_bits(color[0]),
+            x87_quiet_bits(color[1]),
+            x87_quiet_bits(color[2]),
+            last,
+        ];
+        for (index, value) in values.iter().enumerate() {
+            e.set_global::<u32>(COMMON_011FF588 + 0x80 + 4 * index as u32, *value);
+        }
+        e.set_global::<u32>(COMMON_011FF588 + 0x44, power);
+    }
+    for word in 0..4u32 {
+        let value = e.mem.u32(property + 0xd8 + 4 * word);
+        e.set_global::<u32>(COMMON_011FF588 + 0xa0 + 4 * word, value);
+    }
+    for word in 0..8u32 {
+        let value = e.global::<u32>(EXTRA_011FF398 + 4 * word);
+        e.set_global::<u32>(COMMON_011FF588 + 0xb0 + 4 * word, value);
+    }
+    let value = x87_quiet_bits(e.mem.u32(property + 0x124));
+    for word in 0..4u32 {
+        e.set_global::<u32>(COMMON_011FF548 + 4 * word, value);
+    }
+    let stencil = e.mem.u32(property + 0x84);
+    if pass == 0x288 || pass == 0x289 {
+        e.call(RENDER_STATE_00B98230, &args![stencil, 0u32]);
+    } else if e.mem.u8(property + 0x60) != 0 {
+        e.call(RENDER_STATE_00B98070, &args![1u32, 0u32]);
+        let stencil = e.mem.u32(property + 0x84);
+        e.call(RENDER_STATE_00B98180, &args![2u32, 0xffu32, stencil, 0u32]);
+        let third = if pass == 0x29a || pass == 0x2ab {
+            0u32
+        } else {
+            3
+        };
+        e.call(RENDER_STATE_00B980C0, &args![0u32, 0u32, third, 0u32]);
+        e.call(RENDER_STATE_00B98230, &args![0xffu32, 0u32]);
+    }
+    let shade = x87_store32(f64::from(e.mem.u8(property + 0x82)));
+    for word in 0..4u32 {
+        e.set_global::<u32>(COLOR_011FF568 + 4 * word, shade);
+    }
+    let count = e.mem.u32(property + 0x130);
+    let mut lights = f64::from(count as i32);
+    if (count as i32) < 0 {
+        lights = x87_add(lights, x87_m32(e.global::<u32>(TWO_POWER_32_01099378)));
+    }
+    e.set_global::<u32>(LIGHT_COUNT_011FF658, x87_store32(lights));
+    let mut item = e.mem.u32(property + 0x128);
+    let mut cursor = LIGHT_COLORS_011FF6E8;
+    while item != 0 {
+        let light = e.mem.u32(item + 8);
+        item = e.mem.u32(item);
+        if light == 0 {
+            continue;
+        }
+        for (index, offset) in [0x8cu32, 0x90, 0x94, 0xe0].iter().enumerate() {
+            let value = x87_quiet_bits(e.mem.u32(light + offset));
+            e.set_global::<u32>(cursor - 0x80 + 4 * index as u32, value);
+        }
+        let scale = x87_load32(x87_quiet_bits(e.mem.u32(light + 0xc4)));
+        let red = x87_load32(e.mem.u32(light + 0xd4));
+        let green = e.mem.u32(light + 0xd8);
+        let blue = e.mem.u32(light + 0xdc);
+        // FMULP ST2 (`DE CA`), FMUL ST(0),ST(1) (`D8 C9`), FMUL dword.
+        let red = x87_store32(x87_mul(red, scale));
+        let green = x87_store32(x87_mul(x87_load32(green), scale));
+        let blue = x87_store32(x87_mul(scale, x87_m32(blue)));
+        let factor = x87_load32(x87_quiet_bits(e.mem.u32(property + 0xd4)));
+        let red = x87_store32(x87_mul(x87_load32(red), factor));
+        let green = x87_store32(x87_mul(factor, x87_m32(green)));
+        let blue = x87_store32(x87_mul(factor, x87_m32(blue)));
+        for (index, value) in [red, green, blue].iter().enumerate() {
+            e.set_global::<u32>(cursor + 4 * index as u32, x87_quiet_bits(*value));
+        }
+        e.set_global::<u32>(cursor + 0xc, WATER_ONE_BITS);
+        cursor += 0x10;
+    }
+    for (slot, entry) in [(0x30u32, 0x44u32), (0x34, 0x5c)] {
+        let target = e.mem.u32(this + slot);
+        if target == 0 {
+            continue;
+        }
+        let pass_state = e.global::<u32>(PASS_STATE_0126F74C);
+        let constants = e.mem.u32(pass_state + entry);
+        if constants == 0 {
+            continue;
+        }
+        e.vcall(
+            target,
+            0x78,
+            &args![
+                constants, geometry, word_bc, 0u32, passes, state, 0u32, world, bound, 0u32, 1u32
+            ],
+        );
+    }
+}
+
+/// The render-state setters `00b98480` and `00b98070` (`cdecl`, two words).
+const RENDER_STATE_00B98480: u32 = 0x00b9_8480;
+
+// Translated from 00b86b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010af9e0` slot +0x8c), `thiscall`, `RET 4` (the property
+/// state; `this` is not read). With the state's +0xc property: `00b98480(0, 0)` when it is set
+/// and has flag 0x10000 (+0x24); `00b98070(0, 0)` when the pass number (`011f91e4`) is neither
+/// 0x288 nor 0x289 and the property's byte +0x60 is set (read without a null check).
+pub fn fn_00b86b80(e: &mut Engine, _this: Ptr, state: Ptr) {
+    let property = e.mem.u32(state.addr() + 0xc);
+    let pass = e.global::<u32>(CURRENT_PASS_011F91E4);
+    if property != 0 && e.mem.u32(property + 0x24) & 0x1_0000 != 0 {
+        e.call(RENDER_STATE_00B98480, &args![0u32, 0u32]);
+    }
+    if pass != 0x288 && pass != 0x289 && e.mem.u8(property + 0x60) != 0 {
+        e.call(RENDER_STATE_00B98070, &args![0u32, 0u32]);
+    }
+}
+
+// Translated from 00b86db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `watershader.cpp`): the scalar deleting destructor (vtable
+/// `010af9e0` slot +0), `thiscall`, `RET 4`. Runs the destructor (`00b824b0`) and, when bit 0
+/// of the flags is set, frees the 0x250 bytes (`00aa1460`). Answers `this`.
+pub fn fn_00b86db0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b824b0(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_00AA1460, &args![this, 0x250u32]);
+    }
+    this
+}
+
+/// The constant names of the water `CreateConstantMaps` (read in Ghidra), the data and the
+/// global `NiPointer`s the entries are kept in.
+const WORLD_VIEW_PROJ_TRANSPOSE_010A1E50: u32 = 0x010a_1e50;
+const WORLD_TRANSPOSE_010A1F08: u32 = 0x010a_1f08;
+const COMMON_DATA_010AFC60: u32 = 0x010a_fc60;
+const VAR_AMOUNTS_010AFC54: u32 = 0x010a_fc54;
+const FOG_DATA_010AFC4C: u32 = 0x010a_fc4c;
+const DEPTH_DATA_010AF5B0: u32 = 0x010a_f5b0;
+const SUN_LIGHT_DATA_010AFC3C: u32 = 0x010a_fc3c;
+const LIGHT_DATA_010AF62C: u32 = 0x010a_f62c;
+
+/// The map at `this + slot`'s entry for `name` (its slot +0x70) kept in the global `NiPointer`
+/// `global`.
+fn keep_water_entry(e: &mut Engine, this: u32, slot: u32, name: u32, global: u32) {
+    let map = e.mem.u32(this + slot);
+    let entry = e.vcall(map, 0x70, &args![name]).u32();
+    ni_pointer_assign(e, global, entry);
+}
+
+// Translated from 00b86f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `WaterShader::CreateConstantMaps` (Xbox PDB), no stack words. With the thread's allocation
+/// context at 0x1d (put back at the end): when the vertex constant map (+0x34) is null, makes
+/// one (kind 0) with `"WorldViewProjTranspose"` (slot +0x68: 0x20000009, 0, `""`) and
+/// `"WorldTranspose"` (slot +0x68: 0x20000009, 4, `""`) and `"CommonData"` (0x10000009,
+/// register 8, 3 registers, 0x30 bytes at `011ff548`), each entry kept in `011ff4a0`,
+/// `011ff4a4`, `011ff4a8`; when the pixel map (+0x30) is null, makes one (kind 2) with
+/// `"CommonData"` (register 1, 7 registers at `011ff588`), `"VarAmounts"` (8, `011ff5f8`),
+/// `"FogData"` (0x1000000c, 9, 2 registers at `011ff608`), `"DepthData"` (0xb, `011ff628`),
+/// `"SunLightData"` (0x1000000c, 0xc, 2 at `011ff638`) and `"LightData"` (0x10000009, 0xe,
+/// 0x11 registers at `011ff658`), kept in `011ff4ac` to `011ff4c0`.
+// Translation incomplete: 00b86f20 - the C++ exception frame (FS:[0] chain, unwind states 1 and 2 for the allocations) is not translated.
+pub fn water_shader_create_constant_maps(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let empty = CONSTANT_EMPTY_NAME_01011584;
+    with_allocation_context(e, CONTEXT_WATER, |e| {
+        if e.mem.u32(base + 0x34) == 0 {
+            make_constant_map(e, base, 0x34, 0);
+            for (name, register, global) in [
+                (WORLD_VIEW_PROJ_TRANSPOSE_010A1E50, 0u32, ENTRIES_011FF4A0),
+                (WORLD_TRANSPOSE_010A1F08, 4, ENTRIES_011FF4A0 + 4),
+            ] {
+                let map = e.mem.u32(base + 0x34);
+                e.vcall(
+                    map,
+                    0x68,
+                    &args![
+                        name,
+                        0x2000_0009u32,
+                        register,
+                        empty,
+                        0u32,
+                        0u32,
+                        0u32,
+                        0u32
+                    ],
+                );
+                keep_water_entry(e, base, 0x34, name, global);
+            }
+            add_constant_entry(
+                e,
+                base,
+                0x34,
+                [
+                    COMMON_DATA_010AFC60,
+                    0x1000_0009,
+                    0,
+                    8,
+                    3,
+                    empty,
+                    0x30,
+                    4,
+                    COMMON_011FF548,
+                    0,
+                ],
+            );
+            keep_water_entry(e, base, 0x34, COMMON_DATA_010AFC60, ENTRIES_011FF4A0 + 8);
+        }
+        if e.mem.u32(base + 0x30) != 0 {
+            return;
+        }
+        make_constant_map(e, base, 0x30, 2);
+        let entries = [
+            (
+                COMMON_DATA_010AFC60,
+                0x1000_0009u32,
+                1u32,
+                7u32,
+                0x70u32,
+                COMMON_011FF588,
+            ),
+            (
+                VAR_AMOUNTS_010AFC54,
+                0x1000_0007,
+                8,
+                1,
+                0x10,
+                COMMON_011FF588 + 0x70,
+            ),
+            (
+                FOG_DATA_010AFC4C,
+                0x1000_000c,
+                9,
+                2,
+                0x20,
+                COMMON_011FF588 + 0x80,
+            ),
+            (
+                DEPTH_DATA_010AF5B0,
+                0x1000_0007,
+                0xb,
+                1,
+                0x10,
+                COMMON_011FF588 + 0xa0,
+            ),
+            (
+                SUN_LIGHT_DATA_010AFC3C,
+                0x1000_000c,
+                0xc,
+                2,
+                0x20,
+                COMMON_011FF588 + 0xb0,
+            ),
+            (
+                LIGHT_DATA_010AF62C,
+                0x1000_0009,
+                0xe,
+                0x11,
+                0x110,
+                LIGHT_COUNT_011FF658,
+            ),
+        ];
+        for (index, (name, kind, register, count, size, data)) in entries.iter().enumerate() {
+            add_constant_entry(
+                e,
+                base,
+                0x30,
+                [
+                    *name, *kind, 0, *register, *count, empty, *size, 4, *data, 0,
+                ],
+            );
+            keep_water_entry(e, base, 0x30, *name, ENTRIES_011FF4AC + 4 * index as u32);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b8_24b0, fn_00b824b0(Ptr)),
+        entry!(0x00b8_27b0, fn_00b827b0() -> Ptr),
+        entry!(0x00b8_61d0, fn_00b861d0(Ptr) -> bool),
+        entry!(0x00b8_63a0, fn_00b863a0(Ptr, Ptr)),
+        entry!(0x00b8_64d0, fn_00b864d0(Ptr, Ptr)),
+        entry!(0x00b8_6b80, fn_00b86b80(Ptr, Ptr)),
+        entry!(0x00b8_6db0, fn_00b86db0(Ptr, u32) -> Ptr),
+        entry!(0x00b8_6f20, water_shader_create_constant_maps(Ptr)),
         entry!(0x00b8_3dd0, fn_00b83dd0(Ptr) -> bool),
         entry!(0x00b8_27c0, water_shader_load_shaders(Ptr)),
         entry!(0x00b8_6bd0, water_shader_water_shader(Ptr) -> Ptr),
@@ -1595,5 +2228,402 @@ mod stages_and_passes_tests {
         assert!(calls(&e, PASS_SET_STAGE).iter().all(|a| a[0] != kept));
         assert_eq!(e.mem.u32(kept + 0x5c), e.mem.u32(this + 0x194));
         assert_eq!(e.mem.u32(kept + 0x44), e.mem.u32(this + 0x1a4));
+    }
+}
+
+#[cfg(test)]
+mod water_function_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    const SLOTS: u32 = 0x0e00_0000;
+    const VTABLE: u32 = 0x0e80_0000;
+
+    fn vtable(e: &mut Engine, n: u32) -> u32 {
+        let table = VTABLE + n * 0x1000;
+        let targets: Vec<u32> = (0..0x60u32).map(|i| SLOTS + n * 0x1000 + 4 * i).collect();
+        e.put_vtable(table, &targets);
+        table
+    }
+
+    fn slot(n: u32, offset: u32) -> u32 {
+        SLOTS + n * 0x1000 + offset
+    }
+
+    fn noop(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    fn map_globals(e: &mut Engine) {
+        for page in [
+            0x0101_2000u32,
+            0x0102_0000,
+            0x0109_9000,
+            0x011a_9000,
+            0x011f_4000,
+            0x011f_9000,
+            0x011f_a000,
+            0x011f_f000,
+            0x0126_f000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        for (i, word) in [0x10u32, 0x11, 0x12, 0x13].iter().enumerate() {
+            e.set_global(DEFAULT_WORDS_011A9BD0 + 4 * i as u32, *word);
+        }
+    }
+
+    fn assert_blocks_reset(e: &Engine) {
+        for word in 0..0x2cu32 {
+            assert_eq!(
+                e.global::<u32>(BLOCK_011FF4C8 + 4 * word),
+                0x10 + (word & 3),
+                "{word}"
+            );
+        }
+        for word in 0..0x7cu32 {
+            assert_eq!(
+                e.global::<u32>(BLOCK_011FF578 + 4 * word),
+                0x10 + (word & 3),
+                "{word}"
+            );
+        }
+    }
+
+    #[test]
+    fn fn_00b824b0_releases_resets_and_destroys() {
+        let mut e = rig();
+        map_globals(&mut e);
+        noop(&mut e, &[VECTOR_DESTRUCT, BS_SHADER_DESTRUCT]);
+        let this = e.mem.alloc(0x250);
+        let first = object(&mut e, 1);
+        e.mem.set_u32(this + 0x194, first);
+        let pass = e.mem.alloc(0x70);
+        e.mem.set_u32(pass + 0x64, 1);
+        e.mem.set_u32(this + 0x6c + 4 * 0x49, pass);
+        let member = object(&mut e, 2);
+        e.mem.set_u32(this + 0x240, member);
+        e.call(0x00b8_24b0, &args![this]);
+        assert_eq!(e.mem.u32(this), WATER_SHADER_VTABLE_010AF9E0);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![first]]);
+        assert_eq!(calls(&e, PASS_DELETE_00E80190), vec![vec![pass]]);
+        // The member pointer is released but not cleared.
+        assert_eq!(e.mem.u32(member + 4), 1);
+        assert_eq!(e.mem.u32(this + 0x240), member);
+        assert_blocks_reset(&e);
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCT),
+            vec![
+                vec![this + 0x1a0, 4, 0x26, DESTRUCT_00B66F20],
+                vec![this + 0x6c, 4, 0x4a, DESTRUCT_00B79930],
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00b86db0_destroys_and_frees_with_bit_0() {
+        let mut e = rig();
+        map_globals(&mut e);
+        noop(
+            &mut e,
+            &[VECTOR_DESTRUCT, BS_SHADER_DESTRUCT, NI_FREE_00AA1460],
+        );
+        let this = e.mem.alloc(0x250);
+        assert_eq!(e.call(0x00b8_6db0, &args![this, 1u32]).u32(), this);
+        assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![this, 0x250]]);
+        e.call(0x00b8_6db0, &args![this, 0u32]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460).len(), 1);
+    }
+
+    #[test]
+    fn fn_00b827b0_answers_its_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00b8_27b0, &args![]).u32(), RECORD_011FF498);
+    }
+
+    #[test]
+    fn fn_00b861d0_clears_the_shader_and_the_globals() {
+        let mut e = rig();
+        map_globals(&mut e);
+        e.register(CALL_00BE0870, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0x250);
+        let texture = object(&mut e, 1);
+        e.mem.set_u32(this + 0x1a0 + 4 * 0x25, texture);
+        let entry = object(&mut e, 1);
+        e.set_global(ENTRIES_011FF4AC + 0x14, entry);
+        assert!(e.call(0x00b8_61d0, &args![this]).bool());
+        assert_eq!(
+            calls(&e, REFERENCE_DELETE),
+            vec![vec![texture], vec![entry]]
+        );
+        assert_eq!(e.global::<u32>(ENTRIES_011FF4AC + 0x14), 0);
+        assert_blocks_reset(&e);
+    }
+
+    /// The pass state with five constant blocks and a water property in the state's +0xc.
+    fn texture_rig(pass: u32) -> (Engine, u32, u32, u32, Vec<u32>) {
+        let mut e = rig();
+        map_globals(&mut e);
+        let pass_state = e.mem.alloc(0x60);
+        let table = e.mem.alloc(0x14);
+        let blocks: Vec<u32> = (0..5).map(|_| e.mem.alloc(0xc)).collect();
+        for (i, block) in blocks.iter().enumerate() {
+            e.mem.set_u32(table + 4 * i as u32, *block);
+            e.mem.set_u32(block + 8, 0x77);
+        }
+        e.mem.set_u32(pass_state + 0x24, table);
+        e.set_global(PASS_STATE_0126F74C, pass_state);
+        e.set_global(CURRENT_PASS_011F91E4, pass);
+        e.set_global(DEFAULT_TEXTURE_011F9510, 0xdefau32);
+        let this = e.mem.alloc(0x250);
+        let table0 = vtable(&mut e, 0);
+        e.mem.set_u32(this, table0);
+        noop(&mut e, &[slot(0, 0x108)]);
+        e.register(RENDERED_TEXTURE_GET_TEXTURE, |_, a| (a[0] + 1).into_ret());
+        let property = e.mem.alloc(0x150);
+        let state = e.mem.alloc(0x14);
+        e.mem.set_u32(state + 0xc, property);
+        (e, this, state, property, blocks)
+    }
+
+    #[test]
+    fn fn_00b863a0_sets_the_water_textures() {
+        let (mut e, this, state, property, blocks) = texture_rig(0x10);
+        e.mem.set_u32(property + 0x13c, 0x1000);
+        e.mem.set_u8(property + 0x80, 1);
+        e.set_global(RENDERED_TEXTURE_011F943C, 0x2000u32);
+        e.mem.set_u8(property + 0x81, 1);
+        e.mem.set_u8(property + 0x60, 1);
+        e.mem.set_u32(property + 0x148, 0x4444);
+        e.mem.set_u32(property + 0x144, 0x5000);
+        e.mem.set_u8(property + 0x63, 1);
+        e.call(0x00b8_63a0, &args![this, state]);
+        let values: Vec<u32> = blocks.iter().map(|b| e.mem.u32(b + 8)).collect();
+        assert_eq!(values, vec![0x1001, 0x2001, 0xdefa, 0x4444, 0x5001]);
+        assert_eq!(calls(&e, slot(0, 0x108)), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_00b863a0_clears_only_on_the_stencil_passes() {
+        let (mut e, this, state, _, blocks) = texture_rig(0x289);
+        e.call(0x00b8_63a0, &args![this, state]);
+        let values: Vec<u32> = blocks.iter().map(|b| e.mem.u32(b + 8)).collect();
+        assert_eq!(values, vec![0; 5]);
+        assert!(calls(&e, slot(0, 0x108)).is_empty());
+        // Without the flags: the defaults where the code has them, nothing elsewhere.
+        let (mut e, this, state, property, blocks) = texture_rig(0x10);
+        e.mem.set_u32(property + 0x13c, 0x1000);
+        e.mem.set_u32(property + 0x138, 0x3000);
+        e.call(0x00b8_63a0, &args![this, state]);
+        let values: Vec<u32> = blocks.iter().map(|b| e.mem.u32(b + 8)).collect();
+        assert_eq!(values, vec![0xdefa, 0, 0x3001, 0, 0]);
+    }
+
+    #[test]
+    fn fn_00b86b80_sets_the_render_states() {
+        let mut e = rig();
+        map_globals(&mut e);
+        noop(&mut e, &[RENDER_STATE_00B98480, RENDER_STATE_00B98070]);
+        let property = e.mem.alloc(0x70);
+        e.mem.set_u32(property + 0x24, 0x1_0000);
+        e.mem.set_u8(property + 0x60, 1);
+        let state = e.mem.alloc(0x14);
+        e.mem.set_u32(state + 0xc, property);
+        e.set_global(CURRENT_PASS_011F91E4, 0x10u32);
+        e.call(0x00b8_6b80, &args![0u32, state]);
+        assert_eq!(calls(&e, RENDER_STATE_00B98480), vec![vec![0, 0]]);
+        assert_eq!(calls(&e, RENDER_STATE_00B98070), vec![vec![0, 0]]);
+        e.set_global(CURRENT_PASS_011F91E4, 0x288u32);
+        e.mem.set_u32(property + 0x24, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00b8_6b80, &args![0u32, state]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    /// A rig for `00b864d0`: the record's geometry, a water property with two lights (the
+    /// second item without a light) and a fog property when `fog`.
+    fn draw_rig(pass: u32, fog: bool) -> (Engine, u32, u32, u32) {
+        let mut e = rig();
+        map_globals(&mut e);
+        e.set_global(CURRENT_PASS_011F91E4, pass);
+        e.set_global(TEN_01020758, 10.0f64);
+        e.set_global(ONE_01012070, 1.0f64);
+        e.set_global(TWO_POWER_32_01099378, 4_294_967_296.0f32);
+        for (i, v) in [5.0f32, 6.0, 7.0].iter().enumerate() {
+            e.set_global(SUN_POSITION_011FA2A0 + 4 * i as u32, *v);
+            e.set_global(ORIGIN_011F474C + 4 * i as u32, 1.0f32);
+        }
+        let this = e.mem.alloc(0x250);
+        e.mem.set_u32(this + 0x18, 0x1818);
+        let record = e.mem.alloc(0x10);
+        let geometry = e.mem.alloc(0xc0);
+        let passes = e.mem.alloc(0x38);
+        e.mem.set_u32(passes + 0x34, 3);
+        e.mem.set_u32(geometry + 0xb8, passes);
+        e.mem.set_u32(record, geometry);
+        e.set_global(CURRENT_RECORD_011F91E0, record);
+        let property = e.mem.alloc(0x140);
+        e.mem.set_f32(property + 0x104, 5.0);
+        e.mem.set_f32(property + 0xd4, 2.0);
+        e.mem.set_u8(property + 0x82, 3);
+        e.mem.set_u32(property + 0x84, 0x8484);
+        e.mem.set_u32(property + 0x130, 2);
+        let light = e.mem.alloc(0xe4);
+        for (offset, value) in [
+            (0x8cu32, 1.0f32),
+            (0x90, 2.0),
+            (0x94, 3.0),
+            (0xe0, 4.0),
+            (0xc4, 0.5),
+            (0xd4, 2.0),
+            (0xd8, 4.0),
+            (0xdc, 6.0),
+        ] {
+            e.mem.set_f32(light + offset, value);
+        }
+        let items = [e.mem.alloc(0xc), e.mem.alloc(0xc)];
+        e.mem.set_u32(items[0], items[1]);
+        e.mem.set_u32(items[0] + 8, light);
+        e.mem.set_u32(property + 0x128, items[0]);
+        let state = e.mem.alloc(0x14);
+        e.mem.set_u32(state + 0xc, property);
+        let pass_state = e.mem.alloc(0x60);
+        e.set_global(PASS_STATE_0126F74C, pass_state);
+        noop(
+            &mut e,
+            &[
+                RENDERER_CALL_00E6FBB0,
+                RENDER_STATE_00B98070,
+                RENDER_STATE_00B98180,
+                RENDER_STATE_00B980C0,
+                RENDER_STATE_00B98230,
+            ],
+        );
+        let fog_property = if fog {
+            let object = e.mem.alloc(0x64);
+            for (offset, value) in [
+                (0x20u32, 0.1f32),
+                (0x24, 0.2),
+                (0x28, 0.3),
+                (0x2c, 1.0),
+                (0x30, 9.0),
+                (0x60, 2.0),
+            ] {
+                e.mem.set_f32(object + offset, value);
+            }
+            object
+        } else {
+            0
+        };
+        e.register_double(GET_FOG_PROPERTY, move |_, _| fog_property.into_ret());
+        (e, this, state, property)
+    }
+
+    #[test]
+    fn fn_00b864d0_fills_the_water_constants() {
+        let (mut e, this, state, property) = draw_rig(0x10, true);
+        e.mem.set_u8(property + 0x60, 1);
+        e.call(0x00b8_64d0, &args![this, state]);
+        let floats = |e: &Engine, at: u32, n: u32| {
+            (0..n)
+                .map(|i| e.global::<f32>(at + 4 * i))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(floats(&e, COMMON_011FF588, 4), vec![4.0, 5.0, 6.0, 0.0]);
+        // 5 / 10 is below 1: 1.0.
+        assert_eq!(e.global::<f32>(COMMON_011FF588 + 0x4c), 1.0);
+        assert_eq!(floats(&e, COMMON_011FF588 + 0x60, 3), vec![1.0, 1.0, 1.0]);
+        assert_eq!(floats(&e, COMMON_011FF588 + 0x80, 2), vec![9.0, 8.0]);
+        assert_eq!(floats(&e, COMMON_011FF588 + 0x90, 3), vec![0.1, 0.2, 0.3]);
+        assert_eq!(e.global::<f32>(COMMON_011FF588 + 0x44), 2.0);
+        assert_eq!(floats(&e, COLOR_011FF568, 4), vec![3.0; 4]);
+        assert_eq!(e.global::<f32>(LIGHT_COUNT_011FF658), 2.0);
+        assert_eq!(
+            floats(&e, LIGHT_COLORS_011FF6E8 - 0x80, 4),
+            vec![1.0, 2.0, 3.0, 4.0]
+        );
+        // (2, 4, 6) * 0.5 * 2.
+        assert_eq!(
+            floats(&e, LIGHT_COLORS_011FF6E8, 4),
+            vec![2.0, 4.0, 6.0, 1.0]
+        );
+        assert_eq!(e.global::<u32>(LIGHT_COLORS_011FF6E8 + 0x10), 0);
+        assert_eq!(calls(&e, RENDER_STATE_00B98070), vec![vec![1, 0]]);
+        assert_eq!(
+            calls(&e, RENDER_STATE_00B98180),
+            vec![vec![2, 0xff, 0x8484, 0]]
+        );
+        assert_eq!(calls(&e, RENDER_STATE_00B980C0), vec![vec![0, 0, 3, 0]]);
+        assert_eq!(calls(&e, RENDER_STATE_00B98230), vec![vec![0xff, 0]]);
+    }
+
+    #[test]
+    fn fn_00b864d0_stencil_and_special_passes() {
+        let (mut e, this, state, property) = draw_rig(0x288, false);
+        e.mem.set_u8(property + 0x60, 1);
+        e.mem.set_f32(property + 0x104, 20.0);
+        e.call(0x00b8_64d0, &args![this, state]);
+        assert_eq!(e.global::<f32>(COMMON_011FF588 + 0x4c), 2.0);
+        assert_eq!(calls(&e, RENDER_STATE_00B98230), vec![vec![0x8484, 0]]);
+        assert!(calls(&e, RENDER_STATE_00B98070).is_empty());
+        let (mut e, this, state, property) = draw_rig(0x29a, false);
+        e.mem.set_u8(property + 0x60, 1);
+        e.call(0x00b8_64d0, &args![this, state]);
+        assert_eq!(calls(&e, RENDER_STATE_00B980C0), vec![vec![0, 0, 0, 0]]);
+    }
+
+    #[test]
+    fn water_create_constant_maps_keeps_every_entry() {
+        const MAP_SLOTS: u32 = 0x0e30_0000;
+        const MAP_VTABLE: u32 = 0x0e31_0000;
+        let mut e = rig();
+        map_globals(&mut e);
+        let targets: Vec<u32> = (0..0x20u32).map(|i| MAP_SLOTS + 4 * i).collect();
+        e.put_vtable(MAP_VTABLE, &targets);
+        e.register(NI_ALLOCATE_00AA13E0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(CONSTANT_MAP_CONSTRUCT_00B7E330, |e, a| {
+            e.mem.set_u32(a[0], MAP_VTABLE);
+            a[0].into_ret()
+        });
+        noop(&mut e, &[MAP_SLOTS + 8, MAP_SLOTS + 0x68]);
+        e.register(MAP_SLOTS + 0x70, |e, _| {
+            let entry = e.mem.alloc(8);
+            e.mem.set_u32(entry, REFERENCE_VTABLE);
+            entry.into_ret()
+        });
+        let tls = e.tls();
+        e.mem.set_u32(tls + 0x2b4, 4);
+        let this = e.mem.alloc(0x250);
+        e.call(0x00b8_6f20, &args![this]);
+        assert_eq!(e.mem.u32(tls + 0x2b4), 4);
+        assert_eq!(calls(&e, MAP_SLOTS + 0x68).len(), 2);
+        let entries = calls(&e, MAP_SLOTS + 8);
+        assert_eq!(entries.len(), 7);
+        let pixel = e.mem.u32(this + 0x30);
+        assert_eq!(
+            entries[6],
+            vec![
+                pixel,
+                LIGHT_DATA_010AF62C,
+                0x1000_0009,
+                0,
+                0xe,
+                0x11,
+                CONSTANT_EMPTY_NAME_01011584,
+                0x110,
+                4,
+                LIGHT_COUNT_011FF658,
+                0
+            ]
+        );
+        let mut global = ENTRIES_011FF4A0;
+        while global < ENTRIES_END_011FF4C4 - 4 {
+            let entry = e.global::<u32>(global);
+            assert_ne!(entry, 0, "{global:#x}");
+            assert_eq!(e.mem.u32(entry + 4), 1);
+            global += 4;
+        }
     }
 }

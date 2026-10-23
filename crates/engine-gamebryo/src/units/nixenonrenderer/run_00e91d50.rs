@@ -106,12 +106,65 @@ pub fn fn_00e91e30(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `00e80690` (unit `nid3dshader.cpp`, unnamed in the engine map; no arguments): the first
+/// step of `fn_00e91c80`.
+const SHUTDOWN_FIRST_00E80690: u32 = 0x00e8_0690;
+/// The three words `fn_00e91c80` empties, in its order (`0126fa3c`, `0126fa54`, `0126fa50`):
+/// each object is handed to `00e93260` (`cdecl`, one word) and, read again, deleted through
+/// its vtable slot 0 with 1.
+const SHUTDOWN_OBJECTS: [u32; 3] = [0x0126_fa3c, 0x0126_fa54, 0x0126_fa50];
+const RELEASE_00E93260: u32 = 0x00e9_3260;
+/// `00e93f50` (`cdecl`, one word; given 0).
+const SET_00E93F50: u32 = 0x00e9_3f50;
+/// The no-argument steps after it, in order; `00e6ec20` is reached by a jump.
+const SHUTDOWN_STEPS: [u32; 7] = [
+    0x00e9_33d0,
+    0x00e9_2080,
+    0x00e7_a6a0,
+    0x00e8_0630,
+    0x00e7_f610,
+    0x00e8_9740,
+    0x00e6_ec20,
+];
+
+// Translated from 00e91c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no Ghidra function, read from its bytes; no arguments): the
+/// shut-down function `fn_00e91e30` registers beside `fn_00e91dc0`. Only when the start-up
+/// ran (byte `0126fa00` set): clears that byte, runs `00e80690`, empties the words
+/// `0126fa3c`, `0126fa54` and `0126fa50` (each object, when not null, handed to `00e93260`
+/// and then, when still not null, deleted through its vtable slot 0 with 1; the word
+/// cleared), runs `00e93f50` with 0 and then `00e933d0`, `00e92080`, `00e7a6a0`, `00e80630`,
+/// `00e7f610`, `00e89740` and, by a jump, `00e6ec20`.
+pub fn fn_00e91c80(e: &mut Engine) {
+    if e.mem.u8(SETUP_STARTED) == 0 {
+        return;
+    }
+    e.mem.set_u8(SETUP_STARTED, 0);
+    e.call(SHUTDOWN_FIRST_00E80690, &args![]);
+    for word in SHUTDOWN_OBJECTS {
+        let object = e.mem.u32(word);
+        if object != 0 {
+            e.call(RELEASE_00E93260, &args![object]);
+            let object = e.mem.u32(word);
+            if object != 0 {
+                e.vcall(object, 0, &args![1u32]);
+            }
+        }
+        e.mem.set_u32(word, 0);
+    }
+    e.call(SET_00E93F50, &args![0u32]);
+    for step in SHUTDOWN_STEPS {
+        e.call(step, &args![]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00e9_1d50, fn_00e91d50(u32)),
         entry!(0x00e9_1dc0, fn_00e91dc0()),
         entry!(0x00e9_1e30, fn_00e91e30(Ptr) -> Ptr),
+        entry!(0x00e9_1c80, fn_00e91c80()),
     ]
 }
 
@@ -197,5 +250,69 @@ mod start_up_tests {
             vec![(REGISTER_STARTUP, vec![0x00e9_1dc0, 0x00e9_1c80])]
         );
         assert_eq!(e.mem.u32(REGISTRAR_COUNT), 2);
+    }
+}
+
+#[cfg(test)]
+mod shut_down_tests {
+    use super::*;
+
+    const DELETE: u32 = 0x0e40_0000;
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x2000);
+        let mut callees = vec![SHUTDOWN_FIRST_00E80690, SET_00E93F50, DELETE];
+        callees.extend(SHUTDOWN_STEPS);
+        for callee in callees {
+            e.register(callee, |_, _| Ret::default());
+        }
+        // The release empties `0126fa54`'s word: that object is not deleted.
+        e.register(RELEASE_00E93260, |e, a| {
+            if e.mem.u32(0x0126_fa54) == a[0] {
+                e.mem.set_u32(0x0126_fa54, 0);
+            }
+            Ret::default()
+        });
+        e
+    }
+
+    fn object(e: &mut Engine) -> u32 {
+        let vtable = e.mem.alloc(4);
+        e.mem.set_u32(vtable, DELETE);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    #[test]
+    fn fn_00e91c80_shuts_down_once_started() {
+        let mut e = engine();
+        e.mem.set_u8(SETUP_STARTED, 1);
+        let first = object(&mut e);
+        let second = object(&mut e);
+        e.mem.set_u32(0x0126_fa3c, first);
+        e.mem.set_u32(0x0126_fa54, second);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_1c80, &args![]);
+        let log = e.call_log.take().unwrap();
+        let mut expected = vec![
+            (SHUTDOWN_FIRST_00E80690, vec![]),
+            (RELEASE_00E93260, vec![first]),
+            (DELETE, vec![first, 1]),
+            (RELEASE_00E93260, vec![second]),
+            (SET_00E93F50, vec![0]),
+        ];
+        expected.extend(SHUTDOWN_STEPS.iter().map(|step| (*step, vec![])));
+        assert_eq!(log[1..].to_vec(), expected);
+        assert_eq!(e.mem.u8(SETUP_STARTED), 0);
+        for word in SHUTDOWN_OBJECTS {
+            assert_eq!(e.mem.u32(word), 0);
+        }
+
+        // Not started (the byte now clear): nothing runs.
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_1c80, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

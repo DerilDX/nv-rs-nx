@@ -11,9 +11,42 @@ pub fn fn_00408b40(e: &mut Engine, this: Ptr, flags: u32) -> u32 {
         .u32()
 }
 
+/// `strcmp` (`00ec6da0`, cdecl).
+const STRCMP: u32 = 0x00ec_6da0;
+
+// Translated from 00408b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (cdecl: two strings): returns `strcmp(first, second)` (the result is left
+/// in `EAX`).
+pub fn fn_00408b20(e: &mut Engine, first: u32, second: u32) -> i32 {
+    e.call(STRCMP, &args![first, second]).i32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0040_8b40, fn_00408b40(Ptr, u32) -> u32)]
+    vec![
+        entry!(0x0040_8b40, fn_00408b40(Ptr, u32) -> u32),
+        entry!(0x0040_8b20, fn_00408b20(u32, u32) -> i32),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fn_00408b20_returns_strcmp_of_its_arguments() {
+        let mut e = Engine::new();
+        e.register(STRCMP, |_, a| Ret {
+            eax: a[0].wrapping_sub(a[1]),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0040_8b20, &args![0x10u32, 0x30u32]).i32(), -0x20);
+        let log = e.call_log.take().unwrap();
+        let inner: Vec<_> = log.iter().filter(|c| c.0 == STRCMP).collect();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner[0].1, vec![0x10, 0x30]);
+    }
 }
 
 #[cfg(test)]

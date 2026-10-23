@@ -281,6 +281,92 @@ pub fn ni_blend_point3_interpolator_create_clone(e: &mut Engine, this: Ptr, clon
     object
 }
 
+/// `NiInterpolator::IsPoint3ValueSupported` (vtable +0xB0, Xbox PDB slot
+/// order).
+const SLOT_IS_POINT3_VALUE_SUPPORTED: u32 = 0xb0;
+/// `NiBlendInterpolator::IsEqual` (`00a36fd0`), `SaveBinary` (`00a37ec0`)
+/// and `GetViewerStrings` (`00a38080`).
+const BLEND_IS_EQUAL: u32 = 0x00a3_6fd0;
+const BLEND_SAVE_BINARY: u32 = 0x00a3_7ec0;
+const BLEND_GET_VIEWER_STRINGS: u32 = 0x00a3_8080;
+/// `NiPoint3::SaveBinary` (`00a69780`, `thiscall (point, stream)`), the
+/// point comparison `IsEqual` negates (`00439090`, `thiscall (point,
+/// &other)`) and `NiPoint3`'s viewer string (`00a59af0`, `thiscall (point,
+/// name)`, answering the string).
+const POINT_SAVE_BINARY: u32 = 0x00a6_9780;
+const POINT_COMPARE: u32 = 0x0043_9090;
+const POINT_VIEWER_STRING: u32 = 0x00a5_9af0;
+/// `NiGetViewerString` (`00a7d330`, `cdecl`, the class name) and the name
+/// `"m_kPoint3Value"`.
+const VIEWER_STRING: u32 = 0x00a7_d330;
+const POINT_VALUE_NAME: u32 = 0x0109_8924;
+/// `NiBlendPoint3Interpolator::m_kPoint3Value` (Xbox PDB) +0x30.
+const POINT_VALUE: u32 = 0x30;
+
+// Translated from 00a55a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendPoint3Interpolator::InterpolatorIsCorrectType` (Xbox PDB;
+/// `thiscall`, one stack word): the interpolator's `IsPoint3ValueSupported`
+/// (vtable +0xB0); `this` is not read.
+pub fn ni_blend_point3_interpolator_interpolator_is_correct_type(
+    e: &mut Engine,
+    _this: Ptr,
+    interpolator: Ptr,
+) -> bool {
+    e.vcall(
+        interpolator.addr(),
+        SLOT_IS_POINT3_VALUE_SUPPORTED,
+        &args![],
+    )
+    .bool()
+}
+
+// Translated from 00a55ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendPoint3Interpolator::SaveBinary` (Xbox PDB):
+/// `NiBlendInterpolator`'s `SaveBinary`, then the point value
+/// (`NiPoint3::SaveBinary`).
+pub fn ni_blend_point3_interpolator_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(BLEND_SAVE_BINARY, &args![this, stream]);
+    e.call(POINT_SAVE_BINARY, &args![this.addr() + POINT_VALUE, stream]);
+}
+
+// Translated from 00a55ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendPoint3Interpolator::IsEqual` (Xbox PDB): `NiBlendInterpolator`'s
+/// `IsEqual`, then true when the point comparison (`00439090`) of the two
+/// point values answers false.
+pub fn ni_blend_point3_interpolator_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    if !e.call(BLEND_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    !e.call(
+        POINT_COMPARE,
+        &args![this.addr() + POINT_VALUE, other.addr() + POINT_VALUE],
+    )
+    .bool()
+}
+
+// Translated from 00a55ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendPoint3Interpolator::GetViewerStrings` (Xbox PDB):
+/// `NiBlendInterpolator`'s strings, then the class name and the point
+/// value's string named `"m_kPoint3Value"` (both through the argument's
+/// stack word).
+pub fn ni_blend_point3_interpolator_get_viewer_strings(e: &mut Engine, this: Ptr, strings: Ptr) {
+    use crate::units::nianimation::niblendinterpolator::append_viewer_string;
+    e.call(BLEND_GET_VIEWER_STRINGS, &args![this, strings]);
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        let class_name = e.mem.u32(NI_BLEND_POINT3_INTERPOLATOR_RTTI);
+        let text = e.call(VIEWER_STRING, &args![class_name]).u32();
+        append_viewer_string(e, strings, slot, text);
+        let text = e
+            .call(
+                POINT_VIEWER_STRING,
+                &args![this.addr() + POINT_VALUE, POINT_VALUE_NAME],
+            )
+            .u32();
+        append_viewer_string(e, strings, slot, text);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -295,6 +381,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a5_5c30, ni_blend_point3_interpolator_blend_values(Ptr, f32, u32, Ptr) -> bool),
         entry!(0x00a5_5e00, ni_blend_point3_interpolator_update(Ptr, f32, u32, Ptr) -> bool),
         entry!(0x00a5_5b20, ni_blend_point3_interpolator_create_clone(Ptr, Ptr) -> u32),
+        entry!(
+            0x00a5_5a60,
+            ni_blend_point3_interpolator_interpolator_is_correct_type(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00a5_5ad0,
+            ni_blend_point3_interpolator_save_binary(Ptr, Ptr)
+        ),
+        entry!(
+            0x00a5_5ec0,
+            ni_blend_point3_interpolator_is_equal(Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00a5_5ef0,
+            ni_blend_point3_interpolator_get_viewer_strings(Ptr, Ptr)
+        ),
     ]
 }
 
@@ -550,5 +652,73 @@ mod tests {
             .take()
             .unwrap()
             .contains(&(BLEND_COPY_MEMBERS, vec![this, clone, 0x6000])));
+    }
+}
+
+#[cfg(test)]
+mod a07_tests {
+    use super::*;
+    use crate::units::nianimation::niblendinterpolator::a07_test_support::{calls, viewer_strings};
+
+    const VTABLE: u32 = 0x7400_0000;
+    const SUPPORTED: u32 = 0x7500_0000;
+
+    #[test]
+    fn interpolator_is_correct_type_asks_for_point3_support() {
+        let mut e = Engine::new();
+        let mut slots = vec![0u32; 0x40];
+        slots[(SLOT_IS_POINT3_VALUE_SUPPORTED / 4) as usize] = SUPPORTED;
+        e.put_vtable(VTABLE, &slots);
+        e.register(SUPPORTED, |_, _| 1u32.into_ret());
+        let interp = e.mem.alloc(8);
+        e.mem.set_u32(interp, VTABLE);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00a5_5a60, &args![0u32, interp]).bool());
+        assert_eq!(calls(&e, SUPPORTED), vec![vec![interp]]);
+    }
+
+    #[test]
+    fn save_binary_saves_the_base_then_the_point() {
+        let mut e = Engine::new();
+        e.register(BLEND_SAVE_BINARY, |_, _| Ret::default());
+        e.register(POINT_SAVE_BINARY, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_5ad0, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(calls(&e, BLEND_SAVE_BINARY), vec![vec![0x1000, 0x2000]]);
+        assert_eq!(calls(&e, POINT_SAVE_BINARY), vec![vec![0x1030, 0x2000]]);
+    }
+
+    #[test]
+    fn is_equal_negates_the_point_comparison() {
+        let mut e = Engine::new();
+        e.register(BLEND_IS_EQUAL, |_, _| 1u32.into_ret());
+        e.register(POINT_COMPARE, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00a5_5ec0, &args![0x1000u32, 0x2000u32]).bool());
+        assert_eq!(calls(&e, POINT_COMPARE), vec![vec![0x1030, 0x2030]]);
+        e.register(POINT_COMPARE, |_, _| 1u32.into_ret());
+        assert!(!e.call(0x00a5_5ec0, &args![0x1000u32, 0x2000u32]).bool());
+        e.register(BLEND_IS_EQUAL, |_, _| 0u32.into_ret());
+        e.register(POINT_COMPARE, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a5_5ec0, &args![0x1000u32, 0x2000u32]).bool());
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_the_class_and_the_point() {
+        let mut e = Engine::new();
+        e.register(BLEND_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(POINT_VIEWER_STRING, |_, a| (a[1] + 1).into_ret());
+        let (strings, stored) = viewer_strings(&mut e);
+        e.map(0x011f_4000, 0x1000);
+        e.mem
+            .set_u32(NI_BLEND_POINT3_INTERPOLATOR_RTTI, 0x0109_8000);
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x00a5_5ef0, &args![this, strings]);
+        assert_eq!(*stored.borrow(), vec![0x0109_8000, POINT_VALUE_NAME + 1]);
+        assert_eq!(
+            calls(&e, POINT_VIEWER_STRING),
+            vec![vec![this + 0x30, POINT_VALUE_NAME]]
+        );
     }
 }

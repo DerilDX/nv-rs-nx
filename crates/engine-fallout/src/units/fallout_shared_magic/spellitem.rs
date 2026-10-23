@@ -106,6 +106,58 @@ pub fn fn_005e9830(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// The effect list clean-up (`enchantmentitem.rs`, `00409340`) and the
+/// `MagicItemForm` destructor body (`00409210`), thiscall.
+const REMOVE_EFFECTS_00409340: u32 = 0x0040_9340;
+const MAGIC_ITEM_FORM_DESTRUCT: u32 = 0x0040_9210;
+
+// Translated from 0040e210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, `RET 4`): whether
+/// `SpellItemData::iFlags` (+0x40) has any bit of `mask` (the whole stack
+/// word is ANDed with the byte).
+pub fn fn_0040e210(e: &mut Engine, this: Ptr, mask: u32) -> bool {
+    u32::from(e.mem.u8(this.addr() + 0x40)) & mask != 0
+}
+
+// Translated from 0040e280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`): the chunk tag `0x54495053`
+/// (`"SPIT"`).
+pub fn fn_0040e280(e: &mut Engine, this: Ptr) -> u32 {
+    let _ = (e, this);
+    0x5449_5053
+}
+
+// Translated from 0040e2c0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0040e2c0 - the C++ exception frame (FS:[0] chain, unwind state 0 around the effect list's clean-up) is not translated.
+/// The `SpellItem` destructor body (unnamed in the engine map): the three
+/// `SpellItem` vtables (RTTI `.?AVSpellItem@@`), the effects removed
+/// (`00409340`), then the `MagicItemForm` destructor body (`00409210`).
+pub fn fn_0040e2c0(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, 0x0101_3f8c);
+    e.mem.set_u32(base + 0x18, 0x0101_3f44);
+    e.mem.set_u32(base + 0x24, 0x0101_3f28);
+    e.call(REMOVE_EFFECTS_00409340, &args![this]);
+    e.call(MAGIC_ITEM_FORM_DESTRUCT, &args![this]);
+}
+
+// Translated from 0040e330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the `SpellItemData` start values (Xbox PDB
+/// names, PC offsets): `iSpellType` (+0x34) 0, `iCostOverride` (+0x38) -1,
+/// `eLevelOverride` (+0x3c) 0, `iFlags` (+0x40) 0.
+pub fn fn_0040e330(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr() + 0x34, 0);
+    e.mem.set_u32(this.addr() + 0x38, 0xffff_ffff);
+    e.mem.set_u32(this.addr() + 0x3c, 0);
+    e.mem.set_u8(this.addr() + 0x40, 0);
+}
+
+// Translated from 0040e500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: sets `SpellItemData::iCostOverride` (+0x38).
+pub fn fn_0040e500(e: &mut Engine, this: Ptr, cost: u32) {
+    e.mem.set_u32(this.addr() + 0x38, cost);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -118,6 +170,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005e_8140, fn_005e8140(Ptr, u32) -> Ptr),
         entry!(0x005e_9560, fn_005e9560(Ptr, u32) -> Ptr),
         entry!(0x005e_9830, fn_005e9830(Ptr, u32) -> Ptr),
+        entry!(0x0040_e210, fn_0040e210(Ptr, u32) -> bool),
+        entry!(0x0040_e280, fn_0040e280(Ptr) -> u32),
+        entry!(0x0040_e2c0, fn_0040e2c0(Ptr)),
+        entry!(0x0040_e330, fn_0040e330(Ptr)),
+        entry!(0x0040_e500, fn_0040e500(Ptr, u32)),
     ]
 }
 
@@ -336,5 +393,61 @@ mod tests {
             }
             assert_eq!(calls, expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod spell_data_tests {
+    use super::*;
+
+    #[test]
+    fn flag_test_ands_the_whole_word() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x44);
+        e.mem.set_u8(this + 0x40, 0x05);
+        assert!(e.call(0x0040_e210, &args![this, 4u32]).bool());
+        assert!(!e.call(0x0040_e210, &args![this, 0x102u32]).bool());
+        assert!(e.call(0x0040_e210, &args![this, 0x101u32]).bool());
+    }
+
+    #[test]
+    fn chunk_tag() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0040_e280, &args![0u32]).u32(), 0x5449_5053);
+    }
+
+    #[test]
+    fn destructor_body_sets_the_vtables_and_unwinds() {
+        let mut e = Engine::new();
+        e.register(REMOVE_EFFECTS_00409340, |_, _| Ret::default());
+        e.register(MAGIC_ITEM_FORM_DESTRUCT, |_, _| Ret::default());
+        let this = e.mem.alloc(0x44);
+        e.call_log = Some(vec![]);
+        e.call(0x0040_e2c0, &args![this]);
+        assert_eq!(e.mem.u32(this), 0x0101_3f8c);
+        assert_eq!(e.mem.u32(this + 0x18), 0x0101_3f44);
+        assert_eq!(e.mem.u32(this + 0x24), 0x0101_3f28);
+        let log = e.call_log.take().unwrap();
+        let order: Vec<u32> = log.iter().skip(1).map(|c| c.0).collect();
+        assert_eq!(
+            order,
+            vec![REMOVE_EFFECTS_00409340, MAGIC_ITEM_FORM_DESTRUCT]
+        );
+        assert!(log.iter().skip(1).all(|c| c.1 == vec![this]));
+    }
+
+    #[test]
+    fn data_start_values_and_cost_override() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x44);
+        e.mem.set_u32(this + 0x34, 9);
+        e.mem.set_u8(this + 0x40, 9);
+        e.call(0x0040_e330, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x34), 0);
+        assert_eq!(e.mem.u32(this + 0x38), 0xffff_ffff);
+        assert_eq!(e.mem.u32(this + 0x3c), 0);
+        assert_eq!(e.mem.u8(this + 0x40), 0);
+        e.call(0x0040_e500, &args![this, 40u32]);
+        assert_eq!(e.mem.u32(this + 0x38), 40);
     }
 }

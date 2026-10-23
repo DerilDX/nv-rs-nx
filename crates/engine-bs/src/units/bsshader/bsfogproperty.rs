@@ -82,12 +82,37 @@ pub fn bs_fog_property_bs_fog_property(
     this
 }
 
+/// The destructor body `00a5c240` (unit `niobjectnet.cpp`, unnamed in the engine map;
+/// `thiscall`, no stack words).
+const DESTRUCT_00A5C240: u32 = 0x00a5_c240;
+/// The sized Ni free `00aa1460` (`cdecl`: block, size).
+const NI_DELETE: u32 = 0x00aa_1460;
+
+// Translated from 00a99f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiFogProperty::_scalar_deleting_destructor_` (engine map; the Xbox PDB's `NiFogProperty`
+/// is 0x2c bytes, the size freed here): `thiscall`, one stack word, `RET 4`. Runs the
+/// destructor body `00a5c240`, then frees the 0x2c bytes of `this` when bit 0 of `flags` is
+/// set. Answers `this`.
+pub fn ni_fog_property_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(DESTRUCT_00A5C240, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_DELETE, &args![this, 0x2cu32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00bb_8180,
-        bs_fog_property_bs_fog_property(Ptr<BSFogProperty>) -> Ptr<BSFogProperty>
-    )]
+    vec![
+        entry!(
+            0x00bb_8180,
+            bs_fog_property_bs_fog_property(Ptr<BSFogProperty>) -> Ptr<BSFogProperty>
+        ),
+        entry!(
+            0x00a9_9f40,
+            ni_fog_property_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -136,5 +161,30 @@ mod tests {
             assert_eq!(e.mem.u32(base + offset), 0);
         }
         assert_eq!(e.get(this, BSFogProperty::fPower), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod destructor_tests {
+    use super::*;
+
+    #[test]
+    fn ni_fog_property_scalar_deleting_destructor_frees_on_bit_zero() {
+        for (flags, frees) in [(0u32, false), (2, false), (1, true), (0xffff_ffff, true)] {
+            let mut e = Engine::new();
+            e.register(DESTRUCT_00A5C240, |_, _| Ret::default());
+            e.register(NI_DELETE, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                e.call(0x00a9_9f40, &args![0x0e00_2000u32, flags]).u32(),
+                0x0e00_2000
+            );
+            let log = e.call_log.take().unwrap();
+            let mut expected = vec![(DESTRUCT_00A5C240, vec![0x0e00_2000])];
+            if frees {
+                expected.push((NI_DELETE, vec![0x0e00_2000, 0x2c]));
+            }
+            assert_eq!(log[1..].to_vec(), expected);
+        }
     }
 }

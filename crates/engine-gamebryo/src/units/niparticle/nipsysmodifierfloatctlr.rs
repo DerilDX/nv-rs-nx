@@ -36,9 +36,59 @@ pub fn ni_p_sys_modifier_float_ctlr_get_r_t_t_i(_e: &mut Engine) -> u32 {
     0x0120_27f8
 }
 
+/// `NiPSysModifierCtlr::LinkObject` (`00a57630`, `thiscall`, one word).
+const MODIFIER_CTLR_LINK_OBJECT: u32 = 0x00a5_7630;
+/// `NiStream::GetObjectFromLinkID` (`00a63430`, `thiscall`, no words).
+const GET_OBJECT_FROM_LINK_ID: u32 = 0x00a6_3430;
+/// `00aa13e0` (`cdecl`, one word: the size): the Ni allocator.
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+/// `00a3c340` (unnamed, `thiscall`, one word: the linked object): the
+/// constructor of the 0x18-byte object made from it.
+const LINKED_OBJECT_CONSTRUCT: u32 = 0x00a3_c340;
+/// Import slots of `InterlockedIncrement` and `InterlockedDecrement`.
+const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+/// The stream version below which the old layout's extra link is read
+/// (`NiStream` `+0xD8`, compared unsigned).
+const OLD_FORMAT_VERSION: u32 = 0x0a01_0068;
+
+// Translated from 00c32e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPSysModifierFloatCtlr::LinkObject` (Xbox PDB): the modifier-controller
+/// part (`00a57630`); for a stream version (`+0xD8`) below `0a010068` the
+/// next linked object is wrapped in a new 0x18-byte object (`00a3c340`, null
+/// when the allocation fails) that goes into the `NiPointer` at `+0x34`.
+pub fn ni_p_sys_modifier_float_ctlr_link_object(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(MODIFIER_CTLR_LINK_OBJECT, &args![this, stream]);
+    if e.mem.u32(stream.addr() + 0xd8) >= OLD_FORMAT_VERSION {
+        return;
+    }
+    let object = e.call(GET_OBJECT_FROM_LINK_ID, &args![stream]).u32();
+    let block = e.call(NI_ALLOCATE, &args![0x18u32]).u32();
+    let wrapped = if block == 0 {
+        0
+    } else {
+        e.call(LINKED_OBJECT_CONSTRUCT, &args![block, object]).u32()
+    };
+    let slot = this.addr() + 0x34;
+    let old = e.mem.u32(slot);
+    if old != wrapped {
+        if old != 0 && e.call(INTERLOCKED_DECREMENT, &args![old + 4]).u32() == 0 {
+            e.vcall(old, 4, &[]);
+        }
+        e.mem.set_u32(slot, wrapped);
+        if wrapped != 0 {
+            e.call(INTERLOCKED_INCREMENT, &args![wrapped + 4]);
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c3_2e10,
+            ni_p_sys_modifier_float_ctlr_link_object(Ptr, Ptr)
+        ),
         entry!(0x00c32e00, ni_p_sys_modifier_float_ctlr_get_r_t_t_i() -> u32),
         entry!(
             0x00c32f60,
@@ -109,5 +159,58 @@ mod tests {
     fn ni_p_sys_modifier_float_ctlr_get_r_t_t_i_returns_the_constant() {
         let mut e = Engine::new();
         assert_eq!(e.call(0x00c3_2e00, &args![]).u32(), 0x0120_27f8);
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    fn word(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    #[test]
+    fn link_object_wraps_the_old_formats_link() {
+        const DELETE_THIS: u32 = 0x0100_0004;
+        let mut e = Engine::new();
+        e.register(MODIFIER_CTLR_LINK_OBJECT, |_, _| Ret::default());
+        e.register(GET_OBJECT_FROM_LINK_ID, |_, _| word(0x4444));
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LINKED_OBJECT_CONSTRUCT, |_, a| word(a[0]));
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let v = e.mem.u32(a[0]) + 1;
+            e.mem.set_u32(a[0], v);
+            word(v)
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let v = e.mem.u32(a[0]) - 1;
+            e.mem.set_u32(a[0], v);
+            word(v)
+        });
+        e.register(DELETE_THIS, |_, _| Ret::default());
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, DELETE_THIS);
+        let old = e.mem.alloc(8);
+        e.mem.set_u32(old, vtable);
+        e.mem.set_u32(old + 4, 1);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x34, old);
+        let stream = e.mem.alloc(0x100);
+        e.mem.set_u32(stream + 0xd8, OLD_FORMAT_VERSION);
+        e.call_log = Some(vec![]);
+        // The current format: only the controller part.
+        e.call(0x00c3_2e10, &args![this, stream]);
+        assert_eq!(e.mem.u32(this + 0x34), old);
+        e.mem.set_u32(stream + 0xd8, OLD_FORMAT_VERSION - 1);
+        e.call(0x00c3_2e10, &args![this, stream]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(DELETE_THIS, vec![old])));
+        let made = e.mem.u32(this + 0x34);
+        assert!(log.contains(&(LINKED_OBJECT_CONSTRUCT, vec![made, 0x4444])));
+        assert_eq!(e.mem.u32(made + 4), 1);
     }
 }

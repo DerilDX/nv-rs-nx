@@ -73,12 +73,37 @@ pub fn fn_00761540(e: &mut Engine, this: Ptr<BSSimpleArray>) -> u32 {
     size.wrapping_sub(1)
 }
 
+// Translated from 0075f6f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`thiscall`, `RET 8`: a mask and a byte flag): sets the mask's bits in the word
+/// at +0x1a8 when the flag is non-zero, clears them otherwise.
+pub fn fn_0075f6f0(e: &mut Engine, this: Ptr, mask: u32, set: u8) {
+    let field = this.addr().wrapping_add(0x1a8);
+    let flags = e.mem.u32(field);
+    let flags = if set != 0 {
+        flags | mask
+    } else {
+        !mask & flags
+    };
+    e.mem.set_u32(field, flags);
+}
+
+/// The byte `00761460` sets.
+const FLAG_011DCFA5: u32 = 0x011d_cfa5;
+
+// Translated from 00761460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`cdecl`, one word): stores the argument's low byte at `011dcfa5`.
+pub fn fn_00761460(e: &mut Engine, value: u8) {
+    e.set_global(FLAG_011DCFA5, value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0076_1540, fn_00761540(Ptr<BSSimpleArray>) -> u32),
         entry!(0x0076_13f0, fn_007613f0(Ptr) -> Ptr),
         entry!(0x0076_14a0, fn_007614a0(Ptr)),
+        entry!(0x0075_f6f0, fn_0075f6f0(Ptr, u32, u8)),
+        entry!(0x0076_1460, fn_00761460(u8)),
     ]
 }
 
@@ -188,5 +213,31 @@ mod physics_work_ahead_tests {
         assert!(calls(&e, ARRAY_NEXT_CAPACITY).is_empty());
         assert!(calls(&e, ARRAY_REALLOCATE).is_empty());
         assert!(calls(&e, 0x0f00_7000).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod b069_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0075f6f0_sets_or_clears_the_mask() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x1b0);
+        e.mem.set_u32(this + 0x1a8, 0x0f0f);
+        e.call(0x0075_f6f0, &args![this, 0x00f0u32, 0x1234_5601u32]);
+        assert_eq!(e.mem.u32(this + 0x1a8), 0x0fff);
+        // Only the low byte of the flag counts.
+        e.call(0x0075_f6f0, &args![this, 0x0f00u32, 0x1234_5600u32]);
+        assert_eq!(e.mem.u32(this + 0x1a8), 0x00ff);
+    }
+
+    #[test]
+    fn fn_00761460_stores_the_low_byte() {
+        let mut e = Engine::new();
+        e.map(FLAG_011DCFA5 & !0xfff, 0x1000);
+        e.mem.set_u32(FLAG_011DCFA5 - 1, 0xaaaa_aaaa);
+        e.call(0x0076_1460, &args![0x0000_0101u32]);
+        assert_eq!(e.mem.u32(FLAG_011DCFA5 - 1), 0xaaaa_01aa);
     }
 }

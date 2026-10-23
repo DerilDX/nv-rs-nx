@@ -33,9 +33,655 @@ pub fn fn_0068a810(e: &mut Engine, this: Ptr) -> u32 {
     e.mem.u32(this.addr().wrapping_add(0x4c))
 }
 
+/// `BSTempEffectParticle`'s vtable.
+const VTABLE: u32 = 0x0106_9c5c;
+/// `BSTempEffect`'s constructor (`006827b0`, thiscall: cell, lifetime).
+const BS_TEMP_EFFECT_CONSTRUCT: u32 = 0x0068_27b0;
+/// `BSTempEffect`'s destructor body (`00682860`).
+const BS_TEMP_EFFECT_DESTROY: u32 = 0x0068_2860;
+/// `BSTempEffect::Update` (`006828a0`, thiscall: one `float`).
+const BS_TEMP_EFFECT_UPDATE: u32 = 0x0068_28a0;
+/// `00559450` (thiscall on an `NiPointer`, returns the object; unnamed).
+const POINTER_GET: u32 = 0x0055_9450;
+/// `0066b0d0` (thiscall on an `NiPointer`, one word: assigns it; unnamed).
+const POINTER_SET: u32 = 0x0066_b0d0;
+/// `00633c90` (thiscall on an `NiPointer`, one word: constructs it; unnamed).
+const POINTER_INIT: u32 = 0x0063_3c90;
+/// `0045cec0` (thiscall on an `NiPointer`: destroys it; unnamed).
+const POINTER_DESTROY: u32 = 0x0045_cec0;
+/// `006e5cc0` (thiscall on an `NiPointer`, one word: assigns it from another
+/// `NiPointer`; the map's name is a template instance's).
+const POINTER_ASSIGN_POINTER: u32 = 0x006e_5cc0;
+/// `00476a80` (thiscall: constructs an `NiTransform`; unnamed).
+const TRANSFORM_INIT: u32 = 0x0047_6a80;
+/// `NiTransform::MakeIdentity` (`00a86bf0`).
+const NI_TRANSFORM_MAKE_IDENTITY: u32 = 0x00a8_6bf0;
+/// `NiTransform::InvertNonUniform` (`004b4880`, thiscall: result).
+const NI_TRANSFORM_INVERT_NON_UNIFORM: u32 = 0x004b_4880;
+/// `0062c250` (thiscall on an `NiTransform`: result, other; their product).
+const TRANSFORM_MULTIPLY_0062C250: u32 = 0x0062_c250;
+/// `0041a250` (thiscall: constructs a sound handle; unnamed).
+const SOUND_HANDLE_INIT: u32 = 0x0041_a250;
+/// `00483710` (thiscall: the sound handle's destructor here; unnamed).
+const SOUND_HANDLE_DESTROY: u32 = 0x0048_3710;
+/// `BSSoundHandle::IsValid`, `Stop`, `Release`, `SetPosition`.
+const BS_SOUND_HANDLE_IS_VALID: u32 = 0x00ad_8ce0;
+const BS_SOUND_HANDLE_STOP: u32 = 0x00ad_88f0;
+const BS_SOUND_HANDLE_RELEASE: u32 = 0x00ad_8d10;
+const BS_SOUND_HANDLE_SET_POSITION: u32 = 0x00ad_8b60;
+/// `00aa13e0` (cdecl: size; the Ni allocator).
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+/// `004a4240` (no arguments, returns a `float` in `ST0`; unnamed).
+const REAL_004A4240: u32 = 0x004a_4240;
+/// `006815c0` (thiscall: constructs a local matrix here; unnamed).
+const MATRIX_INIT_006815C0: u32 = 0x0068_15c0;
+/// `004a0c90` (thiscall on that matrix, one `float`; unnamed).
+const MATRIX_004A0C90: u32 = 0x004a_0c90;
+/// `BSUtilities::GetRotationZToVectorTranspose` (`00c4b8a0`, cdecl: result, vector).
+const GET_ROTATION_Z_TO_VECTOR_TRANSPOSE: u32 = 0x00c4_b8a0;
+/// `NiMatrix3::operator*` (`0043f8d0`, thiscall: result, other).
+const NI_MATRIX3_MULTIPLY: u32 = 0x0043_f8d0;
+/// `00456fc0` (thiscall on the cell, one word; unnamed).
+const CELL_NODE_00456FC0: u32 = 0x0045_6fc0;
+/// `ProcessLists::AddTempEffect` (`00973fd0`, thiscall on `011e0e80`).
+const PROCESS_LISTS_ADD_TEMP_EFFECT: u32 = 0x0097_3fd0;
+/// The process lists `006890b0` adds the effect to.
+const PROCESS_LISTS: u32 = 0x011e_0e80;
+/// `ModelLoader::LoadFile` (`00447080`) and `ModelLoader::ReleaseModel` (`00445300`),
+/// thiscall on the loader at `011c3b3c`.
+const MODEL_LOADER_LOAD_FILE: u32 = 0x0044_7080;
+const MODEL_LOADER_RELEASE_MODEL: u32 = 0x0044_5300;
+const MODEL_LOADER: u32 = 0x011c_3b3c;
+/// The cache `TES::GetUnusedCachedParticleObject` (`0045aba0`) is asked on (`011dea10`).
+const PARTICLE_CACHE_OWNER: u32 = 0x011d_ea10;
+const TES_GET_UNUSED_CACHED_PARTICLE_OBJECT: u32 = 0x0045_aba0;
+/// `00726070` (thiscall on an object, returns a word: compared with 1 and 2 as
+/// a reference count; unnamed).
+const COUNT_00726070: u32 = 0x0072_6070;
+/// `004ad050` (thiscall: constructs an `NiCloningProcess` with a `float`).
+const CLONING_PROCESS_INIT: u32 = 0x004a_d050;
+/// `NiCloningProcess::~NiCloningProcess` (`004ad270`).
+const CLONING_PROCESS_DESTROY: u32 = 0x004a_d270;
+/// `NiObject::Clone` (`00a5d2c0`, thiscall: cloning process).
+const NI_OBJECT_CLONE: u32 = 0x00a5_d2c0;
+/// `TESObjectREFR::AddMasterParticleAddonNodes` / `RemoveMasterParticleAddonNodes`
+/// (cdecl: the node).
+const ADD_MASTER_PARTICLE_ADDON_NODES: u32 = 0x0057_8060;
+const REMOVE_MASTER_PARTICLE_ADDON_NODES: u32 = 0x0057_8170;
+/// `00440460` (translate), `0043fa80` (rotate), `00440490` (scale): thiscall on an
+/// `NiAVObject`, one word each.
+const SET_TRANSLATE: u32 = 0x0044_0460;
+const SET_ROTATE: u32 = 0x0043_fa80;
+const SET_SCALE: u32 = 0x0044_0490;
+/// `008c7aa0` (no arguments, returns `AL`; unnamed).
+const TEST_008C7AA0: u32 = 0x008c_7aa0;
+/// `004537b0` (no arguments, returns the task queue; unnamed).
+const TASK_QUEUE_004537B0: u32 = 0x0045_37b0;
+/// `TaskQueueInterface::QueueNodeAttach` (`0087ac00`: node, parent, two words).
+const TASK_QUEUE_QUEUE_NODE_ATTACH: u32 = 0x0087_ac00;
+/// `NiAVObject::UpdateProperties` (`00a5a040`).
+const NI_AV_OBJECT_UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+/// `NiTimeController::StartAnimations` (`00a6d2d0`, cdecl).
+const NI_TIME_CONTROLLER_START_ANIMATIONS: u32 = 0x00a6_d2d0;
+/// `00461130` (thiscall on an `NiAVObject`, returns its world transform; unnamed).
+const WORLD_TRANSFORM_00461130: u32 = 0x0046_1130;
+/// `009611e0` (thiscall on an `NiAVObject`, returns its parent; unnamed).
+const PARENT_009611E0: u32 = 0x0096_11e0;
+/// `0043b230` (first controller), `004a8a90` (next controller): thiscall; unnamed.
+const FIRST_CONTROLLER: u32 = 0x0043_b230;
+const NEXT_CONTROLLER: u32 = 0x004a_8a90;
+/// `004a7bd0` and `0047c860` (thiscall on a controller, `float` in `ST0`; the map's
+/// names come from folded getters): the end and start of its time range by their use.
+const CONTROLLER_END_004A7BD0: u32 = 0x004a_7bd0;
+const CONTROLLER_START_0047C860: u32 = 0x0047_c860;
+/// `00404010` (cdecl, two `float`s, returns `ST0`; unnamed): the larger by its use.
+const FLOAT_MAX_00404010: u32 = 0x0040_4010;
+/// `00453470` (child count), `0043b4a0` (child at an index): thiscall on a node.
+const CHILD_COUNT: u32 = 0x0045_3470;
+const CHILD_AT: u32 = 0x0043_b4a0;
+/// `0068abb0` (thiscall: constructs a local array: two words), `00658930` (its size),
+/// `00877a30` (address of an element), `0068ab60` (destroys it); `0068a8f0` fills it.
+const ARRAY_INIT_0068ABB0: u32 = 0x0068_abb0;
+const ARRAY_SIZE_00658930: u32 = 0x0065_8930;
+const ARRAY_AT_00877A30: u32 = 0x0087_7a30;
+const ARRAY_DESTROY_0068AB60: u32 = 0x0068_ab60;
+const COLLECT_0068A8F0: u32 = 0x0068_a8f0;
+/// `NiMatrix3::Inverse` (`004b45b0`, thiscall: result).
+const NI_MATRIX3_INVERSE: u32 = 0x004b_45b0;
+/// `NiMatrix3::MakeYRotation` (`0043f850`, thiscall: angle).
+const NI_MATRIX3_MAKE_Y_ROTATION: u32 = 0x0043_f850;
+/// `-1.0` (`float`).
+const MINUS_ONE_FLOAT: u32 = 0x0101_2054;
+/// `-1.0` (`double`).
+const MINUS_ONE: u32 = 0x0101_a6b0;
+/// `0.1` (`double`, the `float` 0.1 widened).
+const MINIMUM_LIFETIME: u32 = 0x0101_ffa0;
+/// `0.1` (`float`).
+const MINIMUM_LIFETIME_FLOAT: u32 = 0x0101_e2bc;
+/// `3.1415927` (`float`).
+const PI_FLOAT: u32 = 0x0102_b3c8;
+
+// Translated from 00688fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00688fc0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// `BSTempEffectParticle` constructor (unnamed in the map; `RET 0x10`): the
+/// `BSTempEffect` base with `cell` and `lifetime`, the vtable, the particle object and
+/// follow object pointers (+0x18, +0x20), the follow offset transform (+0x24, made the
+/// identity), both sound handles (+0x5c, +0x68); the follow object becomes `follow`, the
+/// file name (+0x1c) `filename`, the decal impact data (+0x58) null. Returns `this`.
+pub fn fn_00688fc0(
+    e: &mut Engine,
+    this: Ptr,
+    cell: u32,
+    lifetime: f32,
+    filename: u32,
+    follow: u32,
+) -> Ptr {
+    let base = this.addr();
+    e.call(
+        BS_TEMP_EFFECT_CONSTRUCT,
+        &args![this, cell, x87_quiet_bits(lifetime.to_bits())],
+    );
+    e.mem.set_u32(base, VTABLE);
+    e.call(POINTER_INIT, &args![base + 0x18, 0u32]);
+    e.call(POINTER_INIT, &args![base + 0x20, 0u32]);
+    e.call(TRANSFORM_INIT, &args![base + 0x24]);
+    e.call(SOUND_HANDLE_INIT, &args![base + 0x5c]);
+    e.call(SOUND_HANDLE_INIT, &args![base + 0x68]);
+    e.call(POINTER_SET, &args![base + 0x18, 0u32]);
+    e.call(POINTER_SET, &args![base + 0x20, follow]);
+    e.call(NI_TRANSFORM_MAKE_IDENTITY, &args![base + 0x24]);
+    e.mem.set_u32(base + 0x1c, filename);
+    e.mem.set_u32(base + 0x58, 0);
+    this
+}
+
+// Translated from 006890b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006890b0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// Unnamed (cdecl, twelve words): makes a particle effect in `cell` (nothing without a
+/// cell): a new 0x74-byte `BSTempEffectParticle` (`fn_00688fc0` with `lifetime`,
+/// `filename`, `follow`; null when the allocation fails), initialized (`Init`) under the
+/// cell's node 4 (`00456fc0`) at `position`, rotated to face `direction` (the rotation
+/// `GetRotationZToVectorTranspose` gives, times a matrix made from `004a4240`), with
+/// `scale` and `flags`, then added to the process lists. Returns the effect.
+pub fn fn_006890b0(
+    e: &mut Engine,
+    cell: u32,
+    lifetime: f32,
+    filename: u32,
+    direction_x: u32,
+    direction_y: u32,
+    direction_z: u32,
+    position_x: u32,
+    position_y: u32,
+    position_z: u32,
+    scale: f32,
+    flags: u32,
+    follow: u32,
+) -> u32 {
+    if cell == 0 {
+        return 0;
+    }
+    let block = e.call(NI_ALLOCATE, &args![0x74u32]).u32();
+    let effect = if block == 0 {
+        0
+    } else {
+        fn_00688fc0(e, Ptr::new(block), cell, lifetime, filename, follow).addr()
+    };
+    // The frame below `EBP`: `local(n)` is `EBP - n`.
+    e.with_stack(0x90, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0x90 - offset;
+        let angle = e.call(REAL_004A4240, &[]).f64();
+        let angle = x87_store32(angle);
+        let spin = local(0x58);
+        e.call(MATRIX_INIT_006815C0, &args![spin]);
+        e.call(MATRIX_004A0C90, &args![spin, x87_quiet_bits(angle)]);
+        let facing = e
+            .call(
+                GET_ROTATION_Z_TO_VECTOR_TRANSPOSE,
+                &args![local(0x8c), direction_x, direction_y, direction_z],
+            )
+            .u32();
+        let rotation = local(0x34);
+        e.call(NI_MATRIX3_MULTIPLY, &args![facing, rotation, spin]);
+        let node = e.call(CELL_NODE_00456FC0, &args![cell, 4u32]).u32();
+        let r: Vec<u32> = (0..9).map(|i| e.mem.u32(rotation + 4 * i)).collect();
+        bs_temp_effect_particle_init(
+            e,
+            Ptr::new(effect),
+            node,
+            r[0],
+            r[1],
+            r[2],
+            r[3],
+            r[4],
+            r[5],
+            r[6],
+            r[7],
+            r[8],
+            position_x,
+            position_y,
+            position_z,
+            f32::from_bits(x87_quiet_bits(scale.to_bits())),
+            flags,
+        );
+    });
+    e.call(PROCESS_LISTS_ADD_TEMP_EFFECT, &args![PROCESS_LISTS, effect]);
+    effect
+}
+
+// Translated from 00689310 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00689310 - the exception-unwinding frame (FS:[0]) is not translated.
+/// `BSTempEffectParticle::Init` (Xbox PDB, `RET 0x3c`): loads the effect's model
+/// (`ModelLoader::LoadFile`; nothing more without it). With flag 1 and the cache at
+/// `011dea10` it takes an unused cached particle object; otherwise it uses the loaded
+/// object while its count (`00726070`) is at most 2, or a clone of it with flag 2. With
+/// an object: flag 4 sets the lifetime to the longest controller range (`fn_00689840`,
+/// at least 0.1, unless it is -1); master particle add-on nodes are added for its slot
+/// +0xc; it gets `position`, `rotation` and `scale`, is attached to `parent` (through the
+/// task queue when `008c7aa0` says so), gets its emitters turned (`fn_0068aa50`) and its
+/// animations started; with a follow object the follow offset becomes the follow
+/// object's inverse world transform times the effect's.
+pub fn bs_temp_effect_particle_init(
+    e: &mut Engine,
+    this: Ptr,
+    parent: u32,
+    rotation_0: u32,
+    rotation_1: u32,
+    rotation_2: u32,
+    rotation_3: u32,
+    rotation_4: u32,
+    rotation_5: u32,
+    rotation_6: u32,
+    rotation_7: u32,
+    rotation_8: u32,
+    position_x: u32,
+    position_y: u32,
+    position_z: u32,
+    scale: f32,
+    flags: u32,
+) {
+    let base = this.addr();
+    // The argument words as the exe has them on its stack (`EBP + 8` onwards), whose
+    // addresses it passes on, and the frame below `EBP`.
+    e.with_stack(0x150, |e, frame| {
+        let argument = |offset: u32| frame.addr() + 0x110 + offset - 8;
+        let local = |offset: u32| frame.addr() + 0x110 - offset;
+        let words = [
+            parent,
+            rotation_0,
+            rotation_1,
+            rotation_2,
+            rotation_3,
+            rotation_4,
+            rotation_5,
+            rotation_6,
+            rotation_7,
+            rotation_8,
+            position_x,
+            position_y,
+            position_z,
+            scale.to_bits(),
+            flags,
+        ];
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(argument(8 + 4 * i as u32), *word);
+        }
+        let rotation = argument(0xc);
+        let position = argument(0x30);
+        let filename = e.mem.u32(base + 0x1c);
+        let loader = e.global::<u32>(MODEL_LOADER);
+        let model = e
+            .call(
+                MODEL_LOADER_LOAD_FILE,
+                &args![loader, filename, 0u32, 1u32, 0u32, 0u32, 1u32],
+            )
+            .u32();
+        let loaded = local(0x10);
+        e.call(POINTER_INIT, &args![loaded, model]);
+        if e.call(POINTER_GET, &args![loaded]).u32() == 0 {
+            e.call(POINTER_DESTROY, &args![loaded]);
+            return;
+        }
+        e.call(POINTER_SET, &args![base + 0x18, 0u32]);
+        let mut cached = 0;
+        let cache = e.global::<u32>(PARTICLE_CACHE_OWNER);
+        if flags & 1 != 0 && cache != 0 {
+            let object = e.call(POINTER_GET, &args![loaded]).u32();
+            cached = e
+                .call(
+                    TES_GET_UNUSED_CACHED_PARTICLE_OBJECT,
+                    &args![cache, object, base + 0x18],
+                )
+                .u32();
+        }
+        if cached == 0 {
+            let object = e.call(POINTER_GET, &args![loaded]).u32();
+            if e.call(COUNT_00726070, &args![object]).u32() <= 2 {
+                e.call(POINTER_ASSIGN_POINTER, &args![base + 0x18, loaded]);
+            } else if flags & 2 != 0 {
+                let cloning = local(0x34);
+                e.call(CLONING_PROCESS_INIT, &args![cloning, x87_store32(1.0)]);
+                let object = e.call(POINTER_GET, &args![loaded]).u32();
+                let clone = e.call(NI_OBJECT_CLONE, &args![object, cloning]).u32();
+                e.call(POINTER_SET, &args![base + 0x18, clone]);
+                e.call(CLONING_PROCESS_DESTROY, &args![cloning]);
+            }
+        }
+        if e.call(POINTER_GET, &args![base + 0x18]).u32() == 0 {
+            e.call(POINTER_DESTROY, &args![loaded]);
+            return;
+        }
+        if flags & 4 != 0 {
+            let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+            let longest = fn_00689840(e, this, object);
+            let mut lifetime = x87_store32(f64::from(longest));
+            let minus_one: f64 = e.global(MINUS_ONE);
+            // FCOMP; TEST AH,0x44; JNP: kept unless equal.
+            if x87_load32(lifetime) != minus_one {
+                let minimum: f64 = e.global(MINIMUM_LIFETIME);
+                // FCOMP; TEST AH,5; JP: raised only when below.
+                if x87_load32(lifetime) < minimum {
+                    lifetime = x87_quiet_bits(e.global::<u32>(MINIMUM_LIFETIME_FLOAT));
+                }
+                e.mem.set_u32(base + 8, x87_quiet_bits(lifetime));
+            }
+        }
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        let node = e.vcall(object, 0xc, &[]).u32();
+        if node != 0 {
+            e.call(ADD_MASTER_PARTICLE_ADDON_NODES, &args![node]);
+        }
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        e.call(SET_TRANSLATE, &args![object, position]);
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        e.call(SET_ROTATE, &args![object, rotation]);
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        e.call(SET_SCALE, &args![object, x87_quiet_bits(scale.to_bits())]);
+        if e.call(TEST_008C7AA0, &[]).bool() {
+            let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+            let queue = e.call(TASK_QUEUE_004537B0, &[]).u32();
+            e.call(
+                TASK_QUEUE_QUEUE_NODE_ATTACH,
+                &args![queue, object, parent, 1u32, 1u32],
+            );
+        } else {
+            let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+            e.vcall(parent, 0xdc, &args![object, 1u32]);
+            let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+            e.call(NI_AV_OBJECT_UPDATE_PROPERTIES, &args![object]);
+        }
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        fn_0068aa50(e, this, object);
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        e.call(NI_TIME_CONTROLLER_START_ANIMATIONS, &args![object]);
+        if e.call(POINTER_GET, &args![base + 0x20]).u32() != 0 {
+            let transform = local(0xa0);
+            e.call(TRANSFORM_INIT, &args![transform]);
+            e.mem
+                .set_u32(transform + 0x30, x87_quiet_bits(scale.to_bits()));
+            for i in 0..9 {
+                let word = e.mem.u32(rotation + 4 * i);
+                e.mem.set_u32(transform + 4 * i, word);
+            }
+            for i in 0..3 {
+                let word = e.mem.u32(position + 4 * i);
+                e.mem.set_u32(transform + 0x24 + 4 * i, word);
+            }
+            let follow = e.call(POINTER_GET, &args![base + 0x20]).u32();
+            let world = e.call(WORLD_TRANSFORM_00461130, &args![follow]).u32();
+            let follow_world = local(0xd4);
+            for i in 0..13 {
+                let word = e.mem.u32(world + 4 * i);
+                e.mem.set_u32(follow_world + 4 * i, word);
+            }
+            let inverse = local(0x6c);
+            e.call(TRANSFORM_INIT, &args![inverse]);
+            e.call(
+                NI_TRANSFORM_INVERT_NON_UNIFORM,
+                &args![follow_world, inverse],
+            );
+            let product = e
+                .call(
+                    TRANSFORM_MULTIPLY_0062C250,
+                    &args![inverse, local(0x108), transform],
+                )
+                .u32();
+            for i in 0..13 {
+                let word = e.mem.u32(product + 4 * i);
+                e.mem.set_u32(base + 0x24 + 4 * i, word);
+            }
+        }
+        e.call(POINTER_DESTROY, &args![loaded]);
+    });
+}
+
+// Translated from 006896c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTempEffectParticle::Detach` (Xbox PDB): removes the master particle add-on nodes
+/// of the particle object's slot +0xc node, when there is one.
+pub fn bs_temp_effect_particle_detach(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    let node = if e.call(POINTER_GET, &args![base + 0x18]).u32() == 0 {
+        0
+    } else {
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        e.vcall(object, 0xc, &[]).u32()
+    };
+    if node != 0 {
+        e.call(REMOVE_MASTER_PARTICLE_ADDON_NODES, &args![node]);
+    }
+}
+
+// Translated from 00689720 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00689720 - the exception-unwinding frame (FS:[0]) is not translated.
+/// `BSTempEffectParticle::~BSTempEffectParticle` (Xbox PDB): stops the sounds, releases
+/// the model (`ModelLoader::ReleaseModel(filename, 0, 1)`) when there is a file name,
+/// detaches the particle object from its parent (slot +0xe8), clears it, then destroys
+/// the sound handles, both pointers and the `BSTempEffect` base.
+pub fn bs_temp_effect_particle_destructor(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, VTABLE);
+    bs_temp_effect_particle_stop_sounds(e, this);
+    let filename = e.mem.u32(base + 0x1c);
+    if filename != 0 {
+        let loader = e.global::<u32>(MODEL_LOADER);
+        e.call(
+            MODEL_LOADER_RELEASE_MODEL,
+            &args![loader, filename, 0u32, 1u32],
+        );
+    }
+    if e.call(POINTER_GET, &args![base + 0x18]).u32() != 0 {
+        let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+        if e.call(PARENT_009611E0, &args![object]).u32() != 0 {
+            let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+            let parent = e.call(PARENT_009611E0, &args![object]).u32();
+            let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+            e.vcall(parent, 0xe8, &args![object]);
+        }
+    }
+    e.call(POINTER_SET, &args![base + 0x18, 0u32]);
+    e.call(SOUND_HANDLE_DESTROY, &args![base + 0x68]);
+    e.call(SOUND_HANDLE_DESTROY, &args![base + 0x5c]);
+    e.call(POINTER_DESTROY, &args![base + 0x20]);
+    e.call(POINTER_DESTROY, &args![base + 0x18]);
+    e.call(BS_TEMP_EFFECT_DESTROY, &args![this]);
+}
+
+// Translated from 00689840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (`RET 4`, returns `ST0`): the longest time range of `object`'s controllers
+/// and, through its slot +0xc node, of its children's (recursively): starting from -1,
+/// each controller's `004a7bd0 - 0047c860` and each child's result go through
+/// `00404010` with the running value.
+pub fn fn_00689840(e: &mut Engine, this: Ptr, object: u32) -> f32 {
+    let mut longest = x87_quiet_bits(e.global::<u32>(MINUS_ONE_FLOAT));
+    let mut controller = e.call(FIRST_CONTROLLER, &args![object]).u32();
+    while controller != 0 {
+        let end = e.call(CONTROLLER_END_004A7BD0, &args![controller]).f64();
+        let start = e.call(CONTROLLER_START_0047C860, &args![controller]).f64();
+        let range = x87_store32(x87_sub(end, start));
+        let larger = e
+            .call(
+                FLOAT_MAX_00404010,
+                &args![x87_quiet_bits(longest), x87_quiet_bits(range)],
+            )
+            .f64();
+        longest = x87_store32(larger);
+        controller = e.call(NEXT_CONTROLLER, &args![controller]).u32();
+    }
+    let node = e.vcall(object, 0xc, &[]).u32();
+    if node != 0 {
+        let count = e.call(CHILD_COUNT, &args![node]).i32();
+        let mut i = 0i32;
+        while i < count {
+            let child = e.call(CHILD_AT, &args![node, i]).u32();
+            if child != 0 {
+                let range = fn_00689840(e, this, child);
+                let larger = e
+                    .call(
+                        FLOAT_MAX_00404010,
+                        &args![x87_quiet_bits(longest), x87_store32(f64::from(range))],
+                    )
+                    .f64();
+                longest = x87_store32(larger);
+            }
+            i += 1;
+        }
+    }
+    f32::from_bits(x87_quiet_bits(longest))
+}
+
+// Translated from 00689a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTempEffectParticle::Update` (Xbox PDB): the `BSTempEffect` update with `time`;
+/// drops the follow object once only this effect holds it (count 1); with a particle
+/// object and a follow object, places the particle object at the follow object's world
+/// transform times the follow offset. Returns the base update's answer.
+pub fn bs_temp_effect_particle_update(e: &mut Engine, this: Ptr, time: f32) -> bool {
+    let base = this.addr();
+    let answer = e
+        .call(
+            BS_TEMP_EFFECT_UPDATE,
+            &args![this, x87_quiet_bits(time.to_bits())],
+        )
+        .u8();
+    if e.call(POINTER_GET, &args![base + 0x20]).u32() != 0 {
+        let follow = e.call(POINTER_GET, &args![base + 0x20]).u32();
+        if e.call(COUNT_00726070, &args![follow]).u32() == 1 {
+            e.call(POINTER_SET, &args![base + 0x20, 0u32]);
+        }
+    }
+    if e.call(POINTER_GET, &args![base + 0x18]).u32() != 0
+        && e.call(POINTER_GET, &args![base + 0x20]).u32() != 0
+    {
+        e.with_stack(0x38, |e, transform| {
+            let transform = transform.addr();
+            let follow = e.call(POINTER_GET, &args![base + 0x20]).u32();
+            let world = e.call(WORLD_TRANSFORM_00461130, &args![follow]).u32();
+            e.call(
+                TRANSFORM_MULTIPLY_0062C250,
+                &args![world, transform, base + 0x24],
+            );
+            let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+            e.call(SET_TRANSLATE, &args![object, transform + 0x24]);
+            let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+            e.call(SET_ROTATE, &args![object, transform]);
+            let scale = x87_quiet_bits(e.mem.u32(transform + 0x30));
+            let object = e.call(POINTER_GET, &args![base + 0x18]).u32();
+            e.call(SET_SCALE, &args![object, scale]);
+        });
+    }
+    answer != 0
+}
+
+// Translated from 0068a7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed (thiscall on a `BSSoundHandle`, `RET 4`): `SetPosition` with the three
+/// `float`s at `position` (loaded and pushed, so a signalling NaN arrives quiet).
+pub fn fn_0068a7d0(e: &mut Engine, this: Ptr, position: u32) {
+    let x = x87_quiet_bits(e.mem.u32(position));
+    let y = x87_quiet_bits(e.mem.u32(position + 4));
+    let z = x87_quiet_bits(e.mem.u32(position + 8));
+    e.call(BS_SOUND_HANDLE_SET_POSITION, &args![this, x, y, z]);
+}
+
+// Translated from 0068a830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed getter: the word at `this + 0x50`.
+pub fn fn_0068a830(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x50)
+}
+
+// Translated from 0068a850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTempEffectParticle::StopSounds` (Xbox PDB): stops each valid sound (`Sound1` at
+/// +0x5c, `Sound2` at +0x68) and releases it when it is still valid afterwards.
+pub fn bs_temp_effect_particle_stop_sounds(e: &mut Engine, this: Ptr) {
+    for offset in [0x5cu32, 0x68] {
+        let sound = this.addr() + offset;
+        if e.call(BS_SOUND_HANDLE_IS_VALID, &args![sound]).bool() {
+            e.call(BS_SOUND_HANDLE_STOP, &args![sound]);
+            if e.call(BS_SOUND_HANDLE_IS_VALID, &args![sound]).bool() {
+                e.call(BS_SOUND_HANDLE_RELEASE, &args![sound]);
+            }
+        }
+    }
+}
+
+// Translated from 0068aa50 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0068aa50 - the exception-unwinding frame (FS:[0]) is not translated.
+/// Unnamed (`RET 4`): collects objects of `node` into a local array (`0068a8f0`; array
+/// made with 10 and 1) and turns each one: its rotation becomes the inverse of its
+/// parent's world rotation times a half turn about Y (`MakeYRotation(pi)`).
+pub fn fn_0068aa50(e: &mut Engine, this: Ptr, node: u32) {
+    // The frame below `EBP`: `local(n)` is `EBP - n`.
+    e.with_stack(0x98, |e, frame| {
+        let local = |offset: u32| frame.addr() + 0x98 - offset;
+        let array = local(0x1c);
+        e.call(ARRAY_INIT_0068ABB0, &args![array, 10u32, 1u32]);
+        let count = local(0x20);
+        e.mem.set_u32(count, 0);
+        e.call(COLLECT_0068A8F0, &args![this, node, array, count]);
+        let mut i = 0u32;
+        while i < e.call(ARRAY_SIZE_00658930, &args![array]).u32() {
+            let slot = e.call(ARRAY_AT_00877A30, &args![array, i]).u32();
+            let item = e.mem.u32(slot);
+            if item != 0 {
+                let inverse = local(0x4c);
+                let parent = e.call(PARENT_009611E0, &args![item]).u32();
+                let world = e.call(WORLD_TRANSFORM_00461130, &args![parent]).u32();
+                e.call(NI_MATRIX3_INVERSE, &args![world, inverse]);
+                let turn = local(0x70);
+                e.call(MATRIX_INIT_006815C0, &args![turn]);
+                let pi = x87_quiet_bits(e.global::<u32>(PI_FLOAT));
+                e.call(NI_MATRIX3_MAKE_Y_ROTATION, &args![turn, pi]);
+                let product = e
+                    .call(NI_MATRIX3_MULTIPLY, &args![inverse, local(0x94), turn])
+                    .u32();
+                e.call(SET_ROTATE, &args![item, product]);
+            }
+            i = i.wrapping_add(1);
+        }
+        e.call(ARRAY_DESTROY_0068AB60, &args![array]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0068_8fc0, fn_00688fc0(Ptr, u32, f32, u32, u32) -> Ptr),
+        entry!(
+            0x0068_90b0,
+            fn_006890b0(u32, f32, u32, u32, u32, u32, u32, u32, u32, f32, u32, u32) -> u32
+        ),
+        entry!(
+            0x0068_9310,
+            bs_temp_effect_particle_init(
+                Ptr, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, f32, u32
+            )
+        ),
+        entry!(0x0068_96c0, bs_temp_effect_particle_detach(Ptr)),
+        entry!(0x0068_9720, bs_temp_effect_particle_destructor(Ptr)),
+        entry!(0x0068_9840, fn_00689840(Ptr, u32) -> f32),
+        entry!(0x0068_9a10, bs_temp_effect_particle_update(Ptr, f32) -> bool),
+        entry!(0x0068_a7d0, fn_0068a7d0(Ptr, u32)),
+        entry!(0x0068_a830, fn_0068a830(Ptr) -> u32),
+        entry!(0x0068_a850, bs_temp_effect_particle_stop_sounds(Ptr)),
+        entry!(0x0068_aa50, fn_0068aa50(Ptr, u32)),
         entry!(0x0068_a810, fn_0068a810(Ptr) -> u32),
         entry!(0x0068_8f80, fn_00688f80(Ptr) -> u32),
         entry!(0x0068_8f90, bs_temp_effect_particle_scalar_deleting_destructor(Ptr, u32) -> Ptr),
@@ -99,5 +745,631 @@ mod physics_work_ahead_tests {
         e.mem.set_u32(this + 0x4c, 0x0bad_f00d);
         e.mem.set_u32(this + 0x50, 2);
         assert_eq!(e.call(0x0068_a810, &args![this]).u32(), 0x0bad_f00d);
+    }
+}
+
+#[cfg(test)]
+mod b066_tests {
+    use super::*;
+
+    type Calls = Vec<Vec<u32>>;
+
+    fn answer(e: &mut Engine, addr: u32, eax: u32) {
+        e.register_double(addr, move |_, _| Ret {
+            eax,
+            ..Ret::default()
+        });
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Calls {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn quiet_all(e: &mut Engine, addrs: &[u32]) {
+        for a in addrs {
+            answer(e, *a, 0);
+        }
+    }
+
+    /// An object whose vtable has `slots` (byte offset, target).
+    fn object(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+        let vtable = e.mem.alloc(0x100);
+        for (slot, target) in slots {
+            e.mem.set_u32(vtable + slot, *target);
+        }
+        let this = e.mem.alloc(0x100);
+        e.mem.set_u32(this, vtable);
+        this
+    }
+
+    fn pointers(e: &mut Engine) {
+        e.register(POINTER_GET, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        e.register(POINTER_SET, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(POINTER_INIT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(POINTER_ASSIGN_POINTER, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            Ret::default()
+        });
+        answer(e, POINTER_DESTROY, 0);
+    }
+
+    const CONSTRUCTOR_CALLEES: [u32; 4] = [
+        BS_TEMP_EFFECT_CONSTRUCT,
+        TRANSFORM_INIT,
+        SOUND_HANDLE_INIT,
+        NI_TRANSFORM_MAKE_IDENTITY,
+    ];
+
+    #[test]
+    fn constructor_builds_the_effect() {
+        let mut e = Engine::new();
+        pointers(&mut e);
+        quiet_all(&mut e, &CONSTRUCTOR_CALLEES);
+        let this = e.mem.alloc(0x74);
+        e.mem.set_u32(this + 0x58, 0x77);
+        e.call_log = Some(vec![]);
+        let result = e.call(
+            0x0068_8fc0,
+            &args![this, 0x4000u32, 2.5f32, 0x4100u32, 0x4200u32],
+        );
+        assert_eq!(result.u32(), this);
+        assert_eq!(e.mem.u32(this), VTABLE);
+        assert_eq!(
+            calls(&e, BS_TEMP_EFFECT_CONSTRUCT),
+            vec![vec![this, 0x4000, 2.5f32.to_bits()]]
+        );
+        assert_eq!(
+            calls(&e, POINTER_INIT),
+            vec![vec![this + 0x18, 0], vec![this + 0x20, 0]]
+        );
+        assert_eq!(
+            calls(&e, SOUND_HANDLE_INIT),
+            vec![vec![this + 0x5c], vec![this + 0x68]]
+        );
+        assert_eq!(
+            calls(&e, NI_TRANSFORM_MAKE_IDENTITY),
+            vec![vec![this + 0x24]]
+        );
+        assert_eq!(e.mem.u32(this + 0x18), 0);
+        assert_eq!(e.mem.u32(this + 0x20), 0x4200);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x4100);
+        assert_eq!(e.mem.u32(this + 0x58), 0);
+    }
+
+    fn make_engine(model: u32) -> Engine {
+        let mut e = Engine::new();
+        pointers(&mut e);
+        quiet_all(&mut e, &CONSTRUCTOR_CALLEES);
+        e.map(MODEL_LOADER, 4);
+        e.mem.set_u32(MODEL_LOADER, 0x4300);
+        e.map(PARTICLE_CACHE_OWNER, 4);
+        answer(&mut e, MODEL_LOADER_LOAD_FILE, model);
+        e
+    }
+
+    #[test]
+    fn make_needs_a_cell_and_adds_the_effect() {
+        let mut e = make_engine(0);
+        e.call_log = Some(vec![]);
+        let words = [0u32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(e.call(0x0068_90b0, &words).u32(), 0);
+        assert!(calls(&e, NI_ALLOCATE).is_empty());
+        let block = e.mem.alloc(0x74);
+        answer(&mut e, NI_ALLOCATE, block);
+        e.register(REAL_004A4240, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        answer(&mut e, GET_ROTATION_Z_TO_VECTOR_TRANSPOSE, 0x4400);
+        quiet_all(
+            &mut e,
+            &[
+                MATRIX_INIT_006815C0,
+                MATRIX_004A0C90,
+                NI_MATRIX3_MULTIPLY,
+                PROCESS_LISTS_ADD_TEMP_EFFECT,
+            ],
+        );
+        answer(&mut e, CELL_NODE_00456FC0, 0x4500);
+        let words = [
+            0x4000u32,
+            1.5f32.to_bits(),
+            0x4100,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            2.0f32.to_bits(),
+            7,
+            0x4200,
+        ];
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0068_90b0, &words).u32(), block);
+        assert_eq!(calls(&e, NI_ALLOCATE), vec![vec![0x74]]);
+        assert_eq!(
+            calls(&e, BS_TEMP_EFFECT_CONSTRUCT),
+            vec![vec![block, 0x4000, 1.5f32.to_bits()]]
+        );
+        assert_eq!(e.mem.u32(block + 0x1c), 0x4100);
+        assert_eq!(e.mem.u32(block + 0x20), 0x4200);
+        let facing = calls(&e, GET_ROTATION_Z_TO_VECTOR_TRANSPOSE);
+        assert_eq!(facing[0][1..], [1, 2, 3]);
+        let spin = calls(&e, MATRIX_004A0C90);
+        assert_eq!(spin[0][1], 0.5f32.to_bits());
+        let multiply = calls(&e, NI_MATRIX3_MULTIPLY);
+        assert_eq!(multiply[0][0], 0x4400);
+        assert_eq!(multiply[0][2], spin[0][0]);
+        assert_eq!(calls(&e, CELL_NODE_00456FC0), vec![vec![0x4000, 4]]);
+        // Init ran (and stopped without a model).
+        assert_eq!(
+            calls(&e, MODEL_LOADER_LOAD_FILE),
+            vec![vec![0x4300, 0x4100, 0, 1, 0, 0, 1]]
+        );
+        assert_eq!(
+            calls(&e, PROCESS_LISTS_ADD_TEMP_EFFECT),
+            vec![vec![PROCESS_LISTS, block]]
+        );
+    }
+
+    const PARENT_SLOT: u32 = 0x0320_0000;
+    const NODE_SLOT: u32 = 0x0320_0004;
+
+    /// `Init` with a model of count `count` whose controllers span `range`.
+    fn init_engine(count: u32) -> (Engine, u32, u32) {
+        let mut e = make_engine(0);
+        let model = object(&mut e, &[(0xc, NODE_SLOT)]);
+        answer(&mut e, MODEL_LOADER_LOAD_FILE, model);
+        answer(&mut e, NODE_SLOT, 0);
+        answer(&mut e, COUNT_00726070, count);
+        let parent = object(&mut e, &[(0xdc, PARENT_SLOT)]);
+        quiet_all(
+            &mut e,
+            &[
+                PARENT_SLOT,
+                SET_TRANSLATE,
+                SET_ROTATE,
+                SET_SCALE,
+                TEST_008C7AA0,
+                NI_AV_OBJECT_UPDATE_PROPERTIES,
+                NI_TIME_CONTROLLER_START_ANIMATIONS,
+                ARRAY_INIT_0068ABB0,
+                COLLECT_0068A8F0,
+                ARRAY_SIZE_00658930,
+                ARRAY_DESTROY_0068AB60,
+                FIRST_CONTROLLER,
+                CLONING_PROCESS_INIT,
+                CLONING_PROCESS_DESTROY,
+                TRANSFORM_INIT,
+                NI_TRANSFORM_INVERT_NON_UNIFORM,
+            ],
+        );
+        (e, model, parent)
+    }
+
+    fn init_words(effect: u32, parent: u32, flags: u32) -> Vec<u32> {
+        let mut words = vec![effect, parent];
+        words.extend(0x10..0x19);
+        words.extend([0x20, 0x21, 0x22, 3.0f32.to_bits(), flags]);
+        words
+    }
+
+    #[test]
+    fn init_stops_without_a_model() {
+        let mut e = make_engine(0);
+        let effect = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_9310, &init_words(effect, 0x100, 0));
+        assert_eq!(calls(&e, POINTER_DESTROY).len(), 1);
+        assert!(calls(&e, POINTER_SET).is_empty());
+    }
+
+    #[test]
+    fn init_places_and_attaches_the_loaded_object() {
+        let (mut e, model, parent) = init_engine(1);
+        let effect = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_9310, &init_words(effect, parent, 0));
+        assert_eq!(e.mem.u32(effect + 0x18), model);
+        let translate = calls(&e, SET_TRANSLATE);
+        assert_eq!(translate[0][0], model);
+        let rotate = calls(&e, SET_ROTATE);
+        assert_eq!(rotate[0][0], model);
+        assert_eq!(rotate[0][1] + 0x24, translate[0][1]);
+        assert_eq!(calls(&e, SET_SCALE), vec![vec![model, 3.0f32.to_bits()]]);
+        assert_eq!(calls(&e, PARENT_SLOT), vec![vec![parent, model, 1]]);
+        assert_eq!(calls(&e, NI_AV_OBJECT_UPDATE_PROPERTIES), vec![vec![model]]);
+        assert_eq!(calls(&e, COLLECT_0068A8F0)[0][..2], [effect, model]);
+        assert_eq!(
+            calls(&e, NI_TIME_CONTROLLER_START_ANIMATIONS),
+            vec![vec![model]]
+        );
+        assert!(calls(&e, TRANSFORM_INIT).is_empty());
+    }
+
+    #[test]
+    fn init_passes_its_argument_words_by_address() {
+        let (mut e, _, parent) = init_engine(1);
+        e.register(SET_TRANSLATE, |e, a| {
+            assert_eq!(
+                (0..3).map(|i| e.mem.u32(a[1] + 4 * i)).collect::<Vec<_>>(),
+                vec![0x20, 0x21, 0x22]
+            );
+            Ret::default()
+        });
+        e.register(SET_ROTATE, |e, a| {
+            assert_eq!(
+                (0..9).map(|i| e.mem.u32(a[1] + 4 * i)).collect::<Vec<_>>(),
+                (0x10..0x19).collect::<Vec<u32>>()
+            );
+            Ret::default()
+        });
+        let effect = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_9310, &init_words(effect, parent, 0));
+        assert_eq!(calls(&e, SET_ROTATE).len(), 1);
+    }
+
+    #[test]
+    fn init_clones_a_shared_object_and_reads_the_cache_first() {
+        // Count 3 without flag 2: no object.
+        let (mut e, _, parent) = init_engine(3);
+        let effect = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_9310, &init_words(effect, parent, 0));
+        assert!(calls(&e, SET_TRANSLATE).is_empty());
+        // With flag 2: a clone.
+        let clone = object(&mut e, &[(0xc, NODE_SLOT)]);
+        answer(&mut e, NI_OBJECT_CLONE, clone);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_9310, &init_words(effect, parent, 2));
+        assert_eq!(e.mem.u32(effect + 0x18), clone);
+        assert_eq!(calls(&e, CLONING_PROCESS_INIT)[0][1], 1.0f32.to_bits());
+        assert_eq!(calls(&e, CLONING_PROCESS_DESTROY).len(), 1);
+        // Flag 1 and a cache: the cached object is used.
+        e.mem.set_u32(PARTICLE_CACHE_OWNER, 0x4700);
+        let cached = object(&mut e, &[(0xc, NODE_SLOT)]);
+        e.register_double(TES_GET_UNUSED_CACHED_PARTICLE_OBJECT, move |e, a| {
+            e.mem.set_u32(a[2], cached);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0068_9310, &init_words(effect, parent, 1));
+        let cache = calls(&e, TES_GET_UNUSED_CACHED_PARTICLE_OBJECT);
+        assert_eq!(cache[0][0], 0x4700);
+        assert_eq!(cache[0][2], effect + 0x18);
+        assert!(calls(&e, COUNT_00726070).is_empty());
+    }
+
+    #[test]
+    fn init_sets_the_lifetime_and_the_follow_offset() {
+        for (range, lifetime) in [(-1.0f32, 9.0f32), (0.05, 0.1), (4.0, 4.0)] {
+            let (mut e, _, parent) = init_engine(1);
+            let effect = e.mem.alloc(0x74);
+            e.mem.set_f32(effect + 8, 9.0);
+            for (addr, value) in [(MINUS_ONE, -1.0f64), (MINIMUM_LIFETIME, f64::from(0.1f32))] {
+                e.map(addr, 8);
+                e.mem.set_f64(addr, value);
+            }
+            e.map(MINUS_ONE_FLOAT, 4);
+            e.mem.set_f32(MINUS_ONE_FLOAT, -1.0);
+            e.map(MINIMUM_LIFETIME_FLOAT, 4);
+            e.mem.set_f32(MINIMUM_LIFETIME_FLOAT, 0.1);
+            // One controller spanning `range`.
+            let controller = e.mem.alloc(4);
+            answer(&mut e, FIRST_CONTROLLER, controller);
+            answer(&mut e, NEXT_CONTROLLER, 0);
+            e.register_double(CONTROLLER_END_004A7BD0, move |_, _| Ret {
+                st0: f64::from(range),
+                ..Ret::default()
+            });
+            e.register(CONTROLLER_START_0047C860, |_, _| Ret::default());
+            e.register(FLOAT_MAX_00404010, |_, a| Ret {
+                st0: f64::from(f32::from_bits(a[0]).max(f32::from_bits(a[1]))),
+                ..Ret::default()
+            });
+            // A follow object whose world transform is all 0x55.
+            e.mem.set_u32(effect + 0x20, 0x4900);
+            let world = e.mem.alloc(0x34);
+            for i in 0..13 {
+                e.mem.set_u32(world + 4 * i, 0x55);
+            }
+            answer(&mut e, WORLD_TRANSFORM_00461130, world);
+            let product = e.mem.alloc(0x34);
+            for i in 0..13 {
+                e.mem.set_u32(product + 4 * i, 0x60 + i);
+            }
+            answer(&mut e, TRANSFORM_MULTIPLY_0062C250, product);
+            e.call_log = Some(vec![]);
+            e.call(0x0068_9310, &init_words(effect, parent, 4));
+            assert_eq!(e.mem.f32(effect + 8), lifetime, "range {range}");
+            let invert = calls(&e, NI_TRANSFORM_INVERT_NON_UNIFORM);
+            let multiply = calls(&e, TRANSFORM_MULTIPLY_0062C250);
+            assert_eq!(multiply[0][0], invert[0][1]);
+            for i in 0..13 {
+                assert_eq!(e.mem.u32(effect + 0x24 + 4 * i), 0x60 + i);
+            }
+        }
+    }
+
+    #[test]
+    fn init_queues_the_attach_when_asked() {
+        let (mut e, model, parent) = init_engine(1);
+        answer(&mut e, TEST_008C7AA0, 1);
+        answer(&mut e, TASK_QUEUE_004537B0, 0x4a00);
+        answer(&mut e, TASK_QUEUE_QUEUE_NODE_ATTACH, 0);
+        let effect = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_9310, &init_words(effect, parent, 0));
+        assert_eq!(
+            calls(&e, TASK_QUEUE_QUEUE_NODE_ATTACH),
+            vec![vec![0x4a00, model, parent, 1, 1]]
+        );
+        assert!(calls(&e, PARENT_SLOT).is_empty());
+    }
+
+    #[test]
+    fn detach_removes_the_addon_nodes() {
+        let mut e = Engine::new();
+        pointers(&mut e);
+        answer(&mut e, REMOVE_MASTER_PARTICLE_ADDON_NODES, 0);
+        let effect = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_96c0, &args![effect]);
+        assert!(calls(&e, REMOVE_MASTER_PARTICLE_ADDON_NODES).is_empty());
+        let object = object(&mut e, &[(0xc, NODE_SLOT)]);
+        answer(&mut e, NODE_SLOT, 0x4b00);
+        e.mem.set_u32(effect + 0x18, object);
+        e.call(0x0068_96c0, &args![effect]);
+        assert_eq!(
+            calls(&e, REMOVE_MASTER_PARTICLE_ADDON_NODES),
+            vec![vec![0x4b00]]
+        );
+    }
+
+    #[test]
+    fn destructor_releases_and_detaches_everything() {
+        let mut e = Engine::new();
+        pointers(&mut e);
+        e.map(MODEL_LOADER, 4);
+        e.mem.set_u32(MODEL_LOADER, 0x4300);
+        let parent = object(&mut e, &[(0xe8, PARENT_SLOT)]);
+        answer(&mut e, PARENT_009611E0, parent);
+        quiet_all(
+            &mut e,
+            &[
+                PARENT_SLOT,
+                MODEL_LOADER_RELEASE_MODEL,
+                SOUND_HANDLE_DESTROY,
+                BS_TEMP_EFFECT_DESTROY,
+                BS_SOUND_HANDLE_IS_VALID,
+            ],
+        );
+        let effect = e.mem.alloc(0x74);
+        e.mem.set_u32(effect + 0x1c, 0x4100);
+        e.mem.set_u32(effect + 0x18, 0x4c00);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_9720, &args![effect]);
+        assert_eq!(e.mem.u32(effect), VTABLE);
+        assert_eq!(
+            calls(&e, MODEL_LOADER_RELEASE_MODEL),
+            vec![vec![0x4300, 0x4100, 0, 1]]
+        );
+        assert_eq!(calls(&e, PARENT_SLOT), vec![vec![parent, 0x4c00]]);
+        assert_eq!(e.mem.u32(effect + 0x18), 0);
+        assert_eq!(
+            calls(&e, SOUND_HANDLE_DESTROY),
+            vec![vec![effect + 0x68], vec![effect + 0x5c]]
+        );
+        assert_eq!(
+            calls(&e, POINTER_DESTROY),
+            vec![vec![effect + 0x20], vec![effect + 0x18]]
+        );
+        assert_eq!(calls(&e, BS_TEMP_EFFECT_DESTROY), vec![vec![effect]]);
+        assert_eq!(calls(&e, BS_SOUND_HANDLE_IS_VALID).len(), 2);
+    }
+
+    #[test]
+    fn longest_range_covers_controllers_and_children() {
+        let mut e = Engine::new();
+        e.map(MINUS_ONE_FLOAT, 4);
+        e.mem.set_f32(MINUS_ONE_FLOAT, -1.0);
+        // Each object holds its controller count at +4 and its node at +8.
+        e.register(FIRST_CONTROLLER, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4),
+            ..Ret::default()
+        });
+        e.register(NEXT_CONTROLLER, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        e.register(CONTROLLER_END_004A7BD0, |e, a| Ret {
+            st0: f64::from(e.mem.f32(a[0] + 4)),
+            ..Ret::default()
+        });
+        e.register(CONTROLLER_START_0047C860, |e, a| Ret {
+            st0: f64::from(e.mem.f32(a[0] + 8)),
+            ..Ret::default()
+        });
+        e.register(FLOAT_MAX_00404010, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0]).max(f32::from_bits(a[1]))),
+            ..Ret::default()
+        });
+        e.register(0x0320_0100, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 8),
+            ..Ret::default()
+        });
+        e.register(CHILD_COUNT, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        e.register(CHILD_AT, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4 + 4 * a[1]),
+            ..Ret::default()
+        });
+        let make = |e: &mut Engine, end: f32, start: f32, node: u32| {
+            let o = object(e, &[(0xc, 0x0320_0100)]);
+            let controller = e.mem.alloc(12);
+            e.mem.set_f32(controller + 4, end);
+            e.mem.set_f32(controller + 8, start);
+            e.mem.set_u32(o + 4, controller);
+            e.mem.set_u32(o + 8, node);
+            o
+        };
+        let child = make(&mut e, 9.0, 1.0, 0);
+        let node = e.mem.alloc(12);
+        e.mem.set_u32(node, 2);
+        e.mem.set_u32(node + 4, 0);
+        e.mem.set_u32(node + 8, child);
+        let root = make(&mut e, 3.0, 1.0, node);
+        assert_eq!(e.call(0x0068_9840, &args![0u32, root]).f32(), 8.0);
+        let lone = make(&mut e, 3.0, 1.0, 0);
+        assert_eq!(e.call(0x0068_9840, &args![0u32, lone]).f32(), 2.0);
+    }
+
+    #[test]
+    fn update_follows_the_follow_object() {
+        let mut e = Engine::new();
+        pointers(&mut e);
+        answer(&mut e, BS_TEMP_EFFECT_UPDATE, 1);
+        quiet_all(&mut e, &[SET_TRANSLATE, SET_ROTATE, SET_SCALE]);
+        answer(&mut e, WORLD_TRANSFORM_00461130, 0x4d00);
+        e.register(TRANSFORM_MULTIPLY_0062C250, |e, a| {
+            e.mem.set_f32(a[1] + 0x30, 2.0);
+            Ret {
+                eax: a[1],
+                ..Ret::default()
+            }
+        });
+        let effect = e.mem.alloc(0x74);
+        e.mem.set_u32(effect + 0x18, 0x4c00);
+        e.mem.set_u32(effect + 0x20, 0x4e00);
+        answer(&mut e, COUNT_00726070, 2);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0068_9a10, &args![effect, 0.25f32]).bool());
+        assert_eq!(
+            calls(&e, BS_TEMP_EFFECT_UPDATE),
+            vec![vec![effect, 0.25f32.to_bits()]]
+        );
+        let multiply = calls(&e, TRANSFORM_MULTIPLY_0062C250);
+        assert_eq!(multiply[0][0], 0x4d00);
+        assert_eq!(multiply[0][2], effect + 0x24);
+        let transform = multiply[0][1];
+        assert_eq!(
+            calls(&e, SET_TRANSLATE),
+            vec![vec![0x4c00, transform + 0x24]]
+        );
+        assert_eq!(calls(&e, SET_ROTATE), vec![vec![0x4c00, transform]]);
+        assert_eq!(calls(&e, SET_SCALE), vec![vec![0x4c00, 2.0f32.to_bits()]]);
+        // Held only by the effect: dropped, and nothing is placed.
+        answer(&mut e, COUNT_00726070, 1);
+        answer(&mut e, BS_TEMP_EFFECT_UPDATE, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0068_9a10, &args![effect, 0.25f32]).bool());
+        assert_eq!(e.mem.u32(effect + 0x20), 0);
+        assert!(calls(&e, SET_TRANSLATE).is_empty());
+    }
+
+    #[test]
+    fn sound_position_getter_and_stop_sounds() {
+        let mut e = Engine::new();
+        answer(&mut e, BS_SOUND_HANDLE_SET_POSITION, 0);
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, 1.0);
+        e.mem.set_u32(position + 4, 0x7f80_0001);
+        e.mem.set_f32(position + 8, 3.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_a7d0, &args![0x4f00u32, position]);
+        assert_eq!(
+            calls(&e, BS_SOUND_HANDLE_SET_POSITION),
+            vec![vec![
+                0x4f00,
+                1.0f32.to_bits(),
+                0x7fc0_0001,
+                3.0f32.to_bits()
+            ]]
+        );
+        let effect = e.mem.alloc(0x74);
+        e.mem.set_u32(effect + 0x50, 0x1234);
+        assert_eq!(e.call(0x0068_a830, &args![effect]).u32(), 0x1234);
+        // Sound 1 stays valid after stopping (released); sound 2 is invalid.
+        let first = effect + 0x5c;
+        e.register_double(BS_SOUND_HANDLE_IS_VALID, move |_, a| Ret {
+            eax: u32::from(a[0] == first),
+            ..Ret::default()
+        });
+        quiet_all(&mut e, &[BS_SOUND_HANDLE_STOP, BS_SOUND_HANDLE_RELEASE]);
+        e.call_log = Some(vec![]);
+        e.call(0x0068_a850, &args![effect]);
+        assert_eq!(calls(&e, BS_SOUND_HANDLE_STOP), vec![vec![first]]);
+        assert_eq!(calls(&e, BS_SOUND_HANDLE_RELEASE), vec![vec![first]]);
+        assert_eq!(calls(&e, BS_SOUND_HANDLE_IS_VALID).len(), 3);
+    }
+
+    #[test]
+    fn emitters_are_turned_half_about_y() {
+        let mut e = Engine::new();
+        e.map(PI_FLOAT, 4);
+        e.mem.set_f32(PI_FLOAT, std::f32::consts::PI);
+        let items = e.mem.alloc(8);
+        e.mem.set_u32(items, 0x5100);
+        e.mem.set_u32(items + 4, 0);
+        e.register(ARRAY_SIZE_00658930, |_, _| Ret {
+            eax: 2,
+            ..Ret::default()
+        });
+        e.register_double(ARRAY_AT_00877A30, move |_, a| Ret {
+            eax: items + 4 * a[1],
+            ..Ret::default()
+        });
+        answer(&mut e, PARENT_009611E0, 0x5200);
+        answer(&mut e, WORLD_TRANSFORM_00461130, 0x5300);
+        answer(&mut e, NI_MATRIX3_MULTIPLY, 0x5400);
+        quiet_all(
+            &mut e,
+            &[
+                ARRAY_INIT_0068ABB0,
+                COLLECT_0068A8F0,
+                ARRAY_DESTROY_0068AB60,
+                NI_MATRIX3_INVERSE,
+                MATRIX_INIT_006815C0,
+                NI_MATRIX3_MAKE_Y_ROTATION,
+                SET_ROTATE,
+            ],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0068_aa50, &args![0x5000u32, 0x5500u32]);
+        let array = calls(&e, ARRAY_INIT_0068ABB0);
+        assert_eq!(array[0][1..], [10, 1]);
+        let collect = calls(&e, COLLECT_0068A8F0);
+        assert_eq!(collect[0][..3], [0x5000, 0x5500, array[0][0]]);
+        assert_eq!(calls(&e, ARRAY_AT_00877A30).len(), 2);
+        assert_eq!(calls(&e, NI_MATRIX3_INVERSE)[0][0], 0x5300);
+        assert_eq!(
+            calls(&e, NI_MATRIX3_MAKE_Y_ROTATION)[0][1],
+            std::f32::consts::PI.to_bits()
+        );
+        assert_eq!(calls(&e, SET_ROTATE), vec![vec![0x5100, 0x5400]]);
+        assert_eq!(calls(&e, ARRAY_DESTROY_0068AB60), vec![vec![array[0][0]]]);
     }
 }

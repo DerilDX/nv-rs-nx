@@ -46,7 +46,68 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0075_30a0, fn_007530a0(Ptr)),
         entry!(0x0075_30f0, fn_007530f0(Ptr)),
         entry!(0x0075_3210, fn_00753210(Ptr)),
+        entry!(0x0073_cb80, fn_0073cb80(Ptr) -> u8),
+        entry!(0x0074_08d0, fn_007408d0(Ptr, i32) -> bool),
+        entry!(0x0074_0940, fn_00740940(Ptr) -> u32),
     ]
+}
+
+// Translated from 0073cb80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name: returns the byte at `this + 0x98` (in `AL`).
+pub fn fn_0073cb80(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x98)
+}
+
+// Translated from 007408d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name: when `value` is 2 or 0 stores it at `this + 0x24` and returns
+/// `true`; any other value is refused (`false`, nothing stored). `RET 4`.
+pub fn fn_007408d0(e: &mut Engine, this: Ptr, value: i32) -> bool {
+    if value == 2 || value == 0 {
+        e.mem.set_i32(this.addr() + 0x24, value);
+        true
+    } else {
+        false
+    }
+}
+
+// Translated from 00740940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No Xbox PDB name: returns the word at `this + 0x624`.
+pub fn fn_00740940(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x624)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fn_0073cb80_reads_the_byte_at_0x98() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xa0);
+        e.mem.set_u32(this + 0x98, 0xaabb_cc07);
+        assert_eq!(e.call(0x0073_cb80, &args![this]).u32(), 7);
+    }
+
+    #[test]
+    fn fn_007408d0_accepts_only_two_and_zero() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x28);
+        for (value, accepted) in [(2i32, true), (0, true), (1, false), (-1, false), (3, false)] {
+            e.mem.set_u32(this + 0x24, 0x55);
+            let result = e.call(0x0074_08d0, &args![this, value]).bool();
+            assert_eq!(result, accepted, "value {value}");
+            let stored = if accepted { value as u32 } else { 0x55 };
+            assert_eq!(e.mem.u32(this + 0x24), stored);
+        }
+    }
+
+    #[test]
+    fn fn_00740940_reads_the_word_at_0x624() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x628);
+        e.mem.set_u32(this + 0x624, 0x1234_5678);
+        assert_eq!(e.call(0x0074_0940, &args![this]).u32(), 0x1234_5678);
+    }
 }
 
 #[cfg(test)]

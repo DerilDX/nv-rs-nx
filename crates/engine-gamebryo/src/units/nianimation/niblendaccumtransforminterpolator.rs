@@ -820,6 +820,278 @@ pub fn ni_blend_accum_transform_interpolator_update(
     answer
 }
 
+/// The `NiQuaternion` equality `operator==` uses (`00a92660`, `thiscall
+/// (this, &other)`).
+const QUATERNION_EQUAL: u32 = 0x00a9_2660;
+/// The `NiBlendInterpolator` functions this unit's members build on: the
+/// default constructor (`00a36890`), `IsEqual` (`00a36fd0`), `SaveBinary`
+/// (`00a37ec0`), `LoadBinary` (`00a37980`), the member copy (`00a37510`,
+/// `(this, clone, cloning)`) and `GetViewerStrings` (`00a38080`).
+const BASE_CONSTRUCT_DEFAULT: u32 = 0x00a3_6890;
+const BASE_IS_EQUAL: u32 = 0x00a3_6fd0;
+const BASE_SAVE_BINARY: u32 = 0x00a3_7ec0;
+const BASE_LOAD_BINARY: u32 = 0x00a3_7980;
+const BASE_COPY_MEMBERS: u32 = 0x00a3_7510;
+const BASE_GET_VIEWER_STRINGS: u32 = 0x00a3_8080;
+/// `NiQuatTransform::SaveBinary` (`00a38b60`), `LoadBinary` (`00a38bb0`)
+/// and `GetViewerStrings` (`00a38cb0`), and `NiMatrix3::SaveBinary`
+/// (`00a59a90`) and `LoadBinary` (`00a59a30`), all `thiscall (object,
+/// stream or strings)`.
+const QUAT_TRANSFORM_SAVE_BINARY: u32 = 0x00a3_8b60;
+const QUAT_TRANSFORM_LOAD_BINARY: u32 = 0x00a3_8bb0;
+const QUAT_TRANSFORM_GET_VIEWER_STRINGS: u32 = 0x00a3_8cb0;
+const MATRIX_SAVE_BINARY: u32 = 0x00a5_9a90;
+const MATRIX_LOAD_BINARY: u32 = 0x00a5_9a30;
+/// `00aa13e0` (`cdecl`, one word): allocates from the Ni allocator; the
+/// class's size.
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+const OBJECT_SIZE: u32 = 0x58;
+/// `NiBlendAccumTransformInterpolator::ms_RTTI` (its first word is the
+/// class name).
+const RTTI: u32 = 0x011f_371c;
+
+// Translated from 00a391c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiQuatTransform::operator==` (Xbox PDB name from the engine map;
+/// `thiscall (this, &other)`): the three translation floats equal (x87
+/// compares: a NaN is never equal), the rotations equal (`00a92660`) and the
+/// scales equal. Answers 1 or 0 in the whole of `EAX`.
+pub fn ni_quat_transform_operator_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let (this, other) = (this.addr(), other.addr());
+    let equal = |e: &Engine, offset: u32| {
+        x87_load32(e.mem.u32(this + offset)) == x87_load32(e.mem.u32(other + offset))
+    };
+    if !equal(e, 0) || !equal(e, 4) || !equal(e, 8) {
+        return false;
+    }
+    if !e
+        .call(QUATERNION_EQUAL, &args![this + ROTATE, other + ROTATE])
+        .bool()
+    {
+        return false;
+    }
+    equal(e, SCALE)
+}
+
+// Translated from 00a39230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiBlendAccumTransformInterpolator` default constructor (unnamed in
+/// the engine map; the factory's tail jump): the `NiBlendInterpolator`
+/// default constructor, the class's vtable, a fresh accumulated transform
+/// (translation and rotation copied, the scale through the FPU), no
+/// accumulation array and `m_bReset` clear. Answers `this`.
+pub fn fn_00a39230(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(BASE_CONSTRUCT_DEFAULT, &args![this]);
+    let object = this.addr();
+    e.mem.set_u32(object, VTABLE);
+    copy_words(e, FRESH_TRANSLATE, object + ACCUMULATED, 3);
+    copy_words(e, FRESH_ROTATE, object + ACCUMULATED + ROTATE, 4);
+    let scale = x87_quiet_bits(e.mem.u32(INVALID_SCALE));
+    e.mem.set_u32(object + ACCUMULATED + SCALE, scale);
+    e.mem.set_u32(object + ACCUM_ARRAY, 0);
+    e.mem.set_u8(object + RESET, 0);
+    this
+}
+
+// Translated from 00a394b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendAccumTransformInterpolator::GetValue` (Xbox PDB): false when the
+/// accumulated transform is all invalid (scale, rotation float +0x10 and
+/// translation x at `-FLT_MAX`). Otherwise its eight words copied to
+/// `value`, or with exactly one interpolator those of the accumulated
+/// transform applied onto the single accumulation item's last value
+/// (`HierApply` into a local); true.
+pub fn ni_blend_accum_transform_interpolator_get_value(
+    e: &mut Engine,
+    this: Ptr,
+    value: Ptr,
+) -> bool {
+    let accumulated = this.addr() + ACCUMULATED;
+    if all_invalid(e, accumulated) {
+        return false;
+    }
+    if byte(e, this, INTERP_COUNT) == 1 {
+        let last = accum_item(e, this, u32::from(byte(e, this, SINGLE_INDEX))) + LAST_VALUE;
+        combine_into(e, HIER_APPLY, accumulated, last, value.addr());
+    } else {
+        copy_words(e, accumulated, value.addr(), 8);
+    }
+    true
+}
+
+// Translated from 00a39700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The class factory (registered through `NiStream::RegisterLoader` at
+/// `00a2d8ad`; Ghidra made no function of it): 0x58 bytes from the Ni
+/// allocator and, when that succeeds, the default constructor
+/// (`fn_00a39230`, a tail jump). Null when the allocation fails.
+pub fn fn_00a39700(e: &mut Engine) -> Ptr {
+    let object = e.call(NI_ALLOCATE, &args![OBJECT_SIZE]).u32();
+    if object == 0 {
+        return Ptr::NULL;
+    }
+    fn_00a39230(e, Ptr::new(object))
+}
+
+// Translated from 00a39720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendAccumTransformInterpolator::SaveBinary` (Xbox PDB): the base
+/// `SaveBinary`, then each accumulation item's last value and delta value
+/// (`NiQuatTransform::SaveBinary`) and reference frame
+/// (`NiMatrix3::SaveBinary`), then the accumulated transform.
+pub fn ni_blend_accum_transform_interpolator_save_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(BASE_SAVE_BINARY, &args![this, stream]);
+    let mut i = 0u8;
+    while i < byte(e, this, ARRAY_SIZE) {
+        let item = accum_item(e, this, u32::from(i));
+        e.call(
+            QUAT_TRANSFORM_SAVE_BINARY,
+            &args![item + LAST_VALUE, stream],
+        );
+        e.call(
+            QUAT_TRANSFORM_SAVE_BINARY,
+            &args![item + DELTA_VALUE, stream],
+        );
+        e.call(MATRIX_SAVE_BINARY, &args![item + REF_FRAME, stream]);
+        i = i.wrapping_add(1);
+    }
+    e.call(
+        QUAT_TRANSFORM_SAVE_BINARY,
+        &args![this.addr() + ACCUMULATED, stream],
+    );
+}
+
+// Translated from 00a39780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendAccumTransformInterpolator::IsEqual` (Xbox PDB): the base
+/// `IsEqual`, then the accumulated transforms equal
+/// (`ni_quat_transform_operator_equal`).
+pub fn ni_blend_accum_transform_interpolator_is_equal(
+    e: &mut Engine,
+    this: Ptr,
+    other: Ptr,
+) -> bool {
+    if !e.call(BASE_IS_EQUAL, &args![this, other]).bool() {
+        return false;
+    }
+    ni_quat_transform_operator_equal(
+        e,
+        Ptr::new(this.addr() + ACCUMULATED),
+        Ptr::new(other.addr() + ACCUMULATED),
+    )
+}
+
+/// A new accumulation array of `size` items (`size * 0x68` bytes from the
+/// memory manager, all ones on overflow; each item constructed by
+/// `00a362f0`), or 0 when the allocation fails.
+fn new_accum_array(e: &mut Engine, size: u32) -> u32 {
+    let bytes = size.checked_mul(ACCUM_ITEM_SIZE).unwrap_or(u32::MAX);
+    let array = e
+        .call(MEMORY_MANAGER_ALLOCATE, &args![MEMORY_MANAGER, bytes])
+        .u32();
+    if array == 0 {
+        return 0;
+    }
+    e.call(
+        VECTOR_CONSTRUCTOR_ITERATOR,
+        &args![array, ACCUM_ITEM_SIZE, size, ACCUM_ITEM_CONSTRUCTOR],
+    );
+    array
+}
+
+// Translated from 00a3a450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`NiBlendAccumTransformInterpolator`'s member
+/// copy, `thiscall (this, clone, cloning)`): the `NiBlendInterpolator`
+/// member copy, a new accumulation array for the clone (of this one's array
+/// size) with every item copied word for word, then the accumulated
+/// transform copied.
+pub fn fn_00a3a450(e: &mut Engine, this: Ptr, clone: Ptr, cloning: Ptr) {
+    e.call(BASE_COPY_MEMBERS, &args![this, clone, cloning]);
+    let size = u32::from(byte(e, this, ARRAY_SIZE));
+    let array = new_accum_array(e, size);
+    e.mem.set_u32(clone.addr().wrapping_add(ACCUM_ARRAY), array);
+    let mut i = 0u8;
+    while i < byte(e, this, ARRAY_SIZE) {
+        let from = accum_item(e, this, u32::from(i));
+        let to = accum_item(e, clone, u32::from(i));
+        copy_words(e, from, to, 0x1a);
+        i = i.wrapping_add(1);
+    }
+    copy_words(
+        e,
+        this.addr() + ACCUMULATED,
+        clone.addr().wrapping_add(ACCUMULATED),
+        8,
+    );
+}
+
+// Translated from 00a3a4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendAccumTransformInterpolator::LoadBinary` (Xbox PDB): the base
+/// `LoadBinary`, a new accumulation array of the loaded array size, each
+/// item's last value and delta value (`NiQuatTransform::LoadBinary`) and
+/// reference frame (`NiMatrix3::LoadBinary`), then the accumulated
+/// transform.
+pub fn ni_blend_accum_transform_interpolator_load_binary(e: &mut Engine, this: Ptr, stream: Ptr) {
+    e.call(BASE_LOAD_BINARY, &args![this, stream]);
+    let size = u32::from(byte(e, this, ARRAY_SIZE));
+    let array = new_accum_array(e, size);
+    e.mem.set_u32(this.addr() + ACCUM_ARRAY, array);
+    let mut i = 0u8;
+    while i < byte(e, this, ARRAY_SIZE) {
+        let item = accum_item(e, this, u32::from(i));
+        e.call(
+            QUAT_TRANSFORM_LOAD_BINARY,
+            &args![item + LAST_VALUE, stream],
+        );
+        e.call(
+            QUAT_TRANSFORM_LOAD_BINARY,
+            &args![item + DELTA_VALUE, stream],
+        );
+        e.call(MATRIX_LOAD_BINARY, &args![item + REF_FRAME, stream]);
+        i = i.wrapping_add(1);
+    }
+    e.call(
+        QUAT_TRANSFORM_LOAD_BINARY,
+        &args![this.addr() + ACCUMULATED, stream],
+    );
+}
+
+// Translated from 00a3a660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendAccumTransformInterpolator::CreateClone` (Xbox PDB): 0x58 bytes
+/// from the Ni allocator, the default constructor (`fn_00a39230`) and the
+/// member copy (`fn_00a3a450`) into it; when the allocation fails the copy
+/// still runs, into address 0, and 0 is answered.
+pub fn ni_blend_accum_transform_interpolator_create_clone(
+    e: &mut Engine,
+    this: Ptr,
+    cloning: Ptr,
+) -> Ptr {
+    let object = e.call(NI_ALLOCATE, &args![OBJECT_SIZE]).u32();
+    if object == 0 {
+        fn_00a3a450(e, this, Ptr::NULL, cloning);
+        return Ptr::NULL;
+    }
+    let clone = fn_00a39230(e, Ptr::new(object));
+    fn_00a3a450(e, this, clone, cloning);
+    clone
+}
+
+// Translated from 00a3a6b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBlendAccumTransformInterpolator::GetViewerStrings` (Xbox PDB): the
+/// base strings, the class name (through the argument's stack word), then
+/// the accumulated transform's strings (`NiQuatTransform::GetViewerStrings`).
+pub fn ni_blend_accum_transform_interpolator_get_viewer_strings(
+    e: &mut Engine,
+    this: Ptr,
+    strings: Ptr,
+) {
+    use crate::units::nianimation::niblendinterpolator::append_viewer_string;
+    e.call(BASE_GET_VIEWER_STRINGS, &args![this, strings]);
+    let class_name = e.mem.u32(RTTI);
+    let text = e.call(0x00a7_d330, &args![class_name]).u32();
+    e.with_stack(4, |e, slot| {
+        append_viewer_string(e, strings, slot.addr(), text);
+    });
+    e.call(
+        QUAT_TRANSFORM_GET_VIEWER_STRINGS,
+        &args![this.addr() + ACCUMULATED, strings],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -851,6 +1123,34 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00a3a580,
             ni_blend_accum_transform_interpolator_update(Ptr, f32, Ptr, Ptr) -> bool
+        ),
+        entry!(0x00a3_91c0, ni_quat_transform_operator_equal(Ptr, Ptr) -> bool),
+        entry!(0x00a3_9230, fn_00a39230(Ptr) -> Ptr),
+        entry!(
+            0x00a3_94b0,
+            ni_blend_accum_transform_interpolator_get_value(Ptr, Ptr) -> bool
+        ),
+        entry!(0x00a3_9700, fn_00a39700() -> Ptr),
+        entry!(
+            0x00a3_9720,
+            ni_blend_accum_transform_interpolator_save_binary(Ptr, Ptr)
+        ),
+        entry!(
+            0x00a3_9780,
+            ni_blend_accum_transform_interpolator_is_equal(Ptr, Ptr) -> bool
+        ),
+        entry!(0x00a3_a450, fn_00a3a450(Ptr, Ptr, Ptr)),
+        entry!(
+            0x00a3_a4f0,
+            ni_blend_accum_transform_interpolator_load_binary(Ptr, Ptr)
+        ),
+        entry!(
+            0x00a3_a660,
+            ni_blend_accum_transform_interpolator_create_clone(Ptr, Ptr) -> Ptr
+        ),
+        entry!(
+            0x00a3_a6b0,
+            ni_blend_accum_transform_interpolator_get_viewer_strings(Ptr, Ptr)
         ),
     ]
 }
@@ -1347,5 +1647,210 @@ mod tests {
         // One: the single value.
         e.mem.set_u8(this.addr() + INTERP_COUNT, 1);
         assert!(e.call(0x00a3a580, &args![this, 0.25f32, 0u32, out]).bool());
+    }
+}
+
+#[cfg(test)]
+mod a07_tests {
+    use super::*;
+    use crate::units::nianimation::niblendinterpolator::a07_test_support::{calls, viewer_strings};
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for page in [0x0102_4000u32, 0x0109_6000, 0x011a_8000, 0x011f_3000] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(LOWEST, f64::from(f32::MIN));
+        e.mem.set_f32(INVALID_SCALE, 1.0);
+        for i in 0..3 {
+            e.mem.set_f32(FRESH_TRANSLATE + 4 * i, 0.0);
+        }
+        e.mem.set_f32(FRESH_ROTATE, 1.0);
+        e.register(MEMORY_MANAGER_ALLOCATE, |e, a| e.mem.alloc(a[1]).into_ret());
+        e.register(VECTOR_CONSTRUCTOR_ITERATOR, |_, _| Ret::default());
+        e
+    }
+
+    fn set_floats(e: &mut Engine, at: u32, values: &[f32]) {
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_f32(at + 4 * i as u32, *v);
+        }
+    }
+
+    /// An accumulating interpolator with `size` accumulation items (and base
+    /// items), its accumulated transform `accumulated`.
+    fn accum(e: &mut Engine, size: u8, accumulated: [f32; 8]) -> Ptr {
+        let this = e.mem.alloc(OBJECT_SIZE);
+        e.mem.set_u8(this + ARRAY_SIZE, size);
+        let items = e.mem.alloc(ITEM_SIZE * u32::from(size).max(1));
+        e.mem.set_u32(this + INTERP_ARRAY, items);
+        let array = e.mem.alloc(ACCUM_ITEM_SIZE * u32::from(size).max(1));
+        e.mem.set_u32(this + ACCUM_ARRAY, array);
+        set_floats(e, this + ACCUMULATED, &accumulated);
+        Ptr::new(this)
+    }
+
+    #[test]
+    fn transform_equality_compares_each_part() {
+        let mut e = engine();
+        e.register(QUATERNION_EQUAL, |e, a| {
+            (e.mem.u32(a[0]) == e.mem.u32(a[1])).into_ret()
+        });
+        let (a, b) = (e.mem.alloc(0x20), e.mem.alloc(0x20));
+        let values = [1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+        set_floats(&mut e, a, &values);
+        set_floats(&mut e, b, &values);
+        let equal = |e: &mut Engine| e.call(0x00a3_91c0, &args![a, b]);
+        assert_eq!(equal(&mut e).u32(), 1);
+        e.mem.set_f32(b + 0xc, 0.5);
+        assert_eq!(equal(&mut e).u32(), 0, "rotation");
+        e.mem.set_f32(b + 0xc, 1.0);
+        e.mem.set_f32(b + 0x8, f32::NAN);
+        e.mem.set_f32(a + 0x8, f32::NAN);
+        assert_eq!(equal(&mut e).u32(), 0, "NaN");
+        e.mem.set_f32(a + 0x8, 3.0);
+        e.mem.set_f32(b + 0x8, 3.0);
+        e.mem.set_f32(b + SCALE, 2.0);
+        assert_eq!(equal(&mut e).u32(), 0, "scale");
+    }
+
+    #[test]
+    fn constructor_and_factory_start_fresh() {
+        let mut e = engine();
+        e.register(BASE_CONSTRUCT_DEFAULT, |_, _| Ret::default());
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        let object = e.call(0x00a3_9700, &args![]).u32();
+        assert_eq!(e.mem.u32(object), VTABLE);
+        assert_eq!(e.mem.f32(object + ACCUMULATED + ROTATE), 1.0);
+        assert_eq!(e.mem.f32(object + ACCUMULATED + SCALE), 1.0);
+        assert_eq!(e.mem.u32(object + ACCUM_ARRAY), 0);
+        assert_eq!(e.mem.u8(object + RESET), 0);
+        let other = e.mem.alloc(OBJECT_SIZE);
+        e.mem.set_u8(other + RESET, 1);
+        assert_eq!(e.call(0x00a3_9230, &args![other]).u32(), other);
+        assert_eq!(e.mem.u8(other + RESET), 0);
+        e.register(NI_ALLOCATE, |_, _| 0u32.into_ret());
+        assert_eq!(e.call(0x00a3_9700, &args![]).u32(), 0);
+    }
+
+    #[test]
+    fn get_value_copies_or_applies_the_single_item() {
+        let mut e = engine();
+        e.register(HIER_APPLY, |e, a| {
+            for i in 0..8 {
+                let sum = e.mem.f32(a[0] + 4 * i) + e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, sum);
+            }
+            a[1].into_ret()
+        });
+        let m = f32::MIN;
+        let this = accum(&mut e, 2, [m, 0.0, 0.0, 0.0, m, 0.0, 0.0, m]);
+        let value = e.mem.alloc(0x20);
+        assert!(!e.call(0x00a3_94b0, &args![this, value]).bool());
+        let this = accum(&mut e, 2, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        assert!(e.call(0x00a3_94b0, &args![this, value]).bool());
+        assert_eq!(e.mem.f32(value + 0x1c), 8.0);
+        e.mem.set_u8(this.addr() + INTERP_COUNT, 1);
+        e.mem.set_u8(this.addr() + SINGLE_INDEX, 1);
+        let last = accum_item(&e, this, 1) + LAST_VALUE;
+        set_floats(&mut e, last, &[1.0; 8]);
+        assert!(e.call(0x00a3_94b0, &args![this, value]).bool());
+        assert_eq!(e.mem.f32(value), 2.0);
+        assert_eq!(e.mem.f32(value + 0x1c), 9.0);
+    }
+
+    #[test]
+    fn save_and_load_binary_walk_the_accumulation_items() {
+        let mut e = engine();
+        for f in [
+            BASE_SAVE_BINARY,
+            BASE_LOAD_BINARY,
+            QUAT_TRANSFORM_SAVE_BINARY,
+            QUAT_TRANSFORM_LOAD_BINARY,
+            MATRIX_SAVE_BINARY,
+            MATRIX_LOAD_BINARY,
+        ] {
+            e.register(f, |_, _| Ret::default());
+        }
+        let this = accum(&mut e, 2, [0.0; 8]);
+        let stream = 0x4000u32;
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_9720, &args![this, stream]);
+        let item = accum_item(&e, this, 1);
+        let saves = calls(&e, QUAT_TRANSFORM_SAVE_BINARY);
+        assert_eq!(saves.len(), 5);
+        assert_eq!(saves[2], vec![item + LAST_VALUE, stream]);
+        assert_eq!(saves[3], vec![item + DELTA_VALUE, stream]);
+        assert_eq!(saves[4], vec![this.addr() + ACCUMULATED, stream]);
+        assert_eq!(
+            calls(&e, MATRIX_SAVE_BINARY)[1],
+            vec![item + REF_FRAME, stream]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_a4f0, &args![this, stream]);
+        let array = e.mem.u32(this.addr() + ACCUM_ARRAY);
+        assert_eq!(
+            calls(&e, VECTOR_CONSTRUCTOR_ITERATOR),
+            vec![vec![array, ACCUM_ITEM_SIZE, 2, ACCUM_ITEM_CONSTRUCTOR]]
+        );
+        let loads = calls(&e, QUAT_TRANSFORM_LOAD_BINARY);
+        assert_eq!(loads.len(), 5);
+        assert_eq!(loads[0], vec![array + LAST_VALUE, stream]);
+        assert_eq!(calls(&e, MATRIX_LOAD_BINARY).len(), 2);
+    }
+
+    #[test]
+    fn is_equal_needs_the_base_and_the_accumulated_transform() {
+        let mut e = engine();
+        e.register(BASE_IS_EQUAL, |_, _| 1u32.into_ret());
+        e.register(QUATERNION_EQUAL, |_, _| 1u32.into_ret());
+        let this = accum(&mut e, 0, [1.0; 8]);
+        let other = accum(&mut e, 0, [1.0; 8]);
+        assert!(e.call(0x00a3_9780, &args![this, other]).bool());
+        e.mem.set_f32(other.addr() + ACCUMULATED, 2.0);
+        assert!(!e.call(0x00a3_9780, &args![this, other]).bool());
+        e.register(BASE_IS_EQUAL, |_, _| 0u32.into_ret());
+        assert!(!e.call(0x00a3_9780, &args![this, this]).bool());
+    }
+
+    #[test]
+    fn copy_members_and_create_clone_copy_the_items_and_the_transform() {
+        let mut e = engine();
+        e.register(BASE_COPY_MEMBERS, |_, _| Ret::default());
+        e.register(BASE_CONSTRUCT_DEFAULT, |_, _| Ret::default());
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        let this = accum(&mut e, 2, [3.0; 8]);
+        let item = accum_item(&e, this, 1);
+        e.mem.set_u32(item + 0x64, 0xabcd);
+        e.call_log = Some(vec![]);
+        let clone = e.call(0x00a3_a660, &args![this, 0x77u32]).u32();
+        assert_eq!(
+            calls(&e, BASE_COPY_MEMBERS),
+            vec![vec![this.addr(), clone, 0x77]]
+        );
+        assert_eq!(e.mem.u32(clone), VTABLE);
+        let copied = accum_item(&e, Ptr::new(clone), 1);
+        assert_eq!(e.mem.u32(copied + 0x64), 0xabcd);
+        assert_eq!(e.mem.f32(clone + ACCUMULATED + SCALE), 3.0);
+        let target = accum(&mut e, 0, [0.0; 8]);
+        e.call(0x00a3_a450, &args![this, target, 0u32]);
+        assert_eq!(e.mem.f32(target.addr() + ACCUMULATED), 3.0);
+    }
+
+    #[test]
+    fn get_viewer_strings_adds_the_class_and_the_transform() {
+        let mut e = engine();
+        e.register(BASE_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        e.register(QUAT_TRANSFORM_GET_VIEWER_STRINGS, |_, _| Ret::default());
+        let (strings, stored) = viewer_strings(&mut e);
+        e.mem.set_u32(RTTI, 0x0109_6100);
+        let this = accum(&mut e, 0, [0.0; 8]);
+        e.call_log = Some(vec![]);
+        e.call(0x00a3_a6b0, &args![this, strings]);
+        assert_eq!(*stored.borrow(), vec![0x0109_6100]);
+        assert_eq!(
+            calls(&e, QUAT_TRANSFORM_GET_VIEWER_STRINGS),
+            vec![vec![this.addr() + ACCUMULATED, strings.addr()]]
+        );
     }
 }

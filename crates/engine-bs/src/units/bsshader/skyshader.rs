@@ -792,9 +792,343 @@ pub fn sky_shader_load_stages_and_passes(e: &mut Engine, this: Ptr) -> bool {
     true
 }
 
+/// The `eh vector destructor iterator` (`00ec5fce`, `stdcall`), `BSShader::~BSShader` (engine
+/// map, `00be0f10`, no stack words), the Ni free (`00aa1460`, `cdecl`: block, size) and
+/// `00be0870` (unnamed, `thiscall`, no stack words; answers a bool).
+const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
+const BS_SHADER_DESTRUCT: u32 = 0x00be_0f10;
+const NI_FREE_00AA1460: u32 = 0x00aa_1460;
+const CALL_00BE0870: u32 = 0x00be_0870;
+
+// Translated from 00b88670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `skyshader.cpp`): the sky shader's destructor, no stack
+/// words. Stores the vtable `010afe18`, drops and clears the 0xb passes at +0x6c, clears
+/// (releasing what they hold) the `NiPointer`s +0x98 (0xb) and +0xc4 (8), destroys the arrays
+/// +0xc4 (8) and +0x98 (0xb) (destructor `00b66f20`) and +0x6c (0xb, `00b79930`) and runs
+/// `BSShader::~BSShader` (`00be0f10`).
+// Translation incomplete: 00b88670 - the C++ exception frame (FS:[0] chain, unwind states 0 to 3 for the arrays and the base) is not translated.
+pub fn fn_00b88670(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.mem.set_u32(base, SKY_SHADER_VTABLE_010AFE18);
+    for index in 0..0xbu32 {
+        pass_pointer_clear(e, base + 0x6c + 4 * index);
+    }
+    for index in 0..0xbu32 {
+        ni_pointer_clear(e, base + 0x98 + 4 * index);
+    }
+    for index in 0..8u32 {
+        ni_pointer_clear(e, base + 0xc4 + 4 * index);
+    }
+    for (offset, count, destructor) in [
+        (0xc4u32, 8u32, DESTRUCT_00B66F20),
+        (0x98, 0xb, DESTRUCT_00B66F20),
+        (0x6c, 0xb, DESTRUCT_00B79930),
+    ] {
+        e.call(
+            VECTOR_DESTRUCT,
+            &args![base + offset, 4u32, count, destructor],
+        );
+    }
+    e.call(BS_SHADER_DESTRUCT, &args![base]);
+}
+
+/// The record whose address `00b887b0` answers (`011ff8d8`).
+const RECORD_011FF8D8: u32 = 0x011f_f8d8;
+
+// Translated from 00b887b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010afe18` slot +8, where the Xbox PDB's `NiObject` order has
+/// `GetRTTI`): answers the address `011ff8d8`. No arguments.
+pub fn fn_00b887b0(_e: &mut Engine) -> Ptr {
+    Ptr::new(RECORD_011FF8D8)
+}
+
+// Translated from 00b89970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010afe18` slot +0x4c), no stack words. Runs `00be0870`,
+/// drops and clears the first pass (+0x6c) and answers what `00be0870` answered.
+pub fn fn_00b89970(e: &mut Engine, this: Ptr) -> bool {
+    let base = this.addr();
+    let result = e.call(CALL_00BE0870, &args![base]).bool();
+    pass_pointer_clear(e, base + 0x6c);
+    result
+}
+
+/// The shader manager's pass state (`0126f74c`, its +0x24 the table of constant blocks), the
+/// pass number (`011f91e4`), and the texture-stage calls `00e7de90` and `00e7eb00` (unit
+/// `NiXenonRenderer`, unnamed; `thiscall` on a block, one word each).
+const PASS_STATE_0126F74C: u32 = 0x0126_f74c;
+const CURRENT_PASS_011F91E4: u32 = 0x011f_91e4;
+const STAGE_CALL_00E7DE90: u32 = 0x00e7_de90;
+const STAGE_CALL_00E7EB00: u32 = 0x00e7_eb00;
+
+/// A texture set on a constant block: its +8 the texture, then `00e7de90` with the property's
+/// slot +0xcc answer and `00e7eb00` with 0.
+fn set_block_texture(e: &mut Engine, block: u32, texture: u32, property: u32) {
+    e.mem.set_u32(block + 8, texture);
+    let mode = e.vcall(property, 0xcc, &args![]).u32();
+    e.call(STAGE_CALL_00E7DE90, &args![block, mode]);
+    e.call(STAGE_CALL_00E7EB00, &args![block, 0u32]);
+}
+
+// Translated from 00b89cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010afe18` slot +0x78), `thiscall`, `RET 4` (the property
+/// state; `this` is not read). With the state's +0xc property: its texture +0x70, when set,
+/// goes to the pass state's (`0126f74c`) first constant block; the second block (when there
+/// is one) gets the property's +0x80, or when that is null and the pass number (`011f91e4`)
+/// is 0x2d4, 0x23c, 0x23a, 0x2d2, 0x23d or 0x23e its +0x70 (when set). Each through
+/// `00e7de90` (with the property's slot +0xcc) and `00e7eb00(0)`.
+pub fn fn_00b89cc0(e: &mut Engine, _this: Ptr, state: Ptr) {
+    let pass_state = e.global::<u32>(PASS_STATE_0126F74C);
+    let property = e.mem.u32(state.addr() + 0xc);
+    let texture = e.mem.u32(property + 0x70);
+    if texture != 0 {
+        let block = e.mem.u32(e.mem.u32(pass_state + 0x24));
+        set_block_texture(e, block, texture, property);
+    }
+    let mut texture = e.mem.u32(property + 0x80);
+    let pass = e.global::<u32>(CURRENT_PASS_011F91E4);
+    if texture == 0 {
+        if !matches!(pass, 0x2d4 | 0x23c | 0x23a | 0x2d2 | 0x23d | 0x23e) {
+            return;
+        }
+        texture = e.mem.u32(property + 0x70);
+        if texture == 0 {
+            return;
+        }
+    }
+    let block = e.mem.u32(e.mem.u32(pass_state + 0x24) + 4);
+    if block != 0 {
+        set_block_texture(e, block, texture, property);
+    }
+}
+
+/// The current pass record (`011f91e0`), the default bound (`011f4288`), the shader-manager
+/// getter `00b4f5d0` (unit `bsshadermanager.cpp`, no arguments), the camera object
+/// (`011f95d8`, its translation +0x8c), the renderer's `00e6fbb0` (`thiscall` on the
+/// shader's +0x18, `RET 8`), and the sky constants and inputs.
+const CURRENT_RECORD_011F91E0: u32 = 0x011f_91e0;
+const DEFAULT_BOUND_011F4288: u32 = 0x011f_4288;
+const MANAGER_STATE_00B4F5D0: u32 = 0x00b4_f5d0;
+const CAMERA_011F95D8: u32 = 0x011f_95d8;
+const RENDERER_CALL_00E6FBB0: u32 = 0x00e6_fbb0;
+const SUN_POSITION_011FA2A0: u32 = 0x011f_a2a0;
+const ORIGIN_011F474C: u32 = 0x011f_474c;
+const EYE_POSITION_011FF8C8: u32 = 0x011f_f8c8;
+const SKY_HEIGHT_011FF8A8: u32 = 0x011f_f8a8;
+const SKY_DIVISOR_01015A40: u32 = 0x0101_5a40;
+const BLEND_VALUES_011FF8B4: u32 = 0x011f_f8b4;
+const FOG_SWITCH_011F941E: u32 = 0x011f_941e;
+const FOG_VALUE_011AD87C: u32 = 0x011a_d87c;
+const COLOR_0_011FF910: u32 = 0x011f_f910;
+const COLORS_011FF8E0: u32 = 0x011f_f8e0;
+/// The render-state setter `00b97ff0` (unit `bsrenderstate_xenon.cpp`, `cdecl`, three words).
+const SET_RENDER_STATE_00B97FF0: u32 = 0x00b9_7ff0;
+/// Bits of `1.0f`.
+const ONE_BITS: u32 = 0x3f80_0000;
+
+// Translated from 00b89d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not a Ghidra function (vtable `010afe18` slot +0x7c), `thiscall`, `RET 4` (the property
+/// state). With the current record's geometry: when the shader manager's state (`00b4f5d0`)
+/// has its byte +0x164 set, the renderer's `00e6fbb0` gets a stack copy of the world
+/// transform moved by minus the camera's (`011f95d8`) translation and plus that of the state's
+/// +8 object when there is one; otherwise the world transform itself. The eye position
+/// `011ff8c8` becomes the sun position (`011fa2a0`) minus `011f474c` (then 0.0; on pass 5 its
+/// z is minus the `float` `011ff8a8` over the `double` `01015a40`). For property kind 3
+/// (+0x8c) the shader's +0xe8 and +0xe4 take the property's +0x84 and the blend value
+/// `011ff8b4[u16 +0x88]`, otherwise +0xe8 is 0.0; with the byte `011f941e` +0xec takes
+/// `011ad87c`. The colours `011ff910` (the compiler's switch on the kind, byte map
+/// `00b8a18c`): kinds 0, 1, 3, 5, 6, 7 the property's four words +0x60; kind 2 the twelve
+/// words at `011ff8e0`; other kinds 0.0 0.0 0.0 1.0 0.0 0.0 0.0 (the word `011ff92c` left)
+/// 0.0 0.0 0.0. Then the slot +0x78 of the shader's +0x30 and +0x34 objects with the pass
+/// state's +0x44 and +0x5c objects and the geometry's words, `00b97ff0(6, 0, 0)` for kinds 0
+/// and 6, and the shader's +0x1c object's slot +0x24 with the state's +0x10 object when its
+/// byte +0x18 has bit 0.
+pub fn fn_00b89d80(e: &mut Engine, this: Ptr, state: Ptr) {
+    let this = this.addr();
+    let state = state.addr();
+    let pass = e.global::<u32>(CURRENT_PASS_011F91E4);
+    let record = e.global::<u32>(CURRENT_RECORD_011F91E0);
+    let geometry = e.mem.u32(record);
+    let mut bound = e.mem.u32(geometry + 0x20);
+    if bound == 0 {
+        bound = DEFAULT_BOUND_011F4288;
+    }
+    let world = geometry + 0x68;
+    let passes = e.mem.u32(e.mem.u32(geometry + 0xb8) + 0x34);
+    let word_bc = e.mem.u32(geometry + 0xbc);
+    let property = e.mem.u32(state + 0xc);
+    let manager = e.call(MANAGER_STATE_00B4F5D0, &args![]).u32();
+    if e.mem.u8(manager + 0x164) != 0 {
+        e.with_stack(0x34, |e, copy| {
+            let copy = copy.addr();
+            for word in 0..0xdu32 {
+                let value = e.mem.u32(world + 4 * word);
+                e.mem.set_u32(copy + 4 * word, value);
+            }
+            let camera = e.global::<u32>(CAMERA_011F95D8);
+            let mut moved = [0u32; 3];
+            for (index, slot) in moved.iter_mut().enumerate() {
+                let offset = 4 * index as u32;
+                let value = x87_sub(
+                    x87_load32(e.mem.u32(copy + 0x24 + offset)),
+                    x87_m32(e.mem.u32(camera + 0x8c + offset)),
+                );
+                *slot = x87_store32(value);
+            }
+            let manager = e.call(MANAGER_STATE_00B4F5D0, &args![]).u32();
+            let object = e.mem.u32(manager + 8);
+            if object != 0 {
+                for (index, slot) in moved.iter_mut().enumerate() {
+                    let offset = 4 * index as u32;
+                    let value = x87_add(
+                        x87_load32(e.mem.u32(object + 0x8c + offset)),
+                        x87_m32(*slot),
+                    );
+                    *slot = x87_store32(value);
+                }
+            }
+            for (index, value) in moved.iter().enumerate() {
+                e.mem.set_u32(copy + 0x24 + 4 * index as u32, *value);
+            }
+            let renderer = e.mem.u32(this + 0x18);
+            e.call(RENDERER_CALL_00E6FBB0, &args![renderer, copy, 0u32]);
+        });
+    } else {
+        let renderer = e.mem.u32(this + 0x18);
+        e.call(RENDERER_CALL_00E6FBB0, &args![renderer, world, 0u32]);
+    }
+    let mut eye = [0u32; 3];
+    for (index, slot) in eye.iter_mut().enumerate() {
+        let offset = 4 * index as u32;
+        let value = x87_sub(
+            x87_load32(e.global::<u32>(SUN_POSITION_011FA2A0 + offset)),
+            x87_m32(e.global::<u32>(ORIGIN_011F474C + offset)),
+        );
+        *slot = x87_store32(value);
+    }
+    for (index, value) in eye.iter().enumerate() {
+        e.set_global::<u32>(
+            EYE_POSITION_011FF8C8 + 4 * index as u32,
+            x87_quiet_bits(*value),
+        );
+    }
+    e.set_global::<u32>(EYE_POSITION_011FF8C8 + 0xc, 0);
+    if pass == 5 {
+        let height = x87_load32(e.global::<u32>(SKY_HEIGHT_011FF8A8));
+        let divisor = f64::from_bits(e.global::<u64>(SKY_DIVISOR_01015A40));
+        let z = x87_store32(x87_div(-height, divisor));
+        e.set_global::<u32>(EYE_POSITION_011FF8C8 + 8, z);
+    }
+    let kind = e.mem.u32(property + 0x8c);
+    if kind == 3 {
+        let value = x87_quiet_bits(e.mem.u32(property + 0x84));
+        e.mem.set_u32(this + 0xe8, value);
+        let index = u32::from(e.mem.u16(property + 0x88));
+        let blend = x87_quiet_bits(e.global::<u32>(BLEND_VALUES_011FF8B4 + 4 * index));
+        e.mem.set_u32(this + 0xe4, blend);
+    } else {
+        e.mem.set_u32(this + 0xe8, 0);
+    }
+    if e.global::<u8>(FOG_SWITCH_011F941E) != 0 {
+        let value = x87_quiet_bits(e.global::<u32>(FOG_VALUE_011AD87C));
+        e.mem.set_u32(this + 0xec, value);
+    }
+    let kind = e.mem.u32(property + 0x8c);
+    // The compiler's switch: byte map `00b8a18c` (0 0 1 0 2 0 0 0) over the jump table
+    // `00b8a180`.
+    match kind {
+        0 | 1 | 3 | 5 | 6 | 7 => {
+            for word in 0..4u32 {
+                let value = e.mem.u32(property + 0x60 + 4 * word);
+                e.set_global::<u32>(COLOR_0_011FF910 + 4 * word, value);
+            }
+        }
+        2 => {
+            for word in 0..12u32 {
+                let value = e.global::<u32>(COLORS_011FF8E0 + 4 * word);
+                e.set_global::<u32>(COLOR_0_011FF910 + 4 * word, value);
+            }
+        }
+        _ => {
+            for word in [0u32, 1, 2] {
+                e.set_global::<u32>(COLOR_0_011FF910 + 4 * word, 0);
+            }
+            e.set_global::<u32>(COLOR_0_011FF910 + 0xc, ONE_BITS);
+            for word in [4u32, 5, 6, 8, 9, 10] {
+                e.set_global::<u32>(COLOR_0_011FF910 + 4 * word, 0);
+            }
+        }
+    }
+    for (slot, entry) in [(0x30u32, 0x44u32), (0x34, 0x5c)] {
+        let target = e.mem.u32(this + slot);
+        if target == 0 {
+            continue;
+        }
+        let pass_state = e.global::<u32>(PASS_STATE_0126F74C);
+        let constants = e.mem.u32(pass_state + entry);
+        if constants == 0 {
+            continue;
+        }
+        e.vcall(
+            target,
+            0x78,
+            &args![
+                constants, geometry, word_bc, 0u32, passes, state, 0u32, world, bound, 0u32, 1u32
+            ],
+        );
+    }
+    let kind = e.mem.u32(property + 0x8c);
+    if kind == 0 || kind == 6 {
+        e.call(SET_RENDER_STATE_00B97FF0, &args![6u32, 0u32, 0u32]);
+    }
+    let object = e.mem.u32(state + 0x10);
+    if object != 0 && e.mem.u8(object + 0x18) & 1 != 0 {
+        let holder = e.mem.u32(this + 0x1c);
+        e.vcall(holder, 0x24, &args![object]);
+    }
+}
+
+/// The render-state setter `00b98070` (unit `bsrenderstate_xenon.cpp`, `cdecl`, two words).
+const SET_RENDER_STATE_00B98070: u32 = 0x00b9_8070;
+
+// Translated from 00b8a1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `skyshader.cpp`; vtable `010afe18` slot +0x8c),
+/// `thiscall`, `RET 4` (the property state; `this` is not read). For property kinds (+0x8c of
+/// the state's +0xc) 0 and 6 `00b97ff0(6, 7, 0)`; when the state's +0x10 object has bit 0 of
+/// its byte +0x18, `00b98070(0, 0)`.
+pub fn fn_00b8a1a0(e: &mut Engine, _this: Ptr, state: Ptr) {
+    let state = state.addr();
+    let kind = e.mem.u32(e.mem.u32(state + 0xc) + 0x8c);
+    if kind == 0 || kind == 6 {
+        e.call(SET_RENDER_STATE_00B97FF0, &args![6u32, 7u32, 0u32]);
+    }
+    let object = e.mem.u32(state + 0x10);
+    if object != 0 && e.mem.u8(object + 0x18) & 1 != 0 {
+        e.call(SET_RENDER_STATE_00B98070, &args![0u32, 0u32]);
+    }
+}
+
+// Translated from 00b8a360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (unit `skyshader.cpp`): the scalar deleting destructor (vtable
+/// `010afe18` slot +0), `thiscall`, `RET 4`. Runs the destructor (`00b88670`) and, when bit 0
+/// of the flags is set, frees the 0xf0 bytes (`00aa1460`). Answers `this`.
+pub fn fn_00b8a360(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00b88670(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_00AA1460, &args![this, 0xf0u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00b8_8670, fn_00b88670(Ptr)),
+        entry!(0x00b8_87b0, fn_00b887b0() -> Ptr),
+        entry!(0x00b8_9970, fn_00b89970(Ptr) -> bool),
+        entry!(0x00b8_9cc0, fn_00b89cc0(Ptr, Ptr)),
+        entry!(0x00b8_9d80, fn_00b89d80(Ptr, Ptr)),
+        entry!(0x00b8_a1a0, fn_00b8a1a0(Ptr, Ptr)),
+        entry!(0x00b8_a360, fn_00b8a360(Ptr, u32) -> Ptr),
         entry!(0x00b8_87c0, sky_shader_load_stages_and_passes(Ptr) -> bool),
         entry!(0x00b8_74f0, sky_shader_load_shaders(Ptr)),
         entry!(0x00b8_a1f0, sky_shader_sky_shader(Ptr) -> Ptr),
@@ -1003,5 +1337,291 @@ mod stages_and_passes_tests {
         assert_eq!(e.mem.u32(kept + 0x5c), e.mem.u32(this + 0x98));
         assert_eq!(e.mem.u32(kept + 0x44), e.mem.u32(this + 0xc4));
         assert!(calls(&e, PASS_SET_STAGE).iter().all(|a| a[0] != kept));
+    }
+}
+
+#[cfg(test)]
+mod sky_function_tests {
+    use super::*;
+    use crate::units::bsshader::geometrydecalshader::shader_test_rig::*;
+
+    const SLOTS: u32 = 0x0e00_0000;
+    const VTABLE: u32 = 0x0e80_0000;
+
+    fn vtable(e: &mut Engine, n: u32) -> u32 {
+        let table = VTABLE + n * 0x1000;
+        let targets: Vec<u32> = (0..0x60u32).map(|i| SLOTS + n * 0x1000 + 4 * i).collect();
+        e.put_vtable(table, &targets);
+        table
+    }
+
+    fn slot(n: u32, offset: u32) -> u32 {
+        SLOTS + n * 0x1000 + offset
+    }
+
+    fn noop(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    fn map_globals(e: &mut Engine) {
+        for page in [
+            0x0101_5000u32,
+            0x011a_d000,
+            0x011f_4000,
+            0x011f_9000,
+            0x011f_a000,
+            0x011f_f000,
+            0x0126_f000,
+        ] {
+            e.map(page, 0x1000);
+        }
+    }
+
+    #[test]
+    fn fn_00b88670_drops_the_passes_and_destroys() {
+        let mut e = rig();
+        noop(&mut e, &[VECTOR_DESTRUCT, BS_SHADER_DESTRUCT]);
+        let this = e.mem.alloc(0xf0);
+        let pass = e.mem.alloc(0x70);
+        e.mem.set_u32(pass + 0x64, 1);
+        e.mem.set_u32(this + 0x6c + 4 * 10, pass);
+        let shader = object(&mut e, 1);
+        e.mem.set_u32(this + 0xc4 + 4 * 7, shader);
+        e.call(0x00b8_8670, &args![this]);
+        assert_eq!(e.mem.u32(this), SKY_SHADER_VTABLE_010AFE18);
+        assert_eq!(calls(&e, PASS_DELETE_00E80190), vec![vec![pass]]);
+        assert_eq!(calls(&e, REFERENCE_DELETE), vec![vec![shader]]);
+        assert_eq!(
+            calls(&e, VECTOR_DESTRUCT),
+            vec![
+                vec![this + 0xc4, 4, 8, DESTRUCT_00B66F20],
+                vec![this + 0x98, 4, 0xb, DESTRUCT_00B66F20],
+                vec![this + 0x6c, 4, 0xb, DESTRUCT_00B79930],
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_00b8a360_destroys_and_frees_with_bit_0() {
+        let mut e = rig();
+        noop(
+            &mut e,
+            &[VECTOR_DESTRUCT, BS_SHADER_DESTRUCT, NI_FREE_00AA1460],
+        );
+        let this = e.mem.alloc(0xf0);
+        assert_eq!(e.call(0x00b8_a360, &args![this, 1u32]).u32(), this);
+        assert_eq!(calls(&e, NI_FREE_00AA1460), vec![vec![this, 0xf0]]);
+        e.call(0x00b8_a360, &args![this, 0u32]);
+        assert_eq!(calls(&e, NI_FREE_00AA1460).len(), 1);
+    }
+
+    #[test]
+    fn fn_00b887b0_answers_its_record() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00b8_87b0, &args![]).u32(), RECORD_011FF8D8);
+    }
+
+    #[test]
+    fn fn_00b89970_drops_the_first_pass_and_answers_the_base() {
+        let mut e = rig();
+        e.register(CALL_00BE0870, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0xf0);
+        let pass = e.mem.alloc(0x70);
+        e.mem.set_u32(pass + 0x64, 1);
+        e.mem.set_u32(this + 0x6c, pass);
+        assert!(e.call(0x00b8_9970, &args![this]).bool());
+        assert_eq!(e.mem.u32(this + 0x6c), 0);
+        assert_eq!(calls(&e, PASS_DELETE_00E80190), vec![vec![pass]]);
+    }
+
+    /// The pass state with two constant blocks, a property state whose +0xc property (vtable
+    /// 1) answers 9 from its slot +0xcc.
+    fn texture_rig(pass: u32) -> (Engine, u32, u32, [u32; 2]) {
+        let mut e = rig();
+        map_globals(&mut e);
+        let pass_state = e.mem.alloc(0x60);
+        let table = e.mem.alloc(8);
+        let blocks = [e.mem.alloc(0x10), e.mem.alloc(0x10)];
+        e.mem.set_u32(table, blocks[0]);
+        e.mem.set_u32(table + 4, blocks[1]);
+        e.mem.set_u32(pass_state + 0x24, table);
+        e.set_global(PASS_STATE_0126F74C, pass_state);
+        e.set_global(CURRENT_PASS_011F91E4, pass);
+        let property = e.mem.alloc(0x90);
+        let table1 = vtable(&mut e, 1);
+        e.mem.set_u32(property, table1);
+        e.register(slot(1, 0xcc), |_, _| 9u32.into_ret());
+        noop(&mut e, &[STAGE_CALL_00E7DE90, STAGE_CALL_00E7EB00]);
+        let state = e.mem.alloc(0x14);
+        e.mem.set_u32(state + 0xc, property);
+        (e, state, property, blocks)
+    }
+
+    #[test]
+    fn fn_00b89cc0_sets_the_sky_textures() {
+        let (mut e, state, property, blocks) = texture_rig(0x10);
+        e.mem.set_u32(property + 0x70, 0x7070);
+        e.mem.set_u32(property + 0x80, 0x8080);
+        e.call(0x00b8_9cc0, &args![0u32, state]);
+        assert_eq!(e.mem.u32(blocks[0] + 8), 0x7070);
+        assert_eq!(e.mem.u32(blocks[1] + 8), 0x8080);
+        assert_eq!(
+            calls(&e, STAGE_CALL_00E7DE90),
+            vec![vec![blocks[0], 9], vec![blocks[1], 9]]
+        );
+        assert_eq!(
+            calls(&e, STAGE_CALL_00E7EB00),
+            vec![vec![blocks[0], 0], vec![blocks[1], 0]]
+        );
+        // No +0x80 texture: the +0x70 one is used again only on the listed passes.
+        let (mut e, state, property, blocks) = texture_rig(0x23d);
+        e.mem.set_u32(property + 0x70, 0x7070);
+        e.call(0x00b8_9cc0, &args![0u32, state]);
+        assert_eq!(e.mem.u32(blocks[1] + 8), 0x7070);
+        let (mut e, state, property, blocks) = texture_rig(0x23b);
+        e.mem.set_u32(property + 0x70, 0x7070);
+        e.call(0x00b8_9cc0, &args![0u32, state]);
+        assert_eq!(e.mem.u32(blocks[1] + 8), 0);
+        assert_eq!(calls(&e, STAGE_CALL_00E7DE90).len(), 1);
+    }
+
+    /// A rig for `00b89d80`: the record's geometry, a shader manager state, a camera and the
+    /// sky property of `kind`.
+    fn draw_rig(kind: u32, moved: u8) -> (Engine, u32, u32, u32, u32) {
+        let mut e = rig();
+        map_globals(&mut e);
+        let this = e.mem.alloc(0xf0);
+        e.mem.set_u32(this + 0x18, 0x1818);
+        let record = e.mem.alloc(0x10);
+        let geometry = e.mem.alloc(0xc0);
+        let passes = e.mem.alloc(0x38);
+        e.mem.set_u32(passes + 0x34, 3);
+        e.mem.set_u32(geometry + 0xb8, passes);
+        e.mem.set_u32(geometry + 0xbc, 0xbcbc);
+        for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
+            e.mem.set_f32(geometry + 0x8c + 4 * i as u32, *v);
+        }
+        e.mem.set_u32(record, geometry);
+        e.set_global(CURRENT_RECORD_011F91E0, record);
+        let manager = e.mem.alloc(0x168);
+        e.mem.set_u8(manager + 0x164, moved);
+        e.register_double(MANAGER_STATE_00B4F5D0, move |_, _| manager.into_ret());
+        let camera = e.mem.alloc(0x98);
+        for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(camera + 0x8c + 4 * i as u32, *v);
+        }
+        e.set_global(CAMERA_011F95D8, camera);
+        for (i, v) in [5.0f32, 6.0, 7.0].iter().enumerate() {
+            e.set_global(SUN_POSITION_011FA2A0 + 4 * i as u32, *v);
+            e.set_global(ORIGIN_011F474C + 4 * i as u32, 1.0f32);
+        }
+        let property = e.mem.alloc(0x90);
+        e.mem.set_u32(property + 0x8c, kind);
+        e.mem.set_f32(property + 0x84, 0.5);
+        e.mem.set_u16(property + 0x88, 1);
+        for i in 0..4u32 {
+            e.mem.set_u32(property + 0x60 + 4 * i, 0x600 + i);
+        }
+        e.set_global(BLEND_VALUES_011FF8B4 + 4, 0.25f32);
+        let state = e.mem.alloc(0x14);
+        e.mem.set_u32(state + 0xc, property);
+        let pass_state = e.mem.alloc(0x60);
+        e.set_global(PASS_STATE_0126F74C, pass_state);
+        noop(&mut e, &[RENDERER_CALL_00E6FBB0, SET_RENDER_STATE_00B97FF0]);
+        (e, this, state, geometry, property)
+    }
+
+    #[test]
+    fn fn_00b89d80_moves_the_world_by_the_camera_and_sets_the_colours() {
+        let (mut e, this, state, geometry, _) = draw_rig(3, 1);
+        e.register(RENDERER_CALL_00E6FBB0, |e, a| {
+            // The copy's translation: world minus the camera.
+            let moved: Vec<f32> = (0..3).map(|i| e.mem.f32(a[1] + 0x24 + 4 * i)).collect();
+            assert_eq!(moved, vec![9.0, 18.0, 27.0]);
+            Ret::default()
+        });
+        e.call(0x00b8_9d80, &args![this, state]);
+        let call = calls(&e, RENDERER_CALL_00E6FBB0);
+        assert_ne!(call[0][1], geometry + 0x68);
+        let eye: Vec<f32> = (0..4)
+            .map(|i| e.global::<f32>(EYE_POSITION_011FF8C8 + 4 * i))
+            .collect();
+        assert_eq!(eye, vec![4.0, 5.0, 6.0, 0.0]);
+        assert_eq!(e.mem.f32(this + 0xe8), 0.5);
+        assert_eq!(e.mem.f32(this + 0xe4), 0.25);
+        let colours: Vec<u32> = (0..4)
+            .map(|i| e.global::<u32>(COLOR_0_011FF910 + 4 * i))
+            .collect();
+        assert_eq!(colours, vec![0x600, 0x601, 0x602, 0x603]);
+        assert!(calls(&e, SET_RENDER_STATE_00B97FF0).is_empty());
+    }
+
+    #[test]
+    fn fn_00b89d80_plain_world_and_the_other_kinds() {
+        let (mut e, this, state, geometry, _) = draw_rig(4, 0);
+        e.set_global(CURRENT_PASS_011F91E4, 5u32);
+        e.set_global(SKY_HEIGHT_011FF8A8, 7.0f32);
+        e.set_global(SKY_DIVISOR_01015A40, 2.0f64);
+        e.set_global(COLOR_0_011FF910 + 0x1c, 0x1234u32);
+        e.mem.set_f32(this + 0xe8, 9.0);
+        e.call(0x00b8_9d80, &args![this, state]);
+        assert_eq!(
+            calls(&e, RENDERER_CALL_00E6FBB0),
+            vec![vec![0x1818, geometry + 0x68, 0]]
+        );
+        assert_eq!(e.global::<f32>(EYE_POSITION_011FF8C8 + 8), -3.5);
+        assert_eq!(e.mem.f32(this + 0xe8), 0.0);
+        let colours: Vec<u32> = (0..12)
+            .map(|i| e.global::<u32>(COLOR_0_011FF910 + 4 * i))
+            .collect();
+        assert_eq!(
+            colours,
+            vec![0, 0, 0, ONE_BITS, 0, 0, 0, 0x1234, 0, 0, 0, 0]
+        );
+        // Kind 2 copies the twelve words; kind 0 sets the render state.
+        let (mut e, this, state, _, _) = draw_rig(2, 0);
+        for i in 0..12u32 {
+            e.set_global(COLORS_011FF8E0 + 4 * i, 0x900 + i);
+        }
+        e.call(0x00b8_9d80, &args![this, state]);
+        assert_eq!(e.global::<u32>(COLOR_0_011FF910 + 0x2c), 0x90b);
+        let (mut e, this, state, _, _) = draw_rig(0, 0);
+        let holder = e.mem.alloc(8);
+        let table = vtable(&mut e, 2);
+        e.mem.set_u32(holder, table);
+        e.mem.set_u32(this + 0x1c, holder);
+        noop(&mut e, &[slot(2, 0x24)]);
+        let object = e.mem.alloc(0x1c);
+        e.mem.set_u8(object + 0x18, 1);
+        e.mem.set_u32(state + 0x10, object);
+        e.call(0x00b8_9d80, &args![this, state]);
+        assert_eq!(calls(&e, SET_RENDER_STATE_00B97FF0), vec![vec![6, 0, 0]]);
+        assert_eq!(calls(&e, slot(2, 0x24)), vec![vec![holder, object]]);
+    }
+
+    #[test]
+    fn fn_00b8a1a0_sets_the_render_states() {
+        let mut e = rig();
+        noop(
+            &mut e,
+            &[SET_RENDER_STATE_00B97FF0, SET_RENDER_STATE_00B98070],
+        );
+        let property = e.mem.alloc(0x90);
+        let state = e.mem.alloc(0x14);
+        e.mem.set_u32(state + 0xc, property);
+        e.mem.set_u32(property + 0x8c, 6);
+        let object = e.mem.alloc(0x1c);
+        e.mem.set_u8(object + 0x18, 3);
+        e.mem.set_u32(state + 0x10, object);
+        e.call(0x00b8_a1a0, &args![0u32, state]);
+        assert_eq!(calls(&e, SET_RENDER_STATE_00B97FF0), vec![vec![6, 7, 0]]);
+        assert_eq!(calls(&e, SET_RENDER_STATE_00B98070), vec![vec![0, 0]]);
+        e.mem.set_u32(property + 0x8c, 1);
+        e.mem.set_u8(object + 0x18, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x00b8_a1a0, &args![0u32, state]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
     }
 }

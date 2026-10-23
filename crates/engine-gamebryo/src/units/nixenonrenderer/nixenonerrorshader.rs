@@ -59,12 +59,39 @@ pub fn ni_d3d_shader_constant_map_ni_d3d_shader_constant_map(
     this
 }
 
+/// The map's destructor `00e87690` (unit `nid3dshaderconstantmap.cpp`, unnamed; `thiscall`) and
+/// the sized free `00aa1460` (`cdecl`: block, size).
+const CONSTANT_MAP_DESTRUCT_00E87690: u32 = 0x00e8_7690;
+const NI_FREE_SIZED_00AA1460: u32 = 0x00aa_1460;
+
+// Translated from 00b7e410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiD3DShaderConstantMap::_scalar_deleting_destructor_` (engine map), `thiscall` with one
+/// stack word (the flags): runs the destructor `00e87690`; with bit 0 set, frees the 0x44 bytes
+/// (`00aa1460`). Answers `this`.
+pub fn ni_d3d_shader_constant_map_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(CONSTANT_MAP_DESTRUCT_00E87690, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_FREE_SIZED_00AA1460, &args![this, 0x44u32]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00b7_e330,
-        ni_d3d_shader_constant_map_ni_d3d_shader_constant_map(Ptr, Ptr, u32) -> Ptr
-    )]
+    vec![
+        entry!(
+            0x00b7_e330,
+            ni_d3d_shader_constant_map_ni_d3d_shader_constant_map(Ptr, Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00b7_e410,
+            ni_d3d_shader_constant_map_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -107,6 +134,37 @@ mod tests {
                 (BASE_CONSTRUCT_00A9BE80, vec![this, 3]),
                 (SET_RENDERER_00E81D00, vec![this, 0x0e50_0000]),
                 (ARRAY_INITIALIZE_00B799C0, vec![this + 0xc]),
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod b056_tests {
+    use super::*;
+
+    #[test]
+    fn constant_map_scalar_deleting_destructor_frees_with_bit_0() {
+        let mut e = Engine::new();
+        e.register(CONSTANT_MAP_DESTRUCT_00E87690, |_, _| Ret::default());
+        e.register(NI_FREE_SIZED_00AA1460, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        let this = e.mem.alloc(0x44);
+        assert_eq!(e.call(0x00b7_e410, &args![this, 3u32]).u32(), this);
+        e.call(0x00b7_e410, &args![this, 2u32]);
+        let log: Vec<(u32, Vec<u32>)> = e
+            .call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(addr, _)| *addr != 0x00b7_e410)
+            .collect();
+        assert_eq!(
+            log,
+            vec![
+                (CONSTANT_MAP_DESTRUCT_00E87690, vec![this]),
+                (NI_FREE_SIZED_00AA1460, vec![this, 0x44]),
+                (CONSTANT_MAP_DESTRUCT_00E87690, vec![this]),
             ]
         );
     }

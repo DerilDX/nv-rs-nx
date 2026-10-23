@@ -18,9 +18,53 @@ pub fn fn_0076a3d0(e: &mut Engine, this: Ptr, byte_address: Ptr) -> bool {
         .bool()
 }
 
+/// `1280.0` (`double`, `0106e960`).
+const SCALE_0106E960: u32 = 0x0106_e960;
+/// `004dc1f0` (`renderer.cpp`, no words): the integer at `0118947c` (the screen width
+/// the scale is divided by, by its use here; not confirmed).
+const SCREEN_SIZE_004DC1F0: u32 = 0x004d_c1f0;
+
+// Translated from 007697f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (hacking menu; `thiscall`, plain `RET`, the result in ST0):
+/// the float +0x4ac times 1280.0 (`0106e960`), divided by the integer `004dc1f0`
+/// returns, times the float +0x4d0, rounded to a `float`.
+pub fn fn_007697f0(e: &mut Engine, this: Ptr) -> f64 {
+    let base = this.addr();
+    let scale = f64::from_bits(e.mem.u64(SCALE_0106E960));
+    let scaled = x87_mul(x87_load32(e.mem.u32(base + 0x4ac)), scale);
+    let size = e.call(SCREEN_SIZE_004DC1F0, &args![]).i32();
+    // FDIVR double: the stored product over the integer.
+    let ratio = x87_div(scaled, f64::from(size));
+    let result = x87_store32(x87_mul(ratio, x87_m32(e.mem.u32(base + 0x4d0))));
+    x87_load32(result)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0076_a3d0, fn_0076a3d0(Ptr, Ptr) -> bool)]
+    vec![
+        entry!(0x0076_a3d0, fn_0076a3d0(Ptr, Ptr) -> bool),
+        entry!(0x0076_97f0, fn_007697f0(Ptr) -> f64),
+    ]
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    #[test]
+    fn fn_007697f0_scales_by_1280_over_the_size() {
+        let mut e = Engine::new();
+        e.map(0x0106_e000, 0x1000);
+        e.mem.set_f64(SCALE_0106E960, 1280.0);
+        e.register(SCREEN_SIZE_004DC1F0, |_, _| 640u32.into_ret());
+        let this = e.mem.alloc(0x4d4);
+        e.mem.set_f32(this + 0x4ac, 0.5);
+        e.mem.set_f32(this + 0x4d0, 3.0);
+        assert_eq!(e.call(0x0076_97f0, &[this]).f64(), 3.0);
+        // A negative size divides as a signed integer.
+        e.register(SCREEN_SIZE_004DC1F0, |_, _| (-640i32).into_ret());
+        assert_eq!(e.call(0x0076_97f0, &[this]).f64(), -3.0);
+    }
 }
 
 #[cfg(test)]
