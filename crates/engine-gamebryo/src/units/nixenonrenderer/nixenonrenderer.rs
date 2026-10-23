@@ -7,6 +7,10 @@ use crate::prelude::*;
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00e7_3eb0,
+            fn_00e73eb0(Ptr<NiDX9Renderer>, u32, u32) -> u32
+        ),
         entry!(0x00e7_a9a0, ni_xenon_renderer_get_d3d_format_string(i32) -> u32),
         entry!(0x00e6_9e50, fn_00e69e50(u32) -> u32),
         entry!(0x00e6_c550, fn_00e6c550(Ptr) -> u8),
@@ -9340,5 +9344,151 @@ mod a07_points_tests {
         e.call(0x00e7_0140, &args![s.renderer, s.geometry]);
         assert_eq!(calls(&e, DATA_BASE + 0x90).len(), 1);
         assert!(calls(&e, ADD_OBJECT_TO_GROUP).is_empty());
+    }
+}
+
+/// `_memcpy` (`00ec44d0`, cdecl: destination, source, count).
+const COPY_BYTES_00EC44D0: u32 = 0x00ec_44d0;
+/// `00e736b0` (unnamed, this unit; `thiscall`, no stack words): resets the device with the
+/// presentation parameters, a nonzero byte on success.
+const RESET_DEVICE_00E736B0: u32 = 0x00e7_36b0;
+/// The messages `00e73eb0` gives `00a29680`.
+const RESET_FAILED_010EE398: u32 = 0x010e_e398;
+const RECOVER_FAILED_010EE348: u32 = 0x010e_e348;
+/// The presentation parameters' size (`D3DPRESENT_PARAMETERS`, 0x38 bytes) and their place
+/// in the render target group object (+0x20).
+const PRESENT_PARAMETERS_SIZE: u32 = 0x38;
+const PRESENT_PARAMETERS_OFFSET: u32 = 0x20;
+
+// Translated from 00e73eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`NiDX9Renderer::Recreate` by its messages; `thiscall`, two
+/// words: width and height, `RET 8`). Takes the object at +0x884's virtual +0xB0 (with 0),
+/// keeps its word +0x10 when that derives from the record at `0126f5d8` (`00e69b00`; null
+/// otherwise and when the word is null), and works on the 0x38 bytes at +0x20 of it: saves
+/// them on the stack, sets the first two words to `width` and `height` and resets the
+/// device (`00e736b0`). Answers 2 when that works; otherwise reports
+/// `"NiDX9Renderer::Recreate> Could not reset device ..."` (`00a29680`), puts the saved bytes
+/// back and resets again: 1 when that works, else reports `"... Could not recover original
+/// presentation parameters"` and answers 0.
+pub fn fn_00e73eb0(e: &mut Engine, this: Ptr<NiDX9Renderer>, width: u32, height: u32) -> u32 {
+    let source = e.get(this, NiDX9Renderer::object_884);
+    let group = e.vcall(source, 0xb0, &args![0u32]).u32();
+    let data = e.mem.u32(group.wrapping_add(0x10));
+    let target = if data == 0 {
+        0
+    } else {
+        fn_00e69b00(e, Ptr::new(data), SHADER_RTTI_0126F5D8)
+    };
+    let parameters = target.wrapping_add(PRESENT_PARAMETERS_OFFSET);
+    e.with_stack(PRESENT_PARAMETERS_SIZE, |e, saved| {
+        e.call(
+            COPY_BYTES_00EC44D0,
+            &args![saved, parameters, PRESENT_PARAMETERS_SIZE],
+        );
+        e.mem.set_u32(parameters, width);
+        e.mem.set_u32(parameters.wrapping_add(4), height);
+        if e.call(RESET_DEVICE_00E736B0, &args![this]).bool() {
+            return 2;
+        }
+        e.call(REPORT_00A29680, &args![RESET_FAILED_010EE398]);
+        e.call(
+            COPY_BYTES_00EC44D0,
+            &args![parameters, saved, PRESENT_PARAMETERS_SIZE],
+        );
+        if e.call(RESET_DEVICE_00E736B0, &args![this]).bool() {
+            return 1;
+        }
+        e.call(REPORT_00A29680, &args![RECOVER_FAILED_010EE348]);
+        0
+    })
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    /// A renderer whose +0x884 object answers a group whose +0x10 word is an object of the
+    /// record `0126f5d8`; the reset double answers each of `results` in turn and records
+    /// the width and height it sees. Answers (engine, renderer, parameters address).
+    fn recreate_rig(results: Vec<u32>) -> (Engine, Ptr<NiDX9Renderer>, u32) {
+        let mut e = Engine::new();
+        let this: Ptr<NiDX9Renderer> = e.new_object();
+        let source = e.mem.alloc(4);
+        e.put_vtable(0x0090_1000, &[0; 0x2d]);
+        e.mem.set_u32(0x0090_1000 + 0xb0, 0x0090_00b0);
+        e.mem.set_u32(source, 0x0090_1000);
+        e.set(this, NiDX9Renderer::object_884, source);
+        let group = e.mem.alloc(0x14);
+        let target = e.mem.alloc(0x60);
+        e.mem.set_u32(group + 0x10, target);
+        e.register_double(0x0090_00b0, move |_, a| {
+            assert_eq!(a[1], 0);
+            group.into_ret()
+        });
+        // The target's `GetRTTI` (+0xC) answers the record itself.
+        e.put_vtable(0x0090_2000, &[0, 0, 0, 0x0090_000c]);
+        e.register(0x0090_000c, |_, _| SHADER_RTTI_0126F5D8.into_ret());
+        e.mem.set_u32(target, 0x0090_2000);
+        e.register(COPY_BYTES_00EC44D0, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        e.register(REPORT_00A29680, |_, _| Ret::default());
+        let mut answers = results.into_iter();
+        e.register_double(RESET_DEVICE_00E736B0, move |_, _| {
+            answers.next().unwrap().into_ret()
+        });
+        let parameters = target + 0x20;
+        for i in 0..14u32 {
+            e.mem.set_u32(parameters + 4 * i, 100 + i);
+        }
+        (e, this, parameters)
+    }
+
+    fn reports(e: &Engine) -> Vec<u32> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == REPORT_00A29680)
+            .map(|(_, w)| w[0])
+            .collect()
+    }
+
+    #[test]
+    fn recreate_answers_2_when_the_new_size_resets() {
+        let (mut e, this, parameters) = recreate_rig(vec![0x1234_5601]);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x00e7_3eb0, &args![this, 1920u32, 1080u32]).u32();
+        assert_eq!(result, 2);
+        assert_eq!(e.mem.u32(parameters), 1920);
+        assert_eq!(e.mem.u32(parameters + 4), 1080);
+        assert_eq!(e.mem.u32(parameters + 8), 102);
+        assert!(reports(&e).is_empty());
+    }
+
+    #[test]
+    fn recreate_answers_1_when_the_old_parameters_reset() {
+        let (mut e, this, parameters) = recreate_rig(vec![0x1234_5600, 1]);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x00e7_3eb0, &args![this, 1920u32, 1080u32]).u32();
+        assert_eq!(result, 1);
+        // The saved parameters are back.
+        assert_eq!(e.mem.u32(parameters), 100);
+        assert_eq!(e.mem.u32(parameters + 4), 101);
+        assert_eq!(reports(&e), vec![RESET_FAILED_010EE398]);
+    }
+
+    #[test]
+    fn recreate_answers_0_when_neither_resets() {
+        let (mut e, this, _) = recreate_rig(vec![0, 0]);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x00e7_3eb0, &args![this, 1920u32, 1080u32]).u32();
+        assert_eq!(result, 0);
+        assert_eq!(
+            reports(&e),
+            vec![RESET_FAILED_010EE398, RECOVER_FAILED_010EE348]
+        );
     }
 }

@@ -305,9 +305,29 @@ pub fn fn_0084d310(e: &mut Engine, this: Ptr, key: u32, value: u8) {
     e.mem.set_u32(map + 0xc, count.wrapping_add(1));
 }
 
+/// `0084c2a0` (this unit; `cdecl`: first type, end type, flag): reverts the global data
+/// types from `first` below `end` (`RevertGlobalDataRange` with a stack load buffer).
+const REVERT_GLOBAL_DATA_TYPES: u32 = 0x0084_c2a0;
+
+// Translated from 0084c270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word): reverts the global data types 0 to 0xB
+/// and 0x3E8 (`0084c2a0(0, 0xC, flag)`, then `0084c2a0(1000, 1001, flag)`), the flag
+/// passed zero-extended from its low byte.
+pub fn fn_0084c270(e: &mut Engine, flag: u8) {
+    e.call(
+        REVERT_GLOBAL_DATA_TYPES,
+        &args![0u32, 0xcu32, u32::from(flag)],
+    );
+    e.call(
+        REVERT_GLOBAL_DATA_TYPES,
+        &args![0x3e8u32, 0x3e9u32, u32::from(flag)],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0084_c270, fn_0084c270(u8)),
         entry!(0x0084d030, fn_0084d030(Ptr) -> f64),
         entry!(
             0x0084_bcd0,
@@ -645,5 +665,25 @@ mod save_tests {
         e.call(0x0084_d310, &args![map, 5u32, 0x109u32]);
         assert_eq!(e.mem.u8(second + 8), 9);
         assert_eq!(e.mem.u32(map + 0xc), 2);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0084c270_reverts_both_ranges() {
+        let mut e = Engine::new();
+        e.register(REVERT_GLOBAL_DATA_TYPES, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0084_c270, &args![0xff01u32]);
+        let log = e.call_log.take().unwrap();
+        let ranges: Vec<Vec<u32>> = log
+            .iter()
+            .filter(|(a, _)| *a == REVERT_GLOBAL_DATA_TYPES)
+            .map(|(_, w)| w.clone())
+            .collect();
+        assert_eq!(ranges, vec![vec![0, 0xc, 1], vec![0x3e8, 0x3e9, 1]]);
     }
 }

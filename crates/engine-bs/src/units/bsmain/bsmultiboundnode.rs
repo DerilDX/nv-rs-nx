@@ -65,9 +65,63 @@ pub fn bs_multi_bound_node_bs_multi_bound_node(e: &mut Engine, this: Ptr) -> Ptr
     this
 }
 
+/// `NiFrustumPlanes::NiFrustumPlanes` (engine map, `0045c620`; `thiscall`, no stack words)
+/// and the size of the planes the code keeps on its stack (`EBP-0x70`).
+const FRUSTUM_PLANES_CONSTRUCT: u32 = 0x0045_c620;
+const FRUSTUM_PLANES_SIZE: u32 = 0x6c;
+/// `BSOcclusionPlane::GetFrustumPlanes` (engine map, `00c33870`; `thiscall` on the occluder,
+/// four words: a point by value and the planes; `RET 0x10`).
+const OCCLUSION_PLANE_GET_FRUSTUM_PLANES: u32 = 0x00c3_3870;
+
+// Translated from 00c47150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSMultiBoundNode::VisibleAgainstActiveOccluders` (engine map; `thiscall`, five words: a
+/// point by value (x, y, z), the culler and an occluder; `RET 0x14`; the answer in `AL`).
+/// Visible (true) when the culler's mode (`+0x90`) is 3 or 1, or without an occluder.
+/// Otherwise the occluder's frustum planes for the point (`BSOcclusionPlane::
+/// GetFrustumPlanes` into `NiFrustumPlanes` on the stack) go to the multi-bound's shape
+/// (`spMultiBound` +0xC) vtable +0xA0: when that answers true the shape's state (+8)
+/// becomes 2 and the answer is false (occluded), else true.
+#[allow(clippy::too_many_arguments)]
+pub fn bs_multi_bound_node_visible_against_active_occluders(
+    e: &mut Engine,
+    this: Ptr,
+    x: u32,
+    y: u32,
+    z: u32,
+    culler: Ptr,
+    occluder: Ptr,
+) -> bool {
+    let mode = e.mem.u32(culler.addr() + 0x90);
+    if mode == 3 || e.mem.u32(culler.addr() + 0x90) == 1 {
+        return true;
+    }
+    if occluder.is_null() {
+        return true;
+    }
+    e.with_stack(FRUSTUM_PLANES_SIZE, |e, planes| {
+        e.call(FRUSTUM_PLANES_CONSTRUCT, &args![planes]);
+        e.call(
+            OCCLUSION_PLANE_GET_FRUSTUM_PLANES,
+            &args![occluder, x, y, z, planes],
+        );
+        let shape = e.mem.u32(e.mem.u32(this.addr() + MULTI_BOUND) + 0xc);
+        if e.vcall(shape, 0xa0, &args![planes]).bool() {
+            let shape = e.mem.u32(e.mem.u32(this.addr() + MULTI_BOUND) + 0xc);
+            e.mem.set_u32(shape + 8, 2);
+            false
+        } else {
+            true
+        }
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00c4_7150,
+            bs_multi_bound_node_visible_against_active_occluders(Ptr, u32, u32, u32, Ptr, Ptr) -> bool
+        ),
         entry!(0x00c4_6970, bs_multi_bound_node_bs_multi_bound_node(Ptr) -> Ptr),
         entry!(0x00c4_7650, fn_00c47650(Ptr) -> u32),
         entry!(0x00c4_7610, bs_multi_bound_node_scalar_deleting_destructor(Ptr, u32) -> Ptr),
@@ -606,5 +660,93 @@ mod b012_tests {
         e.mem.set_u32(lonely + 0x30, 0x8_0000);
         e.call(0x00c4_7250, &args![lonely]);
         assert_eq!(e.mem.f32(world + 0xc), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    /// The shape's test slot (vtable +0xA0) as the test places it.
+    const SHAPE_TEST: u32 = 0x0090_00a0;
+
+    fn rig(occluded: u32) -> (Engine, u32, u32, u32) {
+        let mut e = Engine::new();
+        e.register(FRUSTUM_PLANES_CONSTRUCT, |_, _| Ret::default());
+        e.register(OCCLUSION_PLANE_GET_FRUSTUM_PLANES, |_, _| Ret::default());
+        e.register_double(SHAPE_TEST, move |_, _| occluded.into_ret());
+        let mut slots = [0u32; 0x29];
+        slots[0x28] = SHAPE_TEST;
+        e.put_vtable(0x0090_1000, &slots);
+        let shape = e.mem.alloc(0x10);
+        e.mem.set_u32(shape, 0x0090_1000);
+        let bound = e.mem.alloc(0x10);
+        e.mem.set_u32(bound + 0xc, shape);
+        let node = e.mem.alloc(0xb4);
+        e.mem.set_u32(node + MULTI_BOUND, bound);
+        let culler = e.mem.alloc(0x94);
+        (e, node, culler, shape)
+    }
+
+    #[test]
+    fn modes_3_and_1_and_no_occluder_are_visible() {
+        let (mut e, node, culler, _) = rig(1);
+        for mode in [3u32, 1] {
+            e.mem.set_u32(culler + 0x90, mode);
+            let visible = e
+                .call(
+                    0x00c4_7150,
+                    &args![node, 1u32, 2u32, 3u32, culler, 0x7000u32],
+                )
+                .bool();
+            assert!(visible);
+        }
+        e.mem.set_u32(culler + 0x90, 0);
+        e.call_log = Some(vec![]);
+        let visible = e
+            .call(0x00c4_7150, &args![node, 1u32, 2u32, 3u32, culler, 0u32])
+            .bool();
+        assert!(visible);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_occluded_shape_is_marked_and_not_visible() {
+        let (mut e, node, culler, shape) = rig(0x1234_5601);
+        e.call_log = Some(vec![]);
+        let visible = e
+            .call(
+                0x00c4_7150,
+                &args![node, 1u32, 2u32, 3u32, culler, 0x7000u32],
+            )
+            .bool();
+        assert!(!visible);
+        assert_eq!(e.mem.u32(shape + 8), 2);
+        let log = e.call_log.take().unwrap();
+        let planes = log
+            .iter()
+            .find(|(a, _)| *a == FRUSTUM_PLANES_CONSTRUCT)
+            .unwrap()
+            .1[0];
+        let get = log
+            .iter()
+            .find(|(a, _)| *a == OCCLUSION_PLANE_GET_FRUSTUM_PLANES)
+            .unwrap();
+        assert_eq!(get.1, vec![0x7000, 1, 2, 3, planes]);
+        let test = log.iter().find(|(a, _)| *a == SHAPE_TEST).unwrap();
+        assert_eq!(test.1, vec![shape, planes]);
+    }
+
+    #[test]
+    fn an_unoccluded_shape_is_visible() {
+        let (mut e, node, culler, shape) = rig(0x100);
+        let visible = e
+            .call(
+                0x00c4_7150,
+                &args![node, 1u32, 2u32, 3u32, culler, 0x7000u32],
+            )
+            .bool();
+        assert!(visible);
+        assert_eq!(e.mem.u32(shape + 8), 0);
     }
 }

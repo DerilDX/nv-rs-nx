@@ -201,16 +201,20 @@ pub fn fn_00d2f380(e: &mut Engine, this: Ptr) {
 // Translated from 00d2f3d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkpSymmetricAgentLinearCast<hkpMoppAgent>::updateShapeCollectionFilter` (Xbox PDB), `RET
 /// 0x10`: `hkpBvTreeAgent::updateShapeCollectionFilter` with the first two words swapped.
-/// Virtual method: the first word is `this` (`ECX` in the exe), which the body never reads.
+/// Virtual method: the first word is `this` (`ECX` in the exe). The body leaves `ECX`
+/// unchanged, so the `thiscall` callee runs on this same object.
 pub fn hkp_symmetric_agent_linear_cast_mopp_agent_update_shape_collection_filter(
     e: &mut Engine,
-    _this: u32,
+    this: u32,
     first: u32,
     second: u32,
     third: u32,
     fourth: u32,
 ) {
-    e.call(BV_TREE_UPDATE_FILTER, &args![second, first, third, fourth]);
+    e.call(
+        BV_TREE_UPDATE_FILTER,
+        &args![this, second, first, third, fourth],
+    );
 }
 
 // Translated from 00d2f3f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -626,7 +630,7 @@ mod a06_tests {
         let log: Log = Rc::default();
         log_double(&mut e, BV_TREE_UPDATE_FILTER, &log, 1);
         e.call(0x00d2f3d0, &args![VCALL_THIS, 1u32, 2u32, 3u32, 4u32]);
-        assert_eq!(*log.borrow(), vec![vec![1, 2, 1, 3, 4]]);
+        assert_eq!(*log.borrow(), vec![vec![1, VCALL_THIS, 2, 1, 3, 4]]);
     }
 
     #[test]

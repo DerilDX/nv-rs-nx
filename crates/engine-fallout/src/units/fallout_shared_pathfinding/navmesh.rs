@@ -2170,10 +2170,13 @@ pub fn fn_00691870(e: &mut Engine, _this: Ptr<BSSimpleArray>, count: u32) -> Ptr
 }
 
 // Translated from 006918a0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Frees the storage of `count` `unsigned short` elements at `block` (the
-/// sized deallocation `0042f5d0` with `count * 2`). `this` is not used.
-pub fn fn_006918a0(e: &mut Engine, _this: Ptr<BSSimpleArray>, block: Ptr, count: u32) {
-    e.call(DEALLOCATE_SIZED, &args![block, count.wrapping_shl(1)]);
+/// The array's `_Reallocate` (its vtable slot `+0xC`; `BSSimpleArray`'s
+/// `_Reallocate` in the Xbox PDB) for `unsigned short` elements: `0042f5d0`
+/// with `block` and `count * 2`, answering the block it gives (the exe ends
+/// on that call and leaves its `EAX`). `this` is not used.
+pub fn fn_006918a0(e: &mut Engine, _this: Ptr<BSSimpleArray>, block: Ptr, count: u32) -> u32 {
+    e.call(DEALLOCATE_SIZED, &args![block, count.wrapping_shl(1)])
+        .u32()
 }
 
 // Translated from 006918c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2828,7 +2831,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00691800, fn_00691800(Ptr<BSSimpleArray>)),
         entry!(0x00691820, fn_00691820(Ptr<BSSimpleArray>, Ptr) -> u32),
         entry!(0x00691870, fn_00691870(Ptr<BSSimpleArray>, u32) -> Ptr),
-        entry!(0x006918a0, fn_006918a0(Ptr<BSSimpleArray>, Ptr, u32)),
+        entry!(0x006918a0, fn_006918a0(Ptr<BSSimpleArray>, Ptr, u32) -> u32),
         entry!(
             0x006918c0,
             fn_006918c0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
@@ -5340,5 +5343,17 @@ mod tests {
         // Nothing: no allocation.
         e.call(0x0069_2740, &args![array, 0u32, 0u32]);
         assert_eq!(e.mem.u32(array.addr() + 4), 0);
+    }
+
+    #[test]
+    fn u16_array_reallocation_answers_the_new_block() {
+        let mut e = Engine::new();
+        e.register(DEALLOCATE_SIZED, |_, a| result(a[0] + a[1]));
+        let array: Ptr<BSSimpleArray> = Ptr::new(0x100);
+        assert_eq!(
+            e.call(0x0069_18a0, &args![array, Ptr::<()>::new(0x400), 10u32])
+                .u32(),
+            0x414
+        );
     }
 }

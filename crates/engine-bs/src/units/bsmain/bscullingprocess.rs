@@ -258,11 +258,16 @@ pub fn fn_00c4f2d0(e: &mut Engine, this: Ptr<BSCullingProcess>) {
 }
 
 // Translated from 00c4f320 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `BSCullingProcess::AddShared` (Xbox PDB): hands `object` to the
-/// accumulator's virtual slot +0x9C.
-pub fn bs_culling_process_add_shared(e: &mut Engine, this: Ptr<BSCullingProcess>, object: u32) {
+/// `BSCullingProcess::AddShared` (Xbox PDB; `bool` there): hands `object` to
+/// the accumulator's virtual slot +0x9C and answers its value (the exe ends on
+/// that call and leaves its `EAX`; the callers test `AL`).
+pub fn bs_culling_process_add_shared(
+    e: &mut Engine,
+    this: Ptr<BSCullingProcess>,
+    object: u32,
+) -> bool {
     let accumulator = e.get(this, BSCullingProcess::spAccumulator);
-    e.vcall(accumulator, 0x9c, &args![object]);
+    e.vcall(accumulator, 0x9c, &args![object]).bool()
 }
 
 /// This unit's translated functions, by exe address.
@@ -284,7 +289,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c4f2d0, fn_00c4f2d0(Ptr<BSCullingProcess>)),
         entry!(
             0x00c4f320,
-            bs_culling_process_add_shared(Ptr<BSCullingProcess>, u32)
+            bs_culling_process_add_shared(Ptr<BSCullingProcess>, u32) -> bool
         ),
     ]
 }
@@ -574,5 +579,19 @@ mod tests {
         e.call(0x00c4_f320, &args![this, 0x55u32]);
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1], (0x0050_009c, vec![accumulator, 0x55]));
+    }
+
+    #[test]
+    fn add_shared_answers_the_accumulators_value() {
+        let mut e = Engine::new();
+        let mut table = vec![0u32; 0x28];
+        table[0x9c / 4] = 0x0050_009c;
+        e.put_vtable(0x0090_0000, &table);
+        e.register(0x0050_009c, |_, _| true.into_ret());
+        let this: Ptr<BSCullingProcess> = e.new_object();
+        let accumulator = e.mem.alloc(8);
+        e.mem.set_u32(accumulator, 0x0090_0000);
+        e.set(this, BSCullingProcess::spAccumulator, accumulator);
+        assert!(e.call(0x00c4_f320, &args![this, 0x55u32]).bool());
     }
 }

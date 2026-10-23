@@ -816,8 +816,10 @@ pub fn fn_008509a0(e: &mut Engine, this: Ptr<BGSSaveLoadManager>) {
 }
 
 // Translated from 008509f0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Quick load: shows the "quick loading" notice and loads `quicksave`.
-pub fn fn_008509f0(e: &mut Engine, this: Ptr<BGSSaveLoadManager>) {
+/// Quick load: shows the "quick loading" notice and loads `quicksave`,
+/// answering whether the load succeeded (the exe ends on the `00850760` call
+/// and leaves its `EAX`; the caller tests `AL`).
+pub fn fn_008509f0(e: &mut Engine, this: Ptr<BGSSaveLoadManager>) -> bool {
     show_notice(
         e,
         SETTING_VALUE,
@@ -825,7 +827,7 @@ pub fn fn_008509f0(e: &mut Engine, this: Ptr<BGSSaveLoadManager>) {
         ICON_NEUTRAL,
         0,
     );
-    fn_00850760(e, this, Ptr::new(QUICKSAVE_NAME), u32::MAX, false, 1);
+    fn_00850760(e, this, Ptr::new(QUICKSAVE_NAME), u32::MAX, false, 1)
 }
 
 /// Hands the frame time (`00453850`, in ST0) to `Sky::Update`, running on the
@@ -2032,7 +2034,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_00850760(Ptr<BGSSaveLoadManager>, Ptr, u32, bool, u8) -> bool
         ),
         entry!(0x008509a0, fn_008509a0(Ptr<BGSSaveLoadManager>)),
-        entry!(0x008509f0, fn_008509f0(Ptr<BGSSaveLoadManager>)),
+        entry!(0x008509f0, fn_008509f0(Ptr<BGSSaveLoadManager>) -> bool),
         entry!(0x00850a40, fn_00850a40(Ptr<BGSSaveLoadManager>)),
         entry!(0x00850a90, fn_00850a90(Ptr<BGSSaveLoadManager>)),
         entry!(0x00850b40, fn_00850b40(Ptr)),
@@ -4823,5 +4825,13 @@ mod tests {
         assert_eq!(log.destructs, 1);
         assert_eq!(log.guard_sets, vec![0, 7, 0xdead]);
         assert!(e.get(manager, BGSSaveLoadManager::pSaveLoadFile).is_null());
+    }
+
+    #[test]
+    fn quick_load_answers_the_loads_result() {
+        let mut e = engine();
+        let rig = rig(&mut e);
+        let _loads = load_rig(&mut e, &rig);
+        assert!(e.call(0x0085_09f0, &args![rig.manager]).bool());
     }
 }

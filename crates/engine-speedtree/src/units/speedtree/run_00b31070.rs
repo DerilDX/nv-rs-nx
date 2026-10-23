@@ -313,7 +313,9 @@ pub fn fn_00b31070(e: &mut Engine, this: Ptr<CIndexedGeometry>, texture: u8, rec
 /// element count): constructs the proxy (`00b326e0`) and fills the vector with `count` copies
 /// of a zero word (`00b32600`). Returns `this`.
 pub fn fn_00b311b0(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
-    e.call(PROXY_CONSTRUCT, &args![this]);
+    // `PUSH ECX` reserves the proxy constructor's by-value allocator word (`00b326e0` ends
+    // with `RET 4`); the word the push leaves there is `ECX`, `this`.
+    e.call(PROXY_CONSTRUCT, &args![this, this]);
     e.with_stack(4, |e, value| {
         e.mem.set_u32(value.addr(), 0);
         e.call(CONSTRUCT_FILLED, &args![this, count, value]);
@@ -635,7 +637,7 @@ mod tests {
                 .u32(),
             this
         );
-        assert_eq!(*built.borrow(), vec![vec![this]]);
+        assert_eq!(*built.borrow(), vec![vec![this, this]]);
         assert_eq!(*filled.borrow(), vec![(this, 7, 0)]);
         assert!(proxies.borrow().is_empty());
         // 00b31350 and 00b31ad0: a proxy, a default element at a local, the fill, the destroy

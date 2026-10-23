@@ -231,6 +231,42 @@ pub fn fn_0058da10(e: &mut Engine, this: Ptr) {
     e.call(SET_FORM_FLAG_8, &args![this, 1u32]);
 }
 
+/// `TESForm::StartForm` and `TESForm::CloseForm` (`004855a0`, `00485680`, `thiscall`).
+const FORM_START_FORM: u32 = 0x0048_55a0;
+const FORM_CLOSE_FORM: u32 = 0x0048_5680;
+/// `0084e3a0` (`ECX` = form): the word at +0xC (`TESForm::iFormID`).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `TESForm::AddChunkArray` (`00485710`, engine map `_ov2`; `cdecl`: chunk signature,
+/// address of the words, count).
+const ADD_CHUNK_ARRAY: u32 = 0x0048_5710;
+/// The manager's default objects (`TESForm*`, `OBJECT_COUNT` of them) from +0x18.
+const OBJECTS_OFFSET: u32 = 0x18;
+
+// Translated from 0058d870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the default object manager (`thiscall`, no stack word; unnamed in the engine
+/// map): starts the form record, gathers the form ids of its 0x22 default objects (0 for an
+/// empty slot) in a stack array and saves them as a `DATA` array chunk (`00485710`), then
+/// closes the record.
+pub fn fn_0058d870(e: &mut Engine, this: Ptr) {
+    e.call(FORM_START_FORM, &args![this]);
+    e.with_stack(OBJECT_COUNT * 4, |e, ids| {
+        let mut index: i32 = 0;
+        while index < OBJECT_COUNT as i32 {
+            let offset = index as u32 * 4;
+            let object = e.mem.u32(this.addr() + OBJECTS_OFFSET + offset);
+            let id = if object != 0 {
+                e.call(FORM_ID, &args![object]).u32()
+            } else {
+                0
+            };
+            e.mem.set_u32(ids.addr() + offset, id);
+            index += 1;
+        }
+        e.call(ADD_CHUNK_ARRAY, &args![CHUNK_DATA, ids, OBJECT_COUNT]);
+    });
+    e.call(FORM_CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -243,6 +279,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0058_da10, fn_0058da10(Ptr)),
         entry!(0x0058_db10, bgs_default_object_manager_get_default_object(u32) -> u32),
         entry!(0x0058_d7f0, fn_0058d7f0(Ptr, u32) -> Ptr),
+        entry!(0x0058_d870, fn_0058d870(Ptr)),
     ]
 }
 
@@ -528,5 +565,43 @@ mod manager_tests {
         e.register(MANAGER_IS_LOADED, |_, _| true.into_ret());
         e.call(0x0058_da10, &args![this]);
         assert_eq!(calls(&e, SET_FORM_FLAG_8).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    #[test]
+    fn save_writes_the_ids_of_every_default_object() {
+        let mut e = Engine::new();
+        e.register(FORM_START_FORM, |_, _| Ret::default());
+        e.register(FORM_CLOSE_FORM, |_, _| Ret::default());
+        e.register(FORM_ID, |_, a| (a[0] | 0x0100_0000).into_ret());
+        e.mem.map(0x0003_4000, OBJECT_COUNT * 4);
+        e.register_double(ADD_CHUNK_ARRAY, |e, a| {
+            for i in 0..a[2] {
+                let id = e.mem.u32(a[1] + i * 4);
+                e.mem.set_u32(0x0003_4000 + i * 4, id);
+            }
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x18 + OBJECT_COUNT * 4);
+        e.mem.set_u32(this + 0x18, 0x500);
+        e.mem.set_u32(this + 0x18 + 0x21 * 4, 0x600);
+        for i in 0..OBJECT_COUNT {
+            e.mem.set_u32(0x0003_4000 + i * 4, 0xffff_ffff);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0058_d870, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (FORM_START_FORM, vec![this]));
+        assert_eq!(log.iter().filter(|c| c.0 == FORM_ID).count(), 2);
+        let array = log.iter().find(|c| c.0 == ADD_CHUNK_ARRAY).unwrap();
+        assert_eq!((array.1[0], array.1[2]), (CHUNK_DATA, OBJECT_COUNT));
+        assert_eq!(e.mem.u32(0x0003_4000), 0x0100_0500);
+        assert_eq!(e.mem.u32(0x0003_4004), 0);
+        assert_eq!(e.mem.u32(0x0003_4000 + 0x21 * 4), 0x0100_0600);
+        assert_eq!(log.last().unwrap(), &(FORM_CLOSE_FORM, vec![this]));
     }
 }

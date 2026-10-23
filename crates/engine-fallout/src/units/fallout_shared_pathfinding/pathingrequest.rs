@@ -548,6 +548,403 @@ pub fn fn_006e3de0(e: &mut Engine, this: Ptr, size: u32, used: u32) {
     }
 }
 
+// ---- Batch n032: debug text, creation, loading and the avoid-node array ------
+
+/// `PathingLocation::PrintDebugText` (engine map), `thiscall`, `RET 8`:
+/// (buffer, size).
+const LOCATION_PRINT_DEBUG_TEXT: u32 = 0x006d_e790;
+/// The printer's line output: its vtable slot +0x14, `cdecl` with a
+/// format and its arguments after two words (0, 1).
+const PRINT_SLOT: u32 = 0x14;
+/// The debug text's formats (`Origin: %s`, `Destination: %s`, then
+/// the radii, the flags of the Xbox PDB names, the center, the goal angle,
+/// the heading and `Pathsmoothing retry count: %i`).
+const FORMAT_ORIGIN: u32 = 0x0106_d198;
+const FORMAT_DESTINATION: u32 = 0x0106_d188;
+const FORMAT_ACTOR_RADIUS: u32 = 0x0106_d174;
+const FORMAT_GOAL_Z_DELTA: u32 = 0x0106_d160;
+const FORMAT_TARGET_RADIUS: u32 = 0x0106_d14c;
+const FORMAT_ALLOW_INCOMPLETE_PATH: u32 = 0x0106_d130;
+const FORMAT_CENTER: u32 = 0x0106_d10c;
+const FORMAT_FACE_TARGET_AT_GOAL: u32 = 0x0106_d0f4;
+const FORMAT_GOAL_ANGLE: u32 = 0x0106_d0e4;
+const FORMAT_INITIAL_HEADING: u32 = 0x0106_d0c8;
+const FORMAT_GO_DIRECT_IF_PATHING_FAILS: u32 = 0x0106_d0a0;
+const FORMAT_TRY_CURVED_PATH: u32 = 0x0106_d088;
+const FORMAT_IGNORE_LOCKS: u32 = 0x0106_d074;
+const FORMAT_RETRY_COUNT: u32 = 0x0106_d054;
+/// `"true"` and `"false"`.
+const TEXT_TRUE: u32 = 0x0102_fd2c;
+const TEXT_FALSE: u32 = 0x0102_fd24;
+/// `0.0` (`double`): the center radius compared against.
+const NO_CENTER_RADIUS: u32 = 0x0101_2060;
+/// `00aa13e0` (`cdecl`: size): the allocation the requests use.
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+/// The constructors of the other request kinds (`thiscall`):
+/// `PathingRequestCover` (0xEC bytes), `PathingRequestClosePoint` (0xB8),
+/// `PathingRequestFlee` (0xB4), `PathingRequestHide` (0xDC),
+/// `PathingRequestLOS` (0xD8), `PathingRequestOptimalLocation` (0xC0) and
+/// `PathingRequestCoveredMove` (0x10C).
+const COVER_CONSTRUCT: u32 = 0x006e_4080;
+const CLOSE_POINT_CONSTRUCT: u32 = 0x006e_3f30;
+const FLEE_CONSTRUCT: u32 = 0x006e_5390;
+const HIDE_CONSTRUCT: u32 = 0x006e_5510;
+const LOS_CONSTRUCT: u32 = 0x006e_57e0;
+const OPTIMAL_LOCATION_CONSTRUCT: u32 = 0x006e_5d10;
+const COVERED_MOVE_CONSTRUCT: u32 = 0x006e_4a50;
+/// `005b5e40` (`cdecl`, a format and its arguments): the error print, with
+/// "PATHFINDING: Unknown pathing request type %i" (`0106d1a4`).
+const PRINT_ERROR: u32 = 0x005b_5e40;
+const FORMAT_UNKNOWN_TYPE: u32 = 0x0106_d1a4;
+/// `BGSLoadGameBuffer` raw load (`00864980`, `thiscall`: data, size).
+const LOAD_DATA: u32 = 0x0086_4980;
+/// `BGSLoadGameBuffer::LoadVariableSizedValue` (engine map), `thiscall`.
+const LOAD_VARIABLE_SIZED_VALUE: u32 = 0x0086_4a60;
+/// The load buffer's version (vtable slot 0, a byte) and its actor
+/// (slot +0xC).
+const BUFFER_VERSION_SLOT: u32 = 0x0;
+const BUFFER_ACTOR_SLOT: u32 = 0xc;
+/// `006dadb0` (`thiscall`, `RET 4`): the avoid-node array pointer's
+/// assignment from a pointer.
+const AVOID_POINTER_ASSIGN: u32 = 0x006d_adb0;
+/// `006dc910` (`thiscall`, `RET 4`): an avoid node's load.
+const AVOID_NODE_LOAD: u32 = 0x006d_c910;
+/// `MobileObject::GetCurrentPackage` (engine map), `thiscall`.
+const GET_CURRENT_PACKAGE: u32 = 0x0093_44a0;
+/// `009611e0` (`thiscall`): a package's type.
+const PACKAGE_TYPE: u32 = 0x0096_11e0;
+/// `006780e0` (`thiscall`, `RET 8`): a package's target for an actor
+/// (actor, 0).
+const PACKAGE_TARGET: u32 = 0x0067_80e0;
+/// The global `006e38d0` compares the package's target with.
+const PLAYER_GLOBAL: u32 = 0x011d_ea3c;
+/// `006e3d30` (`thiscall`, `RET 8`): the avoid-node array's buffer
+/// reallocation (new reserved size, element count to keep).
+const AVOID_NODES_REALLOCATE: u32 = 0x006e_3d30;
+/// `0072ba80` (`thiscall`, `RET 8`): destroys `count` elements at an address.
+const AVOID_NODES_DESTROY: u32 = 0x0072_ba80;
+/// `0042f5d0` (`cdecl`: block, size): the reallocation of a block.
+const REALLOCATE: u32 = 0x0042_f5d0;
+/// The game's `operator delete` (`00401030`, `cdecl`).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+
+/// The text of a flag byte.
+fn flag_text(e: &Engine, address: u32) -> u32 {
+    if e.mem.u8(address) != 0 {
+        TEXT_TRUE
+    } else {
+        TEXT_FALSE
+    }
+}
+
+/// `FLD float [address]; FSTP double [ESP]`: a `float` pushed as a `double`.
+fn float_as_double(e: &Engine, address: u32) -> f64 {
+    x87_load32(e.mem.u32(address))
+}
+
+// Translated from 006e2be0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006e2be0 - the /GS stack-cookie check (00ec408c) on return is not translated
+/// `PathingRequest::PrintDebugText` (Xbox PDB): prints the request through
+/// the printer's slot +0x14 (`printer, 0, 1, format, ...`): the origin's
+/// and destination's own text (`PathingLocation::PrintDebugText` into a
+/// 0x100-byte buffer), actor radius, goal z delta and target radius (as
+/// `double`s), `bAllowIncompletePath` (+0x9B), the center and its radius
+/// when the radius is not the constant at `01012060` (NaN included),
+/// `bFaceTargetAtGoal` (+0x99) and the goal angle when it is set, the initial
+/// heading when `bFirstTangentUsesHeading` (+0xA0) is set, `bGoDirectIfPathingFails`, `bTryToUseCurvedPath`, `bIgnoreLocks` (`"true"` /
+/// `"false"`) and the retry count.
+pub fn pathing_request_print_debug_text(e: &mut Engine, this: Ptr, printer: u32) {
+    let base = this.addr();
+    let print = |e: &mut Engine, words: &[u32]| {
+        let mut all = vec![0u32, 1];
+        all.extend_from_slice(words);
+        e.vcall(printer, PRINT_SLOT, &all);
+    };
+    e.with_stack(0x100, |e, text| {
+        e.call(
+            LOCATION_PRINT_DEBUG_TEXT,
+            &args![base + 0xc, text, 0x100u32],
+        );
+        print(e, &args![FORMAT_ORIGIN, text]);
+        e.call(
+            LOCATION_PRINT_DEBUG_TEXT,
+            &args![base + 0x34, text, 0x100u32],
+        );
+        print(e, &args![FORMAT_DESTINATION, text]);
+    });
+    let radius = float_as_double(e, base + 0x68);
+    print(e, &args![FORMAT_ACTOR_RADIUS, radius]);
+    let goal_z = float_as_double(e, base + 0x70);
+    print(e, &args![FORMAT_GOAL_Z_DELTA, goal_z]);
+    let target_radius = float_as_double(e, base + 0x74);
+    print(e, &args![FORMAT_TARGET_RADIUS, target_radius]);
+    let text = flag_text(e, base + 0x9b);
+    print(e, &args![FORMAT_ALLOW_INCOMPLETE_PATH, text]);
+    // FCOMP double; TEST AH,0x44; JNP: skipped only when equal.
+    let no_radius: f64 = e.global(NO_CENTER_RADIUS);
+    if x87_load32(e.mem.u32(base + 0x78)) != no_radius {
+        let center_radius = float_as_double(e, base + 0x78);
+        let z = float_as_double(e, base + 0x84);
+        let y = float_as_double(e, base + 0x80);
+        let x = float_as_double(e, base + 0x7c);
+        print(e, &args![FORMAT_CENTER, x, y, z, center_radius]);
+    }
+    let text = flag_text(e, base + 0x99);
+    print(e, &args![FORMAT_FACE_TARGET_AT_GOAL, text]);
+    if e.mem.u8(base + 0x99) != 0 {
+        let angle = float_as_double(e, base + 0x8c);
+        print(e, &args![FORMAT_GOAL_ANGLE, angle]);
+    }
+    if e.mem.u8(base + 0xa0) != 0 {
+        let heading = float_as_double(e, base + 0x90);
+        print(e, &args![FORMAT_INITIAL_HEADING, heading]);
+    }
+    let text = flag_text(e, base + 0xa1);
+    print(e, &args![FORMAT_GO_DIRECT_IF_PATHING_FAILS, text]);
+    let text = flag_text(e, base + 0xa2);
+    print(e, &args![FORMAT_TRY_CURVED_PATH, text]);
+    let text = flag_text(e, base + 0xa4);
+    print(e, &args![FORMAT_IGNORE_LOCKS, text]);
+    let retries = e.mem.u32(base + 0xa8);
+    print(e, &args![FORMAT_RETRY_COUNT, retries]);
+}
+
+/// A request of one kind: allocated (`00aa13e0`) and constructed, null
+/// when the allocation fails.
+fn new_request(e: &mut Engine, size: u32, construct: impl FnOnce(&mut Engine, Ptr) -> Ptr) -> Ptr {
+    let block = e.call(NI_ALLOCATE, &args![size]).ptr::<()>();
+    if block.is_null() {
+        Ptr::NULL
+    } else {
+        construct(e, block)
+    }
+}
+
+// Translated from 006e2f80 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006e2f80 - the C++ exception frame (FS:[0]) that frees a request whose constructor throws is not translated
+/// `PathingRequest::CreatePathingRequest` (Xbox PDB, `cdecl`): a new
+/// request of `kind` (the exe's jump table at `006e320c`): 0
+/// `PathingRequest`, 1 cover, 2 close point, 3 flee, 4 hide, 5 LOS, 7
+/// optimal location, 8 covered move. Kind 6 and kinds above 8 print
+/// "PATHFINDING: Unknown pathing request type %i" (`005b5e40`) and return
+/// null; so does a failed allocation.
+pub fn pathing_request_create_pathing_request(e: &mut Engine, kind: u32) -> Ptr {
+    let by_address =
+        |address: u32| move |e: &mut Engine, block: Ptr| e.call(address, &args![block]).ptr();
+    match kind {
+        0 => new_request(e, 0xb0, pathing_request_pathing_request),
+        1 => new_request(e, 0xec, by_address(COVER_CONSTRUCT)),
+        2 => new_request(e, 0xb8, by_address(CLOSE_POINT_CONSTRUCT)),
+        3 => new_request(e, 0xb4, by_address(FLEE_CONSTRUCT)),
+        4 => new_request(e, 0xdc, by_address(HIDE_CONSTRUCT)),
+        5 => new_request(e, 0xd8, by_address(LOS_CONSTRUCT)),
+        7 => new_request(e, 0xc0, by_address(OPTIMAL_LOCATION_CONSTRUCT)),
+        8 => new_request(e, 0x10c, by_address(COVERED_MOVE_CONSTRUCT)),
+        // 6 shares the table's default entry.
+        _ => {
+            e.call(PRINT_ERROR, &args![FORMAT_UNKNOWN_TYPE, kind]);
+            Ptr::NULL
+        }
+    }
+}
+
+// Translated from 006e34f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006e34f0 - the C++ exception frame (FS:[0]) that frees an avoid-node array whose constructor throws is not translated
+/// `PathingRequest::LoadGame` (Xbox PDB): the origin and the destination
+/// (their vtable slot +4), then the fields [`pathing_request_save_game`]
+/// saves, those added later only from the buffer version (its vtable slot
+/// 0, a byte) on: `0xD` +0x9F; `0xF` the initial heading, +0xA0, +0xA1;
+/// `0x12` the center, +0xA2 to +0xA4 and the retry count; `0x14` +0x9E;
+/// `0x15` +0xAC. A non-zero avoid-node count makes a new array (0x18
+/// bytes, [`fn_006e3850`], null when the allocation fails) for the
+/// pointer (`006dadb0`), sizes it ([`fn_006e3ad0`], shrinking) and loads
+/// each node (`006dc910`).
+pub fn pathing_request_load_game(e: &mut Engine, this: Ptr, buffer: u32) {
+    let base = this.addr();
+    e.vcall(base + 0xc, 4, &args![buffer]);
+    e.vcall(base + 0x34, 4, &args![buffer]);
+    let load = |e: &mut Engine, offset: u32, size: u32| {
+        e.call(LOAD_DATA, &args![buffer, base + offset, size]);
+    };
+    for (offset, size) in [
+        (0x68u32, 4u32),
+        (0x6c, 4),
+        (0x70, 4),
+        (0x74, 4),
+        (0x78, 4),
+        (0x88, 4),
+        (0x8c, 4),
+        (0x99, 1),
+        (0x98, 1),
+        (0x9a, 1),
+        (0x9b, 1),
+        (0x9c, 1),
+        (0x9d, 1),
+    ] {
+        load(e, offset, size);
+    }
+    let version = |e: &mut Engine| e.vcall(buffer, BUFFER_VERSION_SLOT, &[]).u8();
+    if version(e) >= 0xd {
+        load(e, 0x9f, 1);
+    }
+    if version(e) >= 0xf {
+        load(e, 0x90, 4);
+        load(e, 0xa0, 1);
+        load(e, 0xa1, 1);
+    }
+    if version(e) >= 0x12 {
+        load(e, 0x7c, 0xc);
+        load(e, 0xa2, 1);
+        load(e, 0xa3, 1);
+        load(e, 0xa4, 1);
+        load(e, 0xa8, 4);
+    }
+    if version(e) >= 0x14 {
+        load(e, 0x9e, 1);
+    }
+    if version(e) >= 0x15 {
+        load(e, 0xac, 1);
+    }
+    let count = e.call(LOAD_VARIABLE_SIZED_VALUE, &args![buffer]).u32();
+    if count != 0 {
+        let block = e.call(NI_ALLOCATE, &args![0x18u32]).ptr::<()>();
+        let array = if !block.is_null() {
+            fn_006e3850(e, block)
+        } else {
+            Ptr::NULL
+        };
+        e.call(AVOID_POINTER_ASSIGN, &args![base + 0x94, array]);
+        let array = e.call(WORD_AT, &args![base + 0x94]).ptr();
+        fn_006e3ad0(e, array, count, 1);
+        let mut index = 0u32;
+        while index < count {
+            let array = e.call(WORD_AT, &args![base + 0x94]).u32();
+            let node = e.call(ARRAY_ELEMENT, &args![array, index]).u32();
+            e.call(AVOID_NODE_LOAD, &args![node, buffer]);
+            index = index.wrapping_add(1);
+        }
+    }
+}
+
+// Translated from 006e38d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PathingRequest::InitLoadGame` (Xbox PDB): for a save older than
+/// version `0xE` (the buffer's vtable slot 0), `bWaitIfPlayerWaits` (+0x9F) is cleared, then set
+/// when the buffer's actor (slot +0xC) has a current package
+/// (`MobileObject::GetCurrentPackage`) of type 8 (`009611e0`) whose target
+/// for the actor (`006780e0` with 0) is the word at `011dea3c`.
+pub fn pathing_request_init_load_game(e: &mut Engine, this: Ptr, buffer: u32) {
+    if e.vcall(buffer, BUFFER_VERSION_SLOT, &[]).u8() >= 0xe {
+        return;
+    }
+    e.mem.set_u8(this.addr() + 0x9f, 0);
+    let actor = e.vcall(buffer, BUFFER_ACTOR_SLOT, &[]).u32();
+    if actor == 0 {
+        return;
+    }
+    let package = e.call(GET_CURRENT_PACKAGE, &args![actor]).u32();
+    if package == 0 {
+        return;
+    }
+    if e.call(PACKAGE_TYPE, &args![package]).u32() != 8 {
+        return;
+    }
+    let target = e.call(PACKAGE_TARGET, &args![package, actor, 0u32]).u32();
+    if target == e.global::<u32>(PLAYER_GLOBAL) {
+        e.mem.set_u8(this.addr() + 0x9f, 1);
+    }
+}
+
+// Translated from 006e3ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<PathingAvoidNode,1024>::SetSize` (by its body; 0x24-byte
+/// elements): size 0 releases the buffer (`008454f0` with `shrink`).
+/// Growing past the reserved size allocates (vtable slot +4) when nothing
+/// is reserved, else reallocates (`006e3d30` keeping the old size), then
+/// constructs the new elements (`006e3c90`). Shrinking destroys the
+/// elements past `size` (`0072ba80`) and, with `shrink` and `size` at most
+/// a quarter of the reserved size, reallocates to `size`. Growing within
+/// the reservation constructs the new elements.
+pub fn fn_006e3ad0(e: &mut Engine, this: Ptr, size: u32, shrink: u8) {
+    use crate::types::BSSimpleArray as A;
+    let array = this.cast::<A>();
+    if size == 0 {
+        e.call(ARRAY_RELEASE_008454F0, &args![this, u32::from(shrink)]);
+        return;
+    }
+    let element = |e: &Engine, index: u32| {
+        index
+            .wrapping_mul(0x24)
+            .wrapping_add(e.get(array, A::pBuffer))
+    };
+    if size > e.get(array, A::iReservedSize) {
+        if e.get(array, A::iReservedSize) == 0 {
+            let buffer = e.vcall(this.addr(), 4, &args![size]).u32();
+            e.set(array, A::pBuffer, buffer);
+            e.set(array, A::iReservedSize, size);
+        } else {
+            let used = e.get(array, A::iSize);
+            e.call(AVOID_NODES_REALLOCATE, &args![this, size, used]);
+            e.set(array, A::iReservedSize, size);
+        }
+        let used = e.get(array, A::iSize);
+        let at = element(e, used);
+        e.call(
+            AVOID_NODES_CONSTRUCT,
+            &args![this, at, size.wrapping_sub(used)],
+        );
+        e.set(array, A::iSize, size);
+    } else if size < e.get(array, A::iSize) {
+        let used = e.get(array, A::iSize);
+        let at = element(e, size);
+        e.call(
+            AVOID_NODES_DESTROY,
+            &args![this, at, used.wrapping_sub(size)],
+        );
+        e.set(array, A::iSize, size);
+        if shrink != 0 && size <= e.get(array, A::iReservedSize) >> 2 {
+            e.call(AVOID_NODES_REALLOCATE, &args![this, size, size]);
+            e.set(array, A::iReservedSize, size);
+        }
+    } else {
+        let used = e.get(array, A::iSize);
+        let at = element(e, used);
+        e.call(
+            AVOID_NODES_CONSTRUCT,
+            &args![this, at, size.wrapping_sub(used)],
+        );
+        e.set(array, A::iSize, size);
+    }
+}
+
+// Translated from 006e3c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<PathingAvoidNode,1024>::_Reallocate` (Xbox PDB): the
+/// block reallocated (`0042f5d0`) to `count` 0x24-byte nodes; returns that
+/// call's result. `this` is not read.
+pub fn bs_simple_array_pathing_avoid_node_1024_reallocate(
+    e: &mut Engine,
+    _unused_0: Ptr,
+    block: u32,
+    count: u32,
+) -> u32 {
+    e.call(REALLOCATE, &args![block, count.wrapping_mul(0x24)])
+        .u32()
+}
+
+// Translated from 006e3c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<PathingAvoidNode,1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the destructor ([`fn_006e3ab0`]), then `operator delete`
+/// when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_pathing_avoid_node_1024_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006e3ab0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -581,6 +978,19 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             bs_simple_array_pathing_avoid_node_1024_allocate(Ptr, u32) -> u32
         ),
         entry!(0x006e_3de0, fn_006e3de0(Ptr, u32, u32)),
+        entry!(0x006e_2be0, pathing_request_print_debug_text(Ptr, u32)),
+        entry!(0x006e_2f80, pathing_request_create_pathing_request(u32) -> Ptr),
+        entry!(0x006e_34f0, pathing_request_load_game(Ptr, u32)),
+        entry!(0x006e_38d0, pathing_request_init_load_game(Ptr, u32)),
+        entry!(0x006e_3ad0, fn_006e3ad0(Ptr, u32, u8)),
+        entry!(
+            0x006e_3c40,
+            bs_simple_array_pathing_avoid_node_1024_reallocate(Ptr, u32, u32) -> u32
+        ),
+        entry!(
+            0x006e_3c60,
+            bs_simple_array_pathing_avoid_node_1024_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -1241,5 +1651,416 @@ mod b039_tests {
         assert_eq!(e.mem.u32(this + 8), 0);
         assert_eq!(e.mem.u32(this + 0xc), 4);
         assert_eq!(calls_to(&e, AVOID_NODES_CONSTRUCT).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod n032_tests {
+    use super::*;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    fn stub(e: &mut Engine, addresses: &[u32]) {
+        for &address in addresses {
+            e.register(address, |_, _| Ret::default());
+        }
+    }
+
+    fn calls(log: &Log, address: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|c| c.0 == address)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    fn take(e: &mut Engine) -> Log {
+        e.call_log.take().unwrap()
+    }
+
+    fn double_words(value: f64) -> [u32; 2] {
+        let bits = value.to_bits();
+        [bits as u32, (bits >> 32) as u32]
+    }
+
+    #[test]
+    fn print_debug_text_prints_every_line_in_order() {
+        let mut e = Engine::new();
+        stub(&mut e, &[LOCATION_PRINT_DEBUG_TEXT, 0x5100]);
+        e.put_vtable(0x5000, &[0, 0, 0, 0, 0, 0x5100]);
+        let printer = e.mem.alloc(4);
+        e.mem.set_u32(printer, 0x5000);
+        e.map(NO_CENTER_RADIUS, 8);
+        e.mem.set_f64(NO_CENTER_RADIUS, 0.0);
+        let request = e.mem.alloc(0xb0);
+        e.mem.set_f32(request + 0x68, 1.5);
+        e.mem.set_f32(request + 0x70, 2.5);
+        e.mem.set_f32(request + 0x74, 3.5);
+        e.mem.set_u8(request + 0x9b, 1);
+        e.mem.set_u32(request + 0xa8, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x006e_2be0, &args![request, printer]);
+        let log = take(&mut e);
+        let texts = calls(&log, LOCATION_PRINT_DEBUG_TEXT);
+        assert_eq!(texts.len(), 2);
+        assert_eq!((texts[0][0], texts[0][2]), (request + 0xc, 0x100));
+        assert_eq!(texts[1][0], request + 0x34);
+        let lines = calls(&log, 0x5100);
+        let formats: Vec<u32> = lines.iter().map(|l| l[3]).collect();
+        assert_eq!(
+            formats,
+            vec![
+                FORMAT_ORIGIN,
+                FORMAT_DESTINATION,
+                FORMAT_ACTOR_RADIUS,
+                FORMAT_GOAL_Z_DELTA,
+                FORMAT_TARGET_RADIUS,
+                FORMAT_ALLOW_INCOMPLETE_PATH,
+                FORMAT_FACE_TARGET_AT_GOAL,
+                FORMAT_GO_DIRECT_IF_PATHING_FAILS,
+                FORMAT_TRY_CURVED_PATH,
+                FORMAT_IGNORE_LOCKS,
+                FORMAT_RETRY_COUNT,
+            ]
+        );
+        assert_eq!(lines[0][..3], [printer, 0, 1]);
+        assert_eq!(lines[0][4], texts[0][1]);
+        assert_eq!(lines[2][4..], double_words(1.5));
+        assert_eq!(lines[5][4], TEXT_TRUE);
+        assert_eq!(lines[6][4], TEXT_FALSE);
+        assert_eq!(lines[10][4], 3);
+        // The center, the goal angle and the heading when they apply.
+        e.mem.set_f32(request + 0x78, 4.0);
+        e.mem.set_f32(request + 0x7c, 5.0);
+        e.mem.set_f32(request + 0x80, 6.0);
+        e.mem.set_f32(request + 0x84, 7.0);
+        e.mem.set_u8(request + 0x99, 1);
+        e.mem.set_f32(request + 0x8c, 8.0);
+        e.mem.set_u8(request + 0xa0, 1);
+        e.mem.set_f32(request + 0x90, 9.0);
+        e.call_log = Some(vec![]);
+        e.call(0x006e_2be0, &args![request, printer]);
+        let lines = calls(&take(&mut e), 0x5100);
+        assert_eq!(lines.len(), 14);
+        assert_eq!(lines[6][3], FORMAT_CENTER);
+        let mut center = vec![];
+        for value in [5.0, 6.0, 7.0, 4.0] {
+            center.extend(double_words(value));
+        }
+        assert_eq!(lines[6][4..], center[..]);
+        assert_eq!(lines[8][3], FORMAT_GOAL_ANGLE);
+        assert_eq!(lines[8][4..], double_words(8.0));
+        assert_eq!(lines[9][3], FORMAT_INITIAL_HEADING);
+        // A NaN center radius prints the center too.
+        e.mem.set_u32(request + 0x78, 0x7fc0_0000);
+        e.call_log = Some(vec![]);
+        e.call(0x006e_2be0, &args![request, printer]);
+        assert_eq!(calls(&take(&mut e), 0x5100)[6][3], FORMAT_CENTER);
+    }
+
+    #[test]
+    fn create_makes_each_kind_and_rejects_the_others() {
+        for (kind, size, construct) in [
+            (1u32, 0xecu32, COVER_CONSTRUCT),
+            (2, 0xb8, CLOSE_POINT_CONSTRUCT),
+            (3, 0xb4, FLEE_CONSTRUCT),
+            (4, 0xdc, HIDE_CONSTRUCT),
+            (5, 0xd8, LOS_CONSTRUCT),
+            (7, 0xc0, OPTIMAL_LOCATION_CONSTRUCT),
+            (8, 0x10c, COVERED_MOVE_CONSTRUCT),
+        ] {
+            let mut e = Engine::new();
+            e.register(NI_ALLOCATE, |_, a| (0x4000 + a[0]).into_ret());
+            e.register(construct, |_, a| (a[0] + 1).into_ret());
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x006e_2f80, &args![kind]).u32(), 0x4001 + size);
+            let log = take(&mut e);
+            assert_eq!(calls(&log, NI_ALLOCATE), vec![vec![size]]);
+            assert_eq!(calls(&log, construct), vec![vec![0x4000 + size]]);
+        }
+        // Kind 0: the PathingRequest constructor of this file.
+        let mut e = Engine::new();
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        stub(
+            &mut e,
+            &[
+                REF_OBJECT_CONSTRUCT,
+                LOCATION_CONSTRUCT,
+                LOCK_DATA_CONSTRUCT,
+                POINT_PREPARE,
+                AVOID_POINTER_CONSTRUCT,
+            ],
+        );
+        for address in [
+            DEFAULT_ACTOR_RADIUS,
+            DEFAULT_GOAL_Z_DELTA,
+            DEFAULT_TARGET_RADIUS,
+            ZERO_POINT,
+        ] {
+            e.map(address, 0xc);
+        }
+        let request = e.call(0x006e_2f80, &args![0u32]).u32();
+        assert_eq!(e.mem.u32(request), PATHING_REQUEST_VTABLE);
+        // A failed allocation: null, no constructor.
+        e.register(NI_ALLOCATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006e_2f80, &args![0u32]).u32(), 0);
+        assert!(calls(&take(&mut e), REF_OBJECT_CONSTRUCT).is_empty());
+        // Kinds 6 and 9: the error, null.
+        for kind in [6u32, 9, 0xffff_ffff] {
+            let mut e = Engine::new();
+            stub(&mut e, &[PRINT_ERROR]);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x006e_2f80, &args![kind]).u32(), 0);
+            let log = take(&mut e);
+            assert_eq!(
+                calls(&log, PRINT_ERROR),
+                vec![vec![FORMAT_UNKNOWN_TYPE, kind]]
+            );
+            assert!(calls(&log, NI_ALLOCATE).is_empty());
+        }
+    }
+
+    /// A load buffer of `version` (vtable slot 0 at `0x5100`).
+    fn load_buffer(e: &mut Engine, version: u32) -> u32 {
+        e.put_vtable(0x5000, &[0x5100, 0, 0, 0x510c]);
+        e.register_double(0x5100, move |_, _| version.into_ret());
+        let buffer = e.mem.alloc(4);
+        e.mem.set_u32(buffer, 0x5000);
+        buffer
+    }
+
+    fn load_doubles(e: &mut Engine, count: u32) {
+        stub(
+            e,
+            &[LOAD_DATA, 0x6104, AVOID_POINTER_ASSIGN, AVOID_NODE_LOAD],
+        );
+        e.put_vtable(0x6000, &[0, 0x6104]);
+        e.register_double(LOAD_VARIABLE_SIZED_VALUE, move |_, _| count.into_ret());
+    }
+
+    fn loaded(log: &Log) -> Vec<(u32, u32)> {
+        calls(log, LOAD_DATA).iter().map(|c| (c[1], c[2])).collect()
+    }
+
+    #[test]
+    fn load_game_reads_the_fields_of_its_version() {
+        for (version, extra) in [
+            (0xcu32, vec![]),
+            (0xd, vec![(0x9f, 1)]),
+            (0xf, vec![(0x9f, 1), (0x90, 4), (0xa0, 1), (0xa1, 1)]),
+            (
+                0x15,
+                vec![
+                    (0x9f, 1),
+                    (0x90, 4),
+                    (0xa0, 1),
+                    (0xa1, 1),
+                    (0x7c, 0xc),
+                    (0xa2, 1),
+                    (0xa3, 1),
+                    (0xa4, 1),
+                    (0xa8, 4),
+                    (0x9e, 1),
+                    (0xac, 1),
+                ],
+            ),
+        ] {
+            let mut e = Engine::new();
+            load_doubles(&mut e, 0);
+            let buffer = load_buffer(&mut e, version);
+            let request = e.mem.alloc(0xb0);
+            e.mem.set_u32(request + 0xc, 0x6000);
+            e.mem.set_u32(request + 0x34, 0x6000);
+            e.call_log = Some(vec![]);
+            e.call(0x006e_34f0, &args![request, buffer]);
+            let log = take(&mut e);
+            assert_eq!(
+                calls(&log, 0x6104),
+                vec![vec![request + 0xc, buffer], vec![request + 0x34, buffer]]
+            );
+            let mut expected: Vec<(u32, u32)> = [
+                (0x68, 4),
+                (0x6c, 4),
+                (0x70, 4),
+                (0x74, 4),
+                (0x78, 4),
+                (0x88, 4),
+                (0x8c, 4),
+                (0x99, 1),
+                (0x98, 1),
+                (0x9a, 1),
+                (0x9b, 1),
+                (0x9c, 1),
+                (0x9d, 1),
+            ]
+            .to_vec();
+            expected.extend(extra);
+            let expected: Vec<(u32, u32)> =
+                expected.iter().map(|&(o, s)| (request + o, s)).collect();
+            assert_eq!(loaded(&log), expected);
+            assert!(calls(&log, AVOID_POINTER_ASSIGN).is_empty());
+        }
+    }
+
+    #[test]
+    fn load_game_builds_and_loads_the_avoid_nodes() {
+        let mut e = Engine::new();
+        load_doubles(&mut e, 2);
+        let buffer = load_buffer(&mut e, 0xc);
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        stub(&mut e, &[REF_OBJECT_CONSTRUCT, AVOID_NODES_CONSTRUCT]);
+        e.register(WORD_AT, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(ARRAY_ELEMENT, |e, a| {
+            (e.mem.u32(a[0] + 4) + 0x24 * a[1]).into_ret()
+        });
+        // The pointer assignment stores the new array.
+        e.register(AVOID_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        let request = e.mem.alloc(0xb0);
+        e.mem.set_u32(request + 0xc, 0x6000);
+        e.mem.set_u32(request + 0x34, 0x6000);
+        // The derived array's vtables are the exe's; give its slot +4.
+        e.put_vtable(AVOID_ARRAY_DERIVED_VTABLE, &[0, 0x7104]);
+        e.register(0x7104, |_, _| 0x9000u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x006e_34f0, &args![request, buffer]);
+        let log = take(&mut e);
+        let array = e.mem.u32(request + 0x94);
+        assert_eq!(calls(&log, NI_ALLOCATE), vec![vec![0x18]]);
+        assert_eq!(e.mem.u32(array), AVOID_ARRAY_DERIVED_VTABLE);
+        assert_eq!(calls(&log, 0x7104), vec![vec![array, 2]]);
+        assert_eq!(e.mem.u32(array + 8), 2);
+        assert_eq!(
+            calls(&log, AVOID_NODE_LOAD),
+            vec![vec![0x9000, buffer], vec![0x9024, buffer]]
+        );
+    }
+
+    #[test]
+    fn init_load_game_sets_the_wait_flag_for_old_saves() {
+        // (version, actor, package, type, target matches) -> flag
+        for (version, actor, package, kind, same, expected) in [
+            (0xeu32, 1u32, 1u32, 8u32, true, 0xaau8),
+            (0xd, 0, 1, 8, true, 0),
+            (0xd, 1, 0, 8, true, 0),
+            (0xd, 1, 1, 7, true, 0),
+            (0xd, 1, 1, 8, false, 0),
+            (0xd, 1, 1, 8, true, 1),
+        ] {
+            let mut e = Engine::new();
+            let buffer = load_buffer(&mut e, version);
+            let actor = actor * 0x800;
+            e.register_double(0x510c, move |_, _| actor.into_ret());
+            let package = package * 0x900;
+            e.register_double(GET_CURRENT_PACKAGE, move |_, _| package.into_ret());
+            e.register_double(PACKAGE_TYPE, move |_, _| kind.into_ret());
+            e.register_double(PACKAGE_TARGET, move |_, a| {
+                assert_eq!(a[1..], [0x800, 0]);
+                (if same { 0x14 } else { 0x15 }).into_ret()
+            });
+            e.map(PLAYER_GLOBAL, 4);
+            e.set_global(PLAYER_GLOBAL, 0x14u32);
+            let request = e.mem.alloc(0xb0);
+            e.mem.set_u8(request + 0x9f, 0xaa);
+            e.call(0x006e_38d0, &args![request, buffer]);
+            assert_eq!(e.mem.u8(request + 0x9f), expected);
+        }
+    }
+
+    #[test]
+    fn avoid_node_set_size_branches() {
+        let mut e = Engine::new();
+        stub(
+            &mut e,
+            &[
+                ARRAY_RELEASE_008454F0,
+                AVOID_NODES_REALLOCATE,
+                AVOID_NODES_CONSTRUCT,
+                AVOID_NODES_DESTROY,
+            ],
+        );
+        e.put_vtable(0x5000, &[0, 0x5104]);
+        e.register(0x5104, |_, _| 0x8000u32.into_ret());
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array, 0x5000);
+        let state = |e: &Engine| {
+            (
+                e.mem.u32(array + 4),
+                e.mem.u32(array + 8),
+                e.mem.u32(array + 12),
+            )
+        };
+        e.call_log = Some(vec![]);
+        e.call(0x006e_3ad0, &args![array, 0u32, 0x101u32]);
+        assert_eq!(
+            calls(&take(&mut e), ARRAY_RELEASE_008454F0),
+            vec![vec![array, 1]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x006e_3ad0, &args![array, 8u32, 1u32]);
+        let log = take(&mut e);
+        assert_eq!(calls(&log, 0x5104), vec![vec![array, 8]]);
+        assert_eq!(
+            calls(&log, AVOID_NODES_CONSTRUCT),
+            vec![vec![array, 0x8000, 8]]
+        );
+        assert_eq!(state(&e), (0x8000, 8, 8));
+        e.call_log = Some(vec![]);
+        e.call(0x006e_3ad0, &args![array, 12u32, 1u32]);
+        let log = take(&mut e);
+        assert_eq!(
+            calls(&log, AVOID_NODES_REALLOCATE),
+            vec![vec![array, 12, 8]]
+        );
+        assert_eq!(
+            calls(&log, AVOID_NODES_CONSTRUCT),
+            vec![vec![array, 0x8000 + 8 * 0x24, 4]]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x006e_3ad0, &args![array, 4u32, 1u32]);
+        let log = take(&mut e);
+        assert_eq!(
+            calls(&log, AVOID_NODES_DESTROY),
+            vec![vec![array, 0x8000 + 4 * 0x24, 8]]
+        );
+        assert!(calls(&log, AVOID_NODES_REALLOCATE).is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x006e_3ad0, &args![array, 3u32, 1u32]);
+        assert_eq!(
+            calls(&take(&mut e), AVOID_NODES_REALLOCATE),
+            vec![vec![array, 3, 3]]
+        );
+        assert_eq!(state(&e), (0x8000, 3, 3));
+        e.call_log = Some(vec![]);
+        e.call(0x006e_3ad0, &args![array, 3u32, 0u32]);
+        assert_eq!(
+            calls(&take(&mut e), AVOID_NODES_CONSTRUCT),
+            vec![vec![array, 0x8000 + 3 * 0x24, 0]]
+        );
+    }
+
+    #[test]
+    fn reallocate_asks_for_0x24_bytes_a_node() {
+        let mut e = Engine::new();
+        e.register(REALLOCATE, |_, a| (a[0] + a[1]).into_ret());
+        let result = e.call(0x006e_3c40, &args![0u32, 0x1000u32, 3u32]).u32();
+        assert_eq!(result, 0x1000 + 3 * 0x24);
+    }
+
+    #[test]
+    fn avoid_node_array_deleting_destructor() {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            stub(&mut e, &[ARRAY_RELEASE_008454F0, OPERATOR_DELETE]);
+            let array = e.mem.alloc(0x10);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x006e_3c60, &args![array, flags]).u32(), array);
+            let log = take(&mut e);
+            assert_eq!(e.mem.u32(array), ARRAY_VTABLE_0106D218);
+            assert_eq!(calls(&log, ARRAY_RELEASE_008454F0), vec![vec![array, 1]]);
+            assert_eq!(calls(&log, OPERATOR_DELETE).len(), flags as usize);
+        }
     }
 }

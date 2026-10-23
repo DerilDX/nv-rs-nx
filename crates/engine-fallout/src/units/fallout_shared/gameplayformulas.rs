@@ -91,9 +91,37 @@ pub fn game_play_formulas_get_force_lock_chance(e: &mut Engine, first: i32, seco
     e.call(COMBINE_SECOND, &args![limited, 0u32]).u32()
 }
 
+/// `00404010` and `0040ebd0` (`cdecl`, two floats each, answer `ST0`; no engine-map names).
+const FLOAT_PAIR_00404010: u32 = 0x0040_4010;
+const FLOAT_PAIR_0040EBD0: u32 = 0x0040_ebd0;
+
+// Translated from 00648e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, three floats; answers `ST0`): with
+/// `ratio = (second - third) / second` (rounded to a float), answers
+/// `first * 0040ebd0(1.0, 00404010(0.0, ratio))`, each call's result rounded to a float
+/// and the product rounded to a float.
+pub fn fn_00648e50(e: &mut Engine, first: f32, second: f32, third: f32) -> f32 {
+    let difference = x87_sub(x87_load32(second.to_bits()), x87_m32(third.to_bits()));
+    let ratio = x87_store32(x87_div(difference, x87_m32(second.to_bits())));
+    let inner = e
+        .call(
+            FLOAT_PAIR_00404010,
+            &args![0.0f32, f32::from_bits(x87_quiet_bits(ratio))],
+        )
+        .st0;
+    let inner = x87_store32(inner);
+    let outer = e
+        .call(FLOAT_PAIR_0040EBD0, &args![1.0f32, f32::from_bits(inner)])
+        .st0;
+    let outer = x87_store32(outer);
+    let product = x87_store32(x87_mul(x87_load32(first.to_bits()), x87_m32(outer)));
+    f32::from_bits(x87_quiet_bits(product))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0064_8e50, fn_00648e50(f32, f32, f32) -> f32),
         entry!(
             0x0064_8b50,
             game_play_formulas_get_required_experience_points(i32) -> i32
@@ -203,5 +231,40 @@ mod tests {
         assert_eq!(e.call(0x0064_8d30, &[50, 30]).u32(), 40);
         assert_eq!(calls_to(&e, COMBINE_FIRST), vec![vec![40, 100]]);
         assert_eq!(calls_to(&e, COMBINE_SECOND), vec![vec![40, 0]]);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00648e50_scales_by_the_clamped_ratio() {
+        let mut e = Engine::new();
+        // Doubles: the larger and the smaller of the two floats.
+        e.register(FLOAT_PAIR_00404010, |_, a| {
+            f32::from_bits(a[0]).max(f32::from_bits(a[1])).into_ret()
+        });
+        e.register(FLOAT_PAIR_0040EBD0, |_, a| {
+            f32::from_bits(a[0]).min(f32::from_bits(a[1])).into_ret()
+        });
+        e.call_log = Some(vec![]);
+        // (8 - 2) / 8 = 0.75, times 10.
+        let value = e.call(0x0064_8e50, &args![10.0f32, 8.0f32, 2.0f32]).f32();
+        assert_eq!(value, 7.5);
+        let log = e.call_log.take().unwrap();
+        let inner = log.iter().find(|(a, _)| *a == FLOAT_PAIR_00404010).unwrap();
+        assert_eq!(inner.1, vec![0.0f32.to_bits(), 0.75f32.to_bits()]);
+        let outer = log.iter().find(|(a, _)| *a == FLOAT_PAIR_0040EBD0).unwrap();
+        assert_eq!(outer.1, vec![1.0f32.to_bits(), 0.75f32.to_bits()]);
+        // A third above the second: the ratio is negative, clamped to 0 by the doubles.
+        let value = e.call(0x0064_8e50, &args![10.0f32, 4.0f32, 6.0f32]).f32();
+        assert_eq!(value, 0.0);
+        // The ratio is rounded to a float before the calls: 1/3.
+        e.call_log = Some(vec![]);
+        e.call(0x0064_8e50, &args![1.0f32, 3.0f32, 2.0f32]);
+        let log = e.call_log.take().unwrap();
+        let inner = log.iter().find(|(a, _)| *a == FLOAT_PAIR_00404010).unwrap();
+        assert_eq!(inner.1[1], ((1.0f64 / 3.0) as f32).to_bits());
     }
 }

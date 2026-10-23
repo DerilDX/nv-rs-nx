@@ -132,6 +132,24 @@ pub fn fn_00590350(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `TESForm::StartForm` and `TESForm::CloseForm` (`004855a0`, `00485680`, `thiscall`).
+const FORM_START_FORM: u32 = 0x0048_55a0;
+const FORM_CLOSE_FORM: u32 = 0x0048_5680;
+/// `TESTexture::Save` (`0048e370`, `RET 4`: the chunk signature).
+const TEXTURE_SAVE: u32 = 0x0048_e370;
+
+// Translated from 00590470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSMenuIcon::Save` (Xbox PDB; `thiscall`, no stack word): starts the form record,
+/// saves the texture (+0x18) as an `ICON` chunk (`0048e370`) and closes the record.
+pub fn bgs_menu_icon_save(e: &mut Engine, this: Ptr) {
+    e.call(FORM_START_FORM, &args![this]);
+    e.call(
+        TEXTURE_SAVE,
+        &args![this.addr() + TEXTURE_OFFSET, CHUNK_ICON],
+    );
+    e.call(FORM_CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -139,6 +157,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0059_02a0, fn_005902a0(Ptr, u32) -> Ptr),
         entry!(0x0059_02d0, fn_005902d0(Ptr)),
         entry!(0x0059_0350, fn_00590350(Ptr, Ptr) -> bool),
+        entry!(0x0059_0470, bgs_menu_icon_save(Ptr)),
     ]
 }
 
@@ -320,5 +339,28 @@ mod b022_tests {
         let (mut e, _, file) = setup(5, &[CHUNK_ICON]);
         assert!(e.call(0x0059_0350, &args![Ptr::<()>::NULL, file]).bool());
         assert_eq!(calls_to(&e, LOAD_TEXTURE_CHUNK), vec![vec![0, file.addr()]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    #[test]
+    fn save_writes_the_icon_texture() {
+        let mut e = Engine::new();
+        for addr in [FORM_START_FORM, FORM_CLOSE_FORM, TEXTURE_SAVE] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0059_0470, &args![0x6000u32]);
+        assert_eq!(
+            e.call_log.take().unwrap()[1..],
+            [
+                (FORM_START_FORM, vec![0x6000]),
+                (TEXTURE_SAVE, vec![0x6018, CHUNK_ICON]),
+                (FORM_CLOSE_FORM, vec![0x6000]),
+            ]
+        );
     }
 }

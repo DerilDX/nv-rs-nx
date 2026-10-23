@@ -222,14 +222,15 @@ pub fn bhk_character_proxy_link_object(e: &mut Engine, this: Ptr<BhkCharacterPro
 }
 
 // Translated from 00cac070 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `bhkCharacterProxy::RegisterStreamables` (Xbox PDB): when the Havok proxy exists
-/// and its shape phantom has an owner (`phantom + 0xC`), registers that owner through
-/// its virtual slot `0x54`; then `NiObject::RegisterStreamables`.
+/// `bhkCharacterProxy::RegisterStreamables` (Xbox PDB; a `bool` there): when the Havok
+/// proxy exists and its shape phantom has an owner (`phantom + 0xC`), registers that owner
+/// through its virtual slot `0x54`; then `NiObject::RegisterStreamables`, whose value it
+/// answers (the exe ends on that call and leaves its `EAX`).
 pub fn bhk_character_proxy_register_streamables(
     e: &mut Engine,
     this: Ptr<BhkCharacterProxy>,
     stream: u32,
-) {
+) -> u32 {
     let hk_object = e.get(this, BhkCharacterProxy::phkObject).addr();
     if hk_object != 0 {
         let phantom = shape_phantom(e, hk_object);
@@ -240,7 +241,8 @@ pub fn bhk_character_proxy_register_streamables(
             }
         }
     }
-    e.call(NI_OBJECT_REGISTER_STREAMABLES, &args![this, stream]);
+    e.call(NI_OBJECT_REGISTER_STREAMABLES, &args![this, stream])
+        .u32()
 }
 
 // Translated from 00cac0b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -574,7 +576,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00ca_c070,
-            bhk_character_proxy_register_streamables(Ptr<BhkCharacterProxy>, u32)
+            bhk_character_proxy_register_streamables(Ptr<BhkCharacterProxy>, u32) -> u32
         ),
         entry!(
             0x00ca_c0b0,
@@ -1134,5 +1136,14 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x00ca_c6b0, &args![proxy, strings]);
         assert_eq!(sources(&e), [DEFAULT_VECTOR]);
+    }
+
+    #[test]
+    fn register_streamables_answers_the_base_registration() {
+        let mut e = engine();
+        let (proxy, _, _) = proxy_with_phantom(&mut e);
+        e.set(proxy, BhkCharacterProxy::phkObject, Ptr::NULL);
+        e.register(NI_OBJECT_REGISTER_STREAMABLES, |_, _| 1u32.into_ret());
+        assert_eq!(e.call(0x00ca_c070, &args![proxy, 0x5000u32]).u32(), 1);
     }
 }

@@ -1705,19 +1705,23 @@ fn default_pathing_argument(e: &mut Engine, this: Ptr<Actor>, value: u32) -> u32
 // Translated from 008b3630 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::SetPathfindingGoal` (Xbox PDB): for a goal that fails `0069e390`,
 /// passes the process's slot `0x254` result to `006d61e0` of the goal; then
-/// hands the goal to the `ActorMover` (`009dba30`).
-pub fn actor_set_pathfinding_goal(e: &mut Engine, this: Ptr<Actor>, goal: u32) {
+/// hands the goal to the `ActorMover` (`009dba30`) and answers its value (a
+/// `bool` in the Xbox PDB: the exe ends on that call and leaves its `EAX`,
+/// whose `AL` the callers test).
+pub fn actor_set_pathfinding_goal(e: &mut Engine, this: Ptr<Actor>, goal: u32) -> bool {
     if goal != 0 && e.call(0x0069_e390, &args![goal]).u32() == 0 {
         let value = process_call(e, this.addr(), 0x254, &args![this]).u32();
         e.call(0x006d_61e0, &args![goal, value]);
     }
     let mover = e.get(this, Actor::pActorMover);
-    e.call(0x009d_ba30, &args![mover, goal]);
+    e.call(0x009d_ba30, &args![mover, goal]).bool()
 }
 
 // Translated from 008b3690 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::SetPathfindingGoal_ov2` (Xbox PDB): `ActorMover::SetGoal`
-/// (`009dba50`) with `last` defaulting to the process's slot `0x254` result.
+/// (`009dba50`) with `last` defaulting to the process's slot `0x254` result,
+/// answering its value (the exe ends on that call and leaves its `EAX`; the
+/// callers test `AL`).
 pub fn actor_set_pathfinding_goal_ov2(
     e: &mut Engine,
     this: Ptr<Actor>,
@@ -1726,33 +1730,38 @@ pub fn actor_set_pathfinding_goal_ov2(
     third: u32,
     fourth: f32,
     last: u32,
-) {
+) -> bool {
     let last = default_pathing_argument(e, this, last);
     let mover = e.get(this, Actor::pActorMover);
     e.call(
         0x009d_ba50,
         &args![mover, first, second, third, fourth, last],
-    );
+    )
+    .bool()
 }
 
 // Translated from 008b36f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::SetPathfindingGoal_ov3` (Xbox PDB): `009dbb10` of the
-/// `ActorMover`, with `last` defaulting to the process's slot `0x254` result.
+/// `ActorMover`, with `last` defaulting to the process's slot `0x254` result,
+/// answering its value (the exe ends on that call and leaves its `EAX`; the
+/// caller tests `AL`).
 pub fn actor_set_pathfinding_goal_ov3(
     e: &mut Engine,
     this: Ptr<Actor>,
     first: u32,
     second: f32,
     last: u32,
-) {
+) -> bool {
     let last = default_pathing_argument(e, this, last);
     let mover = e.get(this, Actor::pActorMover);
-    e.call(0x009d_bb10, &args![mover, first, second, last]);
+    e.call(0x009d_bb10, &args![mover, first, second, last])
+        .bool()
 }
 
 // Translated from 008b3750 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `009dbb60` of the `ActorMover`, with `last` defaulting to the process's
-/// slot `0x254` result.
+/// slot `0x254` result, answering its value (the exe ends on that call and
+/// leaves its `EAX`; the caller tests `AL`).
 #[allow(clippy::too_many_arguments)]
 pub fn fn_008b3750(
     e: &mut Engine,
@@ -1763,13 +1772,14 @@ pub fn fn_008b3750(
     fourth: f32,
     fifth: f32,
     last: u32,
-) {
+) -> bool {
     let last = default_pathing_argument(e, this, last);
     let mover = e.get(this, Actor::pActorMover);
     e.call(
         0x009d_bb60,
         &args![mover, first, second, third, fourth, fifth, last],
-    );
+    )
+    .bool()
 }
 
 // Translated from 008b37c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4992,18 +5002,21 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008b3180, actor_destroy_actor_mover(Ptr<Actor>)),
         entry!(0x008b3200, fn_008b3200(Ptr<Actor>, u32)),
         entry!(0x008b3230, fn_008b3230(Ptr<Actor>, f32)),
-        entry!(0x008b3630, actor_set_pathfinding_goal(Ptr<Actor>, u32)),
+        entry!(
+            0x008b3630,
+            actor_set_pathfinding_goal(Ptr<Actor>, u32) -> bool
+        ),
         entry!(
             0x008b3690,
-            actor_set_pathfinding_goal_ov2(Ptr<Actor>, u32, u32, u32, f32, u32)
+            actor_set_pathfinding_goal_ov2(Ptr<Actor>, u32, u32, u32, f32, u32) -> bool
         ),
         entry!(
             0x008b36f0,
-            actor_set_pathfinding_goal_ov3(Ptr<Actor>, u32, f32, u32)
+            actor_set_pathfinding_goal_ov3(Ptr<Actor>, u32, f32, u32) -> bool
         ),
         entry!(
             0x008b3750,
-            fn_008b3750(Ptr<Actor>, u32, u32, u32, f32, f32, u32)
+            fn_008b3750(Ptr<Actor>, u32, u32, u32, f32, f32, u32) -> bool
         ),
         entry!(0x008b37c0, fn_008b37c0(Ptr<Actor>, u32, f32, u32)),
         entry!(
@@ -11346,5 +11359,34 @@ mod tests {
         s.e.mem.set_u8(flag, 0);
         assert_eq!(s.e.call(0x008b_87a0, &args![a, player, flag]).i32(), 1);
         assert_eq!(s.e.mem.u8(flag), 0);
+    }
+
+    #[test]
+    fn pathfinding_goals_answer_the_movers_value() {
+        let (mut w, this, _mover, _log) = mover_world();
+        let process = w.e.get(this, Actor::pCurrentProcess);
+        w.answer(process.addr(), 0x254, 0x5555);
+        w.e.register(0x0069_e390, |_, _| int(1));
+        for address in [0x009d_ba30u32, 0x009d_ba50, 0x009d_bb10, 0x009d_bb60] {
+            w.e.register(address, |_, _| int(1));
+        }
+        assert!(w.e.call(0x008b_3630, &args![this, 0x66u32]).bool());
+        assert!(w
+            .e
+            .call(0x008b_3690, &args![this, 1u32, 2u32, 3u32, 4.5f32, 0u32])
+            .bool());
+        assert!(w
+            .e
+            .call(0x008b_36f0, &args![this, 1u32, 2.5f32, 0u32])
+            .bool());
+        assert!(w
+            .e
+            .call(
+                0x008b_3750,
+                &args![this, 1u32, 2u32, 3u32, 4.5f32, 5.5f32, 0u32]
+            )
+            .bool());
+        w.e.register(0x009d_ba30, |_, _| int(0));
+        assert!(!w.e.call(0x008b_3630, &args![this, 0x66u32]).bool());
     }
 }

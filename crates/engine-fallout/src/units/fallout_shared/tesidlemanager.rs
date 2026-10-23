@@ -188,9 +188,31 @@ fn new_root_idle_array(e: &mut Engine, path: Ptr) -> u32 {
     }
 }
 
+/// `00863db0` (`thiscall` on a form array, no stack words): clears its entries (count at
+/// +0xC) and sets the words +0xC and +0x10 to 0.
+const FORM_ARRAY_CLEAR_00863DB0: u32 = 0x0086_3db0;
+
+// Translated from 00600030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack words; called from the map's
+/// `ClearData`): for each root of the map, deletes the forms of its `IdleArray` and then
+/// its `LooseIdleArray` (virtual `+0x10` with 1, the count read once), clearing each array
+/// right after its forms (`00863db0`). The roots and their file lists stay.
+pub fn fn_00600030(e: &mut Engine, this: Ptr) {
+    for_each_root(e, this, |e, root, _| {
+        delete_forms(e, root);
+        e.call(FORM_ARRAY_CLEAR_00863DB0, &args![root]);
+        delete_forms(e, root + ROOT_LOOSE_IDLE_ARRAY);
+        e.call(
+            FORM_ARRAY_CLEAR_00863DB0,
+            &args![root + ROOT_LOOSE_IDLE_ARRAY],
+        );
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0060_0030, fn_00600030(Ptr)),
         entry!(0x0060_0700, tes_idle_manager_get_root_filename_list(Ptr, Ptr, u32) -> u32),
         entry!(0x0060_0170, tes_idle_manager_add_root_idle_array(Ptr, Ptr, Ptr, u8) -> u32),
         entry!(0x0060_0b00, fn_00600b00(Ptr)),
@@ -1738,5 +1760,61 @@ mod b016_tests {
         );
         e.call(0x0060_0e50, &args![this]);
         assert_eq!(e.mem.u32(this), NI_T_MAP_BASE_VTABLE);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// The forms' deleting slot (vtable +0x10) as the test places it.
+    const DELETE_SLOT: u32 = 0x0090_0010;
+
+    #[test]
+    fn fn_00600030_deletes_and_clears_both_arrays_of_each_root() {
+        let mut e = Engine::new();
+        // Two roots: the second step answers a null root, which is skipped.
+        let first_root = e.mem.alloc(0x68);
+        let steps = vec![(2u32, first_root), (3, 0), (0, 0)];
+        let mut steps = steps.into_iter();
+        e.register(MAP_FIRST, |_, _| 1u32.into_ret());
+        e.register_double(MAP_NEXT, move |e, a| {
+            let (next, root) = steps.next().unwrap();
+            e.mem.set_u32(a[1], next);
+            e.mem.set_u32(a[3], root);
+            Ret::default()
+        });
+        // Each array holds two slots: a form and a null.
+        e.put_vtable(0x0090_1000, &[0, 0, 0, 0, DELETE_SLOT]);
+        let form = e.mem.alloc(4);
+        e.mem.set_u32(form, 0x0090_1000);
+        e.register(FORM_ARRAY_COUNT, |_, _| 2u32.into_ret());
+        e.register_double(FORM_ARRAY_GET_FORM_AT, move |_, a| {
+            (if a[1] == 0 { form } else { 0 }).into_ret()
+        });
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        for address in [DELETE_SLOT, FORM_ARRAY_CLEAR_00863DB0] {
+            let record = log.clone();
+            e.register_double(address, move |_, a| {
+                record.borrow_mut().push((address, a.to_vec()));
+                Ret::default()
+            });
+        }
+        let this = e.mem.alloc(0x30);
+        e.call(0x0060_0030, &args![this]);
+        let got = log.borrow().clone();
+        assert_eq!(
+            got,
+            vec![
+                (DELETE_SLOT, vec![form, 1]),
+                (FORM_ARRAY_CLEAR_00863DB0, vec![first_root]),
+                (DELETE_SLOT, vec![form, 1]),
+                (FORM_ARRAY_CLEAR_00863DB0, vec![first_root + 0x18]),
+            ]
+        );
     }
 }

@@ -1017,9 +1017,10 @@ pub fn interface_set_enemy_actor(e: &mut Engine, actor: u32) {
 }
 
 // Translated from 007038d0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `007732b0` (in `hudmainmenu.cpp`), no arguments.
-pub fn fn_007038d0(e: &mut Engine) {
-    e.call(0x0077_32b0, &[]);
+/// `007732b0` (in `hudmainmenu.cpp`), no arguments; answers its value (the
+/// exe ends on that call and leaves its `EAX`, which the callers compare).
+pub fn fn_007038d0(e: &mut Engine) -> Ptr {
+    e.call(0x0077_32b0, &[]).ptr()
 }
 
 // Translated from 007038e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2564,7 +2565,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00703860, interface_set_crosshair_target_type(u32)),
         entry!(0x007038a0, fn_007038a0() -> u32),
         entry!(0x007038b0, interface_set_enemy_actor(u32)),
-        entry!(0x007038d0, fn_007038d0()),
+        entry!(0x007038d0, fn_007038d0() -> Ptr),
         entry!(0x007038e0, interface_toggle_safe_zone(u32)),
         entry!(0x00703920, interface_set_first_chance_texture_release()),
         entry!(0x00703960, fn_00703960(u32, u8)),
@@ -5381,5 +5382,12 @@ mod tests {
         }
         let mut e = engine_without_manager();
         assert_eq!(e.call(0x0070_5a00, &[]).u8(), 0);
+    }
+
+    #[test]
+    fn fn_007038d0_answers_the_callees_value() {
+        let (mut e, _) = ui_engine();
+        e.register(0x0077_32b0, |_, _| 0x9000u32.into_ret());
+        assert_eq!(e.call(0x0070_38d0, &[]).u32(), 0x9000);
     }
 }

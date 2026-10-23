@@ -109,6 +109,21 @@ pub fn fn_006f5020(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 006f5060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VirtualPathingNode::SetLocation` (Xbox PDB; `thiscall`; the location;
+/// `RET 4`): the location at +4 is assigned (`PathingLocation::operator=`),
+/// the flags become 2, and flag 1 is added when the location resolves its
+/// navmesh information (`006dd6f0` with 0).
+pub fn virtual_pathing_node_set_location(e: &mut Engine, this: Ptr, location: u32) {
+    let base = this.addr();
+    e.call(LOCATION_ASSIGN, &args![base + 4, location]);
+    e.mem.set_u32(base, 2);
+    if e.call(LOCATION_RESOLVE, &args![base + 4, 0u32]).bool() {
+        let flags = e.mem.u32(base);
+        e.mem.set_u32(base, flags | 1);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -121,6 +136,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006f_4f00, fn_006f4f00(Ptr, u32, u32, u32) -> Ptr),
         entry!(0x006f_4f90, fn_006f4f90(Ptr, u32, u32) -> Ptr),
         entry!(0x006f_5020, fn_006f5020(Ptr)),
+        entry!(0x006f_5060, virtual_pathing_node_set_location(Ptr, u32)),
     ]
 }
 
@@ -263,5 +279,22 @@ mod tests {
         e.mem.set_u32(node, 2);
         e.call(0x006f_5020, &args![node]);
         assert_eq!(e.mem.u32(node), 2);
+    }
+
+    #[test]
+    fn set_location_assigns_and_resolves() {
+        for (resolves, flags) in [(true, 3u32), (false, 2)] {
+            let mut e = engine(resolves);
+            let node = e.mem.alloc(0x30);
+            e.mem.set_u32(node, 0xf0);
+            e.mem.set_u32(node + 0x2c, 0x77);
+            e.call_log = Some(vec![]);
+            e.call(0x006f_5060, &args![node, 0x4000u32]);
+            assert_eq!(calls_to(&e, LOCATION_ASSIGN), vec![vec![node + 4, 0x4000]]);
+            assert_eq!(calls_to(&e, LOCATION_RESOLVE), vec![vec![node + 4, 0]]);
+            assert!(calls_to(&e, LOCATION_CONSTRUCT).is_empty());
+            assert_eq!(e.mem.u32(node), flags);
+            assert_eq!(e.mem.u32(node + 0x2c), 0x77);
+        }
     }
 }

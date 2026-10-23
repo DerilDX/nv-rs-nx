@@ -97,6 +97,140 @@ pub fn fn_006d0510(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+/// `BSSimpleArray<FastNavMeshTriHandle,1024>`'s vtable (`0106c9e0`, RTTI).
+const FAST_TRI_HANDLE_ARRAY_VTABLE: u32 = 0x0106_c9e0;
+/// `006dc440` (`thiscall`, `RET 8`): run with 0, 0 by the destructor.
+const ARRAY_RESET_006DC440: u32 = 0x006d_c440;
+/// `memmove` (`00ec7230`, cdecl: destination, source, size).
+const MEMMOVE: u32 = 0x00ec_7230;
+/// `006a0480` (`thiscall`): the 0x18-byte element's constructor.
+const ELEMENT_CONSTRUCT_006A0480: u32 = 0x006a_0480;
+/// `006a8500` (`thiscall`): run on the array once the elements have moved
+/// to the new buffer.
+const ARRAY_RELEASE_006A8500: u32 = 0x006a_8500;
+
+/// Moves `count` elements of `stride` bytes from `source` to `destination`,
+/// one `memmove` each: first to last when the destination is below the
+/// source, last to first (a signed index, so nothing for a count above
+/// 0x8000_0000) when it is above, nothing when they are the same.
+fn move_elements(e: &mut Engine, destination: u32, source: u32, count: u32, stride: u32) {
+    if count == 0 {
+        return;
+    }
+    if destination < source {
+        let mut index = 0u32;
+        while index < count {
+            let offset = index.wrapping_mul(stride);
+            e.call(
+                MEMMOVE,
+                &args![
+                    destination.wrapping_add(offset),
+                    source.wrapping_add(offset),
+                    stride
+                ],
+            );
+            index += 1;
+        }
+    } else if source < destination {
+        let mut index = count.wrapping_sub(1) as i32;
+        while index >= 0 {
+            let offset = (index as u32).wrapping_mul(stride);
+            e.call(
+                MEMMOVE,
+                &args![
+                    destination.wrapping_add(offset),
+                    source.wrapping_add(offset),
+                    stride
+                ],
+            );
+            index -= 1;
+        }
+    }
+}
+
+// Translated from 006d04e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<FastNavMeshTriHandle,1024>`'s destructor body (no name in
+/// the engine map; `thiscall`, plain `RET`): the class's vtable, then
+/// `006dc440(0, 0)`. Returns `this`.
+pub fn fn_006d04e0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), FAST_TRI_HANDLE_ARRAY_VTABLE);
+    e.call(ARRAY_RESET_006DC440, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 006d0540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves `count` 0x30-byte elements from `source` to `destination` in the
+/// safe direction, one `memmove` each (`thiscall`, `ECX` not read;
+/// `RET 0xc`; no name in the engine map).
+pub fn fn_006d0540(e: &mut Engine, _unused_0: Ptr, destination: u32, source: u32, count: u32) {
+    move_elements(e, destination, source, count, 0x30);
+}
+
+// Translated from 006d05e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006d05e0 - the exception-unwinding frame (FS:[0]) is not translated.
+/// Constructs `count` 0x18-byte elements at `first` (`thiscall`, `ECX` not
+/// read; first, count; `RET 8`; no name in the engine map): each through
+/// placement new (`006e6da0` with 0x18) and, when that gives memory,
+/// `006a0480`.
+pub fn fn_006d05e0(e: &mut Engine, _unused_0: Ptr, first: u32, count: u32) {
+    let mut index = 0u32;
+    while index < count {
+        let place = e
+            .call(
+                PLACEMENT_NEW,
+                &args![0x18u32, index.wrapping_mul(0x18).wrapping_add(first)],
+            )
+            .u32();
+        if place != 0 {
+            e.call(ELEMENT_CONSTRUCT_006A0480, &args![place]);
+        }
+        index += 1;
+    }
+}
+
+// Translated from 006d0680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Gives the array of 0x18-byte elements (buffer `+4`, capacity `+0xc`) a
+/// buffer of `capacity` (`thiscall`; capacity, count; `RET 8`; no name in
+/// the engine map): without a buffer, virtual slot 4 with the capacity,
+/// which is also stored; when `count` equals the capacity, slot 0xc with the
+/// old buffer and the capacity; else a new buffer from slot 4, the `count`
+/// elements moved (`006d0730`), `006a8500` on the array and the new buffer
+/// kept.
+pub fn fn_006d0680(e: &mut Engine, this: Ptr, capacity: u32, count: u32) {
+    let base = this.addr();
+    if e.mem.u32(base + 4) == 0 {
+        let buffer = e.vcall(base, 4, &args![capacity]).u32();
+        e.mem.set_u32(base + 4, buffer);
+        e.mem.set_u32(base + 0xc, capacity);
+    } else if count == e.mem.u32(base + 0xc) {
+        let old = e.mem.u32(base + 4);
+        let buffer = e.vcall(base, 0xc, &args![old, capacity]).u32();
+        e.mem.set_u32(base + 4, buffer);
+    } else {
+        let buffer = e.vcall(base, 4, &args![capacity]).u32();
+        let old = e.mem.u32(base + 4);
+        fn_006d0730(e, this, buffer, old, count);
+        e.call(ARRAY_RELEASE_006A8500, &args![this]);
+        e.mem.set_u32(base + 4, buffer);
+    }
+}
+
+// Translated from 006d0730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves `count` 0x18-byte elements from `source` to `destination` in the
+/// safe direction, one `memmove` each (`thiscall`, `ECX` not read;
+/// `RET 0xc`; no name in the engine map).
+pub fn fn_006d0730(e: &mut Engine, _unused_0: Ptr, destination: u32, source: u32, count: u32) {
+    move_elements(e, destination, source, count, 0x18);
+}
+
+// Translated from 006d07d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves `count` bytes from `source` to `destination` in the safe
+/// direction, one 1-byte `memmove` each (`thiscall`, `ECX` not read;
+/// `RET 0xc`; no name in the engine map).
+pub fn fn_006d07d0(e: &mut Engine, _unused_0: Ptr, destination: u32, source: u32, count: u32) {
+    move_elements(e, destination, source, count, 1);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -105,6 +239,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006d_0420, fn_006d0420(Ptr) -> Ptr),
         entry!(0x006d_0450, fn_006d0450(Ptr) -> u32),
         entry!(0x006d_0510, fn_006d0510(Ptr, u32) -> Ptr),
+        entry!(0x006d_04e0, fn_006d04e0(Ptr) -> Ptr),
+        entry!(0x006d_0540, fn_006d0540(Ptr, u32, u32, u32)),
+        entry!(0x006d_05e0, fn_006d05e0(Ptr, u32, u32)),
+        entry!(0x006d_0680, fn_006d0680(Ptr, u32, u32)),
+        entry!(0x006d_0730, fn_006d0730(Ptr, u32, u32, u32)),
+        entry!(0x006d_07d0, fn_006d07d0(Ptr, u32, u32, u32)),
     ]
 }
 
@@ -227,5 +367,100 @@ mod b039_tests {
         assert_eq!(e.call(0x006d_0510, &args![0x5000u32, 1u32]).u32(), 0x5000);
         assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![0x5000]]);
         assert_eq!(calls_to(&e, ELEMENT_DESTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn fn_006d04e0_sets_the_vtable_and_resets() {
+        let mut e = Engine::new();
+        e.register(ARRAY_RESET_006DC440, |_, _| word(0));
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006d_04e0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), FAST_TRI_HANDLE_ARRAY_VTABLE);
+        assert_eq!(calls_to(&e, ARRAY_RESET_006DC440), vec![vec![this, 0, 0]]);
+    }
+
+    #[test]
+    fn element_moves_use_their_strides() {
+        let mut e = Engine::new();
+        e.register(MEMMOVE, |_, _| word(0));
+        for (addr, stride) in [
+            (0x006d_0540u32, 0x30u32),
+            (0x006d_0730, 0x18),
+            (0x006d_07d0, 1),
+        ] {
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![0u32, 0x1000u32, 0x2000u32, 2u32]);
+            assert_eq!(
+                calls_to(&e, MEMMOVE),
+                vec![
+                    vec![0x1000, 0x2000, stride],
+                    vec![0x1000 + stride, 0x2000 + stride, stride]
+                ]
+            );
+            e.call_log = Some(vec![]);
+            e.call(addr, &args![0u32, 0x2000u32, 0x1000u32, 2u32]);
+            assert_eq!(
+                calls_to(&e, MEMMOVE),
+                vec![
+                    vec![0x2000 + stride, 0x1000 + stride, stride],
+                    vec![0x2000, 0x1000, stride]
+                ]
+            );
+            for (destination, source, count) in [
+                (0x2000u32, 0x2000u32, 2u32),
+                (0x2000, 0x1000, 0),
+                (0x2000, 0x1000, 0x8000_0001),
+            ] {
+                e.call_log = Some(vec![]);
+                e.call(addr, &args![0u32, destination, source, count]);
+                assert!(calls_to(&e, MEMMOVE).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn fn_006d05e0_constructs_where_the_placement_gives() {
+        let mut e = Engine::new();
+        e.register(PLACEMENT_NEW, |_, a| {
+            word(if a[1] == 0x9018 { 0 } else { a[1] })
+        });
+        e.register(ELEMENT_CONSTRUCT_006A0480, |_, a| word(a[0]));
+        e.call_log = Some(vec![]);
+        e.call(0x006d_05e0, &args![0u32, 0x9000u32, 3u32]);
+        assert_eq!(
+            calls_to(&e, PLACEMENT_NEW),
+            vec![vec![0x18, 0x9000], vec![0x18, 0x9018], vec![0x18, 0x9030]]
+        );
+        assert_eq!(
+            calls_to(&e, ELEMENT_CONSTRUCT_006A0480),
+            vec![vec![0x9000], vec![0x9030]]
+        );
+    }
+
+    #[test]
+    fn fn_006d0680_allocates_reallocates_or_moves() {
+        let mut e = Engine::new();
+        e.register(MEMMOVE, |_, _| word(0));
+        e.register(ARRAY_RELEASE_006A8500, |_, _| word(0));
+        e.register(0x0f00_0004, |_, a| word(0x9000 + a[1]));
+        e.register(0x0f00_000c, |_, a| word(0xa000 + a[2]));
+        e.put_vtable(0x0f00_1000, &[0, 0x0f00_0004, 0, 0x0f00_000c]);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, 0x0f00_1000);
+        e.call(0x006d_0680, &args![this, 6u32, 0u32]);
+        assert_eq!(e.mem.u32(this + 4), 0x9006);
+        assert_eq!(e.mem.u32(this + 0xc), 6);
+        e.call_log = Some(vec![]);
+        e.call(0x006d_0680, &args![this, 9u32, 6u32]);
+        assert_eq!(calls_to(&e, 0x0f00_000c), vec![vec![this, 0x9006, 9]]);
+        assert_eq!(e.mem.u32(this + 4), 0xa009);
+        assert_eq!(e.mem.u32(this + 0xc), 6);
+        e.call_log = Some(vec![]);
+        e.call(0x006d_0680, &args![this, 0x10u32, 1u32]);
+        assert_eq!(calls_to(&e, 0x0f00_0004), vec![vec![this, 0x10]]);
+        assert_eq!(calls_to(&e, MEMMOVE), vec![vec![0x9010, 0xa009, 0x18]]);
+        assert_eq!(calls_to(&e, ARRAY_RELEASE_006A8500), vec![vec![this]]);
+        assert_eq!(e.mem.u32(this + 4), 0x9010);
     }
 }

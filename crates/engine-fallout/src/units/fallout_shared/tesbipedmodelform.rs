@@ -264,9 +264,28 @@ pub fn tes_biped_model_form_get_world_tes_model_ov2(e: &mut Engine, this: Ptr, s
         .wrapping_add(0x4c)
 }
 
+// Translated from 00481150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESBipedModelForm::GetBipedTESModel_ov2` (engine map): `bipedModel[sex]`
+/// (`this + 0xC + sex * 0x20`), sex 1 falling back to 0 when that model has no file name
+/// (`0048cee0`); `RET 4`.
+pub fn tes_biped_model_form_get_biped_tes_model_ov2(e: &mut Engine, this: Ptr, sex: u32) -> u32 {
+    let mut sex = sex;
+    let model = this
+        .addr()
+        .wrapping_add(sex.wrapping_shl(5))
+        .wrapping_add(0xc);
+    if e.call(MODEL_HAS_NAME, &args![model]).u32() == 0 && sex == 1 {
+        sex = 0;
+    }
+    this.addr()
+        .wrapping_add(sex.wrapping_shl(5))
+        .wrapping_add(0xc)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0048_1150, tes_biped_model_form_get_biped_tes_model_ov2(Ptr, u32) -> u32),
         entry!(0x0048_0db0, tes_biped_model_form_get_form_as_biped_model(Ptr) -> Ptr),
         entry!(0x0048_0af0, tes_biped_model_form_fills_biped_slot(Ptr, u32, u8, Ptr) -> bool),
         entry!(
@@ -622,5 +641,25 @@ mod physics_work_ahead_tests {
         // An empty container (no list head) ends the search at once.
         let bare = e.mem.alloc(0x10);
         assert!(!e.call(0x0048_0af0, &args![this, 2u32, 0u8, bare]).bool());
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn get_biped_tes_model_falls_back_to_the_male_model() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x100);
+        // The female model (+0x2C) has a name only when its word +4 is set.
+        e.register(MODEL_HAS_NAME, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        let at = |e: &mut Engine, sex: u32| e.call(0x0048_1150, &args![this, sex]).u32();
+        assert_eq!(at(&mut e, 0), this + 0xc);
+        assert_eq!(at(&mut e, 1), this + 0xc);
+        e.mem.set_u32(this + 0x2c + 4, 1);
+        assert_eq!(at(&mut e, 1), this + 0x2c);
+        // Other indices are not checked: 2 without a name stays 2.
+        assert_eq!(at(&mut e, 2), this + 0x4c);
     }
 }

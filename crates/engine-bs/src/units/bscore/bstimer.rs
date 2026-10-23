@@ -123,9 +123,27 @@ pub fn fn_00aa4ee0(e: &mut Engine, this: Ptr<BSTimer>, now: u32) {
     e.set(this, BSTimer::fDelta, f32::from_bits(x87_store32(scaled)));
 }
 
+// Translated from 00aa50a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTimer::Disable` (engine map; `ECX` only): counts the disable counter up (a byte,
+/// wrapping); when it was zero, `iLastTime` and `iFirstTime` become `GetTickCount()` minus
+/// themselves (saving the times relative to now, which `Enable` turns back).
+pub fn bs_timer_disable(e: &mut Engine, this: Ptr<BSTimer>) {
+    let counter = e.get(this, BSTimer::cDisableCounter);
+    e.set(this, BSTimer::cDisableCounter, counter.wrapping_add(1));
+    if counter != 0 {
+        return;
+    }
+    let now = e.call(GET_TICK_COUNT_IMPORT, &args![]).u32();
+    let last = now.wrapping_sub(e.get(this, BSTimer::iLastTime));
+    e.set(this, BSTimer::iLastTime, last);
+    let first = now.wrapping_sub(e.get(this, BSTimer::iFirstTime));
+    e.set(this, BSTimer::iFirstTime, first);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00aa_50a0, bs_timer_disable(Ptr<BSTimer>)),
         entry!(0x00aa4ee0, fn_00aa4ee0(Ptr<BSTimer>, u32)),
         entry!(
             0x00aa_4db0,
@@ -418,5 +436,40 @@ mod tests {
         assert_eq!(e.get(timer, BSTimer::fClampRemainder), 0.25);
         assert_eq!(e.get(timer, BSTimer::fDeltaUnmodified), 0.0165);
         assert_eq!(e.get(timer, BSTimer::fDelta), 0.033);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn disable_saves_the_times_on_the_first_count_only() {
+        let mut e = Engine::new();
+        e.register(GET_TICK_COUNT_IMPORT, |_, _| 1000u32.into_ret());
+        let timer: Ptr<BSTimer> = e.new_object();
+        e.set(timer, BSTimer::iLastTime, 900);
+        e.set(timer, BSTimer::iFirstTime, 100);
+        e.call(0x00aa_50a0, &args![timer]);
+        assert_eq!(e.get(timer, BSTimer::cDisableCounter), 1);
+        assert_eq!(e.get(timer, BSTimer::iLastTime), 100);
+        assert_eq!(e.get(timer, BSTimer::iFirstTime), 900);
+        // A second disable only counts.
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_50a0, &args![timer]);
+        assert_eq!(e.get(timer, BSTimer::cDisableCounter), 2);
+        assert_eq!(e.get(timer, BSTimer::iLastTime), 100);
+        let log = e.call_log.take().unwrap();
+        assert!(log.iter().all(|(a, _)| *a != GET_TICK_COUNT_IMPORT));
+        // The counter wraps from 0xFF to 0 without reading the clock.
+        e.set(timer, BSTimer::cDisableCounter, 0xff);
+        e.call(0x00aa_50a0, &args![timer]);
+        assert_eq!(e.get(timer, BSTimer::cDisableCounter), 0);
+        assert_eq!(e.get(timer, BSTimer::iLastTime), 100);
+        // Later than the 32-bit wrap: now minus a larger saved time.
+        let timer: Ptr<BSTimer> = e.new_object();
+        e.set(timer, BSTimer::iLastTime, 2000);
+        e.call(0x00aa_50a0, &args![timer]);
+        assert_eq!(e.get(timer, BSTimer::iLastTime), 1000u32.wrapping_sub(2000));
     }
 }

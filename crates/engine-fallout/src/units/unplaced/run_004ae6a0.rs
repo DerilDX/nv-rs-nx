@@ -47,10 +47,12 @@ pub fn fn_004ae6c0(e: &mut Engine, this: Ptr) -> u32 {
 }
 
 // Translated from 004ae6a0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed in the engine map: passes `004ae6c0`'s answer to `004a3a40`.
-pub fn fn_004ae6a0(e: &mut Engine, this: Ptr) {
+/// Unnamed in the engine map: passes `004ae6c0`'s answer to `004a3a40` and
+/// answers its value (the exe ends on that call and leaves its `EAX`, which
+/// the callers read).
+pub fn fn_004ae6a0(e: &mut Engine, this: Ptr) -> u32 {
     let word = fn_004ae6c0(e, this);
-    e.call(CALLEE_004A3A40, &args![word]);
+    e.call(CALLEE_004A3A40, &args![word]).u32()
 }
 
 /// This unit's translated functions, by exe address.
@@ -58,7 +60,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x004a_e700, fn_004ae700(Ptr) -> u32),
         entry!(0x004a_e6c0, fn_004ae6c0(Ptr) -> u32),
-        entry!(0x004a_e6a0, fn_004ae6a0(Ptr)),
+        entry!(0x004a_e6a0, fn_004ae6a0(Ptr) -> u32),
     ]
 }
 
@@ -147,5 +149,13 @@ mod tests {
         let hits: Vec<_> = log.iter().filter(|c| c.0 == CALLEE_004A3A40).collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, vec![0]);
+    }
+
+    #[test]
+    fn fn_004ae6a0_answers_004a3a40s_value() {
+        let mut e = Engine::new();
+        e.register(CHARACTER_PROXY_OPERATOR_P, |_, _| Ret::default());
+        e.register(CALLEE_004A3A40, |_, _| 0x55u32.into_ret());
+        assert_eq!(e.call(0x004a_e6a0, &args![0x4000u32]).u32(), 0x55);
     }
 }

@@ -45,7 +45,9 @@ pub fn fn_00a68c80(e: &mut Engine, this: Ptr, stream: u32) {
 /// copied into the clone (fields unnamed here).
 pub fn fn_00a68d40(e: &mut Engine, this: Ptr, clone: u32, cloning: u32) {
     let this = this.addr();
-    e.call(GEOMETRY_COPY_MEMBERS, &args![clone, cloning]);
+    // `ECX` is still `this` at the call (the exe copies it to `ESI` only
+    // after the pushes): `CopyMembers` runs on this object.
+    e.call(GEOMETRY_COPY_MEMBERS, &args![this, clone, cloning]);
     let first = e.mem.u32(this + 0xa4);
     e.mem.set_u32(clone + 0xa4, first);
     let second = e.mem.u32(this + 0xa8);
@@ -132,7 +134,7 @@ mod tests {
         assert_eq!(e.mem.u32(clone + 0xa8), 8);
         assert_eq!(e.mem.u8(clone + 0x9c), 9);
         let log = e.call_log.take().unwrap();
-        assert!(log.contains(&(GEOMETRY_COPY_MEMBERS, vec![clone, 0x33])));
+        assert!(log.contains(&(GEOMETRY_COPY_MEMBERS, vec![this, clone, 0x33])));
     }
 }
 

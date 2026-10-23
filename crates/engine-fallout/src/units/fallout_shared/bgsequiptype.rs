@@ -123,11 +123,110 @@ pub fn bgs_equip_type_generate_default_menu_icons(e: &mut Engine) {
     });
 }
 
+/// `00485910` (`cdecl`: chunk signature, word): saves a chunk holding one word.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// The chunk signature `ETYP` (`0x50595445`).
+const CHUNK_ETYP: u32 = 0x5059_5445;
+/// The `BaseFormComponent` and `BGSEquipType` type descriptors (`01183040`, `01183290`).
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+const TYPE_BGS_EQUIP_TYPE: u32 = 0x0118_3290;
+/// `006ecd40` (`ECX` = object, `RET 4`): stores its argument at +4 (the engine map names it
+/// `CombatProcedureAttackMelee::Initialize`, a folded body).
+const SET_WORD_4: u32 = 0x006e_cd40;
+/// `00408da0` (`ECX` = string holder): its text (`00559450` on +4), or the empty string
+/// `01011584` (the engine map names it `MapMarkerData::GetLocationName`, a folded body).
+const STRING_TEXT: u32 = 0x0040_8da0;
+/// The empty string (`01011584`).
+const EMPTY_STRING: u32 = 0x0101_1584;
+/// The number of equip types with a default menu icon.
+const EQUIP_TYPE_COUNT: i32 = 14;
+
+/// `__RTDynamicCast` of `other` from `BaseFormComponent` to `BGSEquipType`.
+fn cast_to_equip_type(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![
+            other,
+            0u32,
+            TYPE_BASE_FORM_COMPONENT,
+            TYPE_BGS_EQUIP_TYPE,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+// Translated from 00479350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEquipType::Save` (Xbox PDB; `thiscall`, no stack word): saves the equip type (the
+/// word at +4) in an `ETYP` chunk (`00485910`).
+pub fn bgs_equip_type_save(e: &mut Engine, this: Ptr) {
+    let equip_type = e.mem.u32(this.addr() + 4);
+    e.call(ADD_CHUNK_WORD, &args![CHUNK_ETYP, equip_type]);
+}
+
+// Translated from 00479380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEquipType::CopyComponent` (Xbox PDB; `RET 4`): casts `other` to a `BGSEquipType`
+/// and, when it is one, copies its equip type (the word at +4, read through `00726070`
+/// and stored through `006ecd40`).
+pub fn bgs_equip_type_copy_component(e: &mut Engine, this: Ptr, other: Ptr) {
+    let cast = cast_to_equip_type(e, other);
+    if cast == 0 {
+        return;
+    }
+    let equip_type = e.call(WORD_4_00726070, &args![cast]).u32();
+    e.call(SET_WORD_4, &args![this, equip_type]);
+}
+
+// Translated from 004793d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEquipType::CompareComponent` (Xbox PDB; `RET 4`, result in `AL`): true ("differs")
+/// when `other` is not a `BGSEquipType` or its equip type (+4, through `00726070`)
+/// differs from this one's.
+pub fn bgs_equip_type_compare_component(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let cast = cast_to_equip_type(e, other);
+    if cast == 0 {
+        return true;
+    }
+    let ours = e.call(WORD_4_00726070, &args![this]).u32();
+    let theirs = e.call(WORD_4_00726070, &args![cast]).u32();
+    ours != theirs
+}
+
+// Translated from 00479510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The default menu icon of `equip_type` (`cdecl`): the entry of the table at `011c4b54`
+/// that `GenerateDefaultMenuIcons` fills, 0 for a type outside 0..14 (signed compare).
+pub fn fn_00479510(e: &mut Engine, equip_type: i32) -> u32 {
+    if equip_type > -1 && equip_type < EQUIP_TYPE_COUNT {
+        e.global::<u32>(DEFAULT_MENU_ICONS.wrapping_add((equip_type as u32).wrapping_mul(4)))
+    } else {
+        0
+    }
+}
+
+// Translated from 00479540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSEquipType::GetEquipTypeIconFilename` (Xbox PDB; `cdecl`): the icon file name of
+/// the default menu icon of `equip_type` (`00408da0` on the icon's string at +0x18), or
+/// the empty string `01011584` when there is no icon.
+pub fn bgs_equip_type_get_equip_type_icon_filename(e: &mut Engine, equip_type: i32) -> u32 {
+    let icon = fn_00479510(e, equip_type);
+    if icon == 0 {
+        return EMPTY_STRING;
+    }
+    e.call(STRING_TEXT, &args![icon + 0x18]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0047_9430, bgs_equip_type_get_equip_type(Ptr) -> u32),
         entry!(0x0047_9570, bgs_equip_type_generate_default_menu_icons()),
+        entry!(0x0047_9350, bgs_equip_type_save(Ptr)),
+        entry!(0x0047_9380, bgs_equip_type_copy_component(Ptr, Ptr)),
+        entry!(0x0047_93d0, bgs_equip_type_compare_component(Ptr, Ptr) -> bool),
+        entry!(0x0047_9510, fn_00479510(i32) -> u32),
+        entry!(
+            0x0047_9540,
+            bgs_equip_type_get_equip_type_icon_filename(i32) -> u32
+        ),
     ]
 }
 
@@ -265,5 +364,115 @@ mod tests {
         // The second time the name length is not taken again.
         e.call(0x0047_9570, &args![]);
         assert_eq!(calls(&e, STRLEN).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn save_writes_the_equip_type() {
+        let mut e = Engine::new();
+        e.register(ADD_CHUNK_WORD, |_, _| Ret::default());
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0xffff_ffff);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_9350, &args![this]);
+        assert_eq!(
+            calls(&e, ADD_CHUNK_WORD),
+            vec![vec![CHUNK_ETYP, 0xffff_ffff]]
+        );
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(WORD_4_00726070, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(SET_WORD_4, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e
+    }
+
+    #[test]
+    fn copy_component_copies_the_equip_type_of_an_equip_type() {
+        let mut e = engine();
+        let this = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(other + 4, 9);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_9380, &args![this, other]);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![
+                other,
+                0,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_BGS_EQUIP_TYPE,
+                0
+            ]]
+        );
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.call(0x0047_9380, &args![this, other]);
+        assert_eq!(e.mem.u32(this + 4), 9);
+    }
+
+    #[test]
+    fn compare_component_differs_unless_the_same_equip_type() {
+        let mut e = engine();
+        let this = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 3);
+        e.mem.set_u32(other + 4, 3);
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        assert!(!e.call(0x0047_93d0, &args![this, other]).bool());
+        e.mem.set_u32(other + 4, 4);
+        assert!(e.call(0x0047_93d0, &args![this, other]).bool());
+        e.mem.set_u32(other + 4, 3);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0047_93d0, &args![this, other]).bool());
+    }
+
+    fn engine_with_icons() -> Engine {
+        let mut e = Engine::new();
+        e.mem.map(DEFAULT_MENU_ICONS, 14 * 4);
+        for i in 0..14u32 {
+            e.set_global(DEFAULT_MENU_ICONS + i * 4, 0x9000 + i * 0x100);
+        }
+        e
+    }
+
+    #[test]
+    fn default_menu_icon_reads_the_table_inside_its_range_only() {
+        let mut e = engine_with_icons();
+        assert_eq!(e.call(0x0047_9510, &args![0u32]).u32(), 0x9000);
+        assert_eq!(e.call(0x0047_9510, &args![13u32]).u32(), 0x9d00);
+        assert_eq!(e.call(0x0047_9510, &args![14u32]).u32(), 0);
+        assert_eq!(e.call(0x0047_9510, &args![-1i32]).u32(), 0);
+    }
+
+    #[test]
+    fn icon_filename_is_the_icon_string_or_empty() {
+        let mut e = engine_with_icons();
+        e.set_global(DEFAULT_MENU_ICONS + 4, 0u32);
+        e.register(STRING_TEXT, |_, a| (a[0] + 1).into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_9540, &args![2u32]).u32(), 0x9218 + 1);
+        assert_eq!(calls(&e, STRING_TEXT), vec![vec![0x9218]]);
+        assert_eq!(e.call(0x0047_9540, &args![1u32]).u32(), EMPTY_STRING);
+        assert_eq!(e.call(0x0047_9540, &args![20u32]).u32(), EMPTY_STRING);
     }
 }

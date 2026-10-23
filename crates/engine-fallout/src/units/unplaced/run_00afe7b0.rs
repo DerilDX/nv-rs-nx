@@ -140,9 +140,59 @@ pub fn fn_00afeac0(e: &mut Engine, this: Ptr, path: Ptr) -> u32 {
     result
 }
 
+/// Import slot of KERNEL32 `SetFilePointerEx` (stdcall, five words: the handle, the
+/// distance's low and high words, the new position's address and the move method).
+const SET_FILE_POINTER_EX: u32 = 0x00fd_f140;
+
+// Translated from 00afeef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map: the seek of the file object (thiscall, four words: the
+/// distance's low and high words, the move method and the address of an 8-byte position;
+/// `RET 0x10`). Answers 4 while the flag byte (+0xc) is set. Otherwise moves the handle
+/// (+0x10) with `SetFilePointerEx` (the new position on its stack, cleared first); on
+/// success copies the new position to `position` and answers 0; on failure answers
+/// `GetLastError` mapped as [`fn_00afeac0`] does: 0 to 0, 2 to 1, 3 to 2, 0x13 to 3 and
+/// anything else to 4 (the exe's byte map at `00afefe8`, as `match` arms).
+pub fn fn_00afeef0(
+    e: &mut Engine,
+    this: Ptr,
+    distance_low: u32,
+    distance_high: u32,
+    method: u32,
+    position: Ptr,
+) -> u32 {
+    let base = this.addr();
+    e.with_stack(8, |e, moved| {
+        if e.mem.u8(base + FILE_OVERLAPPED_FLAG) != 0 {
+            return 4;
+        }
+        let handle = e.mem.u32(base + FILE_HANDLE);
+        let done = e
+            .call(
+                SET_FILE_POINTER_EX,
+                &args![handle, distance_low, distance_high, moved, method],
+            )
+            .u32();
+        if done == 0 {
+            return match e.call(GET_LAST_ERROR, &args![]).u32() {
+                0 => 0,
+                2 => 1,
+                3 => 2,
+                0x13 => 3,
+                _ => 4,
+            };
+        }
+        let low = e.mem.u32(moved.addr());
+        e.mem.set_u32(position.addr(), low);
+        let high = e.mem.u32(moved.addr() + 4);
+        e.mem.set_u32(position.addr() + 4, high);
+        0
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00af_eef0, fn_00afeef0(Ptr, u32, u32, u32, Ptr) -> u32),
         entry!(
             0x00af_e9f0,
             fn_00afe9f0(Ptr<BSSimpleArray>, u32) -> Ptr<BSSimpleArray>
@@ -303,5 +353,68 @@ mod tests {
         let (e, result) = open(0, 1, 0, &[u32::MAX, u32::MAX], 0);
         assert_eq!(result, 0x55);
         assert_eq!(calls_to(&e, FILE_SEEK).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn seek_copies_the_new_position() {
+        let mut e = Engine::new();
+        e.register(SET_FILE_POINTER_EX, |e, a| {
+            // The new position is the distance itself.
+            e.mem.set_u32(a[3], a[1]);
+            e.mem.set_u32(a[3] + 4, a[2]);
+            1u32.into_ret()
+        });
+        let this = e.mem.alloc(0x14);
+        e.mem.set_u32(this + FILE_HANDLE, 0x44);
+        let position = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x00af_eef0, &args![this, 0x10u32, 0x2u32, 1u32, position])
+            .u32();
+        assert_eq!(result, 0);
+        assert_eq!(e.mem.u32(position), 0x10);
+        assert_eq!(e.mem.u32(position + 4), 2);
+        let log = e.call_log.take().unwrap();
+        let call = log.iter().find(|(a, _)| *a == SET_FILE_POINTER_EX).unwrap();
+        assert_eq!(
+            [call.1[0], call.1[1], call.1[2], call.1[4]],
+            [0x44, 0x10, 2, 1]
+        );
+    }
+
+    #[test]
+    fn seek_maps_the_error_and_refuses_with_the_flag() {
+        let mut e = Engine::new();
+        e.register(SET_FILE_POINTER_EX, |_, _| 0u32.into_ret());
+        let this = e.mem.alloc(0x14);
+        let position = e.mem.alloc(8);
+        for (error, want) in [
+            (0u32, 0u32),
+            (1, 4),
+            (2, 1),
+            (3, 2),
+            (5, 4),
+            (0x13, 3),
+            (0x14, 4),
+        ] {
+            e.register_double(GET_LAST_ERROR, move |_, _| error.into_ret());
+            let result = e
+                .call(0x00af_eef0, &args![this, 0u32, 0u32, 0u32, position])
+                .u32();
+            assert_eq!(result, want, "error {error:#x}");
+        }
+        assert_eq!(e.mem.u32(position), 0);
+        e.mem.set_u8(this + FILE_OVERLAPPED_FLAG, 1);
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x00af_eef0, &args![this, 0u32, 0u32, 0u32, position])
+            .u32();
+        assert_eq!(result, 4);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

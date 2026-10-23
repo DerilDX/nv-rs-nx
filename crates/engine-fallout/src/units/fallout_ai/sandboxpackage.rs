@@ -1810,9 +1810,360 @@ pub fn fn_009f4700(e: &mut Engine, this: Ptr, actor: Ptr, package: Ptr) {
     e.mem.set_u32(base + LAST_TIME_CHANGED, x87_store32(hour));
 }
 
+/// `BGSLoadGameBuffer`'s read of bytes (`00864980`, `thiscall` on the
+/// buffer, `RET 8`: the destination and the size).
+const LOAD_DATA: u32 = 0x0086_4980;
+/// `BGSLoadGameBuffer::LoadFormID_ov2` (`008648e0`, engine map; `thiscall`
+/// on the buffer, `RET 4`: the address of the form id word).
+const LOAD_FORM_ID: u32 = 0x0086_48e0;
+/// `BGSLoadGameBuffer::LoadVariableSizedValue` (`00864a60`, engine map;
+/// `ECX` only).
+const LOAD_VARIABLE_SIZED_VALUE: u32 = 0x0086_4a60;
+/// `004839c0` (cdecl, one word): the form of an id.
+const LOOKUP_FORM_004839C0: u32 = 0x0048_39c0;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl, five words).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// The type descriptors of `InitLoadGame`'s casts: `.?AVTESForm@@`
+/// (`01183028`) to `.?AVTESObjectREFR@@` (`011841cc`).
+const CAST_FROM_FORM: u32 = 0x0118_3028;
+const CAST_TO_REFERENCE: u32 = 0x0118_41cc;
+/// `009a4f40` (`thiscall` on a choice item, `RET 4`: the load buffer): the
+/// item's own `InitLoadGame` step.
+const CHOICE_INIT_LOAD_GAME_009A4F40: u32 = 0x009a_4f40;
+/// `0092a980` (cdecl, one word): the test on a target-less choice's
+/// procedure that drops the choice.
+const PROCEDURE_TEST_0092A980: u32 = 0x0092_a980;
+/// `009f6540` (`thiscall`, `RET 8`: the new reserved size and the count to
+/// keep): reallocates the choice buffer.
+const CHOICE_ARRAY_REALLOCATE_009F6540: u32 = 0x009f_6540;
+/// The array's virtual slot (byte offset) that allocates a buffer of `n`
+/// items.
+const SLOT_ARRAY_ALLOCATE: u32 = 0x4;
+
+// Translated from 009f38b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SandBoxChoiceListItem`'s load (unnamed in the engine map; `RET 4`), the
+/// mirror of `009f3850`: the words at +4, +8 and +0xC (four bytes each,
+/// `00864980`), then the target's form id into +0 (`LoadFormID_ov2`).
+pub fn fn_009f38b0(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    let base = this.addr();
+    for offset in [4u32, 8, 0xc] {
+        e.call(LOAD_DATA, &args![buffer, base + offset, 4u32]);
+    }
+    e.call(LOAD_FORM_ID, &args![buffer, base]);
+}
+
+// Translated from 009f41c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`ECX` only): lets go of the target marker
+/// (`009f4060`), asks for a new procedure (`bShouldPickNewProcedure` +0x34
+/// set) and sets the state (+4) to 1.
+pub fn fn_009f41c0(e: &mut Engine, this: Ptr) {
+    fn_009f4060(e, this);
+    let base = this.addr();
+    e.mem.set_u8(base + SHOULD_PICK_NEW_PROCEDURE, 1);
+    e.mem.set_u32(base + STATE, 1);
+}
+
+// Translated from 009f4680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SandBoxActorPackageData::ForgetTargetAndPickProcedure` (engine map;
+/// `RET 8`): with a current target object, every potential target choosing
+/// it (`00559450`) gets its base score (+8) cleared (the count and index
+/// compared signed); then the next procedure is picked (`009f4700`).
+pub fn sand_box_actor_package_data_forget_target_and_pick_procedure(
+    e: &mut Engine,
+    this: Ptr,
+    actor: Ptr,
+    package: Ptr,
+) {
+    let base = this.addr();
+    if e.mem.u32(base + CURRENT_TARGET_OBJECT) != 0 {
+        let targets = Ptr::new(base + POTENTIAL_TARGETS);
+        let count = e.call(WORD_AT_8, &args![targets]).u32() as i32;
+        let mut index: i32 = 0;
+        while index < count {
+            let choice = fn_009f6190(e, targets, index as u32);
+            let target = e.call(CHOICE_TARGET, &args![choice]).u32();
+            if target == e.mem.u32(base + CURRENT_TARGET_OBJECT) {
+                e.mem.set_u32(choice.addr() + 8, 0);
+            }
+            index = index.wrapping_add(1);
+        }
+    }
+    fn_009f4700(e, this, actor, package);
+}
+
+// Translated from 009f5ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SandBoxActorPackageData::LoadGame` (engine map; `RET 4`), the mirror of
+/// `SaveGame`: the state, procedure, duration, last change, total time,
+/// next change, duration again, scan time, the four flags, the idle
+/// markers and the marker byte; the time since the previous target changed
+/// (read into a local) becomes `iPrevTargetChangedTimeStamp` (+0x48) as now
+/// minus it; the activity's day, hour, duration and type and the six
+/// procedure weights; the form ids of the location, the current and the
+/// previous target; then the choice count (`LoadVariableSizedValue`), the
+/// array sized to it (`009f6200(count, 1)`) and each choice loaded
+/// (`009f38b0`).
+pub fn sand_box_actor_package_data_load_game(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    let base = this.addr();
+    let fields: [(u32, u32); 14] = [
+        (STATE, 4),
+        (PROCEDURE, 4),
+        (PROCEDURE_DURATION, 4),
+        (LAST_TIME_CHANGED, 4),
+        (TOTAL_TIME, 4),
+        (NEXT_TIME_TO_CHANGE_LOCATIONS, 4),
+        (PROCEDURE_DURATION, 4),
+        (NEXT_TIME_TO_SCAN_WORLD, 4),
+        (SHOULD_PICK_NEW_PROCEDURE, 1),
+        (FOOD, 1),
+        (CHAIR, 1),
+        (BED, 1),
+        (IDLE_MARKERS, 4),
+        (CURRENT_TARGET_MARKER, 1),
+    ];
+    for (offset, size) in fields {
+        e.call(LOAD_DATA, &args![buffer, base + offset, size]);
+    }
+    let since = e.with_stack(4, |e, slot| {
+        e.call(LOAD_DATA, &args![buffer, slot, 4u32]);
+        e.mem.u32(slot.addr())
+    });
+    let time = now(e);
+    e.mem.set_u32(
+        base + PREV_TARGET_CHANGED_TIME_STAMP,
+        time.wrapping_sub(since),
+    );
+    let fields: [(u32, u32); 5] = [
+        (ACTIVITY_START_DAY, 4),
+        (ACTIVITY_START_HOUR, 4),
+        (ACTIVITY_DURATION, 4),
+        (ACTIVITY, 4),
+        (PROCEDURE_WEIGHT, 6),
+    ];
+    for (offset, size) in fields {
+        e.call(LOAD_DATA, &args![buffer, base + offset, size]);
+    }
+    for offset in [LOCATION, CURRENT_TARGET_OBJECT, PREV_TARGET_OBJECT] {
+        e.call(LOAD_FORM_ID, &args![buffer, base + offset]);
+    }
+    let count = e.call(LOAD_VARIABLE_SIZED_VALUE, &args![buffer]).u32();
+    let targets = Ptr::new(base + POTENTIAL_TARGETS);
+    fn_009f6200(e, targets, count, 1);
+    let mut index = 0u32;
+    while index < count {
+        let choice = fn_009f6190(e, targets, index);
+        fn_009f38b0(e, choice, buffer);
+        index = index.wrapping_add(1);
+    }
+}
+
+/// `InitLoadGame`'s resolution of a loaded form id: null stays null, else
+/// `__RTDynamicCast(004839c0(id), 0, TESForm, TESObjectREFR, 0)`.
+fn resolve_reference(e: &mut Engine, id: u32) -> u32 {
+    if id == 0 {
+        return 0;
+    }
+    let form = e.call(LOOKUP_FORM_004839C0, &args![id]).u32();
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, CAST_FROM_FORM, CAST_TO_REFERENCE, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 009f5ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SandBoxActorPackageData::InitLoadGame` (engine map; `RET 4`): resolves
+/// the location (+0x10), the current target (+0x3C, then marked targeted)
+/// and the previous target (+0x44, likewise) from their form ids; runs each
+/// choice's step `009a4f40` with the buffer; removes every target-less
+/// choice whose procedure passes `0092a980` (`009f63a0(index, 1)`, the
+/// count and index compared signed). Then, with a current target, its
+/// marker is reserved again when it has a free marker (`00568260(0)`), else
+/// the choice is marked dropped; a dropped choice or no current target
+/// resets the procedure (-1), its duration (0.0), the target, the marker
+/// (0x7F), asks for a new procedure and clears the scan time. With a
+/// location and no change time yet, the change time becomes -1, then 0
+/// when the location's extra data has type 0x51, then now plus the 0x6F
+/// entry's seconds times 1000.0 (truncated to 64 bits) when it has one.
+pub fn sand_box_actor_package_data_init_load_game(e: &mut Engine, this: Ptr, buffer: Ptr) {
+    let base = this.addr();
+    let id = e.mem.u32(base + LOCATION);
+    let location = resolve_reference(e, id);
+    e.mem.set_u32(base + LOCATION, location);
+    let id = e.mem.u32(base + CURRENT_TARGET_OBJECT);
+    let current = resolve_reference(e, id);
+    e.mem.set_u32(base + CURRENT_TARGET_OBJECT, current);
+    if e.mem.u32(base + CURRENT_TARGET_OBJECT) != 0 {
+        let target = e.mem.u32(base + CURRENT_TARGET_OBJECT);
+        e.call(SET_TARGETED, &args![target, 1u32]);
+    }
+    let id = e.mem.u32(base + PREV_TARGET_OBJECT);
+    let previous = resolve_reference(e, id);
+    e.mem.set_u32(base + PREV_TARGET_OBJECT, previous);
+    if e.mem.u32(base + PREV_TARGET_OBJECT) != 0 {
+        let target = e.mem.u32(base + PREV_TARGET_OBJECT);
+        e.call(SET_TARGETED, &args![target, 1u32]);
+    }
+    let targets = Ptr::new(base + POTENTIAL_TARGETS);
+    let count = e.call(WORD_AT_8, &args![targets]).u32();
+    let mut index = 0u32;
+    while index < count {
+        let choice = fn_009f6190(e, targets, index);
+        e.call(CHOICE_INIT_LOAD_GAME_009A4F40, &args![choice, buffer]);
+        index = index.wrapping_add(1);
+    }
+    let mut count = e.call(WORD_AT_8, &args![targets]).u32() as i32;
+    let mut index: i32 = 0;
+    let mut dropped = false;
+    while index < count {
+        let choice = fn_009f6190(e, targets, index as u32);
+        if e.call(CHOICE_TARGET, &args![choice]).u32() == 0 {
+            let procedure = e.call(WORD_AT_4, &args![choice]).u32();
+            if e.call(PROCEDURE_TEST_0092A980, &args![procedure]).u8() != 0 {
+                fn_009f63a0(e, targets, index as u32, 1);
+                count = count.wrapping_sub(1);
+                dropped = true;
+                continue;
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    if e.mem.u32(base + CURRENT_TARGET_OBJECT) != 0 {
+        let target = e.mem.u32(base + CURRENT_TARGET_OBJECT);
+        if e.call(REFERENCE_HAS_FREE_MARKER, &args![target, 0u32]).u8() != 0 {
+            let marker = u32::from(e.mem.u8(base + CURRENT_TARGET_MARKER));
+            let target = e.mem.u32(base + CURRENT_TARGET_OBJECT);
+            e.call(SET_MARKER_RESERVED, &args![target, marker, 1u32]);
+        } else {
+            dropped = true;
+        }
+    }
+    if dropped || e.mem.u32(base + CURRENT_TARGET_OBJECT) == 0 {
+        e.mem.set_u32(base + PROCEDURE, 0xffff_ffff);
+        e.mem.set_u32(base + PROCEDURE_DURATION, x87_store32(0.0));
+        e.mem.set_u32(base + CURRENT_TARGET_OBJECT, 0);
+        e.mem.set_u8(base + CURRENT_TARGET_MARKER, 0x7f);
+        e.mem.set_u8(base + SHOULD_PICK_NEW_PROCEDURE, 1);
+        e.mem.set_u32(base + NEXT_TIME_TO_SCAN_WORLD, 0);
+    }
+    if e.mem.u32(base + LOCATION) == 0 || e.mem.u32(base + NEXT_TIME_TO_CHANGE_LOCATIONS) != 0 {
+        return;
+    }
+    e.mem
+        .set_u32(base + NEXT_TIME_TO_CHANGE_LOCATIONS, 0xffff_ffff);
+    let location = e.mem.u32(base + LOCATION);
+    let list = e.call(EXTRA_DATA_LIST, &args![location]).u32();
+    if e.call(EXTRA_DATA_0X51, &args![list]).u32() == 0 {
+        return;
+    }
+    e.mem.set_u32(base + NEXT_TIME_TO_CHANGE_LOCATIONS, 0);
+    let location = e.mem.u32(base + LOCATION);
+    let list = e.call(EXTRA_DATA_LIST, &args![location]).u32();
+    let extra = e.call(EXTRA_DATA_0X6F, &args![list]).u32();
+    if extra == 0 {
+        return;
+    }
+    let start = now(e);
+    let seconds = e.call(FLOAT_AT_0, &args![extra]).f64();
+    let thousand: f64 = e.global(THOUSAND);
+    let milliseconds = x87_fistp64_chop(X87Ext::load64(x87_mul(seconds, thousand))) as u32;
+    e.mem.set_u32(
+        base + NEXT_TIME_TO_CHANGE_LOCATIONS,
+        start.wrapping_add(milliseconds),
+    );
+}
+
+// Translated from 009f6200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<SandBoxChoiceListItem,1024>`'s `SetSize` (unnamed in the
+/// engine map; `RET 8`; items of 0x10 bytes). Size 0 empties the array
+/// (`008454f0(shrink)`). Above the reserved size the buffer is allocated
+/// (virtual slot +4 with the size) when there is none, else reallocated
+/// (`009f6540(size, old size)`), the new items constructed (`009f6460`) and
+/// the size set. Below the current size the extra items are destroyed
+/// (`0072ba80`), the size set, and with `shrink` and a size at most a
+/// quarter of the reserved one the buffer is reallocated to the size.
+/// Otherwise the new items are constructed and the size set.
+pub fn fn_009f6200(e: &mut Engine, this: Ptr, size: u32, shrink: u8) {
+    let base = this.addr();
+    if size == 0 {
+        e.call(ARRAY_RELEASE_008454F0, &args![this, u32::from(shrink)]);
+        return;
+    }
+    let item = |e: &Engine, index: u32| (index << 4).wrapping_add(e.mem.u32(base + ARRAY_BUFFER));
+    if size > e.mem.u32(base + ARRAY_ALLOC_SIZE) {
+        if e.mem.u32(base + ARRAY_ALLOC_SIZE) == 0 {
+            let buffer = e.vcall(base, SLOT_ARRAY_ALLOCATE, &args![size]).u32();
+            e.mem.set_u32(base + ARRAY_BUFFER, buffer);
+            e.mem.set_u32(base + ARRAY_ALLOC_SIZE, size);
+        } else {
+            let old = e.mem.u32(base + ARRAY_SIZE);
+            e.call(CHOICE_ARRAY_REALLOCATE_009F6540, &args![this, size, old]);
+            e.mem.set_u32(base + ARRAY_ALLOC_SIZE, size);
+        }
+        let old = e.mem.u32(base + ARRAY_SIZE);
+        let first = item(e, old);
+        e.call(
+            CHOICE_ARRAY_CONSTRUCT_ITEMS,
+            &args![this, first, size.wrapping_sub(old)],
+        );
+        e.mem.set_u32(base + ARRAY_SIZE, size);
+    } else if size < e.mem.u32(base + ARRAY_SIZE) {
+        let old = e.mem.u32(base + ARRAY_SIZE);
+        let first = item(e, size);
+        e.call(
+            CHOICE_ARRAY_DESTROY_ITEMS,
+            &args![this, first, old.wrapping_sub(size)],
+        );
+        e.mem.set_u32(base + ARRAY_SIZE, size);
+        if shrink != 0 && size <= e.mem.u32(base + ARRAY_ALLOC_SIZE) >> 2 {
+            e.call(CHOICE_ARRAY_REALLOCATE_009F6540, &args![this, size, size]);
+            e.mem.set_u32(base + ARRAY_ALLOC_SIZE, size);
+        }
+    } else {
+        let old = e.mem.u32(base + ARRAY_SIZE);
+        let first = item(e, old);
+        e.call(
+            CHOICE_ARRAY_CONSTRUCT_ITEMS,
+            &args![this, first, size.wrapping_sub(old)],
+        );
+        e.mem.set_u32(base + ARRAY_SIZE, size);
+    }
+}
+
+// Translated from 009f6430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<SandBoxChoiceListItem,1024>` scalar deleting destructor
+/// (engine map, from the vtable; `RET 4`): the destructor body `009f61e0`,
+/// then `00401030(this)` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_sand_box_choice_list_item_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_009f61e0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x009f_38b0, fn_009f38b0(Ptr, Ptr)),
+        entry!(0x009f_41c0, fn_009f41c0(Ptr)),
+        entry!(
+            0x009f_4680,
+            sand_box_actor_package_data_forget_target_and_pick_procedure(Ptr, Ptr, Ptr)
+        ),
+        entry!(0x009f_5ca0, sand_box_actor_package_data_load_game(Ptr, Ptr)),
+        entry!(
+            0x009f_5ea0,
+            sand_box_actor_package_data_init_load_game(Ptr, Ptr)
+        ),
+        entry!(0x009f_6200, fn_009f6200(Ptr, u32, u8)),
+        entry!(
+            0x009f_6430,
+            bs_simple_array_sand_box_choice_list_item_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(0x009f_6190, fn_009f6190(Ptr, u32) -> Ptr),
         entry!(0x009f_61e0, fn_009f61e0(Ptr)),
         entry!(0x009f61b0, fn_009f61b0(Ptr) -> Ptr),
@@ -2965,5 +3316,481 @@ mod sandbox_tests {
         assert_eq!(e.mem.u8(this + CURRENT_TARGET_MARKER), 0x7f);
         assert_eq!(e.mem.f32(this + TOTAL_TIME), 6.0);
         assert!(calls_to(&e, RAND).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod load_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .iter()
+            .flatten()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    fn nothing(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    fn answer(e: &mut Engine, addr: u32, value: u32) {
+        e.register_double(addr, move |_, _| value.into_ret());
+    }
+
+    fn answer_float(e: &mut Engine, addr: u32, value: f32) {
+        e.register_double(addr, move |_, _| value.into_ret());
+    }
+
+    fn word_of(e: &mut Engine, addr: u32, offset: u32) {
+        e.register_double(addr, move |e, a| e.mem.u32(a[0] + offset).into_ret());
+    }
+
+    fn constant(e: &mut Engine, addr: u32, value: f64) {
+        e.map(addr, 8);
+        e.set_global(addr, value);
+    }
+
+    fn constant32(e: &mut Engine, addr: u32, value: f32) {
+        e.map(addr, 4);
+        e.set_global(addr, value);
+    }
+
+    /// An object whose vtable has `slots` (byte offset, target).
+    fn object(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+        let size = slots.iter().map(|(s, _)| s + 4).max().unwrap_or(4);
+        let vtable = e.mem.alloc(size);
+        for (slot, target) in slots {
+            e.mem.set_u32(vtable + slot, *target);
+        }
+        let object = e.mem.alloc(0x80);
+        e.mem.set_u32(object, vtable);
+        object
+    }
+
+    /// The doubles `009f4700` needs to pick among the choices (as the
+    /// `sandbox_tests` set-up does): returns the actor.
+    fn pick_doubles(e: &mut Engine) -> u32 {
+        constant(e, ZERO, 0.0);
+        constant(e, HOURS_PER_DAY, 24.0);
+        constant(e, SIXTY, 60.0);
+        constant(e, THOUSAND, 1000.0);
+        constant(e, TWENTY_DOUBLE, 20.0);
+        constant32(e, FLOAT_MAX, f32::MAX);
+        constant32(e, DEFAULT_TOTAL_TIME, 24.0);
+        constant32(e, MINUS_ONE, -1.0);
+        constant32(e, TWENTY, 20.0);
+        constant32(e, NINETY, 90.0);
+        answer(e, TIMER_NOW, 1000);
+        e.register(SET_MARKER_RESERVED, nothing);
+        e.map(DATA_HANDLER, 4);
+        e.register(ARRAY_RELEASE_008454F0, nothing);
+        e.register(ACTIVITY_TIMES, |e, a| {
+            e.mem.set_f32(a[1], 30.0);
+            e.mem.set_f32(a[2], 1.0);
+            Ret::default()
+        });
+        answer(e, CALENDAR_DAYS, 2);
+        answer_float(e, CALENDAR_GET_HOUR, 10.0);
+        e.map(SETTING_RADIUS, 8);
+        e.mem.set_f32(SETTING_RADIUS + 4, 100.0);
+        e.map(SETTING_DIALOGUE_RANGE, 8);
+        e.mem.set_f32(SETTING_DIALOGUE_RANGE + 4, 50.0);
+        e.register(SETTING_FLOAT, |_, a| (a[0] + 4).into_ret());
+        e.register(SETTING_INT, |_, a| (a[0] + 4).into_ret());
+        for setting in [
+            SETTING_PREVIOUS_TARGET_SECONDS,
+            SETTING_SCAN_DELAY_A,
+            SETTING_SCAN_DELAY_B,
+        ] {
+            e.map(setting, 8);
+            e.mem.set_u32(setting + 4, 2);
+        }
+        answer(e, SCAN_DELAY_00944460, 3000);
+        word_of(e, REFERENCE_CELL, 0x40);
+        answer(e, CELL_GET_WORLD_SPACE, 0x30);
+        answer(e, REFERENCE_GET_WORLD_SPACE, 0x30);
+        answer(e, CELL_FLAG_0, 0);
+        word_of(e, WORD_AT_8, 8);
+        word_of(e, WORD_AT_4, 4);
+        word_of(e, CHOICE_TARGET, 0);
+        word_of(e, CHOICE_FULL_SCORE, 0xc);
+        e.register(CHOICE_SET_FULL_SCORE, |e, a| {
+            e.mem.set_u32(a[0] + 0xc, a[1]);
+            Ret::default()
+        });
+        e.register(SCORE_00647B70, |_, a| a[0].into_ret());
+        e.register(ELEMENT_TARGET_00558DD0, |e, a| {
+            (e.mem.u32(a[0] + 4) + (a[1] << 4)).into_ret()
+        });
+        e.register(POSITION_DIFFERENCE, |e, a| {
+            for i in 0..3 {
+                let d = e.mem.f32(a[0] + 4 * i) - e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, d);
+            }
+            a[1].into_ret()
+        });
+        e.register(SQUARED_LENGTH, |e, a| {
+            let mut sum = 0.0f32;
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i);
+                sum += v * v;
+            }
+            sum.into_ret()
+        });
+        answer(e, REFERENCE_HAS_FREE_MARKER, 1);
+        answer(e, REFERENCE_GET_FIRST_FREE_MARKER_INDEX, 2);
+        answer(e, ACTOR_VALUE_0087F990, 1);
+        answer_float(e, PROCEDURE_DURATION_006435C0, 4.0);
+        answer(e, RAND, 7);
+        answer(e, MOBILE_OBJECT_GET_CURRENT_PACKAGE, 0);
+        let position = e.mem.alloc(12);
+        let actor = object(e, &[(0x1f4, 0x0620_01f4)]);
+        e.register_double(0x0620_01f4, move |_, _| position.into_ret());
+        word_of(e, OBJECT_AT_0X68, 0x68);
+        actor
+    }
+
+    /// A target reference at `x` on the axis.
+    fn target(e: &mut Engine, x: f32, slot: u32) -> u32 {
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, x);
+        let target = object(e, &[(0x1f4, slot)]);
+        e.register_double(slot, move |_, _| position.into_ret());
+        target
+    }
+
+    /// The array doubles over 0x10-byte items: the element address, the
+    /// item moves of `009f63a0` (copies) and its count helper.
+    fn choice_array(e: &mut Engine) {
+        e.register(ELEMENT_TARGET_00558DD0, |e, a| {
+            (e.mem.u32(a[0] + 4) + (a[1] << 4)).into_ret()
+        });
+        e.register(MOVE_COUNT_0042F5A0, |_, a| a[0].min(a[1]).into_ret());
+        e.register(CHOICE_ARRAY_DESTROY_ITEMS, nothing);
+        e.register(CHOICE_ARRAY_MOVE_ITEMS, |e, a| {
+            for i in 0..a[3] * 4 {
+                let word = e.mem.u32(a[2] + 4 * i);
+                e.mem.set_u32(a[1] + 4 * i, word);
+            }
+            Ret::default()
+        });
+        word_of(e, WORD_AT_8, 8);
+        word_of(e, WORD_AT_4, 4);
+        word_of(e, CHOICE_TARGET, 0);
+    }
+
+    fn place_choices(e: &mut Engine, this: u32, choices: &[(u32, u32, u32)]) -> u32 {
+        let buffer = e.mem.alloc(0x100);
+        for (i, (t, p, s)) in choices.iter().enumerate() {
+            let item = buffer + 0x10 * i as u32;
+            e.mem.set_u32(item, *t);
+            e.mem.set_u32(item + 4, *p);
+            e.mem.set_u32(item + 8, *s);
+        }
+        e.mem.set_u32(this + POTENTIAL_TARGETS + 4, buffer);
+        e.mem
+            .set_u32(this + POTENTIAL_TARGETS + 8, choices.len() as u32);
+        e.mem.set_u32(this + POTENTIAL_TARGETS + 0xc, 0x10);
+        buffer
+    }
+
+    #[test]
+    fn at_009f38b0_loads_three_words_then_the_target() {
+        let mut e = Engine::new();
+        e.register(LOAD_DATA, nothing);
+        e.register(LOAD_FORM_ID, nothing);
+        e.call_log = Some(vec![]);
+        e.call(0x009f_38b0, &args![0x7000u32, 0x55u32]);
+        assert_eq!(
+            calls_to(&e, LOAD_DATA),
+            vec![
+                vec![0x55, 0x7004, 4],
+                vec![0x55, 0x7008, 4],
+                vec![0x55, 0x700c, 4]
+            ]
+        );
+        assert_eq!(calls_to(&e, LOAD_FORM_ID), vec![vec![0x55, 0x7000]]);
+    }
+
+    #[test]
+    fn at_009f41c0_lets_go_of_the_marker_and_asks_for_a_procedure() {
+        let mut e = Engine::new();
+        e.map(DATA_HANDLER, 4);
+        e.register(SET_MARKER_RESERVED, nothing);
+        let this = e.mem.alloc(0x64);
+        e.mem.set_u32(this + CURRENT_TARGET_OBJECT, 0x4444);
+        e.mem.set_u8(this + CURRENT_TARGET_MARKER, 3);
+        e.call_log = Some(vec![]);
+        e.call(0x009f_41c0, &args![this]);
+        assert_eq!(calls_to(&e, SET_MARKER_RESERVED), vec![vec![0x4444, 3, 0]]);
+        assert_eq!(e.mem.u32(this + CURRENT_TARGET_OBJECT), 0);
+        assert_eq!(e.mem.u8(this + CURRENT_TARGET_MARKER), 0x7f);
+        assert_eq!(e.mem.u8(this + SHOULD_PICK_NEW_PROCEDURE), 1);
+        assert_eq!(e.mem.u32(this + STATE), 1);
+    }
+
+    #[test]
+    fn at_009f4680_clears_the_current_target_choices_then_picks() {
+        for forget in [true, false] {
+            let mut e = Engine::new();
+            let actor = pick_doubles(&mut e);
+            let this = e.mem.alloc(0x64);
+            e.mem.set_u32(this + NEXT_TIME_TO_SCAN_WORLD, 5000);
+            e.mem.set_u32(this + ACTIVITY, 0xffff_ffff);
+            for i in 0..6 {
+                e.mem.set_u8(this + PROCEDURE_WEIGHT + i, 2);
+            }
+            let near = target(&mut e, 10.0, 0x0630_0000);
+            let buffer = place_choices(&mut e, this, &[(near, 0, 3), (0, 3, 5), (near, 1, 4)]);
+            if forget {
+                e.mem.set_u32(this + CURRENT_TARGET_OBJECT, near);
+            }
+            e.call(0x009f_4680, &args![this, actor, 0u32]);
+            let scores: Vec<u32> = (0..3).map(|i| e.mem.u32(buffer + 0x10 * i + 8)).collect();
+            if forget {
+                assert_eq!(scores, vec![0, 5, 0]);
+            } else {
+                assert_eq!(scores, vec![3, 5, 4]);
+            }
+            // `009f4700` ran: the procedure was picked and the wish cleared.
+            assert_eq!(e.mem.u8(this + SHOULD_PICK_NEW_PROCEDURE), 0);
+            assert_eq!(e.mem.f32(this + LAST_TIME_CHANGED), 10.0);
+        }
+    }
+
+    #[test]
+    fn at_009f5ca0_loads_every_field_and_choice() {
+        let mut e = Engine::new();
+        choice_array(&mut e);
+        answer(&mut e, TIMER_NOW, 1000);
+        e.register(LOAD_FORM_ID, nothing);
+        answer(&mut e, LOAD_VARIABLE_SIZED_VALUE, 2);
+        e.register(CHOICE_ARRAY_CONSTRUCT_ITEMS, nothing);
+        let items = e.mem.alloc(0x20);
+        let allocate = 0x0640_0000;
+        e.register_double(allocate, move |_, _| items.into_ret());
+        let this = e.mem.alloc(0x64);
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, allocate);
+        e.mem.set_u32(this + POTENTIAL_TARGETS, vtable);
+        // The local the time since the previous target is read into: 250.
+        e.register_double(LOAD_DATA, move |e, a| {
+            let in_data = (this..this + 0x64).contains(&a[1]);
+            let in_items = (items..items + 0x20).contains(&a[1]);
+            if !in_data && !in_items {
+                e.mem.set_u32(a[1], 250);
+            }
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x009f_5ca0, &args![this, 0x55u32]);
+        let loads: Vec<(u32, u32)> = calls_to(&e, LOAD_DATA)
+            .iter()
+            .filter(|a| (this..this + 0x64).contains(&a[1]))
+            .map(|a| (a[1] - this, a[2]))
+            .collect();
+        assert_eq!(
+            loads,
+            vec![
+                (4, 4),
+                (8, 4),
+                (0xc, 4),
+                (0x14, 4),
+                (0x18, 4),
+                (0x1c, 4),
+                (0xc, 4),
+                (0x30, 4),
+                (0x34, 1),
+                (0x35, 1),
+                (0x36, 1),
+                (0x37, 1),
+                (0x38, 4),
+                (0x40, 1),
+                (0x4c, 4),
+                (0x50, 4),
+                (0x54, 4),
+                (0x58, 4),
+                (0x5c, 6),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + PREV_TARGET_CHANGED_TIME_STAMP), 750);
+        assert_eq!(
+            calls_to(&e, LOAD_FORM_ID),
+            vec![
+                vec![0x55, this + 0x10],
+                vec![0x55, this + 0x3c],
+                vec![0x55, this + 0x44],
+                vec![0x55, items],
+                vec![0x55, items + 0x10],
+            ]
+        );
+        assert_eq!(e.mem.u32(this + POTENTIAL_TARGETS + 4), items);
+        assert_eq!(e.mem.u32(this + POTENTIAL_TARGETS + 8), 2);
+    }
+
+    /// The doubles `InitLoadGame` needs: ids resolve to `id + 0x1000`.
+    fn init_doubles(e: &mut Engine) {
+        choice_array(e);
+        answer(e, TIMER_NOW, 1000);
+        e.register(LOOKUP_FORM_004839C0, |_, a| (a[0] + 0x1000).into_ret());
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(SET_TARGETED, nothing);
+        e.register(CHOICE_INIT_LOAD_GAME_009A4F40, nothing);
+        e.register(PROCEDURE_TEST_0092A980, |_, a| (a[0] == 7).into_ret());
+        e.register(SET_MARKER_RESERVED, nothing);
+        e.register(EXTRA_DATA_LIST, |_, a| (a[0] + 0x44).into_ret());
+        answer(e, EXTRA_DATA_0X51, 1);
+        answer(e, EXTRA_DATA_0X6F, 0x6f00);
+        answer_float(e, FLOAT_AT_0, 2.5);
+        constant(e, THOUSAND, 1000.0);
+    }
+
+    #[test]
+    fn at_009f5ea0_drops_target_less_choices_and_resets() {
+        let mut e = Engine::new();
+        init_doubles(&mut e);
+        answer(&mut e, REFERENCE_HAS_FREE_MARKER, 1);
+        let this = e.mem.alloc(0x64);
+        e.mem.set_u32(this + LOCATION, 0x10);
+        e.mem.set_u32(this + CURRENT_TARGET_OBJECT, 0x20);
+        e.mem.set_u8(this + CURRENT_TARGET_MARKER, 2);
+        e.mem.set_u32(this + PROCEDURE, 4);
+        let buffer = place_choices(&mut e, this, &[(5, 1, 1), (0, 7, 2), (0, 8, 3)]);
+        e.call_log = Some(vec![]);
+        e.call(0x009f_5ea0, &args![this, 0x55u32]);
+        assert_eq!(e.mem.u32(this + LOCATION), 0x1010);
+        assert_eq!(calls_to(&e, SET_TARGETED), vec![vec![0x1020, 1]]);
+        assert_eq!(calls_to(&e, CHOICE_INIT_LOAD_GAME_009A4F40).len(), 3);
+        // The target-less choice of procedure 7 went; the last moved down.
+        assert_eq!(e.mem.u32(this + POTENTIAL_TARGETS + 8), 2);
+        assert_eq!(e.mem.u32(buffer + 0x14), 8);
+        // The marker is reserved again, but the drop resets the procedure.
+        assert_eq!(calls_to(&e, SET_MARKER_RESERVED), vec![vec![0x1020, 2, 1]]);
+        assert_eq!(e.mem.u32(this + PROCEDURE), 0xffff_ffff);
+        assert_eq!(e.mem.u32(this + CURRENT_TARGET_OBJECT), 0);
+        assert_eq!(e.mem.u8(this + CURRENT_TARGET_MARKER), 0x7f);
+        assert_eq!(e.mem.u8(this + SHOULD_PICK_NEW_PROCEDURE), 1);
+        // The location's change time: now plus 2.5 s.
+        assert_eq!(e.mem.u32(this + NEXT_TIME_TO_CHANGE_LOCATIONS), 3500);
+    }
+
+    #[test]
+    fn at_009f5ea0_keeps_a_target_with_a_free_marker() {
+        let mut e = Engine::new();
+        init_doubles(&mut e);
+        answer(&mut e, REFERENCE_HAS_FREE_MARKER, 1);
+        let this = e.mem.alloc(0x64);
+        e.mem.set_u32(this + LOCATION, 0x10);
+        e.mem.set_u32(this + NEXT_TIME_TO_CHANGE_LOCATIONS, 77);
+        e.mem.set_u32(this + CURRENT_TARGET_OBJECT, 0x20);
+        e.mem.set_u32(this + PREV_TARGET_OBJECT, 0x30);
+        e.mem.set_u32(this + PROCEDURE, 4);
+        place_choices(&mut e, this, &[(5, 1, 1), (0, 8, 3)]);
+        e.call_log = Some(vec![]);
+        e.call(0x009f_5ea0, &args![this, 0x55u32]);
+        assert_eq!(
+            calls_to(&e, SET_TARGETED),
+            vec![vec![0x1020, 1], vec![0x1030, 1]]
+        );
+        assert_eq!(e.mem.u32(this + POTENTIAL_TARGETS + 8), 2);
+        assert_eq!(e.mem.u32(this + PROCEDURE), 4);
+        assert_eq!(e.mem.u32(this + CURRENT_TARGET_OBJECT), 0x1020);
+        assert_eq!(e.mem.u32(this + NEXT_TIME_TO_CHANGE_LOCATIONS), 77);
+        // No free marker: the choice is dropped all the same.
+        answer(&mut e, REFERENCE_HAS_FREE_MARKER, 0);
+        e.mem.set_u32(this + CURRENT_TARGET_OBJECT, 0x20);
+        e.call(0x009f_5ea0, &args![this, 0x55u32]);
+        assert_eq!(e.mem.u32(this + PROCEDURE), 0xffff_ffff);
+        assert_eq!(e.mem.u32(this + CURRENT_TARGET_OBJECT), 0);
+    }
+
+    #[test]
+    fn at_009f6200_sizes_the_choice_array() {
+        let mut e = Engine::new();
+        e.register(ARRAY_RELEASE_008454F0, nothing);
+        e.register(CHOICE_ARRAY_CONSTRUCT_ITEMS, nothing);
+        e.register(CHOICE_ARRAY_DESTROY_ITEMS, nothing);
+        e.register(CHOICE_ARRAY_REALLOCATE_009F6540, nothing);
+        let allocate = 0x0650_0000;
+        e.register(allocate, |_, _| 0x7000u32.into_ret());
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, allocate);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, vtable);
+        // Size 0: the release with the flag.
+        e.call_log = Some(vec![]);
+        e.call(0x009f_6200, &args![this, 0u32, 1u32]);
+        assert_eq!(calls_to(&e, ARRAY_RELEASE_008454F0), vec![vec![this, 1]]);
+        // No buffer yet: allocated through slot +4, items constructed.
+        e.call_log = Some(vec![]);
+        e.call(0x009f_6200, &args![this, 3u32, 0u32]);
+        assert_eq!(calls_to(&e, allocate), vec![vec![this, 3]]);
+        assert_eq!(
+            calls_to(&e, CHOICE_ARRAY_CONSTRUCT_ITEMS),
+            vec![vec![this, 0x7000, 3]]
+        );
+        assert_eq!(e.mem.u32(this + 0xc), 3);
+        assert_eq!(e.mem.u32(this + 8), 3);
+        // Past the reserved size: reallocated, the new items constructed.
+        e.call_log = Some(vec![]);
+        e.call(0x009f_6200, &args![this, 0x10u32, 0u32]);
+        assert_eq!(
+            calls_to(&e, CHOICE_ARRAY_REALLOCATE_009F6540),
+            vec![vec![this, 0x10, 3]]
+        );
+        assert_eq!(
+            calls_to(&e, CHOICE_ARRAY_CONSTRUCT_ITEMS),
+            vec![vec![this, 0x7030, 0xd]]
+        );
+        assert_eq!(e.mem.u32(this + 0xc), 0x10);
+        // Shrinking without the flag keeps the buffer.
+        e.call_log = Some(vec![]);
+        e.call(0x009f_6200, &args![this, 0xcu32, 0u32]);
+        assert_eq!(
+            calls_to(&e, CHOICE_ARRAY_DESTROY_ITEMS),
+            vec![vec![this, 0x70c0, 4]]
+        );
+        assert!(calls_to(&e, CHOICE_ARRAY_REALLOCATE_009F6540).is_empty());
+        assert_eq!(e.mem.u32(this + 8), 0xc);
+        // Shrinking with the flag to a quarter of the reserved size reallocates.
+        e.call_log = Some(vec![]);
+        e.call(0x009f_6200, &args![this, 4u32, 1u32]);
+        assert_eq!(
+            calls_to(&e, CHOICE_ARRAY_DESTROY_ITEMS),
+            vec![vec![this, 0x7040, 8]]
+        );
+        assert_eq!(
+            calls_to(&e, CHOICE_ARRAY_REALLOCATE_009F6540),
+            vec![vec![this, 4, 4]]
+        );
+        assert_eq!(e.mem.u32(this + 0xc), 4);
+        // Growing within the reserved size only constructs.
+        e.mem.set_u32(this + 8, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x009f_6200, &args![this, 4u32, 1u32]);
+        assert_eq!(
+            calls_to(&e, CHOICE_ARRAY_CONSTRUCT_ITEMS),
+            vec![vec![this, 0x7020, 2]]
+        );
+        assert!(calls_to(&e, CHOICE_ARRAY_REALLOCATE_009F6540).is_empty());
+        assert_eq!(e.mem.u32(this + 8), 4);
+    }
+
+    #[test]
+    fn at_009f6430_destroys_then_frees_on_bit_zero() {
+        for (flags, frees) in [(0u32, false), (1, true), (2, false), (3, true)] {
+            let mut e = Engine::new();
+            e.register(ARRAY_RELEASE_008454F0, nothing);
+            e.register(OPERATOR_DELETE, nothing);
+            let this = e.mem.alloc(0x10);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x009f_6430, &args![this, flags]).u32(), this);
+            assert_eq!(e.mem.u32(this), ARRAY_VTABLE_01093614);
+            assert_eq!(calls_to(&e, ARRAY_RELEASE_008454F0), vec![vec![this, 1]]);
+            assert_eq!(calls_to(&e, OPERATOR_DELETE).len(), usize::from(frees));
+        }
     }
 }

@@ -1481,11 +1481,13 @@ pub fn fn_006ec7e0(
 }
 
 // Translated from 006ec830 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Invokes the queue's virtual item operation, then reports its result.
-pub fn fn_006ec830(e: &mut Engine, this: Ptr, item: u32, context: Ptr) {
+/// Invokes the queue's virtual item operation, then reports its result and
+/// answers that report's value (the exe ends on the `006ec9b0` call and
+/// leaves its `EAX`; the callers keep `AL`).
+pub fn fn_006ec830(e: &mut Engine, this: Ptr, item: u32, context: Ptr) -> bool {
     let receiver = e.mem.u32(this.addr());
     let value = e.vcall(receiver, 0x24, &args![item]).u32();
-    let _ = fn_006ec9b0(e, this, value, item, context);
+    fn_006ec9b0(e, this, value, item, context)
 }
 
 // Translated from 006ec870 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1743,7 +1745,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006e_c5b0, fn_006ec5b0(Ptr, Ptr) -> bool),
         entry!(0x006e_c660, fn_006ec660(Ptr, u32, u32, u32) -> Ptr),
         entry!(0x006e_c7e0, fn_006ec7e0(Ptr, u32, u32, u32, u8) -> bool),
-        entry!(0x006e_c830, fn_006ec830(Ptr, u32, Ptr)),
+        entry!(0x006e_c830, fn_006ec830(Ptr, u32, Ptr) -> bool),
         entry!(0x006e_c870, fn_006ec870(Ptr)),
         entry!(0x006e_c900, fn_006ec900(Ptr, u32) -> bool),
         entry!(0x006e_c9b0, fn_006ec9b0(Ptr, u32, u32, Ptr) -> bool),
@@ -4233,5 +4235,38 @@ mod continuation_tests {
         noops(&mut static_queue, &[0x006e_c410, 0x0040_1030]);
         static_message_queue_deleting_destructor(&mut static_queue, Ptr::new(OBJECT), 1);
         assert_eq!(calls(&static_queue, 0x0040_1030).len(), 1);
+    }
+
+    #[test]
+    fn manager_item_operation_answers_the_report() {
+        let mut e = fixture();
+        let wrapper = OBJECT + 0x1000;
+        let receiver = OBJECT + 0x1100;
+        let manager = OBJECT + 0x1200;
+        let request = OBJECT + 0x1300;
+        let exception = OBJECT + 0x1400;
+        e.mem.set_u32(wrapper, receiver);
+        e.mem.set_u32(receiver, 0x31000);
+        let mut table = vec![0; 10];
+        table[0x24 / 4] = 0x0077_0410;
+        e.put_vtable(0x31000, &table);
+        e.register_double(0x0077_0410, |_, _| result(0x5151));
+        e.register_double(0x0044_df00, move |_, _| result(exception));
+        e.register_double(0x0044_df20, |_, _| result(0));
+        noops(&mut e, &[0x0040_fbe0, 0x0052_9000]);
+        e.register_double(0x0066_62a0, |_, _| result(1));
+        assert!(fn_006ec830(
+            &mut e,
+            Ptr::new(wrapper),
+            manager,
+            Ptr::new(request)
+        ));
+        e.register_double(0x0066_62a0, |_, _| result(0));
+        assert!(!fn_006ec830(
+            &mut e,
+            Ptr::new(wrapper),
+            manager,
+            Ptr::new(request)
+        ));
     }
 }

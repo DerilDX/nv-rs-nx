@@ -24,9 +24,28 @@ pub fn fn_00a30540(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 00a30580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (thiscall, one word: an object; `RET 4`): follows the chain of words at
+/// +0x58 from `object`'s own +0x58 and answers false as soon as it meets `this`, true when
+/// it reaches a null link first (`AL`; the rest of `EAX` keeps the last link, not
+/// modelled).
+pub fn fn_00a30580(e: &mut Engine, this: Ptr, object: Ptr) -> bool {
+    let mut link = e.mem.u32(object.addr().wrapping_add(0x58));
+    while link != 0 {
+        if link == this.addr() {
+            return false;
+        }
+        link = e.mem.u32(link.wrapping_add(0x58));
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x00a3_0540, fn_00a30540(Ptr))]
+    vec![
+        entry!(0x00a3_0540, fn_00a30540(Ptr)),
+        entry!(0x00a3_0580, fn_00a30580(Ptr, Ptr) -> bool),
+    ]
 }
 
 #[cfg(test)]
@@ -65,5 +84,28 @@ mod b028_tests {
         e.call_log = Some(vec![]);
         e.call(0x00a3_0540, &args![this]);
         assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00a30580_answers_whether_this_is_outside_the_chain() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(0x60);
+        let b = e.mem.alloc(0x60);
+        let c = e.mem.alloc(0x60);
+        let other = e.mem.alloc(0x60);
+        // a -> b -> c -> null
+        e.mem.set_u32(a + 0x58, b);
+        e.mem.set_u32(b + 0x58, c);
+        assert!(!e.call(0x00a3_0580, &args![c, a]).bool());
+        assert!(!e.call(0x00a3_0580, &args![b, a]).bool());
+        assert!(e.call(0x00a3_0580, &args![other, a]).bool());
+        // The object itself is not compared, only its links.
+        assert!(e.call(0x00a3_0580, &args![a, a]).bool());
+        assert!(e.call(0x00a3_0580, &args![a, c]).bool());
     }
 }

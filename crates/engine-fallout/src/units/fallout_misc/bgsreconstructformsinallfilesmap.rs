@@ -389,9 +389,161 @@ pub fn fn_00844e20(e: &mut Engine, this: Ptr) {
     e.call(0x0084_4e80, &args![this]);
 }
 
+/// `TESForm::GetFile` (engine map, `00484e60`; `thiscall`, one word: the index, -1 for the
+/// last file).
+const FORM_GET_FILE: u32 = 0x0048_4e60;
+/// `00440e30` (`thiscall` on a form, no stack words): the text `AddForm`'s warning prints
+/// as the form's type.
+const TYPE_NAME_00440E30: u32 = 0x0044_0e30;
+/// `0084e3a0` (`thiscall`: the word at +0xC, a form's id).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// The forms' vtable slot `AddForm` and `AddReference` print as the name (+0x130).
+const FORM_NAME_SLOT: u32 = 0x130;
+/// `SaveGameWarning` (engine map, `00845cc0`; variadic `cdecl`: format and values).
+const SAVE_GAME_WARNING: u32 = 0x0084_5cc0;
+/// `"Form %08X %s with type %s and no file passed to
+/// BGSReconstructFormsInAllFilesMap::AddForm()"` and `"Cell %08X %s with no file passed to
+/// BGSReconstructFormsInAllFilesMap::AddReference()"`.
+const NO_FILE_FORM_MESSAGE: u32 = 0x0107_ea90;
+const NO_FILE_CELL_MESSAGE: u32 = 0x0107_eaf0;
+/// The file map's look-up (`00853130`, `thiscall`, two words: key and the value's
+/// address; answers whether found) and `SetAt` (`00844700`, `thiscall`: key, value).
+const FILE_MAP_GET_AT: u32 = 0x0085_3130;
+const FILE_MAP_SET_AT: u32 = 0x0084_4700;
+/// `operator new` (`00401000`, `cdecl`, one word) and
+/// `BGSReconstructFormsInFileMap::BGSReconstructFormsInFileMap` (engine map, `00842180`;
+/// `thiscall`, no stack words) on a 0x1C-byte block.
+const OPERATOR_NEW: u32 = 0x0040_1000;
+const FILE_MAP_CONSTRUCT: u32 = 0x0084_2180;
+const FILE_MAP_SIZE: u32 = 0x1c;
+/// `BGSReconstructFormsInFileMap::AddForm` (engine map, `00842310`; `thiscall`, two words)
+/// and `AddCellForm` (`00842600`; `thiscall`, four words).
+const FILE_MAP_ADD_FORM: u32 = 0x0084_2310;
+const FILE_MAP_ADD_CELL_FORM: u32 = 0x0084_2600;
+/// The count of added forms (`+0x30`).
+const ADDED_COUNT: u32 = 0x30;
+/// `00425fd0` (`thiscall` on a form: a byte), `00460140` (`thiscall`, no stack words),
+/// `TESObjectCELL::GetWorldSpace` (engine map, `0054ddd0`; `thiscall`, no stack words) and
+/// `BGSReconstructFormsInAllFilesMap::GetFileForFormID` (engine map, `00843fe0`;
+/// `thiscall`, two words).
+const FORM_TEST_00425FD0: u32 = 0x0042_5fd0;
+const FORM_KEY_00460140: u32 = 0x0046_0140;
+const CELL_GET_WORLD_SPACE: u32 = 0x0054_ddd0;
+const GET_FILE_FOR_FORM_ID: u32 = 0x0084_3fe0;
+
+/// The file's `BGSReconstructFormsInFileMap`: looked up in the map (`00853130`), or a new
+/// one (`00842180` on a 0x1C-byte block, null when the allocation fails) set at the file
+/// (`00844700`).
+fn file_map_for(e: &mut Engine, this: Ptr, file: u32) -> u32 {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), 0);
+        if !e.call(FILE_MAP_GET_AT, &args![this, file, slot]).bool() {
+            let block = e.call(OPERATOR_NEW, &args![FILE_MAP_SIZE]).u32();
+            let map = if block != 0 {
+                e.call(FILE_MAP_CONSTRUCT, &args![block]).u32()
+            } else {
+                0
+            };
+            e.mem.set_u32(slot.addr(), map);
+            e.call(FILE_MAP_SET_AT, &args![this, file, map]);
+        }
+        e.mem.u32(slot.addr())
+    })
+}
+
+/// `+0x30` counts up.
+fn count_added(e: &mut Engine, this: Ptr) {
+    let count = e.mem.u32(this.addr() + ADDED_COUNT);
+    e.mem
+        .set_u32(this.addr() + ADDED_COUNT, count.wrapping_add(1));
+}
+
+// Translated from 00843630 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00843630 - the compiler's exception frame (FS:[0] chain, handler 00f0b23b, state 0 that frees the 0x1c-byte block when its constructor throws) is not translated
+/// `BGSReconstructFormsInAllFilesMap::AddForm` (engine map; `thiscall`, two words: the form
+/// and a word handed on; `RET 8`). Nothing for a null form. A form without a file
+/// (`TESForm::GetFile(-1)`) gets the warning `"Form %08X %s with type %s and no file ..."`
+/// (its id, its name from vtable +0x130 and `00440e30`'s text). Otherwise the form goes to
+/// its file's map (found, or made and set) with `BGSReconstructFormsInFileMap::AddForm`,
+/// and `+0x30` counts up.
+pub fn bgs_reconstruct_forms_in_all_files_map_add_form(
+    e: &mut Engine,
+    this: Ptr,
+    form: u32,
+    data: u32,
+) {
+    if form == 0 {
+        return;
+    }
+    let file = e.call(FORM_GET_FILE, &args![form, u32::MAX]).u32();
+    if file == 0 {
+        let type_text = e.call(TYPE_NAME_00440E30, &args![form]).u32();
+        let name = e.vcall(form, FORM_NAME_SLOT, &args![]).u32();
+        let id = e.call(FORM_ID, &args![form]).u32();
+        e.call(
+            SAVE_GAME_WARNING,
+            &args![NO_FILE_FORM_MESSAGE, id, name, type_text],
+        );
+        return;
+    }
+    let map = file_map_for(e, this, file);
+    e.call(FILE_MAP_ADD_FORM, &args![map, form, data]);
+    count_added(e, this);
+}
+
+// Translated from 00843750 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00843750 - the compiler's exception frame (FS:[0] chain, handler 00f0b23b, state 0 that frees the 0x1c-byte block when its constructor throws) is not translated
+/// `BGSReconstructFormsInAllFilesMap::AddReference` (engine map; `thiscall`, three words: a
+/// form, then two words handed on; `RET 0xc`). Nothing for a null form. The file is
+/// `GetFileForFormID(00460140(form), first)` when the form's `00425fd0` answers true, else
+/// `GetFileForFormID(00460140(GetWorldSpace(form)), first)`. Without a file the warning
+/// `"Cell %08X %s with no file ..."` (its id and its name from vtable +0x130); otherwise the
+/// form goes to the file's map (found, or made and set) with
+/// `BGSReconstructFormsInFileMap::AddCellForm(form, 0, first, second)`, and `+0x30` counts
+/// up.
+pub fn bgs_reconstruct_forms_in_all_files_map_add_reference(
+    e: &mut Engine,
+    this: Ptr,
+    form: u32,
+    first: u32,
+    second: u32,
+) {
+    if form == 0 {
+        return;
+    }
+    let file = if e.call(FORM_TEST_00425FD0, &args![form]).bool() {
+        let key = e.call(FORM_KEY_00460140, &args![form]).u32();
+        e.call(GET_FILE_FOR_FORM_ID, &args![this, key, first]).u32()
+    } else {
+        let world = e.call(CELL_GET_WORLD_SPACE, &args![form]).u32();
+        let key = e.call(FORM_KEY_00460140, &args![world]).u32();
+        e.call(GET_FILE_FOR_FORM_ID, &args![this, key, first]).u32()
+    };
+    if file == 0 {
+        let name = e.vcall(form, FORM_NAME_SLOT, &args![]).u32();
+        let id = e.call(FORM_ID, &args![form]).u32();
+        e.call(SAVE_GAME_WARNING, &args![NO_FILE_CELL_MESSAGE, id, name]);
+        return;
+    }
+    let map = file_map_for(e, this, file);
+    e.call(
+        FILE_MAP_ADD_CELL_FORM,
+        &args![map, form, 0u32, first, second],
+    );
+    count_added(e, this);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0084_3630,
+            bgs_reconstruct_forms_in_all_files_map_add_form(Ptr, u32, u32)
+        ),
+        entry!(
+            0x0084_3750,
+            bgs_reconstruct_forms_in_all_files_map_add_reference(Ptr, u32, u32, u32)
+        ),
         entry!(0x0084_3150, fn_00843150(Ptr) -> u8),
         entry!(0x0084_3170, fn_00843170(Ptr)),
         entry!(0x0084_3240, fn_00843240(Ptr)),
@@ -921,5 +1073,145 @@ mod b023_tests {
         assert_eq!(finished, vec![forms[0], forms[2], forms[3]]);
         let tls = e.tls();
         assert_eq!(e.mem.u32(tls + TLS_FLAGS) & 4, 0);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    /// The forms' name slot (vtable +0x130) as the tests place it.
+    const NAME_SLOT: u32 = 0x0090_0130;
+
+    fn calls(log: &[(u32, Vec<u32>)], address: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// `known` is the file map's answer for file 0x7000 (0 when the map has none).
+    fn rig(file: u32, known: u32) -> (Engine, Ptr, u32) {
+        let mut e = Engine::new();
+        e.register_double(FORM_GET_FILE, move |_, _| file.into_ret());
+        e.register_double(GET_FILE_FOR_FORM_ID, move |_, _| file.into_ret());
+        e.register(TYPE_NAME_00440E30, |_, _| 0x0300_0000u32.into_ret());
+        e.register(NAME_SLOT, |_, _| 0x0300_1000u32.into_ret());
+        e.register(FORM_ID, |_, _| 0x0001_2345u32.into_ret());
+        e.register(FORM_KEY_00460140, |_, a| (a[0] ^ 0xff).into_ret());
+        e.register(CELL_GET_WORLD_SPACE, |_, _| 0x0c00_0000u32.into_ret());
+        e.register_double(FILE_MAP_GET_AT, move |e, a| {
+            e.mem.set_u32(a[2], known);
+            u32::from(known != 0).into_ret()
+        });
+        e.register(OPERATOR_NEW, |_, _| 0x0d00_0000u32.into_ret());
+        e.register(FILE_MAP_CONSTRUCT, |_, a| a[0].into_ret());
+        for callee in [
+            SAVE_GAME_WARNING,
+            FILE_MAP_SET_AT,
+            FILE_MAP_ADD_FORM,
+            FILE_MAP_ADD_CELL_FORM,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.put_vtable(0x0090_1000, &[0; 0x4d]);
+        e.mem.set_u32(0x0090_1000 + 0x130, NAME_SLOT);
+        let form = e.mem.alloc(0x20);
+        e.mem.set_u32(form, 0x0090_1000);
+        let this = Ptr::new(e.mem.alloc(0x34));
+        (e, this, form)
+    }
+
+    #[test]
+    fn add_form_adds_to_a_new_file_map() {
+        let (mut e, this, form) = rig(0x7000, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0084_3630, &args![this, form, 9u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, FORM_GET_FILE), vec![vec![form, u32::MAX]]);
+        assert_eq!(
+            calls(&log, FILE_MAP_SET_AT),
+            vec![vec![this.addr(), 0x7000, 0x0d00_0000]]
+        );
+        assert_eq!(
+            calls(&log, FILE_MAP_ADD_FORM),
+            vec![vec![0x0d00_0000, form, 9]]
+        );
+        assert_eq!(e.mem.u32(this.addr() + ADDED_COUNT), 1);
+    }
+
+    #[test]
+    fn add_form_uses_the_known_map_or_warns_without_a_file() {
+        let (mut e, this, form) = rig(0x7000, 0x0e00_0000);
+        e.call_log = Some(vec![]);
+        e.call(0x0084_3630, &args![this, form, 9u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(
+            calls(&log, FILE_MAP_ADD_FORM),
+            vec![vec![0x0e00_0000, form, 9]]
+        );
+        let (mut e, this, form) = rig(0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0084_3630, &args![this, form, 9u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, SAVE_GAME_WARNING),
+            vec![vec![
+                NO_FILE_FORM_MESSAGE,
+                0x0001_2345,
+                0x0300_1000,
+                0x0300_0000
+            ]]
+        );
+        assert!(calls(&log, FILE_MAP_ADD_FORM).is_empty());
+        assert_eq!(e.mem.u32(this.addr() + ADDED_COUNT), 0);
+        // A null form: nothing at all.
+        e.call_log = Some(vec![]);
+        e.call(0x0084_3630, &args![this, 0u32, 9u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn add_reference_finds_the_file_by_the_form_or_its_world() {
+        let (mut e, this, form) = rig(0x7000, 0x0e00_0000);
+        e.register(FORM_TEST_00425FD0, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0084_3750, &args![this, form, 5u32, 6u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, GET_FILE_FOR_FORM_ID),
+            vec![vec![this.addr(), form ^ 0xff, 5]]
+        );
+        assert_eq!(
+            calls(&log, FILE_MAP_ADD_CELL_FORM),
+            vec![vec![0x0e00_0000, form, 0, 5, 6]]
+        );
+        assert_eq!(e.mem.u32(this.addr() + ADDED_COUNT), 1);
+        // Through the world space when the test answers false.
+        e.register(FORM_TEST_00425FD0, |_, _| 0x100u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0084_3750, &args![this, form, 5u32, 6u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, CELL_GET_WORLD_SPACE), vec![vec![form]]);
+        assert_eq!(
+            calls(&log, GET_FILE_FOR_FORM_ID),
+            vec![vec![this.addr(), 0x0c00_00ff, 5]]
+        );
+        assert_eq!(e.mem.u32(this.addr() + ADDED_COUNT), 2);
+    }
+
+    #[test]
+    fn add_reference_warns_without_a_file() {
+        let (mut e, this, form) = rig(0, 0);
+        e.register(FORM_TEST_00425FD0, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0084_3750, &args![this, form, 5u32, 6u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls(&log, SAVE_GAME_WARNING),
+            vec![vec![NO_FILE_CELL_MESSAGE, 0x0001_2345, 0x0300_1000]]
+        );
+        assert!(calls(&log, FILE_MAP_ADD_CELL_FORM).is_empty());
     }
 }

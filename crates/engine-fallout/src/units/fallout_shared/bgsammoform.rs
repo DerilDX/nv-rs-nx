@@ -123,11 +123,80 @@ pub fn bgs_ammo_form_is_rock_it_launcher(e: &mut Engine, this: Ptr) -> bool {
     cast == 0
 }
 
+/// `00485910` (`cdecl`: chunk signature, word): saves a chunk holding one word.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// The chunk signature `NAM0` (`0x304d414e`).
+const CHUNK_NAM0: u32 = 0x304d_414e;
+/// The cast's type descriptors: from `BaseFormComponent` (`01183040`) to `BGSAmmoForm`
+/// (`01186890`).
+const BASE_FORM_COMPONENT_TYPE: u32 = 0x0118_3040;
+const BGS_AMMO_FORM_TYPE: u32 = 0x0118_6890;
+
+/// `__RTDynamicCast` of `other` from `BaseFormComponent` to `BGSAmmoForm`.
+fn cast_to_ammo_form(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![
+            other,
+            0u32,
+            BASE_FORM_COMPONENT_TYPE,
+            BGS_AMMO_FORM_TYPE,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+// Translated from 00474af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSAmmoForm::Save` (Xbox PDB; `thiscall`, no stack word): when an ammo form is set,
+/// saves its form id (`0084e3a0`) in a `NAM0` chunk (`00485910`).
+pub fn bgs_ammo_form_save(e: &mut Engine, this: Ptr<BGSAmmoForm>) {
+    let ammo = e.get(this, BGSAmmoForm::pFormAmmo);
+    if ammo == 0 {
+        return;
+    }
+    let id = e.call(FORM_ID, &args![ammo]).u32();
+    e.call(ADD_CHUNK_WORD, &args![CHUNK_NAM0, id]);
+}
+
+// Translated from 00474b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSAmmoForm::CopyComponent` (Xbox PDB; `RET 4`): casts `other` to a `BGSAmmoForm`
+/// (`__RTDynamicCast`) and, when it is one, copies its ammo form.
+pub fn bgs_ammo_form_copy_component(e: &mut Engine, this: Ptr<BGSAmmoForm>, other: Ptr) {
+    let cast = cast_to_ammo_form(e, other);
+    if cast == 0 {
+        return;
+    }
+    let ammo = e.mem.u32(cast + 4);
+    e.set(this, BGSAmmoForm::pFormAmmo, ammo);
+}
+
+// Translated from 00474b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSAmmoForm::CompareComponent` (Xbox PDB; `RET 4`, result in `AL`): true ("differs")
+/// when `other` is not a `BGSAmmoForm` or holds another ammo form, false when both hold
+/// the same one.
+pub fn bgs_ammo_form_compare_component(e: &mut Engine, this: Ptr<BGSAmmoForm>, other: Ptr) -> bool {
+    let cast = cast_to_ammo_form(e, other);
+    if cast == 0 {
+        return true;
+    }
+    e.get(this, BGSAmmoForm::pFormAmmo) != e.mem.u32(cast + 4)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00474bc0, bgs_ammo_form_init_item(Ptr<BGSAmmoForm>, Ptr)),
         entry!(0x0047_4a80, bgs_ammo_form_is_rock_it_launcher(Ptr) -> bool),
+        entry!(0x0047_4af0, bgs_ammo_form_save(Ptr<BGSAmmoForm>)),
+        entry!(
+            0x0047_4b30,
+            bgs_ammo_form_copy_component(Ptr<BGSAmmoForm>, Ptr)
+        ),
+        entry!(
+            0x0047_4b70,
+            bgs_ammo_form_compare_component(Ptr<BGSAmmoForm>, Ptr) -> bool
+        ),
     ]
 }
 
@@ -304,5 +373,82 @@ mod tests_b043 {
         let (result, log) = run(0, 0x6200, 0);
         assert!(!result);
         assert_eq!(log.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn save_writes_the_ammo_form_id_only_when_set() {
+        let mut e = Engine::new();
+        e.register(FORM_ID, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(ADD_CHUNK_WORD, |_, _| Ret::default());
+        let ammo = e.mem.alloc(0x18);
+        e.mem.set_u32(ammo + 0xc, 0x0012_3456);
+        let this = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_4af0, &args![this]);
+        assert!(calls(&e, ADD_CHUNK_WORD).is_empty());
+        e.mem.set_u32(this + 4, ammo);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_4af0, &args![this]);
+        assert_eq!(calls(&e, FORM_ID), vec![vec![ammo]]);
+        assert_eq!(
+            calls(&e, ADD_CHUNK_WORD),
+            vec![vec![CHUNK_NAM0, 0x0012_3456]]
+        );
+    }
+
+    #[test]
+    fn copy_component_copies_the_ammo_of_an_ammo_form() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0x11);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(other + 4, 0x22);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_4b30, &args![this, other]);
+        assert_eq!(e.mem.u32(this + 4), 0x11);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![
+                other,
+                0,
+                BASE_FORM_COMPONENT_TYPE,
+                BGS_AMMO_FORM_TYPE,
+                0
+            ]]
+        );
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.call(0x0047_4b30, &args![this, other]);
+        assert_eq!(e.mem.u32(this + 4), 0x22);
+    }
+
+    #[test]
+    fn compare_component_differs_unless_the_same_ammo() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0x44);
+        e.mem.set_u32(other + 4, 0x44);
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        assert!(!e.call(0x0047_4b70, &args![this, other]).bool());
+        e.mem.set_u32(other + 4, 0x45);
+        assert!(e.call(0x0047_4b70, &args![this, other]).bool());
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0047_4b70, &args![this, other]).bool());
     }
 }

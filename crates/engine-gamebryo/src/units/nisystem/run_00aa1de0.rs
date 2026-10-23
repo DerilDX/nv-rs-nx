@@ -294,9 +294,25 @@ pub fn fn_00aa2170(e: &mut Engine) {
     e.mem.set_u8(STARTUP_FINISHED, 0);
 }
 
+// Translated from 00aa21e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, no stack word): the holder's tear-down, the
+/// counterpart of [`fn_00aa2200`]. When the byte at `this + 4` is set and the object at
+/// `this` is not null, calls the object's vtable slot 0 (its deleting destructor) with 1.
+pub fn fn_00aa21e0(e: &mut Engine, this: Ptr) {
+    if e.mem.u8(this.addr() + 4) == 0 {
+        return;
+    }
+    let object = e.mem.u32(this.addr());
+    if object == 0 {
+        return;
+    }
+    e.vcall(object, 0, &args![1u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00aa_21e0, fn_00aa21e0(Ptr)),
         entry!(
             0x00aa_1f10,
             fn_00aa1f10(Ptr<NiBinaryStream>, Ptr, u32) -> i32
@@ -705,5 +721,38 @@ mod tests_b043 {
         e.call_log = Some(vec![]);
         e.call(0x00aa_2170, &args![]);
         assert_eq!(calls(&mut e), vec![(SHUTDOWN_STEP, vec![])]);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00aa21e0_deletes_the_owned_object() {
+        let mut e = Engine::new();
+        e.put_vtable(0x0090_1000, &[0x0090_0000]);
+        e.register(0x0090_0000, |_, _| Ret::default());
+        let object = e.mem.alloc(4);
+        e.mem.set_u32(object, 0x0090_1000);
+        let holder = e.mem.alloc(8);
+        e.mem.set_u32(holder, object);
+        e.mem.set_u8(holder + 4, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_21e0, &args![holder]);
+        let log = e.call_log.take().unwrap();
+        let deletes: Vec<_> = log.iter().filter(|(a, _)| *a == 0x0090_0000).collect();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].1, vec![object, 1]);
+        // Not owned, or no object: nothing is called.
+        e.mem.set_u8(holder + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_21e0, &args![holder]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        e.mem.set_u8(holder + 4, 1);
+        e.mem.set_u32(holder, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00aa_21e0, &args![holder]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

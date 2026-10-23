@@ -194,6 +194,36 @@ pub fn fn_00692710(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00692640 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00692640 - the exception-unwinding frame (FS:[0]) is not translated.
+/// Constructs `count` 0x28-byte elements at `storage` (`thiscall`, `ECX` not
+/// read; storage, count; `RET 8`): each through placement new (`006e6da0`
+/// with 0x28) and, when that gives memory, `006926e0`.
+pub fn fn_00692640(e: &mut Engine, _unused_0: Ptr, storage: u32, count: u32) {
+    let mut index = 0u32;
+    while index < count {
+        let memory = e
+            .call(
+                PLACEMENT_NEW,
+                &args![0x28u32, index.wrapping_mul(0x28).wrapping_add(storage)],
+            )
+            .u32();
+        if memory != 0 {
+            fn_006926e0(e, Ptr::new(memory));
+        }
+        index += 1;
+    }
+}
+
+// Translated from 006926e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs a 0x28-byte element: `00692710` on it, then the 16-bit word
+/// at +0x24 is 0xFFFF. Returns `this`.
+pub fn fn_006926e0(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_00692710(e, this);
+    e.mem.set_u16(this.addr() + 0x24, 0xffff);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -205,6 +235,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069_2520, fn_00692520(Ptr, u32, u32)),
         entry!(0x0069_25b0, fn_006925b0(Ptr) -> u32),
         entry!(0x0069_2710, fn_00692710(Ptr) -> Ptr),
+        entry!(0x0069_2640, fn_00692640(Ptr, u32, u32)),
+        entry!(0x0069_26e0, fn_006926e0(Ptr) -> Ptr),
     ]
 }
 
@@ -389,5 +421,47 @@ mod tests {
                 (PAIR_HALF_CONSTRUCT, vec![0x400c]),
             ]
         );
+    }
+
+    #[test]
+    fn at_00692640_constructs_0x28_byte_elements_and_skips_failed_ones() {
+        let mut e = Engine::new();
+        e.register(PAIR_HALF_CONSTRUCT, |_, _| ret(0));
+        e.register(PLACEMENT_NEW, |_, a| ret(a[1]));
+        let storage = e.mem.alloc(0x50);
+        let (_, log) = run(&mut e, 0x0069_2640, &[0, storage, 2]);
+        assert_eq!(
+            log,
+            vec![
+                (PLACEMENT_NEW, vec![0x28, storage]),
+                (PAIR_HALF_CONSTRUCT, vec![storage]),
+                (PAIR_HALF_CONSTRUCT, vec![storage + 0xc]),
+                (PLACEMENT_NEW, vec![0x28, storage + 0x28]),
+                (PAIR_HALF_CONSTRUCT, vec![storage + 0x28]),
+                (PAIR_HALF_CONSTRUCT, vec![storage + 0x34]),
+            ]
+        );
+        assert_eq!(e.mem.u16(storage + 0x24), 0xffff);
+        assert_eq!(e.mem.u16(storage + 0x4c), 0xffff);
+        e.register(PLACEMENT_NEW, |_, _| ret(0));
+        let (_, log) = run(&mut e, 0x0069_2640, &[0, storage, 1]);
+        assert_eq!(log, vec![(PLACEMENT_NEW, vec![0x28, storage])]);
+    }
+
+    #[test]
+    fn at_006926e0_constructs_both_halves_and_marks_the_word() {
+        let mut e = Engine::new();
+        e.register(PAIR_HALF_CONSTRUCT, |_, _| ret(0));
+        let this = e.mem.alloc(0x28);
+        let (result, log) = run(&mut e, 0x0069_26e0, &[this]);
+        assert_eq!(result.u32(), this);
+        assert_eq!(
+            log,
+            vec![
+                (PAIR_HALF_CONSTRUCT, vec![this]),
+                (PAIR_HALF_CONSTRUCT, vec![this + 0xc]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x24), 0xffff);
     }
 }

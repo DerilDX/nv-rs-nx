@@ -531,9 +531,38 @@ pub fn bst_case_insensitive_string_map_key_to_hash_index(
     hash % e.mem.u32(this.addr() + 4)
 }
 
+/// The `MoviePlayer` base constructor (`00ec20c0`, this unit; thiscall, no stack words; it
+/// stores `PLAYER_VTABLE`).
+const PLAYER_CONSTRUCT: u32 = 0x00ec_20c0;
+/// `BGSMoviePlayer`'s vtable (RTTI `.?AVBGSMoviePlayer@@`).
+const BGS_MOVIE_PLAYER_VTABLE: u32 = 0x0108_2564;
+/// `BSAudio::QInstance` (engine map, `00453a70`; no arguments) and `004f1540` (thiscall:
+/// the byte at +4 of the object, in `AL`).
+const AUDIO_INSTANCE: u32 = 0x0045_3a70;
+const OBJECT_BYTE_AT_4: u32 = 0x004f_1540;
+/// `00ec1680` (this unit; thiscall, one word: when its low byte is set, Bink's sound system
+/// is set to DirectSound).
+const PLAYER_SET_SOUND: u32 = 0x00ec_1680;
+
+// Translated from 008670e0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 008670e0 - the compiler's exception frame (FS:[0] chain, handler 00f13b98) is not translated
+/// The engine map names it `MoviePlayer::Initialize`; the body is a constructor
+/// (thiscall, no stack words): the `MoviePlayer` base (`00ec20c0`), then
+/// `BGSMoviePlayer`'s vtable at `+0`, then `00ec1680(this, b)` with `b` the byte
+/// `004f1540` answers for `BSAudio::QInstance()` (zero-extended). Returns `this`.
+pub fn fn_008670e0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(PLAYER_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr(), BGS_MOVIE_PLAYER_VTABLE);
+    let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+    let flag = e.call(OBJECT_BYTE_AT_4, &args![audio]).u8();
+    e.call(PLAYER_SET_SOUND, &args![this, u32::from(flag)]);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0086_70e0, fn_008670e0(Ptr) -> Ptr),
         entry!(0x00ebff30, fn_00ebff30(Ptr, f32, f32, f32, f32)),
         entry!(
             0x00ec0e00,
@@ -842,5 +871,42 @@ mod tests {
             .bool();
         assert!(!played);
         assert_eq!(e.mem.u8(movie + 0x24), 0);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_008670e0_constructs_and_hands_the_audio_flag_on() {
+        let mut e = Engine::new();
+        e.register(PLAYER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], PLAYER_VTABLE);
+            Ret::default()
+        });
+        e.register(AUDIO_INSTANCE, |_, _| 0x0c00_0000u32.into_ret());
+        // The byte comes back with garbage in the upper bytes of EAX.
+        e.register(OBJECT_BYTE_AT_4, |_, _| 0x1234_5601u32.into_ret());
+        e.register(PLAYER_SET_SOUND, |_, _| Ret::default());
+        let this = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0086_70e0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), BGS_MOVIE_PLAYER_VTABLE);
+        let log = e.call_log.take().unwrap();
+        let order: Vec<u32> = log.iter().skip(1).map(|(a, _)| *a).collect();
+        assert_eq!(
+            order,
+            vec![
+                PLAYER_CONSTRUCT,
+                AUDIO_INSTANCE,
+                OBJECT_BYTE_AT_4,
+                PLAYER_SET_SOUND
+            ]
+        );
+        let query = log.iter().find(|(a, _)| *a == OBJECT_BYTE_AT_4).unwrap();
+        assert_eq!(query.1, vec![0x0c00_0000]);
+        let sound = log.iter().find(|(a, _)| *a == PLAYER_SET_SOUND).unwrap();
+        assert_eq!(sound.1, vec![this, 1]);
     }
 }

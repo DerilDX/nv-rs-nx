@@ -209,12 +209,85 @@ pub fn fn_00590b60(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `TESForm::StartForm` and `TESForm::CloseForm` (`004855a0`, `00485680`, `thiscall`).
+const FORM_START_FORM: u32 = 0x0048_55a0;
+const FORM_CLOSE_FORM: u32 = 0x0048_5680;
+/// `TESDescription::Save` (`00482cb0`, `thiscall`).
+const DESCRIPTION_SAVE: u32 = 0x0048_2cb0;
+/// `TESFullName::Save` (`00487010`, `thiscall`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+/// `00485910` (`cdecl`: chunk signature, word): saves a chunk holding one word.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// `TESForm::AddChunkArray` (`004856f0`; `cdecl`: chunk signature, address, size).
+const ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+/// `00590d00` (`ECX` = message, `AL`): whether bit 0 of the flags word (+0x38) is set; the
+/// display time (`TNAM`) is saved only when it is clear.
+const FLAG_1_SET: u32 = 0x0059_0d00;
+/// `00436aa0` (`ECX` = message): the address of its button list (+0x30).
+const BUTTON_LIST_OF: u32 = 0x0043_6aa0;
+/// `008256d0` (`ECX` = list node, `AL`): true when the node is empty.
+const NODE_IS_EMPTY: u32 = 0x0082_56d0;
+/// `006815c0` (`ECX` = list node): the address of the node's item.
+const NODE_ITEM: u32 = 0x0068_15c0;
+/// `00726070` (`ECX` = list node): the next node.
+const NODE_NEXT: u32 = 0x0072_6070;
+/// `00559450` (`ECX` = string): its characters (null for an empty string).
+const STRING_CHARS: u32 = 0x0055_9450;
+/// `0044a670` (`cdecl`, a string): its length.
+const STRLEN: u32 = 0x0044_a670;
+/// `TESCondition::Save` (`00680910`, `ECX` = conditions).
+const CONDITIONS_SAVE: u32 = 0x0068_0910;
+
+// Translated from 00590bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSMessage::Save` (Xbox PDB; `thiscall`, no stack word): starts the form record,
+/// saves the description (+0x24) and the full name (+0x18), the icon's form id (`INAM`, 0
+/// without an icon), the flags (+0x38, `DNAM`), the display time (+0x3C, `TNAM`) unless
+/// flag bit 0 is set, and for each button of the list (+0x30) its text with the
+/// terminating zero (`ITXT`, or a zero word for a button without text) followed by its
+/// conditions (+8), then closes the record.
+pub fn bgs_message_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(FORM_START_FORM, &args![this]);
+    e.call(DESCRIPTION_SAVE, &args![base + 0x24]);
+    e.call(FULL_NAME_SAVE, &args![base + 0x18]);
+    let icon_id = if e.call(ICON_GET, &args![this]).u32() != 0 {
+        let icon = e.call(ICON_GET, &args![this]).u32();
+        e.call(FORM_ID, &args![icon]).u32()
+    } else {
+        0
+    };
+    e.call(ADD_CHUNK_WORD, &args![CHUNK_INAM, icon_id]);
+    let flags = e.mem.u32(base + 0x38);
+    e.call(ADD_CHUNK_WORD, &args![CHUNK_DNAM, flags]);
+    if e.call(FLAG_1_SET, &args![this]).u8() == 0 {
+        let display_time = e.mem.u32(base + 0x3c);
+        e.call(ADD_CHUNK_WORD, &args![CHUNK_TNAM, display_time]);
+    }
+    let mut node = e.call(BUTTON_LIST_OF, &args![this]).u32();
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let slot = e.call(NODE_ITEM, &args![node]).u32();
+        let button = e.mem.u32(slot);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        if e.call(STRING_CHARS, &args![button]).u32() != 0 {
+            let text = e.call(STRING_CHARS, &args![button]).u32();
+            let size = e.call(STRLEN, &args![text]).u32().wrapping_add(1);
+            let text = e.call(STRING_CHARS, &args![button]).u32();
+            e.call(ADD_CHUNK_ARRAY, &args![CHUNK_ITXT, text, size]);
+        } else {
+            e.call(ADD_CHUNK_WORD, &args![CHUNK_ITXT, 0u32]);
+        }
+        e.call(CONDITIONS_SAVE, &args![button.wrapping_add(8)]);
+    }
+    e.call(FORM_CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0059_06f0, bgs_message_init_item(Ptr)),
         entry!(0x0059_0880, bgs_message_load(Ptr, Ptr) -> bool),
         entry!(0x0059_0b60, fn_00590b60(Ptr) -> Ptr),
+        entry!(0x0059_0bc0, bgs_message_save(Ptr)),
     ]
 }
 
@@ -464,5 +537,118 @@ mod tests {
         assert_eq!(calls(&e, 0x0059_11d0), vec![vec![this, 0x6000]]);
         // Only the condition after the item is read.
         assert_eq!(calls(&e, 0x0068_0960), vec![vec![0x6008, file]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    type CallLog = Vec<(u32, Vec<u32>)>;
+
+    /// Runs the save on a message with `icon`, `flags` and buttons whose texts are the
+    /// given string addresses (0 for none).
+    fn run(icon: u32, flags: u32, texts: &[u32]) -> (u32, Vec<u32>, CallLog) {
+        let mut e = Engine::new();
+        for addr in [
+            FORM_START_FORM,
+            FORM_CLOSE_FORM,
+            DESCRIPTION_SAVE,
+            FULL_NAME_SAVE,
+            ADD_CHUNK_WORD,
+            ADD_CHUNK_ARRAY,
+            CONDITIONS_SAVE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(FORM_ID, |_, a| (a[0] + 1).into_ret());
+        e.register_double(ICON_GET, move |_, _| icon.into_ret());
+        e.register(FLAG_1_SET, |e, a| {
+            u32::from(e.mem.u32(a[0] + 0x38) & 1 != 0).into_ret()
+        });
+        e.register(BUTTON_LIST_OF, |_, a| (a[0] + 0x30).into_ret());
+        e.register(NODE_IS_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(STRING_CHARS, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(STRLEN, |_, a| (a[0] & 0xf).into_ret());
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x38, flags);
+        e.mem.set_u32(this + 0x3c, 0x40a0_0000);
+        let mut buttons = vec![];
+        let mut next = 0;
+        for text in texts.iter().rev() {
+            let button = e.mem.alloc(0x10);
+            e.mem.set_u32(button, *text);
+            buttons.insert(0, button);
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, button);
+            e.mem.set_u32(node + 4, next);
+            next = node;
+        }
+        if next != 0 {
+            let head = e.mem.u32(next);
+            let after = e.mem.u32(next + 4);
+            e.mem.set_u32(this + 0x30, head);
+            e.mem.set_u32(this + 0x34, after);
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0059_0bc0, &args![this]);
+        (this, buttons, e.call_log.take().unwrap())
+    }
+
+    fn saved(log: &CallLog) -> CallLog {
+        log.iter()
+            .filter(|c| {
+                [
+                    FORM_START_FORM,
+                    FORM_CLOSE_FORM,
+                    DESCRIPTION_SAVE,
+                    FULL_NAME_SAVE,
+                    ADD_CHUNK_WORD,
+                    ADD_CHUNK_ARRAY,
+                    CONDITIONS_SAVE,
+                ]
+                .contains(&c.0)
+            })
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn save_writes_icon_flags_time_and_buttons() {
+        let (this, buttons, log) = run(0x900, 0, &[0x1234, 0]);
+        assert_eq!(
+            saved(&log),
+            vec![
+                (FORM_START_FORM, vec![this]),
+                (DESCRIPTION_SAVE, vec![this + 0x24]),
+                (FULL_NAME_SAVE, vec![this + 0x18]),
+                (ADD_CHUNK_WORD, vec![CHUNK_INAM, 0x901]),
+                (ADD_CHUNK_WORD, vec![CHUNK_DNAM, 0]),
+                (ADD_CHUNK_WORD, vec![CHUNK_TNAM, 0x40a0_0000]),
+                (ADD_CHUNK_ARRAY, vec![CHUNK_ITXT, 0x1234, 5]),
+                (CONDITIONS_SAVE, vec![buttons[0] + 8]),
+                (ADD_CHUNK_WORD, vec![CHUNK_ITXT, 0]),
+                (CONDITIONS_SAVE, vec![buttons[1] + 8]),
+                (FORM_CLOSE_FORM, vec![this]),
+            ]
+        );
+    }
+
+    #[test]
+    fn save_without_icon_time_or_buttons() {
+        let (this, _, log) = run(0, 1, &[]);
+        assert_eq!(
+            saved(&log)[3..],
+            [
+                (ADD_CHUNK_WORD, vec![CHUNK_INAM, 0]),
+                (ADD_CHUNK_WORD, vec![CHUNK_DNAM, 1]),
+                (FORM_CLOSE_FORM, vec![this]),
+            ]
+        );
+        assert!(!log.iter().any(|c| c.0 == FORM_ID));
     }
 }

@@ -354,9 +354,26 @@ pub fn fn_0058ec00(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+// Translated from 0058f7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, one word: an index; `RET 4`): the address of the
+/// 0x1E-byte entry `index` from `this + 0x30` when its first byte is not 0 (tested
+/// sign-extended, so any non-zero byte), else null.
+pub fn fn_0058f7f0(e: &mut Engine, this: Ptr, index: i32) -> u32 {
+    let entry = this
+        .addr()
+        .wrapping_add((index as u32).wrapping_mul(0x1e))
+        .wrapping_add(0x30);
+    if e.mem.u8(entry) as i8 != 0 {
+        entry
+    } else {
+        0
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0058_f7f0, fn_0058f7f0(Ptr, i32) -> u32),
         entry!(0x0058_e810, fn_0058e810(Ptr) -> Ptr),
         entry!(0x0058_f850, bs_map_bgs_impact_data_p_bgs_impact_data_p_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x0058_f9a0, bs_map_base_bgs_impact_data_p_bgs_impact_data_p_scalar_deleting_destructor(Ptr, u32) -> Ptr),
@@ -736,5 +753,23 @@ mod impact_tests {
         let (mut e, this) = load_rig(vec![(CHUNK_DATA, 0x30)], false);
         assert!(e.call(0x0058_ec00, &args![this, FILE]).bool());
         assert!(calls(&e, SWAP_WORD).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0058f7f0_answers_a_present_entry_or_null() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x30 + 3 * 0x1e);
+        e.mem.set_u8(this + 0x30 + 0x1e, 0x80);
+        assert_eq!(e.call(0x0058_f7f0, &args![this, 0u32]).u32(), 0);
+        assert_eq!(
+            e.call(0x0058_f7f0, &args![this, 1u32]).u32(),
+            this + 0x30 + 0x1e
+        );
+        assert_eq!(e.call(0x0058_f7f0, &args![this, 2u32]).u32(), 0);
     }
 }

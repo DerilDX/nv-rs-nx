@@ -495,6 +495,289 @@ pub fn fn_0058b350(e: &mut Engine, this: Ptr) -> u32 {
     array
 }
 
+/// `TESForm::CopyAllComponents` (decompiler name of `004851b0`; `RET 4`, the other form).
+const FORM_COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+/// `TESForm::CompareAllComponents` (decompiler name of `00485270`; `RET 4`, `AL` true when
+/// different).
+const FORM_COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+/// `00680a70` (`ECX` = conditions, `RET 8`: the other conditions, 0): copies conditions.
+const CONDITIONS_COPY: u32 = 0x0068_0a70;
+/// `00680b70` (`ECX` = conditions, `RET 4`, `AL` true when different): compares
+/// conditions.
+const CONDITIONS_COMPARE: u32 = 0x0068_0b70;
+/// `TESCondition::Save` (decompiler name of `00680910`, `ECX` = conditions).
+const CONDITIONS_SAVE: u32 = 0x0068_0910;
+/// `00401460` (`cdecl`: destination, source, size): copies memory.
+const MEMCPY: u32 = 0x0040_1460;
+/// `memcmp` (`00ec4835`, `cdecl`: first, second, size).
+const MEMCMP: u32 = 0x00ec_4835;
+/// `00891170` (`ECX` = path): the address of its shot list (+0x20).
+const SHOT_LIST_OF: u32 = 0x0089_1170;
+/// `008256d0` (`ECX` = list node, `AL`): true when the node is empty.
+const NODE_IS_EMPTY: u32 = 0x0082_56d0;
+/// `00726070` (`ECX` = list node): the next node (the word at +4).
+const NODE_NEXT: u32 = 0x0072_6070;
+/// `00470470` (`ECX` = list): removes every item.
+const LIST_REMOVE_ALL: u32 = 0x0047_0470;
+/// `00905820` (`ECX` = list, `RET 4`): appends the item a pointer points at.
+const LIST_ADD_TAIL: u32 = 0x0090_5820;
+/// `004867a0` (`ECX` = form, `RET 8`: a byte, the references map): the form's duplicate.
+const FORM_DUPLICATE: u32 = 0x0048_67a0;
+/// `00853130` (`ECX` = references map, `RET 8`: a form, the address of the answer; `AL`):
+/// looks a form up in the map.
+const MAP_GET_AT: u32 = 0x0085_3130;
+/// `00864280` (`ECX` = form array, `RET 4`): sizes the array to a count.
+const ARRAY_SET_SIZE: u32 = 0x0086_4280;
+/// The child's virtual slot that duplicates it (`RET 8`: the byte and the map).
+const SLOT_DUPLICATE: u32 = 0x40;
+/// `00671d10` (`ECX` = path): the parent path.
+const PARENT_PATH_OF: u32 = 0x0067_1d10;
+/// `00440d80` (`ECX` = form, `AL`): whether bit 0x20 of the form flags (+8) is set.
+const FORM_FLAG_20_SET: u32 = 0x0044_0d80;
+/// `00403d30` (`cdecl`: address, byte, count): fills memory.
+const FILL_MEMORY: u32 = 0x0040_3d30;
+/// `00401500` (`cdecl`, no arguments, `AL`): whether saved data is byte-swapped.
+const SWAP_ON_SAVE: u32 = 0x0040_1500;
+/// `00462230` (`ECX` = the two `ANAM` words): swaps their byte order.
+const SWAP_ANAM: u32 = 0x0046_2230;
+/// `00483710` (`ECX` = the data byte): the byte's swap, which does nothing.
+const SWAP_DATA_BYTE: u32 = 0x0048_3710;
+/// `TESForm::__AddChunkData` (`00485990`, `cdecl`: chunk signature, address, size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// `TESForm::__SaveData` (`00485e20`, `RET 8`: address, size).
+const FORM_SAVE_DATA: u32 = 0x0048_5e20;
+/// `00485910` (`cdecl`: chunk signature, word): saves a chunk holding one word.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// `TESForm::StartForm` and `TESForm::CloseForm` (`004855a0`, `00485680`, `thiscall`).
+const FORM_START_FORM: u32 = 0x0048_55a0;
+const FORM_CLOSE_FORM: u32 = 0x0048_5680;
+/// `0084e3a0` (`ECX` = form): the word at +0xC (`TESForm::iFormID`).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `0058b680` (`ECX` = path, `RET 4`): the index of a child in the child array.
+const CHILD_INDEX_OF: u32 = 0x0058_b680;
+/// `0058b6c0` (`ECX` = path, `RET 4`): removes the child at an index.
+const REMOVE_CHILD_AT: u32 = 0x0058_b6c0;
+/// The path's data byte (+0x28) and child array (+0x2C).
+const DATA_OFFSET: u32 = 0x28;
+const CHILDREN_OFFSET: u32 = 0x2c;
+/// `pParentPath` (+0x30) and `pPrevPath` (+0x34).
+const PARENT_OFFSET: u32 = 0x30;
+const PREVIOUS_OFFSET: u32 = 0x34;
+
+// Translated from 0058a680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies another camera path into this one (`thiscall`, `RET 4`; unnamed in the engine
+/// map). When `other` casts from `TESForm` to `BGSCameraPath`: every component
+/// (`004851b0`), the conditions (`00680a70` with 0), the data byte (+0x28), and the shot
+/// list: this list is emptied (`00470470`) and every item of the other's list is appended
+/// (`00905820`) until a null or empty node.
+pub fn fn_0058a680(e: &mut Engine, this: Ptr, other: Ptr) {
+    let source = cast(e, other.addr(), TYPE_CAMERA_PATH);
+    if source == 0 {
+        return;
+    }
+    e.call(FORM_COPY_ALL_COMPONENTS, &args![this, source]);
+    let their_conditions = e.call(CONDITIONS_OF, &args![source]).u32();
+    let our_conditions = e.call(CONDITIONS_OF, &args![this]).u32();
+    e.call(
+        CONDITIONS_COPY,
+        &args![our_conditions, their_conditions, 0u32],
+    );
+    e.call(
+        MEMCPY,
+        &args![this.addr() + DATA_OFFSET, source + DATA_OFFSET, 1u32],
+    );
+    let shots = this.addr() + 0x20;
+    e.call(LIST_REMOVE_ALL, &args![shots]);
+    let mut node = e.call(SHOT_LIST_OF, &args![source]).u32();
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let slot = e.call(IDENTITY, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), item);
+            e.call(LIST_ADD_TAIL, &args![shots, local]);
+        });
+    }
+}
+
+// Translated from 0058a750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compares another camera path with this one (`thiscall`, `RET 4`, `AL`; unnamed in the
+/// engine map): true ("differs") when `other` is not a `BGSCameraPath`, the components
+/// (`00485270`) or the conditions (`00680b70`) differ, the data byte differs (`memcmp`),
+/// or the shot lists differ item by item (walking the other's list while its node is set
+/// and not empty; this list ending first differs, and this list having a non-empty node
+/// left afterwards differs).
+pub fn fn_0058a750(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let source = cast(e, other.addr(), TYPE_CAMERA_PATH);
+    if source == 0 {
+        return true;
+    }
+    if e.call(FORM_COMPARE_ALL_COMPONENTS, &args![this, source])
+        .u8()
+        != 0
+    {
+        return true;
+    }
+    let their_conditions = e.call(CONDITIONS_OF, &args![source]).u32();
+    let our_conditions = e.call(CONDITIONS_OF, &args![this]).u32();
+    if e.call(CONDITIONS_COMPARE, &args![our_conditions, their_conditions])
+        .u8()
+        != 0
+    {
+        return true;
+    }
+    if e.call(
+        MEMCMP,
+        &args![this.addr() + DATA_OFFSET, source + DATA_OFFSET, 1u32],
+    )
+    .u32()
+        != 0
+    {
+        return true;
+    }
+    let mut ours = e.call(SHOT_LIST_OF, &args![this]).u32();
+    let mut theirs = e.call(SHOT_LIST_OF, &args![source]).u32();
+    while theirs != 0 && !e.call(NODE_IS_EMPTY, &args![theirs]).bool() {
+        if ours == 0 {
+            return true;
+        }
+        let our_slot = e.call(IDENTITY, &args![ours]).u32();
+        let their_slot = e.call(IDENTITY, &args![theirs]).u32();
+        if e.mem.u32(our_slot) != e.mem.u32(their_slot) {
+            return true;
+        }
+        theirs = e.call(NODE_NEXT, &args![theirs]).u32();
+        ours = e.call(NODE_NEXT, &args![ours]).u32();
+    }
+    ours != 0 && !e.call(NODE_IS_EMPTY, &args![ours]).bool()
+}
+
+/// The form `map` gives for `form` (`00853130` into a cleared local), or `form` itself
+/// when the lookup fails or answers null.
+fn mapped_form(e: &mut Engine, map: u32, form: u32) -> u32 {
+    e.with_stack(4, |e, answer| {
+        e.mem.set_u32(answer.addr(), 0);
+        let found = e.call(MAP_GET_AT, &args![map, form, answer]).u8() != 0;
+        let mapped = e.mem.u32(answer.addr());
+        if !found || mapped == 0 {
+            form
+        } else {
+            mapped
+        }
+    })
+}
+
+// Translated from 0058a870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Duplicates the camera path (`thiscall`, `RET 8`: a byte and a references map; unnamed
+/// in the engine map): the form's duplicate (`004867a0`) cast to `BGSCameraPath`; its
+/// parent and previous paths are this one's, mapped through `map` (`00853130`) when the
+/// map has them; with a child array, it is compacted, the duplicate's array (`0058b350`)
+/// sized to the count (`00864280`) and each child's duplicate (virtual slot `0x40`, same
+/// byte and map) stored at its index (`0061bd20`). Answers the duplicate.
+pub fn fn_0058a870(e: &mut Engine, this: Ptr, flag: u8, map: u32) -> u32 {
+    let form = e
+        .call(FORM_DUPLICATE, &args![this, u32::from(flag), map])
+        .u32();
+    let duplicate = cast(e, form, TYPE_CAMERA_PATH);
+    let parent = e.mem.u32(this.addr() + PARENT_OFFSET);
+    let parent = mapped_form(e, map, parent);
+    e.call(SET_PARENT_PATH, &args![duplicate, parent]);
+    let previous = e.mem.u32(this.addr() + PREVIOUS_OFFSET);
+    let previous = mapped_form(e, map, previous);
+    e.call(SET_PREVIOUS_PATH, &args![duplicate, previous]);
+    if e.mem.u32(this.addr() + CHILDREN_OFFSET) != 0 {
+        let children = e.mem.u32(this.addr() + CHILDREN_OFFSET);
+        e.call(ARRAY_COMPACT, &args![children]);
+        let children = e.mem.u32(this.addr() + CHILDREN_OFFSET);
+        let count = e.call(ARRAY_COUNT, &args![children]).u32();
+        let array = fn_0058b350(e, Ptr::new(duplicate));
+        e.call(ARRAY_SET_SIZE, &args![array, count]);
+        let mut index = 0u32;
+        while index < count {
+            let children = e.mem.u32(this.addr() + CHILDREN_OFFSET);
+            let slot = e.call(ARRAY_ENTRY, &args![children, index]).u32();
+            let child = e.mem.u32(slot);
+            let copy = e
+                .vcall(child, SLOT_DUPLICATE, &args![u32::from(flag), map])
+                .u32();
+            e.with_stack(4, |e, local| {
+                e.mem.set_u32(local.addr(), copy);
+                e.call(ARRAY_TAKE, &args![array, index, local]);
+            });
+            index += 1;
+        }
+    }
+    duplicate
+}
+
+// Translated from 0058ac10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Saves the camera path (`thiscall`, no stack word; unnamed in the engine map): starts
+/// the form record, saves the conditions (`00680910`), then an `ANAM` chunk of two words
+/// (cleared by `00403d30`): the parent's form id (when there is a parent, `00671d10`) and
+/// the form id of the first previous path (`005f36f0`, walking past those with form flag
+/// 0x20) unless this path has flag 0x20 itself, byte swapped (`00462230`) around the save
+/// when `00401500` says so; then the data byte (+0x28, `TESForm::__SaveData`, its no-op
+/// swap `00483710` around it), one `SNAM` chunk per shot's form id, and closes the record.
+pub fn fn_0058ac10(e: &mut Engine, this: Ptr) {
+    e.call(FORM_START_FORM, &args![this]);
+    let conditions = e.call(CONDITIONS_OF, &args![this]).u32();
+    e.call(CONDITIONS_SAVE, &args![conditions]);
+    e.with_stack(8, |e, ids| {
+        e.call(FILL_MEMORY, &args![ids, 0u32, 8u32]);
+        if e.call(PARENT_PATH_OF, &args![this]).u32() != 0 {
+            let parent = e.call(PARENT_PATH_OF, &args![this]).u32();
+            let id = e.call(FORM_ID, &args![parent]).u32();
+            e.mem.set_u32(ids.addr(), id);
+        }
+        if e.call(FORM_FLAG_20_SET, &args![this]).u8() == 0 {
+            let mut previous = e.call(PREVIOUS_PATH_OF, &args![this]).u32();
+            while previous != 0 && e.call(FORM_FLAG_20_SET, &args![previous]).u8() != 0 {
+                previous = e.call(PREVIOUS_PATH_OF, &args![previous]).u32();
+            }
+            if previous != 0 {
+                let id = e.call(FORM_ID, &args![previous]).u32();
+                e.mem.set_u32(ids.addr() + 4, id);
+            }
+        }
+        if e.call(SWAP_ON_SAVE, &[]).u8() != 0 {
+            e.call(SWAP_ANAM, &args![ids]);
+        }
+        e.call(ADD_CHUNK_DATA, &args![CHUNK_ANAM, ids, 8u32]);
+        if e.call(SWAP_ON_SAVE, &[]).u8() != 0 {
+            e.call(SWAP_ANAM, &args![ids]);
+        }
+    });
+    let data = this.addr() + DATA_OFFSET;
+    if e.call(SWAP_ON_SAVE, &[]).u8() != 0 {
+        e.call(SWAP_DATA_BYTE, &args![data]);
+    }
+    e.call(FORM_SAVE_DATA, &args![this, data, 1u32]);
+    if e.call(SWAP_ON_SAVE, &[]).u8() != 0 {
+        e.call(SWAP_DATA_BYTE, &args![data]);
+    }
+    let mut node = e.call(SHOT_LIST_OF, &args![this]).u32();
+    while node != 0 && !e.call(NODE_IS_EMPTY, &args![node]).bool() {
+        let slot = e.call(IDENTITY, &args![node]).u32();
+        let shot = e.mem.u32(slot);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        let id = e.call(FORM_ID, &args![shot]).u32();
+        e.call(ADD_CHUNK_WORD, &args![CHUNK_SNAM, id]);
+    }
+    e.call(FORM_CLOSE_FORM, &args![this]);
+}
+
+// Translated from 0058b730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes `child` from the path's children (`thiscall`, `RET 4`; unnamed in the engine
+/// map): when `child` is set and there is a child array, removes the entry at the child's
+/// index (`0058b680`, then `0058b6c0`).
+pub fn fn_0058b730(e: &mut Engine, this: Ptr, child: u32) {
+    if child == 0 || e.mem.u32(this.addr() + CHILDREN_OFFSET) == 0 {
+        return;
+    }
+    let index = e.call(CHILD_INDEX_OF, &args![this, child]).u32();
+    e.call(REMOVE_CHILD_AT, &args![this, index]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -508,6 +791,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0058aef0, bgs_camera_path_init_parents(Ptr) -> bool),
         entry!(0x0058b190, bgs_camera_path_fix_next_paths(Ptr, u32)),
         entry!(0x0058b350, fn_0058b350(Ptr) -> u32),
+        entry!(0x0058_a680, fn_0058a680(Ptr, Ptr)),
+        entry!(0x0058_a750, fn_0058a750(Ptr, Ptr) -> bool),
+        entry!(0x0058_a870, fn_0058a870(Ptr, u8, u32) -> u32),
+        entry!(0x0058_ac10, fn_0058ac10(Ptr)),
+        entry!(0x0058_b730, fn_0058b730(Ptr, u32)),
     ]
 }
 
@@ -1005,5 +1293,312 @@ mod b019_tests {
         assert_eq!(e.call(0x0058_b350, &args![p]).u32(), 0x8800);
         assert_eq!(e.call(0x0058_b350, &args![p]).u32(), 0x8800);
         assert_eq!(calls(&e, ALLOCATE).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    type CallLog = Vec<(u32, Vec<u32>)>;
+
+    fn to(log: &CallLog, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// Builds a shot list (nodes of item, next) and answers its head; an empty list is
+    /// one node whose item and next are 0.
+    fn list(e: &mut Engine, items: &[u32]) -> u32 {
+        let mut next = 0;
+        for item in items.iter().rev() {
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, *item);
+            e.mem.set_u32(node + 4, next);
+            next = node;
+        }
+        if next == 0 {
+            next = e.mem.alloc(8);
+        }
+        next
+    }
+
+    /// An engine whose list helpers work on such nodes; `00891170` answers the word at
+    /// +0x20 of a path (the head node here).
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(SHOT_LIST_OF, |e, a| e.mem.u32(a[0] + 0x20).into_ret());
+        e.register(NODE_IS_EMPTY, |e, a| {
+            u32::from(e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0).into_ret()
+        });
+        e.register(IDENTITY, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(CONDITIONS_OF, |_, a| (a[0] + 0x18).into_ret());
+        e
+    }
+
+    fn path(e: &mut Engine, shots: &[u32], data: u8) -> u32 {
+        let this = e.mem.alloc(0x38);
+        let head = list(e, shots);
+        e.mem.set_u32(this + 0x20, head);
+        e.mem.set_u8(this + 0x28, data);
+        this
+    }
+
+    #[test]
+    fn copy_takes_components_conditions_data_and_shots() {
+        let mut e = engine();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        for addr in [
+            FORM_COPY_ALL_COMPONENTS,
+            CONDITIONS_COPY,
+            MEMCPY,
+            LIST_REMOVE_ALL,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register_double(LIST_ADD_TAIL, |e, a| {
+            let item = e.mem.u32(a[1]);
+            e.mem.set_u32(0x0003_1000 + item * 4, a[0]);
+            Ret::default()
+        });
+        e.mem.map(0x0003_1000, 0x100);
+        let this = path(&mut e, &[], 0);
+        let other = path(&mut e, &[3, 5], 7);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_a680, &args![this, other]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(to(&log, FORM_COPY_ALL_COMPONENTS), vec![vec![this, other]]);
+        assert_eq!(
+            to(&log, CONDITIONS_COPY),
+            vec![vec![this + 0x18, other + 0x18, 0]]
+        );
+        assert_eq!(to(&log, MEMCPY), vec![vec![this + 0x28, other + 0x28, 1]]);
+        assert_eq!(to(&log, LIST_REMOVE_ALL), vec![vec![this + 0x20]]);
+        assert_eq!(to(&log, LIST_ADD_TAIL).len(), 2);
+        assert_eq!(e.mem.u32(0x0003_1000 + 12), this + 0x20);
+        assert_eq!(e.mem.u32(0x0003_1000 + 20), this + 0x20);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0058_a680, &args![this, other]);
+        assert_eq!(e.call_log.take().unwrap().len(), 2);
+    }
+
+    fn compare_engine() -> Engine {
+        let mut e = engine();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(FORM_COMPARE_ALL_COMPONENTS, |_, _| 0u32.into_ret());
+        e.register(CONDITIONS_COMPARE, |_, _| 0u32.into_ret());
+        e.register(MEMCMP, |e, a| {
+            u32::from(e.mem.u8(a[0]) != e.mem.u8(a[1])).into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn compare_checks_components_conditions_data_and_shots() {
+        let mut e = compare_engine();
+        let this = path(&mut e, &[3, 5], 1);
+        let same = path(&mut e, &[3, 5], 1);
+        assert!(!e.call(0x0058_a750, &args![this, same]).bool());
+        let other_data = path(&mut e, &[3, 5], 2);
+        assert!(e.call(0x0058_a750, &args![this, other_data]).bool());
+        let other_shot = path(&mut e, &[3, 6], 1);
+        assert!(e.call(0x0058_a750, &args![this, other_shot]).bool());
+        let longer = path(&mut e, &[3, 5, 7], 1);
+        assert!(e.call(0x0058_a750, &args![this, longer]).bool());
+        let shorter = path(&mut e, &[3], 1);
+        assert!(e.call(0x0058_a750, &args![this, shorter]).bool());
+        let empty = path(&mut e, &[], 1);
+        let also_empty = path(&mut e, &[], 1);
+        assert!(!e.call(0x0058_a750, &args![empty, also_empty]).bool());
+        e.register(CONDITIONS_COMPARE, |_, _| 1u32.into_ret());
+        assert!(e.call(0x0058_a750, &args![this, same]).bool());
+        e.register(FORM_COMPARE_ALL_COMPONENTS, |_, _| 1u32.into_ret());
+        assert!(e.call(0x0058_a750, &args![this, same]).bool());
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0058_a750, &args![this, same]).bool());
+    }
+
+    #[test]
+    fn duplicate_maps_parents_and_duplicates_children() {
+        let mut e = engine();
+        let this = path(&mut e, &[], 0);
+        let copy = path(&mut e, &[], 0);
+        e.mem.set_u32(this + 0x30, 0x0100);
+        e.mem.set_u32(this + 0x34, 0x0200);
+        let children = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0x2c, children);
+        e.mem.set_u32(copy + 0x2c, 0x0004_4000);
+        e.put_vtable(0x0190_0000, &[0x5040; 0x11]);
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(first, 0x0190_0000);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(second, 0x0190_0000);
+        e.mem.set_u32(children + 4, first);
+        e.mem.set_u32(children + 8, second);
+        e.register_double(FORM_DUPLICATE, move |_, _| copy.into_ret());
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        // The map knows 0x100 (as 0x110) but not 0x200.
+        e.register(MAP_GET_AT, |e, a| {
+            if a[1] == 0x100 {
+                e.mem.set_u32(a[2], 0x110);
+            }
+            u32::from(a[1] == 0x100).into_ret()
+        });
+        for addr in [
+            SET_PARENT_PATH,
+            SET_PREVIOUS_PATH,
+            ARRAY_COMPACT,
+            ARRAY_SET_SIZE,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(ARRAY_COUNT, |_, _| 2u32.into_ret());
+        e.register(ARRAY_ENTRY, |_, a| (children_slot(a[0], a[1])).into_ret());
+        e.register(0x5040, |_, a| (a[0] + 1).into_ret());
+        e.register_double(ARRAY_TAKE, |e, a| {
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(0x0003_2000 + a[1] * 4, value);
+            Ret::default()
+        });
+        e.mem.map(0x0003_2000, 0x10);
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x0058_a870, &args![this, 0x0000_0101u32, 0x7000u32])
+            .u32();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(result, copy);
+        assert_eq!(to(&log, FORM_DUPLICATE), vec![vec![this, 1, 0x7000]]);
+        assert_eq!(to(&log, SET_PARENT_PATH), vec![vec![copy, 0x110]]);
+        assert_eq!(to(&log, SET_PREVIOUS_PATH), vec![vec![copy, 0x200]]);
+        assert_eq!(to(&log, ARRAY_SET_SIZE), vec![vec![0x0004_4000, 2]]);
+        assert_eq!(to(&log, 0x5040).len(), 2);
+        assert_eq!(e.mem.u32(0x0003_2000), first + 1);
+        assert_eq!(e.mem.u32(0x0003_2004), second + 1);
+    }
+
+    /// `00877a30` on the test's child array: entry `i` at `array + 4 + 4 * i`.
+    fn children_slot(array: u32, index: u32) -> u32 {
+        array + 4 + index * 4
+    }
+
+    #[test]
+    fn duplicate_without_children_only_links() {
+        let mut e = engine();
+        let this = path(&mut e, &[], 0);
+        e.register(FORM_DUPLICATE, |_, _| 0x8000u32.into_ret());
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.register(MAP_GET_AT, |_, _| 0u32.into_ret());
+        e.register(SET_PARENT_PATH, |_, _| Ret::default());
+        e.register(SET_PREVIOUS_PATH, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0058_a870, &args![this, 0u32, 0x7000u32]).u32(),
+            0x8000
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(to(&log, SET_PARENT_PATH), vec![vec![0x8000, 0]]);
+        assert!(to(&log, ARRAY_COMPACT).is_empty());
+    }
+
+    fn save_engine(swap: bool) -> Engine {
+        let mut e = engine();
+        for addr in [
+            FORM_START_FORM,
+            FORM_CLOSE_FORM,
+            CONDITIONS_SAVE,
+            SWAP_ANAM,
+            SWAP_DATA_BYTE,
+            FORM_SAVE_DATA,
+            ADD_CHUNK_WORD,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(FILL_MEMORY, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
+        e.register(ARRAY_COUNT, |_, a| (a[0] | 0x0100_0000).into_ret());
+        e.register(PARENT_PATH_OF, |e, a| e.mem.u32(a[0] + 0x30).into_ret());
+        e.register(PREVIOUS_PATH_OF, |e, a| e.mem.u32(a[0] + 0x34).into_ret());
+        e.register(FORM_FLAG_20_SET, |e, a| {
+            u32::from(e.mem.u32(a[0] + 8) & 0x20 != 0).into_ret()
+        });
+        e.register_double(SWAP_ON_SAVE, move |_, _| u32::from(swap).into_ret());
+        e.register_double(ADD_CHUNK_DATA, |e, a| {
+            let first = e.mem.u32(a[1]);
+            let second = e.mem.u32(a[1] + 4);
+            e.mem.set_u32(0x0003_3000, first);
+            e.mem.set_u32(0x0003_3004, second);
+            Ret::default()
+        });
+        e.mem.map(0x0003_3000, 8);
+        e
+    }
+
+    #[test]
+    fn save_writes_conditions_links_data_and_shots() {
+        let mut e = save_engine(true);
+        let this = path(&mut e, &[0x40, 0x50], 1);
+        let parent = path(&mut e, &[], 0);
+        let deleted = path(&mut e, &[], 0);
+        let previous = path(&mut e, &[], 0);
+        e.mem.set_u32(deleted + 8, 0x20);
+        e.mem.set_u32(this + 0x30, parent);
+        e.mem.set_u32(this + 0x34, deleted);
+        e.mem.set_u32(deleted + 0x34, previous);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_ac10, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(to(&log, CONDITIONS_SAVE), vec![vec![this + 0x18]]);
+        assert_eq!(e.mem.u32(0x0003_3000), parent | 0x0100_0000);
+        assert_eq!(e.mem.u32(0x0003_3004), previous | 0x0100_0000);
+        assert_eq!(to(&log, SWAP_ANAM).len(), 2);
+        assert_eq!(to(&log, SWAP_DATA_BYTE), vec![vec![this + 0x28]; 2]);
+        assert_eq!(to(&log, FORM_SAVE_DATA), vec![vec![this, this + 0x28, 1]]);
+        assert_eq!(
+            to(&log, ADD_CHUNK_WORD),
+            vec![vec![CHUNK_SNAM, 0x0100_0040], vec![CHUNK_SNAM, 0x0100_0050]]
+        );
+        assert_eq!(log.last().unwrap(), &(FORM_CLOSE_FORM, vec![this]));
+    }
+
+    #[test]
+    fn save_of_a_flagged_path_leaves_the_links_cleared() {
+        let mut e = save_engine(false);
+        let this = path(&mut e, &[], 1);
+        let previous = path(&mut e, &[], 0);
+        e.mem.set_u32(this + 8, 0x20);
+        e.mem.set_u32(this + 0x34, previous);
+        e.mem.set_u32(0x0003_3000, 0xffff_ffff);
+        e.mem.set_u32(0x0003_3004, 0xffff_ffff);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_ac10, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!((e.mem.u32(0x0003_3000), e.mem.u32(0x0003_3004)), (0, 0));
+        assert!(to(&log, PREVIOUS_PATH_OF).is_empty());
+        assert!(to(&log, SWAP_ANAM).is_empty());
+        assert!(to(&log, ADD_CHUNK_WORD).is_empty());
+    }
+
+    #[test]
+    fn remove_child_needs_a_child_and_an_array() {
+        let mut e = Engine::new();
+        e.register(CHILD_INDEX_OF, |_, _| 3u32.into_ret());
+        e.register(REMOVE_CHILD_AT, |_, _| Ret::default());
+        let this = e.mem.alloc(0x38);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_b730, &args![this, 0x900u32]);
+        e.mem.set_u32(this + 0x2c, 0x4000);
+        e.call(0x0058_b730, &args![this, 0u32]);
+        e.call(0x0058_b730, &args![this, 0x900u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(to(&log, CHILD_INDEX_OF), vec![vec![this, 0x900]]);
+        assert_eq!(to(&log, REMOVE_CHILD_AT), vec![vec![this, 3]]);
     }
 }

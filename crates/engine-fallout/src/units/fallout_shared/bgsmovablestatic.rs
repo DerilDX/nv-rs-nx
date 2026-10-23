@@ -167,12 +167,77 @@ pub fn bgs_movable_static_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
     true
 }
 
+/// `TESForm::StartForm` and `TESForm::CloseForm` (Xbox PDB; `004855a0`, `00485680`,
+/// `thiscall`).
+const FORM_START_FORM: u32 = 0x0048_55a0;
+const FORM_CLOSE_FORM: u32 = 0x0048_5680;
+/// `TESFullName::Save` (Xbox PDB name of `00487010`, `thiscall`).
+const FULL_NAME_SAVE: u32 = 0x0048_7010;
+/// `TESModelTextureSwap::Save` (Xbox PDB name of `0048a520`; `RET 0xc`: the model,
+/// texture and texture-swap chunk signatures).
+const MODEL_TEXTURE_SWAP_SAVE: u32 = 0x0048_a520;
+/// `BGSDestructibleObjectForm::Save` (Xbox PDB name of `00477f20`, `thiscall`).
+const DESTRUCTIBLE_SAVE: u32 = 0x0047_7f20;
+/// `00401500` (`cdecl`, no arguments, `AL`): whether saved data is byte-swapped.
+const SWAP_ON_SAVE: u32 = 0x0040_1500;
+/// `00483710` (`ECX` = the data byte): the byte's swap, which does nothing.
+const SWAP_DATA_BYTE: u32 = 0x0048_3710;
+/// `TESForm::__SaveData` (Xbox PDB name of `00485e20`; `RET 8`: address, size).
+const FORM_SAVE_DATA: u32 = 0x0048_5e20;
+/// `00485910` (`cdecl`: chunk signature, word): saves a chunk holding one word.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// `0084e3a0` (`ECX` = form): the word at +0xC (`TESForm::iFormID`).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `this + 0x58`: the sound form (`TESSound*`) saved as `SNAM`.
+const SOUND_OFFSET: u32 = 0x58;
+
+// Translated from 004fbf20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSMovableStatic::Save` (Xbox PDB; `thiscall`, no stack word): starts the form record,
+/// saves the full name (`00487010` on `this - 0x14`), the model (`MODL`, `MODT`, `MODS`
+/// on `this + 0x30`), the destruction data (`00477f20` on `this - 8`), the one data byte
+/// at `this + 0x5C` (`TESForm::__SaveData`, with the byte's no-op swap `00483710` before
+/// and after when `00401500` says so), and the sound's form id (`SNAM`, when a sound is
+/// set at `this + 0x58`), then closes the record.
+pub fn bgs_movable_static_save(e: &mut Engine, this: Ptr) {
+    let base = this.addr();
+    e.call(FORM_START_FORM, &args![this]);
+    e.call(FULL_NAME_SAVE, &args![base.wrapping_sub(OBJECT_OFFSET)]);
+    e.call(
+        MODEL_TEXTURE_SWAP_SAVE,
+        &args![
+            base.wrapping_add(MODEL_OFFSET),
+            CHUNK_MODL,
+            CHUNK_MODT,
+            CHUNK_MODS
+        ],
+    );
+    e.call(
+        DESTRUCTIBLE_SAVE,
+        &args![base.wrapping_sub(DESTRUCTIBLE_BACKWARD)],
+    );
+    let data = base.wrapping_add(DATA_OFFSET);
+    if e.call(SWAP_ON_SAVE, &[]).u8() != 0 {
+        e.call(SWAP_DATA_BYTE, &args![data]);
+    }
+    e.call(FORM_SAVE_DATA, &args![this, data, 1u32]);
+    if e.call(SWAP_ON_SAVE, &[]).u8() != 0 {
+        e.call(SWAP_DATA_BYTE, &args![data]);
+    }
+    let sound = e.mem.u32(base.wrapping_add(SOUND_OFFSET));
+    if sound != 0 {
+        let id = e.call(FORM_ID, &args![sound]).u32();
+        e.call(ADD_CHUNK_WORD, &args![CHUNK_SNAM, id]);
+    }
+    e.call(FORM_CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x004fbc70, bgs_movable_static_load(Ptr, Ptr) -> bool),
         entry!(0x004f_bb70, bgs_movable_static_init_item(Ptr)),
         entry!(0x004f_bf00, fn_004fbf00(Ptr, u32)),
+        entry!(0x004f_bf20, bgs_movable_static_save(Ptr)),
     ]
 }
 
@@ -537,5 +602,73 @@ mod b016_tests {
         let this = e.mem.alloc(0x80);
         e.call(0x004f_bf00, &args![this, 9u32]);
         assert_eq!(e.mem.u32(this + 0x6c), 9);
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    fn run(sound: u32, swap: bool) -> (u32, Vec<(u32, Vec<u32>)>) {
+        let mut e = Engine::new();
+        for addr in [
+            FORM_START_FORM,
+            FORM_CLOSE_FORM,
+            FULL_NAME_SAVE,
+            MODEL_TEXTURE_SWAP_SAVE,
+            DESTRUCTIBLE_SAVE,
+            SWAP_DATA_BYTE,
+            FORM_SAVE_DATA,
+            ADD_CHUNK_WORD,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(FORM_ID, |_, a| (a[0] + 1).into_ret());
+        e.register_double(SWAP_ON_SAVE, move |_, _| u32::from(swap).into_ret());
+        let object = e.mem.alloc(0x80);
+        let this = object + 0x14;
+        e.mem.set_u32(this + 0x58, sound);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_bf20, &args![this]);
+        let log = e.call_log.take().unwrap();
+        (
+            this,
+            log.into_iter().filter(|c| c.0 != SWAP_ON_SAVE).collect(),
+        )
+    }
+
+    #[test]
+    fn save_writes_every_part_in_order() {
+        let (this, log) = run(0x9000, true);
+        assert_eq!(
+            log[1..],
+            [
+                (FORM_START_FORM, vec![this]),
+                (FULL_NAME_SAVE, vec![this - 0x14]),
+                (
+                    MODEL_TEXTURE_SWAP_SAVE,
+                    vec![this + 0x30, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS]
+                ),
+                (DESTRUCTIBLE_SAVE, vec![this - 8]),
+                (SWAP_DATA_BYTE, vec![this + 0x5c]),
+                (FORM_SAVE_DATA, vec![this, this + 0x5c, 1]),
+                (SWAP_DATA_BYTE, vec![this + 0x5c]),
+                (FORM_ID, vec![0x9000]),
+                (ADD_CHUNK_WORD, vec![CHUNK_SNAM, 0x9001]),
+                (FORM_CLOSE_FORM, vec![this]),
+            ]
+        );
+    }
+
+    #[test]
+    fn save_without_sound_or_swaps() {
+        let (this, log) = run(0, false);
+        assert_eq!(
+            log[5..],
+            [
+                (FORM_SAVE_DATA, vec![this, this + 0x5c, 1]),
+                (FORM_CLOSE_FORM, vec![this]),
+            ]
+        );
     }
 }

@@ -52,9 +52,71 @@ pub fn ni_plane_ni_plane_ov3(
     this
 }
 
+/// `NiPoint3::UnitCross` (engine map, `0053d1a0`; `thiscall` on the first point, two words:
+/// the result and the second point; `RET 8`; answers the result's address).
+const POINT_UNIT_CROSS: u32 = 0x0053_d1a0;
+
+/// `FLD dword [minuend]; FSUB dword [subtrahend]; FSTP dword`: one component of a
+/// difference, as its bits.
+fn component_difference(e: &Engine, minuend: u32, subtrahend: u32) -> u32 {
+    x87_store32(x87_sub(
+        x87_load32(e.mem.u32(minuend)),
+        x87_m32(e.mem.u32(subtrahend)),
+    ))
+}
+
+// Translated from 00a699d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPlane::NiPlane_ov4` (engine map; `thiscall`, three points, `RET 0xc`): the plane
+/// through `p0`, `p1` and `p2`. The normal is `UnitCross(p1 - p0, p2 - p1)` (each
+/// difference rounded to floats on the stack), copied as three words; the constant is the
+/// normal's dot product with `p0` as the x87 code sums it, `(ny·p0y + p0x·nx) + nz·p0z`,
+/// rounded to a float. Returns `this`.
+pub fn ni_plane_ni_plane_ov4(
+    e: &mut Engine,
+    this: Ptr<NiPlane>,
+    p0: Ptr,
+    p1: Ptr,
+    p2: Ptr,
+) -> Ptr<NiPlane> {
+    let base = this.addr();
+    let (p0, p1, p2) = (p0.addr(), p1.addr(), p2.addr());
+    // The frame: the second difference at +0, the first at +0xC, the result at +0x18.
+    e.with_stack(0x24, |e, frame| {
+        let second = frame.addr();
+        let first = second + 0xc;
+        let result = second + 0x18;
+        for i in 0..3u32 {
+            let value = component_difference(e, p1 + 4 * i, p0 + 4 * i);
+            e.mem.set_u32(first + 4 * i, value);
+        }
+        for i in 0..3u32 {
+            let value = component_difference(e, p2 + 4 * i, p1 + 4 * i);
+            e.mem.set_u32(second + 4 * i, value);
+        }
+        let normal = e
+            .call(POINT_UNIT_CROSS, &args![first, result, second])
+            .u32();
+        for i in 0..3u32 {
+            let word = e.mem.u32(normal + 4 * i);
+            e.mem.set_u32(base + 4 * i, word);
+        }
+    });
+    let y = x87_mul(x87_load32(e.mem.u32(base + 4)), x87_m32(e.mem.u32(p0 + 4)));
+    let x = x87_mul(x87_load32(e.mem.u32(p0)), x87_m32(e.mem.u32(base)));
+    let sum = x87_add(y, x);
+    let z = x87_mul(x87_load32(e.mem.u32(base + 8)), x87_m32(e.mem.u32(p0 + 8)));
+    let constant = x87_add(sum, z);
+    e.mem.set_u32(base + 0xc, x87_store32(constant));
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x00a6_99d0,
+            ni_plane_ni_plane_ov4(Ptr<NiPlane>, Ptr, Ptr, Ptr) -> Ptr<NiPlane>
+        ),
         entry!(
             0x00a6_9970,
             ni_plane_ni_plane_ov2(Ptr<NiPlane>, Ptr, f32) -> Ptr<NiPlane>
@@ -111,5 +173,55 @@ mod b004_tests {
             words(&e, this),
             vec![0, 0.6f32.to_bits(), 0.8f32.to_bits(), want.to_bits()]
         );
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    fn point(e: &mut Engine, values: [f32; 3]) -> u32 {
+        let p = e.mem.alloc(0xc);
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_f32(p + 4 * i as u32, *v);
+        }
+        p
+    }
+
+    fn floats(e: &Engine, p: u32, count: u32) -> Vec<f32> {
+        (0..count).map(|i| e.mem.f32(p + 4 * i)).collect()
+    }
+
+    #[test]
+    fn plane_through_three_points() {
+        let mut e = Engine::new();
+        // The cross product double (unnormalised: the points are chosen so it is a unit).
+        e.register(POINT_UNIT_CROSS, |e, a| {
+            let u: Vec<f32> = (0..3).map(|i| e.mem.f32(a[0] + 4 * i)).collect();
+            let v: Vec<f32> = (0..3).map(|i| e.mem.f32(a[2] + 4 * i)).collect();
+            let cross = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            for (i, c) in cross.iter().enumerate() {
+                e.mem.set_f32(a[1] + 4 * i as u32, *c);
+            }
+            a[1].into_ret()
+        });
+        // Three points on the plane z = 5.
+        let p0 = point(&mut e, [0.0, 0.0, 5.0]);
+        let p1 = point(&mut e, [1.0, 0.0, 5.0]);
+        let p2 = point(&mut e, [1.0, 1.0, 5.0]);
+        let this = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        let back = e.call(0x00a6_99d0, &args![this, p0, p1, p2]).u32();
+        assert_eq!(back, this);
+        assert_eq!(floats(&e, this, 4), vec![0.0, 0.0, 1.0, 5.0]);
+        let log = e.call_log.take().unwrap();
+        let cross = log.iter().find(|(a, _)| *a == POINT_UNIT_CROSS).unwrap();
+        // The first point is p1 - p0, the second p2 - p1.
+        assert_eq!(cross.1[0] + 0xc, cross.1[1]);
+        assert_eq!(cross.1[2] + 0xc, cross.1[0]);
     }
 }

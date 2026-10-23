@@ -2016,9 +2016,56 @@ pub fn fn_008373d0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// The byte `008325a0` stores (`011dd313`; `falloutaudiomedia.rs` reads it as the media
+/// hold byte) and the byte `00833ce0` answers (`011dd437`).
+const HOLD_FLAG_011DD313: u32 = 0x011d_d313;
+const STORED_FLAG_011DD437: u32 = 0x011d_d437;
+
+// Translated from 008325a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, one word): stores its low byte at `011dd313`.
+pub fn fn_008325a0(e: &mut Engine, value: u8) {
+    e.set_global(HOLD_FLAG_011DD313, value);
+}
+
+// Translated from 00832490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`on`) or clears flag `0x100` of `iStationFlags` (`thiscall`, `RET 4`).
+pub fn fn_00832490(e: &mut Engine, this: Ptr<StationState>, on: u8) {
+    set_station_flag(e, this, 0x100, on);
+}
+
+// Translated from 00833c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether flag `0x80` of `iStationFlags` is set (`EAX` exactly 0 or 1).
+pub fn fn_00833c00(e: &mut Engine, this: Ptr<StationState>) -> bool {
+    station_flag(e, this, 0x80)
+}
+
+// Translated from 00833ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): the byte at `011dd437`, in `AL`.
+pub fn fn_00833ce0(e: &mut Engine) -> u8 {
+    e.global(STORED_FLAG_011DD437)
+}
+
+// Translated from 00835670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether flag `8` of `iStationFlags` is set (`EAX` exactly 0 or 1).
+pub fn fn_00835670(e: &mut Engine, this: Ptr<StationState>) -> bool {
+    station_flag(e, this, 8)
+}
+
+// Translated from 00835690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`on`) or clears flag `0x80` of `iStationFlags` (`thiscall`, `RET 4`).
+pub fn fn_00835690(e: &mut Engine, this: Ptr<StationState>, on: u8) {
+    set_station_flag(e, this, 0x80, on);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0083_25a0, fn_008325a0(u8)),
+        entry!(0x0083_2490, fn_00832490(Ptr<StationState>, u8)),
+        entry!(0x0083_3c00, fn_00833c00(Ptr<StationState>) -> bool),
+        entry!(0x0083_3ce0, fn_00833ce0() -> u8),
+        entry!(0x0083_5670, fn_00835670(Ptr<StationState>) -> bool),
+        entry!(0x0083_5690, fn_00835690(Ptr<StationState>, u8)),
         entry!(0x0083_72c0, fn_008372c0(Ptr)),
         entry!(0x0083_21c0, fn_008321c0(Ptr)),
         entry!(0x0083_2010, fallout_radio_shutdown()),
@@ -2948,5 +2995,42 @@ mod b070_tests {
             vec![vec![block, 0x5000, 0x5000, 0x6200]]
         );
         assert_eq!(e.mem.u32(station + 4), 0x7200);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn the_two_radio_bytes() {
+        let mut e = Engine::new();
+        e.map(0x011d_d000, 0x1000);
+        e.call(0x0083_25a0, &args![0x1234_5607u32]);
+        assert_eq!(e.global::<u8>(HOLD_FLAG_011DD313), 7);
+        assert_eq!(e.global::<u8>(HOLD_FLAG_011DD313 + 1), 0);
+        e.set_global(STORED_FLAG_011DD437, 0x5au8);
+        assert_eq!(e.call(0x0083_3ce0, &args![]).u8(), 0x5a);
+    }
+
+    #[test]
+    fn station_flags_0x100_0x80_and_8() {
+        let mut e = Engine::new();
+        let state = e.new_object::<StationState>();
+        e.set(state, StationState::iStationFlags, 0x0001_0008);
+        // Only the low byte of the flag word counts.
+        e.call(0x0083_2490, &args![state, 0x100u32]);
+        assert_eq!(e.get(state, StationState::iStationFlags), 0x0001_0008);
+        e.call(0x0083_2490, &args![state, 1u32]);
+        assert_eq!(e.get(state, StationState::iStationFlags), 0x0001_0108);
+        assert!(!e.call(0x0083_3c00, &args![state]).bool());
+        e.call(0x0083_5690, &args![state, 1u32]);
+        assert_eq!(e.call(0x0083_3c00, &args![state]).u32(), 1);
+        assert_eq!(e.call(0x0083_5670, &args![state]).u32(), 1);
+        e.call(0x0083_5690, &args![state, 0u32]);
+        e.call(0x0083_2490, &args![state, 0u32]);
+        assert_eq!(e.get(state, StationState::iStationFlags), 0x0001_0008);
+        e.set(state, StationState::iStationFlags, !8u32);
+        assert_eq!(e.call(0x0083_5670, &args![state]).u32(), 0);
     }
 }

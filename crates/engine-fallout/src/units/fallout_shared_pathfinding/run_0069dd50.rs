@@ -78,12 +78,71 @@ pub fn fn_0069dd50(e: &mut Engine, this: Ptr, dest: Ptr) {
     }
 }
 
+/// `0069b240` (`thiscall`; three words; `RET 0xc`): an index, -1 when there
+/// is none.
+const FIND_INDEX_0069B240: u32 = 0x0069_b240;
+/// The function pointer `0069dee0` passes to it (`0069b1b0`).
+const MATCH_0069B1B0: u32 = 0x0069_b1b0;
+/// `006815c0` (`thiscall`): returns `this`.
+const SELF_006815C0: u32 = 0x0068_15c0;
+/// `0068efb0` (`thiscall` on the source's first word): the word stored at
+/// `+0`.
+const FIRST_VALUE_0068EFB0: u32 = 0x0068_efb0;
+
+// Translated from 0069dee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `0069b240` finds `key` (`thiscall`; one word; `RET 4`): it is
+/// called with `key`, 0 and the function `0069b1b0`, and the result is
+/// whether it did not answer -1. The engine map gives it no name.
+pub fn fn_0069dee0(e: &mut Engine, this: Ptr, key: u32) -> bool {
+    let index = e
+        .call(FIND_INDEX_0069B240, &args![this, key, 0u32, MATCH_0069B1B0])
+        .u32();
+    index != 0xffff_ffff
+}
+
+// Translated from 0069df10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copy-constructs a 12-byte record from `source` (`thiscall`; one word;
+/// `RET 4`): `006815c0` on `this`, then `+0` is `0068efb0` of the source's
+/// first word, the 16-bit `+4` and the word at `+8` are copied. Returns
+/// `this`. The engine map gives it no name.
+pub fn fn_0069df10(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    let (t, s) = (this.addr(), source.addr());
+    e.call(SELF_006815C0, &args![this]);
+    let first = e.mem.u32(s);
+    let word = e.call(FIRST_VALUE_0068EFB0, &args![first]).u32();
+    e.mem.set_u32(t, word);
+    let half = e.mem.u16(s + 4);
+    e.mem.set_u16(t + 4, half);
+    let last = e.mem.u32(s + 8);
+    e.mem.set_u32(t + 8, last);
+    this
+}
+
+// Translated from 0069df60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copy-constructs a 0x18-byte record from `source` (`thiscall`; one word;
+/// `RET 4`): its first 12 bytes through `0069df10`, then `006815c0` on
+/// `this + 0xc` and the three words at `+0xc` copied. Returns `this`. The
+/// engine map gives it no name.
+pub fn fn_0069df60(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    let (t, s) = (this.addr(), source.addr());
+    fn_0069df10(e, this, source);
+    e.call(SELF_006815C0, &args![t + 0xc]);
+    for offset in [0xc, 0x10, 0x14] {
+        let word = e.mem.u32(s + offset);
+        e.mem.set_u32(t + offset, word);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x0069_dec0, fn_0069dec0(Ptr, u32) -> u32),
         entry!(0x0069_dfb0, fn_0069dfb0(Ptr) -> bool),
         entry!(0x0069_dd50, fn_0069dd50(Ptr, Ptr)),
+        entry!(0x0069_dee0, fn_0069dee0(Ptr, u32) -> bool),
+        entry!(0x0069_df10, fn_0069df10(Ptr, Ptr) -> Ptr),
+        entry!(0x0069_df60, fn_0069df60(Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -176,5 +235,76 @@ mod tests {
         e.call(0x0069_dd50, &args![this, dest]);
         assert_eq!(e.call_log.take().unwrap()[2], (ALLOCATE_BLOCK, vec![4]));
         assert_eq!(e.mem.u32(dest + 0x24), 0);
+    }
+
+    #[test]
+    fn fn_0069dee0_is_true_unless_the_search_answers_minus_one() {
+        let mut e = Engine::new();
+        e.register(FIND_INDEX_0069B240, |_, a| Ret {
+            eax: if a[1] == 7 { 0xffff_ffff } else { 2 },
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0069_dee0, &args![0x4000u32, 5u32]).bool());
+        assert!(!e.call(0x0069_dee0, &args![0x4000u32, 7u32]).bool());
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<_> = log
+            .iter()
+            .filter(|(a, _)| *a == FIND_INDEX_0069B240)
+            .collect();
+        assert_eq!(calls[0].1, vec![0x4000, 5, 0, MATCH_0069B1B0]);
+    }
+
+    fn record_doubles(e: &mut Engine) {
+        e.register(SELF_006815C0, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.register(FIRST_VALUE_0068EFB0, |_, a| Ret {
+            eax: a[0] + 1,
+            ..Ret::default()
+        });
+    }
+
+    #[test]
+    fn fn_0069df10_copies_the_record() {
+        let mut e = Engine::new();
+        record_doubles(&mut e);
+        let source = e.mem.alloc(0xc);
+        e.mem.set_u32(source, 0x100);
+        e.mem.set_u32(source + 4, 0xaaaa_1234);
+        e.mem.set_u32(source + 8, 0x55);
+        let this = e.mem.alloc(0xc);
+        e.mem.set_u32(this + 4, 0xffff_ffff);
+        assert_eq!(e.call(0x0069_df10, &args![this, source]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x101);
+        // Only the 16-bit half at +4 is copied.
+        assert_eq!(e.mem.u32(this + 4), 0xffff_1234);
+        assert_eq!(e.mem.u32(this + 8), 0x55);
+    }
+
+    #[test]
+    fn fn_0069df60_copies_both_parts() {
+        let mut e = Engine::new();
+        record_doubles(&mut e);
+        let source = e.mem.alloc(0x18);
+        for i in 0..6u32 {
+            e.mem.set_u32(source + 4 * i, 0x10 + i);
+        }
+        let this = e.mem.alloc(0x18);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0069_df60, &args![this, source]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        let selves: Vec<_> = log
+            .iter()
+            .filter(|(a, _)| *a == SELF_006815C0)
+            .map(|(_, w)| w[0])
+            .collect();
+        assert_eq!(selves, vec![this, this + 0xc]);
+        assert_eq!(e.mem.u32(this), 0x11);
+        assert_eq!(e.mem.u16(this + 4), 0x11);
+        for i in 2..6u32 {
+            assert_eq!(e.mem.u32(this + 4 * i), 0x10 + i);
+        }
     }
 }

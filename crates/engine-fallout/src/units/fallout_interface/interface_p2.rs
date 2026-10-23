@@ -1793,20 +1793,25 @@ pub fn fn_00707950(e: &mut Engine, this: u32, value: u8) {
 
 // Translated from 00707970 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `cdecl`: `BSAnimGroupSequence::PlaySounds(sequence, 0)` (Xbox PDB name of
-/// `004eef00`).
-pub fn fn_00707970(e: &mut Engine, sequence: u32) {
-    e.call(ANIM_GROUP_PLAY_SOUNDS, &args![sequence, 0u32]);
+/// `004eef00`), whose answer it answers (the exe ends on that call and leaves
+/// its `EAX`; the caller tests `AL`).
+pub fn fn_00707970(e: &mut Engine, sequence: u32) -> bool {
+    e.call(ANIM_GROUP_PLAY_SOUNDS, &args![sequence, 0u32])
+        .bool()
 }
 
 // Translated from 00707990 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `Interface::CreateMenuByClass` (Xbox PDB), `cdecl`: asks the menu manager
-/// (`MenuManager::Instance(1)`) to create the menu of class `class_id`.
-pub fn interface_create_menu_by_class(e: &mut Engine, class_id: u32) {
+/// `Interface::CreateMenuByClass` (Xbox PDB; a `Menu*` there), `cdecl`: asks
+/// the menu manager (`MenuManager::Instance(1)`) to create the menu of class
+/// `class_id` and answers what that gives (the exe ends on that call and
+/// leaves its `EAX`, which the caller keeps).
+pub fn interface_create_menu_by_class(e: &mut Engine, class_id: u32) -> u32 {
     let menu_manager = e.call(MENU_MANAGER_INSTANCE, &args![1u32]).u32();
     e.call(
         MENU_MANAGER_CREATE_MENU_BY_CLASS,
         &args![menu_manager, class_id],
-    );
+    )
+    .u32()
 }
 
 // Translated from 007079b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3066,8 +3071,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00707870, interface_copy_or_deep_copy_node(u32) -> u32),
         entry!(0x00707930, interface_set_need_to_update(u8)),
         entry!(0x00707950, fn_00707950(u32, u8)),
-        entry!(0x00707970, fn_00707970(u32)),
-        entry!(0x00707990, interface_create_menu_by_class(u32)),
+        entry!(0x00707970, fn_00707970(u32) -> bool),
+        entry!(0x00707990, interface_create_menu_by_class(u32) -> u32),
         entry!(0x007079b0, interface_is_in_rendered_menu() -> bool),
         entry!(0x007079f0, fn_007079f0(u32) -> bool),
         entry!(0x00707a30, interface_is_rendered_menu(u32) -> bool),
@@ -6640,5 +6645,15 @@ mod tests {
     #[test]
     fn fn_00709b40_calls_the_hud_main_menu_function() {
         check_static_forward(0x0070_9b40, HUD_MAIN_MENU_FN);
+    }
+
+    #[test]
+    fn sound_and_menu_wrappers_answer_their_callees() {
+        let (mut e, _) = ui_engine();
+        stub(&mut e, ANIM_GROUP_PLAY_SOUNDS, 1);
+        assert!(e.call(0x0070_7970, &args![0x4411u32]).bool());
+        stub(&mut e, MENU_MANAGER_INSTANCE, 0x7000);
+        stub(&mut e, MENU_MANAGER_CREATE_MENU_BY_CLASS, 0x7400);
+        assert_eq!(e.call(0x0070_7990, &args![0x3f1u32]).u32(), 0x7400);
     }
 }

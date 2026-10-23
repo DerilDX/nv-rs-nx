@@ -105,6 +105,67 @@ pub fn fn_00589850(e: &mut Engine, this: Ptr) -> f64 {
     e.call(FLOAT_CALL_004579E0, &args![pushed]).f64()
 }
 
+/// The marker data's virtual slots: the base copy (`0x8`) and the base comparison
+/// (`0xC`, `AL` true when different), each with the other marker data.
+const SLOT_COPY_BASE: u32 = 0x8;
+const SLOT_COMPARE_BASE: u32 = 0xc;
+
+// Translated from 00589770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies `other` into this audio marker data (`thiscall`, `RET 4`; unnamed in the engine
+/// map): the base part through virtual slot `0x8`, then the controller, the
+/// use-controller byte and the two layer percentages (`FLD`/`FSTP`, which quiets a
+/// signalling NaN).
+pub fn fn_00589770(e: &mut Engine, this: Ptr<AudioMarkerData>, other: Ptr<AudioMarkerData>) {
+    e.vcall(this.addr(), SLOT_COPY_BASE, &args![other]);
+    let controller = e.get(other, AudioMarkerData::pController);
+    e.set(this, AudioMarkerData::pController, controller);
+    let use_controller = e.mem.u8(other.addr() + 0x28);
+    e.mem.set_u8(this.addr() + 0x28, use_controller);
+    let second = e.mem.u32(other.addr() + 0xc);
+    e.mem.set_u32(this.addr() + 0xc, x87_quiet_bits(second));
+    let third = e.mem.u32(other.addr() + 0x10);
+    e.mem.set_u32(this.addr() + 0x10, x87_quiet_bits(third));
+}
+
+// Translated from 005897c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `AudioMarkerData::Compare` (Xbox PDB; `RET 4`, result in `AL`): true ("differs") when
+/// the base comparison (virtual slot `0xC`) says so, or the controller, the
+/// use-controller byte or either layer percentage differs (`FUCOMPP`: unordered
+/// differs); false otherwise.
+pub fn audio_marker_data_compare(
+    e: &mut Engine,
+    this: Ptr<AudioMarkerData>,
+    other: Ptr<AudioMarkerData>,
+) -> bool {
+    if e.vcall(this.addr(), SLOT_COMPARE_BASE, &args![other]).u8() != 0 {
+        return true;
+    }
+    if e.get(this, AudioMarkerData::pController) != e.get(other, AudioMarkerData::pController) {
+        return true;
+    }
+    if e.mem.u8(this.addr() + 0x28) != e.mem.u8(other.addr() + 0x28) {
+        return true;
+    }
+    for offset in [0xc, 0x10] {
+        let ours = x87_m32(e.mem.u32(this.addr() + offset));
+        let theirs = x87_m32(e.mem.u32(other.addr() + offset));
+        if theirs != ours {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 00589890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `AudioBuoyMarkerData::Load` (Xbox PDB; `RET 4`, the file; result in `AL`): false for a
+/// null file, otherwise whether the current chunk (`TESFile::GetTESChunk`) is `MMRK`.
+pub fn audio_buoy_marker_data_load(e: &mut Engine, _this: Ptr, file: Ptr) -> bool {
+    if file.is_null() {
+        return false;
+    }
+    e.call(GET_TES_CHUNK, &args![file]).u32() == CHUNK_MMRK
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -113,6 +174,15 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             audio_marker_data_load(Ptr<AudioMarkerData>, Ptr) -> bool
         ),
         entry!(0x0058_9850, fn_00589850(Ptr) -> f64),
+        entry!(
+            0x0058_9770,
+            fn_00589770(Ptr<AudioMarkerData>, Ptr<AudioMarkerData>)
+        ),
+        entry!(
+            0x0058_97c0,
+            audio_marker_data_compare(Ptr<AudioMarkerData>, Ptr<AudioMarkerData>) -> bool
+        ),
+        entry!(0x0058_9890, audio_buoy_marker_data_load(Ptr, Ptr) -> bool),
     ]
 }
 
@@ -220,5 +290,71 @@ mod tests {
         e.mem.set_u32(this, 0x7f80_0001);
         let result = e.call(0x0058_9850, &args![this]).f64();
         assert!(result.is_nan());
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    /// A marker data with a vtable whose slots `0x8` and `0xC` go to `0x4008` and
+    /// `0x400C`.
+    fn marker(e: &mut Engine, controller: u32, flag: u8, second: f32, third: f32) -> u32 {
+        e.put_vtable(0x0180_0000, &[0, 0, 0x4008, 0x400c]);
+        let this = e.mem.alloc(0x34);
+        e.mem.set_u32(this, 0x0180_0000);
+        e.mem.set_u32(this + 0x24, controller);
+        e.mem.set_u8(this + 0x28, flag);
+        e.mem.set_u32(this + 0xc, second.to_bits());
+        e.mem.set_u32(this + 0x10, third.to_bits());
+        this
+    }
+
+    #[test]
+    fn copy_takes_the_base_and_the_fields() {
+        let mut e = Engine::new();
+        e.register(0x4008, |_, _| Ret::default());
+        let this = marker(&mut e, 0, 0, 0.0, 0.0);
+        let other = marker(&mut e, 0x77, 1, 0.5, 0.25);
+        e.mem.set_u32(other + 0x10, 0xff80_0001);
+        e.call_log = Some(vec![]);
+        e.call(0x0058_9770, &args![this, other]);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(0x4008, vec![this, other])));
+        assert_eq!(e.mem.u32(this + 0x24), 0x77);
+        assert_eq!(e.mem.u8(this + 0x28), 1);
+        assert_eq!(e.mem.u32(this + 0xc), 0.5f32.to_bits());
+        assert_eq!(e.mem.u32(this + 0x10), 0xffc0_0001);
+    }
+
+    #[test]
+    fn compare_checks_the_base_and_every_field() {
+        let mut e = Engine::new();
+        e.register(0x400c, |_, _| 0u32.into_ret());
+        let this = marker(&mut e, 5, 1, 0.5, 0.25);
+        let same = marker(&mut e, 5, 1, 0.5, 0.25);
+        assert!(!e.call(0x0058_97c0, &args![this, same]).bool());
+        for other in [
+            marker(&mut e, 6, 1, 0.5, 0.25),
+            marker(&mut e, 5, 0, 0.5, 0.25),
+            marker(&mut e, 5, 1, 0.75, 0.25),
+            marker(&mut e, 5, 1, 0.5, f32::NAN),
+        ] {
+            assert!(e.call(0x0058_97c0, &args![this, other]).bool());
+        }
+        e.register(0x400c, |_, _| 1u32.into_ret());
+        assert!(e.call(0x0058_97c0, &args![this, same]).bool());
+    }
+
+    #[test]
+    fn buoy_load_accepts_an_mmrk_chunk() {
+        let mut e = Engine::new();
+        e.register(GET_TES_CHUNK, |e, a| e.mem.u32(a[0]).into_ret());
+        let file = e.mem.alloc(4);
+        assert!(!e.call(0x0058_9890, &args![0x10u32, 0u32]).bool());
+        e.mem.set_u32(file, CHUNK_MMRK);
+        assert!(e.call(0x0058_9890, &args![0x10u32, file]).bool());
+        e.mem.set_u32(file, CHUNK_FULL);
+        assert!(!e.call(0x0058_9890, &args![0x10u32, file]).bool());
     }
 }

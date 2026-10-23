@@ -1761,9 +1761,144 @@ pub fn nav_mesh_obstacle_cutter_undo_nav_mesh_from_obstacle_undo_data(
     true
 }
 
+/// `MemoryManager` deallocation (`00401030`, cdecl, the block).
+const DEALLOCATE: u32 = 0x0040_1030;
+/// `006bf870` (`unplaced/run_006bf870.rs`): the
+/// `BSSimpleArray<NavMeshObstacleVertex*>` destructor body.
+const VERTEX_SIMPLE_ARRAY_DESTRUCT: u32 = 0x006b_f870;
+/// `006bfab0` (`unplaced/run_006bfab0.rs`): the
+/// `BSSimpleArray<NavMeshObstacleEdge*>` destructor body.
+const EDGE_SIMPLE_ARRAY_DESTRUCT: u32 = 0x006b_fab0;
+/// `006bc870` (`fallout shared/pathfinding/run_006bc870.rs`; `RET 4`):
+/// copies the word at +0, the half-word at +4 and the word at +8 of its
+/// argument into `this`; returns `this`.
+const COPY_EDGE_HANDLE: u32 = 0x006b_c870;
+
+// Translated from 006bfbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<BoundsTriangleInfo,1024>` scalar deleting destructor
+/// (engine map, from the vtable; `RET 4`): the destructor body `006bf6c0`,
+/// then `00401030(this)` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_bounds_triangle_info_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006bf6c0(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006bfc10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<PortalEdgeSwap,1024>` scalar deleting destructor (engine
+/// map, from the vtable; `RET 4`): the destructor body `006bf710`, then
+/// `00401030(this)` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_portal_edge_swap_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006bf710(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006bfc40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`navmeshobstaclecutter.cpp`; `thiscall`,
+/// `RET 4`; called by `006bf730`): copies `other` into `this` member by
+/// member: the 0xC-byte part at +0 and the one at +0xC through `006bc870`,
+/// then the byte at +0x18. Returns `this`.
+pub fn fn_006bfc40(e: &mut Engine, this: Ptr, other: Ptr) -> Ptr {
+    e.call(COPY_EDGE_HANDLE, &args![this, other]);
+    e.call(
+        COPY_EDGE_HANDLE,
+        &args![
+            this.addr().wrapping_add(0xc),
+            other.addr().wrapping_add(0xc)
+        ],
+    );
+    let byte = e.mem.u8(other.addr().wrapping_add(0x18));
+    e.mem.set_u8(this.addr().wrapping_add(0x18), byte);
+    this
+}
+
+// Translated from 006bfc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshObstacleVertex *,1024>` scalar deleting destructor
+/// (engine map, from the vtable; `RET 4`): the destructor body `006bf870`,
+/// then `00401030(this)` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_nav_mesh_obstacle_vertex_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(VERTEX_SIMPLE_ARRAY_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006bfcb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<NavMeshObstacleVertex *,1024>` scalar deleting destructor
+/// (engine map, from the vtable; `RET 4`): the destructor body `006bf890`,
+/// then `00401030(this)` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_scrap_array_nav_mesh_obstacle_vertex_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006bf890(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006bfce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NavMeshObstacleEdge *,1024>` scalar deleting destructor
+/// (engine map, from the vtable; `RET 4`): the destructor body `006bfab0`,
+/// then `00401030(this)` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_simple_array_nav_mesh_obstacle_edge_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(EDGE_SIMPLE_ARRAY_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006bfd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<NavMeshObstacleEdge *,1024>` scalar deleting destructor
+/// (engine map, from the vtable; `RET 4`): the destructor body `006bfad0`,
+/// then `00401030(this)` when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_scrap_array_nav_mesh_obstacle_edge_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006bfad0(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x006b_fbe0, bs_simple_array_bounds_triangle_info_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x006b_fc10, bs_simple_array_portal_edge_swap_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x006b_fc40, fn_006bfc40(Ptr, Ptr) -> Ptr),
+        entry!(0x006b_fc80, bs_simple_array_nav_mesh_obstacle_vertex_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x006b_fcb0, bs_scrap_array_nav_mesh_obstacle_vertex_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x006b_fce0, bs_simple_array_nav_mesh_obstacle_edge_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x006b_fd10, bs_scrap_array_nav_mesh_obstacle_edge_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x006b_c300, obstacle_undo_data_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x006b_f6c0, fn_006bf6c0(Ptr)),
         entry!(0x006b_f710, fn_006bf710(Ptr)),
@@ -3322,5 +3457,104 @@ mod cutter_tests {
         assert_eq!(calls_to(&log, 0x0069_4890), vec![vec![0x0700_0028, 10, 1]]);
         assert_eq!(calls_to(&log, 0x0069_49d0), vec![vec![0x0700_0038, 20, 1]]);
         assert_eq!(calls_to(&log, 0x0300_1000), vec![vec![undo_block, 1]]);
+    }
+}
+
+#[cfg(test)]
+mod deleting_destructor_tests {
+    use super::*;
+
+    /// Runs a scalar deleting destructor with each `flags`, every outside
+    /// callee doubled: checks the result, the vtable the body leaves (when it
+    /// stores one), the body callee run on `this` (when it is outside this
+    /// file) and whether `00401030` frees the object.
+    fn check(address: u32, vtable: Option<u32>, body: Option<u32>) {
+        for (flags, frees) in [(0u32, false), (1, true), (2, false), (3, true)] {
+            let mut e = Engine::new();
+            for callee in [
+                ARRAY_RELEASE_008454F0,
+                VERTEX_SIMPLE_ARRAY_DESTRUCT,
+                EDGE_SIMPLE_ARRAY_DESTRUCT,
+                DEALLOCATE,
+            ] {
+                e.register(callee, |_, _| Ret::default());
+            }
+            let this = e.mem.alloc(0x10);
+            e.mem.set_u32(this, 0x1234_5678);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![this, flags]).u32(), this);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(e.mem.u32(this), vtable.unwrap_or(0x1234_5678));
+            if let Some(body) = body {
+                let ran: Vec<_> = log.iter().filter(|c| c.0 == body).collect();
+                assert_eq!(ran.len(), 1);
+                assert_eq!(ran[0].1, vec![this]);
+            }
+            let freed: Vec<_> = log.iter().filter(|c| c.0 == DEALLOCATE).collect();
+            assert_eq!(freed.len(), usize::from(frees));
+            if frees {
+                assert_eq!(freed[0].1, vec![this]);
+            }
+        }
+    }
+
+    #[test]
+    fn at_006bfbe0_bounds_triangle_info_array() {
+        check(0x006b_fbe0, Some(ARRAY_VTABLE_0106C2E8), None);
+    }
+
+    #[test]
+    fn at_006bfc10_portal_edge_swap_array() {
+        check(0x006b_fc10, Some(ARRAY_VTABLE_0106C2FC), None);
+    }
+
+    #[test]
+    fn at_006bfc80_vertex_simple_array() {
+        check(0x006b_fc80, None, Some(VERTEX_SIMPLE_ARRAY_DESTRUCT));
+    }
+
+    #[test]
+    fn at_006bfcb0_vertex_scrap_array() {
+        check(
+            0x006b_fcb0,
+            Some(VERTEX_ARRAY_VTABLE),
+            Some(VERTEX_SIMPLE_ARRAY_DESTRUCT),
+        );
+    }
+
+    #[test]
+    fn at_006bfce0_edge_simple_array() {
+        check(0x006b_fce0, None, Some(EDGE_SIMPLE_ARRAY_DESTRUCT));
+    }
+
+    #[test]
+    fn at_006bfd10_edge_scrap_array() {
+        check(
+            0x006b_fd10,
+            Some(EDGE_ARRAY_VTABLE),
+            Some(EDGE_SIMPLE_ARRAY_DESTRUCT),
+        );
+    }
+
+    #[test]
+    fn at_006bfc40_copies_both_parts_and_the_byte() {
+        let mut e = Engine::new();
+        e.register(COPY_EDGE_HANDLE, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(0x1c);
+        let other = e.mem.alloc(0x1c);
+        e.mem.set_u8(other + 0x18, 0xa5);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006b_fc40, &args![this, other]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        let copies: Vec<_> = log
+            .iter()
+            .filter(|c| c.0 == COPY_EDGE_HANDLE)
+            .map(|c| c.1.clone())
+            .collect();
+        assert_eq!(
+            copies,
+            vec![vec![this, other], vec![this + 0xc, other + 0xc]]
+        );
+        assert_eq!(e.mem.u8(this + 0x18), 0xa5);
     }
 }

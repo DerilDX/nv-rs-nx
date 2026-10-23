@@ -24,12 +24,14 @@ pub fn fn_004f8b00(e: &mut Engine, this: Ptr) -> Ptr {
 
 // Translated from 004f8a90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Forwards its two words to `00853130` on the member at `+0x10C` (the
-/// object's class is not confirmed).
-pub fn fn_004f8a90(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+/// object's class is not confirmed) and answers its byte: the exe ends on
+/// that call and leaves its `EAX`, whose `AL` the callers keep.
+pub fn fn_004f8a90(e: &mut Engine, this: Ptr, first: u32, second: u32) -> u8 {
     e.call(
         0x0085_3130,
         &args![this.addr().wrapping_add(0x10c), first, second],
-    );
+    )
+    .u8()
 }
 
 // Translated from 004f8ac0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -90,7 +92,7 @@ pub fn fn_004f8c50(e: &mut Engine, this: Ptr) {
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x004f_8b00, fn_004f8b00(Ptr) -> Ptr),
-        entry!(0x004f_8a90, fn_004f8a90(Ptr, u32, u32)),
+        entry!(0x004f_8a90, fn_004f8a90(Ptr, u32, u32) -> u8),
         entry!(0x004f_8ac0, fn_004f8ac0(Ptr, u32)),
         entry!(0x004f_8b90, fn_004f8b90(Ptr, u32) -> Ptr),
         entry!(0x004f_8bc0, fn_004f8bc0(Ptr)),
@@ -208,5 +210,12 @@ mod tests {
         assert_eq!(e.mem.u32(this + 0x54), 0);
         assert_eq!(e.mem.u32(this + 0x5c), 0);
         assert_eq!(calls_to(&e, 0x0040_3d30), vec![vec![this + 0x58, 0, 4]]);
+    }
+
+    #[test]
+    fn fn_004f8a90_answers_the_lookups_byte() {
+        let mut e = Engine::new();
+        e.register(0x0085_3130, |_, _| 1u8.into_ret());
+        assert_eq!(e.call(0x004f_8a90, &args![0x1000u32, 7u32, 9u32]).u8(), 1);
     }
 }

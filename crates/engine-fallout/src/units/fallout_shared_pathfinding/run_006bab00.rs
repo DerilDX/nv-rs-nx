@@ -559,6 +559,131 @@ pub fn fn_006bbad0(e: &mut Engine, out: Ptr, a: Ptr, b: Ptr, c: Ptr) -> Ptr {
     out
 }
 
+/// `0.5` (`double`).
+const HALF: u32 = 0x0101_1588;
+/// `006a0660` (`thiscall`, `RET 4`: a 2D point): a byte of the object
+/// passed to [`fn_006bb8b0`] for one of the two intersection points.
+const POINT_TEST_006A0660: u32 = 0x006a_0660;
+
+// Translated from 006bb8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name, `cdecl`: a test between circles `first` and `second`
+/// (centre at `+0`, radius at `+0xc`) and the object `other`. True when
+/// either radius is exactly 0, false when the centres coincide in 2D
+/// (`00595c80` of `second - first` is 0); true when the 2D or the 3D
+/// squared distance (`00595c80`, `004a7290`) is above the square of the
+/// radius sum or below the square of the radius difference. Otherwise the
+/// two 2D intersection points of the circles, relative to `first` and
+/// divided by its radius, are offered to `other`'s `006a0660`: false as
+/// soon as one answers true, else true.
+pub fn fn_006bb8b0(e: &mut Engine, first: Ptr, other: Ptr, second: Ptr) -> bool {
+    let (first, other, second) = (first.addr(), other.addr(), second.addr());
+    e.with_stack(0x50, |e, frame| {
+        let l = |x: u32| frame.addr() + 0x50 - x;
+        let zero: f64 = e.global(ZERO);
+        // `TEST AH,0x44; JP`: on unless exactly equal.
+        if ld(e, first + 0xc) == zero {
+            return true;
+        }
+        if ld(e, second + 0xc) == zero {
+            return true;
+        }
+        let delta = l(0x48);
+        e.call(POINT_SUBTRACT, &args![second, delta, first]);
+        let length = e.call(POINT_LENGTH_SQUARED, &args![delta]).f64();
+        st(e, l(0x4), length);
+        let flat = e.call(POINT2_LENGTH_SQUARED, &args![delta]).f64();
+        st(e, l(0x3c), flat);
+        if ld(e, l(0x3c)) == zero {
+            return false;
+        }
+        st(e, l(0x8), x87_add(ld(e, first + 0xc), m32(e, second + 0xc)));
+        // `FCOMPP; TEST AH,0x41; JNZ`: on when the distance is not above
+        // the square (NaN included).
+        let sum = x87_mul(ld(e, l(0x8)), m32(e, l(0x8)));
+        if ld(e, l(0x3c)) > sum {
+            return true;
+        }
+        let sum = x87_mul(ld(e, l(0x8)), m32(e, l(0x8)));
+        if ld(e, l(0x4)) > sum {
+            return true;
+        }
+        st(
+            e,
+            l(0x2c),
+            x87_sub(ld(e, first + 0xc), m32(e, second + 0xc)),
+        );
+        // `FCOMPP; TEST AH,0x5; JP`: on when the distance is not below the
+        // square (NaN included).
+        let difference = x87_mul(ld(e, l(0x2c)), m32(e, l(0x2c)));
+        if ld(e, l(0x3c)) < difference {
+            return true;
+        }
+        let difference = x87_mul(ld(e, l(0x2c)), m32(e, l(0x2c)));
+        if ld(e, l(0x4)) < difference {
+            return true;
+        }
+        st(e, l(0x38), x87_mul(ld(e, first + 0xc), m32(e, first + 0xc)));
+        st(
+            e,
+            l(0x28),
+            x87_mul(ld(e, second + 0xc), m32(e, second + 0xc)),
+        );
+        let root = e.call(SQUARE_ROOT, &args![pushed(e, l(0x3c))]).f64();
+        st(e, l(0x30), root);
+        // `FLD; FLD1; FDIVRP`: 1 / the value.
+        st(e, l(0x24), x87_div(1.0, ld(e, l(0x30))));
+        st(e, l(0x20), x87_div(1.0, ld(e, first + 0xc)));
+        let half: f64 = e.global(HALF);
+        let along = x87_add(x87_sub(ld(e, l(0x38)), m32(e, l(0x28))), m32(e, l(0x3c)));
+        st(e, l(0x14), x87_mul(x87_mul(along, half), m32(e, l(0x24))));
+        st(e, l(0x4c), x87_mul(ld(e, l(0x14)), m32(e, l(0x14))));
+        st(e, l(0x50), x87_sub(ld(e, l(0x38)), m32(e, l(0x4c))));
+        let root = e.call(SQUARE_ROOT, &args![pushed(e, l(0x50))]).f64();
+        st(e, l(0x34), root);
+        let (dx, dy) = (l(0x48), l(0x44));
+        let (along, across) = (l(0x14), l(0x34));
+        let (inverse_radius, inverse_length) = (l(0x20), l(0x24));
+        let scale = |e: &Engine, value: f64| {
+            x87_mul(
+                x87_mul(value, m32(e, inverse_radius)),
+                m32(e, inverse_length),
+            )
+        };
+
+        e.call(SELF, &args![l(0x1c)]);
+        let x = x87_add(
+            x87_mul(ld(e, along), m32(e, dx)),
+            x87_mul(ld(e, across), m32(e, dy)),
+        );
+        st(e, l(0x1c), scale(e, x));
+        let y = x87_sub(
+            x87_mul(ld(e, along), m32(e, dy)),
+            x87_mul(ld(e, across), m32(e, dx)),
+        );
+        st(e, l(0x18), scale(e, y));
+
+        e.call(SELF, &args![l(0x10)]);
+        let x = x87_sub(
+            x87_mul(ld(e, along), m32(e, dx)),
+            x87_mul(ld(e, across), m32(e, dy)),
+        );
+        st(e, l(0x10), scale(e, x));
+        let y = x87_add(
+            x87_mul(ld(e, along), m32(e, dy)),
+            x87_mul(ld(e, across), m32(e, dx)),
+        );
+        st(e, l(0xc), scale(e, y));
+
+        if e.call(POINT_TEST_006A0660, &args![other, l(0x1c)]).bool() {
+            return false;
+        }
+        if e.call(POINT_TEST_006A0660, &args![other, l(0x10)]).bool() {
+            return false;
+        }
+        true
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -568,6 +693,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b_b540, fn_006bb540(Ptr, Ptr) -> Ptr),
         entry!(0x006b_b570, fn_006bb570(Ptr, Ptr, u32, Ptr) -> u32),
         entry!(0x006b_bad0, fn_006bbad0(Ptr, Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x006b_b8b0, fn_006bb8b0(Ptr, Ptr, Ptr) -> bool),
     ]
 }
 
@@ -851,5 +977,94 @@ mod tests {
         e.mem.set_u32(out, 9);
         assert!(!e.call(0x006b_ac20, &args![circle, segment, out]).bool());
         assert_eq!(e.mem.u32(out), 9);
+    }
+
+    /// Runs `006bb8b0` on two circles with `006a0660` answering `answers`
+    /// in turn; returns the result and the points it was offered.
+    fn circle_test(first: [f32; 4], second: [f32; 4], answers: [bool; 2]) -> (bool, Vec<[f32; 2]>) {
+        let mut e = Engine::new();
+        points(&mut e);
+        e.map(HALF & !0xfff, 0x1000);
+        e.set_global(HALF, 0.5f64);
+        let mut turn = 0usize;
+        e.register_double(POINT_TEST_006A0660, move |_, _| {
+            let answer = answers[turn.min(1)];
+            turn += 1;
+            u32::from(answer).into_ret()
+        });
+        let first = floats(&mut e, &first);
+        let second = floats(&mut e, &second);
+        let other = e.mem.alloc(4);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x006b_b8b0, &args![first, other, second]).bool();
+        let offered = e
+            .call_log
+            .take()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == POINT_TEST_006A0660)
+            .map(|(_, w)| {
+                assert_eq!(w[0], other);
+                [e.mem.f32(w[1]), e.mem.f32(w[1] + 4)]
+            })
+            .collect();
+        (result, offered)
+    }
+
+    #[test]
+    fn circles_rejected_before_the_intersection_points() {
+        let no = [false, false];
+        // A zero radius on either side: true, nothing offered.
+        assert_eq!(
+            circle_test([0.0; 4], [3.0, 0.0, 0.0, 2.0], no),
+            (true, vec![])
+        );
+        assert_eq!(
+            circle_test([0.0, 0.0, 0.0, 2.0], [3.0, 0.0, 0.0, 0.0], no),
+            (true, vec![])
+        );
+        // Same centre in 2D: false.
+        assert_eq!(
+            circle_test([0.0, 0.0, 0.0, 2.0], [0.0, 0.0, 5.0, 1.0], no),
+            (false, vec![])
+        );
+        // Too far apart in 2D, or in 3D only.
+        assert_eq!(
+            circle_test([0.0, 0.0, 0.0, 2.0], [5.0, 0.0, 0.0, 2.0], no),
+            (true, vec![])
+        );
+        assert_eq!(
+            circle_test([0.0, 0.0, 0.0, 2.0], [3.0, 0.0, 4.0, 2.0], no),
+            (true, vec![])
+        );
+        // One inside the other.
+        assert_eq!(
+            circle_test([0.0, 0.0, 0.0, 5.0], [1.0, 0.0, 0.0, 1.0], no),
+            (true, vec![])
+        );
+    }
+
+    #[test]
+    fn circles_offer_both_intersection_points() {
+        let first = [0.0, 0.0, 0.0, 2.0];
+        let second = [3.0, 0.0, 0.0, 2.0];
+        let (result, offered) = circle_test(first, second, [false, false]);
+        assert!(result);
+        // Intersections at (1.5, -+sqrt(1.75)) relative to the first
+        // centre, divided by its radius 2.
+        let y = (1.75f64.sqrt() / 2.0) as f32;
+        assert_eq!(offered.len(), 2);
+        assert!(close(f64::from(offered[0][0]), 0.75));
+        assert!(close(f64::from(offered[0][1]), -f64::from(y)));
+        assert!(close(f64::from(offered[1][0]), 0.75));
+        assert!(close(f64::from(offered[1][1]), f64::from(y)));
+        // The first point accepted: false at once.
+        let (result, offered) = circle_test(first, second, [true, false]);
+        assert!(!result);
+        assert_eq!(offered.len(), 1);
+        // The second accepted.
+        let (result, offered) = circle_test(first, second, [false, true]);
+        assert!(!result);
+        assert_eq!(offered.len(), 2);
     }
 }

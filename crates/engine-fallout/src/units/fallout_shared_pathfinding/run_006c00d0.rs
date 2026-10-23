@@ -50,6 +50,19 @@ pub fn fn_006c00d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     this
 }
 
+// Translated from 006c0120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `hkpEntityActivationListener` scalar deleting destructor
+/// (`thiscall`; flags; `RET 4`): the destructor body `006c0150`, then the
+/// object is freed (`00401030`) when bit 0 of `flags` is set. Returns
+/// `this`.
+pub fn fn_006c0120(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006c0150(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -57,6 +70,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006c0100, fn_006c0100(Ptr) -> Ptr),
         entry!(0x006c0150, fn_006c0150(Ptr)),
         entry!(0x006c00d0, fn_006c00d0(Ptr, u32) -> Ptr),
+        entry!(0x006c_0120, fn_006c0120(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -110,5 +124,24 @@ mod thunk_tests {
         assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
         e.call(0x006c_00d0, &args![this, 1u32]);
         assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_006c0120_destroys_and_frees_on_bit_0() {
+        let mut e = Engine::new();
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let this = e.mem.alloc(8);
+        for (flags, frees) in [(0u32, 0usize), (1, 1), (2, 0), (3, 1)] {
+            e.mem.set_u32(this, 0x1234);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x006c_0120, &args![this, flags]).u32(), this);
+            assert_eq!(e.mem.u32(this), ENTITY_ACTIVATION_LISTENER_VTABLE);
+            let log = e.call_log.take().unwrap();
+            let freed: Vec<_> = log.iter().filter(|(a, _)| *a == OPERATOR_DELETE).collect();
+            assert_eq!(freed.len(), frees);
+            if frees == 1 {
+                assert_eq!(freed[0].1, vec![this]);
+            }
+        }
     }
 }

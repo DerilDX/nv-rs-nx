@@ -328,6 +328,195 @@ pub fn bgs_idle_collection_get_idles_for_actor(
     found
 }
 
+/// The `BaseFormComponent` and `BGSIdleCollection` type descriptors (`01183040`,
+/// `011869f8`).
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+const TYPE_BGS_IDLE_COLLECTION: u32 = 0x0118_69f8;
+/// `00401460` (`cdecl`: destination, source, size): copies memory.
+const MEMCPY: u32 = 0x0040_1460;
+/// `memcmp` (`00ec4835`, `cdecl`: first, second, size).
+const MEMCMP: u32 = 0x00ec_4835;
+/// `004858f0` (`cdecl`: chunk signature, byte): saves a chunk holding one byte.
+const ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
+/// `00485910` (`cdecl`: chunk signature, word): saves a chunk holding one word.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// `TESForm::AddChunkArray` (`00485710`, engine map `_ov2`; `cdecl`: chunk signature,
+/// address of the words, count).
+const ADD_CHUNK_ARRAY: u32 = 0x0048_5710;
+
+/// `__RTDynamicCast` of `other` from `BaseFormComponent` to `BGSIdleCollection`.
+fn cast_to_idle_collection(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![
+            other,
+            0u32,
+            TYPE_BASE_FORM_COMPONENT,
+            TYPE_BGS_IDLE_COLLECTION,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+/// `count * 4` as the exe's `MUL`/`SETO`/`NEG`/`OR` computes an allocation size: all ones
+/// when the product overflows.
+fn array_bytes(count: u32) -> u32 {
+    count.checked_mul(4).unwrap_or(0xffff_ffff)
+}
+
+// Translated from 00479850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSIdleCollection::CopyComponent` (Xbox PDB; `RET 4`): casts `other` to a
+/// `BGSIdleCollection`; when it is one, copies the flags, frees this array (`00401030`,
+/// also when null) and clears it and the count, then, when the other has idles,
+/// allocates `count * 4` bytes (`00401000`), copies its array into them (`00401460`) and
+/// takes its count; last it copies the timer (`FLD`/`FSTP`).
+pub fn bgs_idle_collection_copy_component(
+    e: &mut Engine,
+    this: Ptr<BGSIdleCollection>,
+    other: Ptr,
+) {
+    let cast = cast_to_idle_collection(e, other);
+    if cast == 0 {
+        return;
+    }
+    let source = Ptr::<BGSIdleCollection>::new(cast);
+    let flags = e.get(source, BGSIdleCollection::cIdleFlags);
+    e.set(this, BGSIdleCollection::cIdleFlags, flags);
+    let old = e.get(this, BGSIdleCollection::pIdleArray);
+    e.call(FREE, &args![old]);
+    e.set(this, BGSIdleCollection::pIdleArray, 0);
+    e.set(this, BGSIdleCollection::cIdleCount, 0);
+    if e.get(source, BGSIdleCollection::cIdleCount) != 0 {
+        let count = u32::from(e.get(source, BGSIdleCollection::cIdleCount));
+        let array = e.call(ALLOCATE, &args![array_bytes(count)]).u32();
+        e.set(this, BGSIdleCollection::pIdleArray, array);
+        let bytes = u32::from(e.get(source, BGSIdleCollection::cIdleCount)) << 2;
+        let from = e.get(source, BGSIdleCollection::pIdleArray);
+        let to = e.get(this, BGSIdleCollection::pIdleArray);
+        e.call(MEMCPY, &args![to, from, bytes]);
+        let count = e.get(source, BGSIdleCollection::cIdleCount);
+        e.set(this, BGSIdleCollection::cIdleCount, count);
+    }
+    let timer = e.mem.u32(cast + 0xc);
+    e.mem
+        .set_u32(this.addr().wrapping_add(0xc), x87_quiet_bits(timer));
+}
+
+// Translated from 00479930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSIdleCollection::CompareComponent` (Xbox PDB; `RET 4`, result in `AL`): true
+/// ("differs") when `other` is not a `BGSIdleCollection`, or the flags, the count or the
+/// timer differ (`FUCOMPP`: unordered differs), or both arrays are set and `memcmp` of
+/// `count * 4` bytes finds a difference; false otherwise.
+pub fn bgs_idle_collection_compare_component(
+    e: &mut Engine,
+    this: Ptr<BGSIdleCollection>,
+    other: Ptr,
+) -> bool {
+    let cast = cast_to_idle_collection(e, other);
+    if cast == 0 {
+        return true;
+    }
+    let source = Ptr::<BGSIdleCollection>::new(cast);
+    if e.get(this, BGSIdleCollection::cIdleFlags) != e.get(source, BGSIdleCollection::cIdleFlags) {
+        return true;
+    }
+    if e.get(this, BGSIdleCollection::cIdleCount) != e.get(source, BGSIdleCollection::cIdleCount) {
+        return true;
+    }
+    let ours = x87_m32(e.mem.u32(this.addr().wrapping_add(0xc)));
+    let theirs = x87_m32(e.mem.u32(cast + 0xc));
+    if theirs != ours {
+        return true;
+    }
+    let our_array = e.get(this, BGSIdleCollection::pIdleArray);
+    if our_array == 0 {
+        return false;
+    }
+    let their_array = e.get(source, BGSIdleCollection::pIdleArray);
+    if their_array == 0 {
+        return false;
+    }
+    let bytes = u32::from(e.get(this, BGSIdleCollection::cIdleCount)) << 2;
+    e.call(MEMCMP, &args![our_array, their_array, bytes]).u32() != 0
+}
+
+// Translated from 004799f0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004799f0 - the /GS cookie check (00ec408c) of the frame is not translated
+/// `BGSIdleCollection::Save` (Xbox PDB; `thiscall`, no stack word): when the collection
+/// has idles, saves the flags (`IDLF`) and the count (`IDLC`) as byte chunks
+/// (`004858f0`), the timer's bits (`IDLT`, `00485910`), then the idles' form ids
+/// (`0084e3a0`, 0 for an empty slot) in a stack array (`_alloca_probe_16`, `00ec5ec0`)
+/// saved as an `IDLA` array chunk (`00485710`, the count words).
+pub fn bgs_idle_collection_save(e: &mut Engine, this: Ptr<BGSIdleCollection>) {
+    if e.get(this, BGSIdleCollection::cIdleCount) == 0 {
+        return;
+    }
+    let flags = u32::from(e.get(this, BGSIdleCollection::cIdleFlags));
+    e.call(ADD_CHUNK_BYTE, &args![CHUNK_IDLF, flags]);
+    let count = u32::from(e.get(this, BGSIdleCollection::cIdleCount));
+    e.call(ADD_CHUNK_BYTE, &args![CHUNK_IDLC, count]);
+    let timer = x87_quiet_bits(e.mem.u32(this.addr().wrapping_add(0xc)));
+    e.call(ADD_CHUNK_WORD, &args![CHUNK_IDLT, timer]);
+    let bytes = u32::from(e.get(this, BGSIdleCollection::cIdleCount)) << 2;
+    // `_alloca_probe_16` rounds the block up to 16 bytes.
+    let block = (bytes + 15) & !15;
+    e.with_stack(block, |e, ids| {
+        let mut index: u32 = 0;
+        while index < u32::from(e.get(this, BGSIdleCollection::cIdleCount)) {
+            let slot = idle_slot(e, this, index);
+            let idle = e.mem.u32(slot);
+            let id = if idle != 0 {
+                e.call(WORD_AT_0C, &args![idle]).u32()
+            } else {
+                0
+            };
+            e.mem.set_u32(ids.addr() + index * 4, id);
+            index += 1;
+        }
+        let count = u32::from(e.get(this, BGSIdleCollection::cIdleCount));
+        e.call(ADD_CHUNK_ARRAY, &args![CHUNK_IDLA, ids, count]);
+    });
+}
+
+// Translated from 00479ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the idle at `index` (`thiscall`, `RET 4`; unsigned compare with the count).
+/// The last idle frees the array (`00401030`) and clears the count and pointer; otherwise
+/// the count drops by one, a new array of `count * 4` bytes is allocated (`00401000`),
+/// the idles before and after `index` are copied into it (`00401460`, each only when
+/// its signed length is positive), and the old array is freed.
+pub fn fn_00479ea0(e: &mut Engine, this: Ptr<BGSIdleCollection>, index: u32) {
+    if index >= u32::from(e.get(this, BGSIdleCollection::cIdleCount)) {
+        return;
+    }
+    if e.get(this, BGSIdleCollection::cIdleCount) == 1 {
+        e.set(this, BGSIdleCollection::cIdleCount, 0);
+        let old = e.get(this, BGSIdleCollection::pIdleArray);
+        e.call(FREE, &args![old]);
+        e.set(this, BGSIdleCollection::pIdleArray, 0);
+        return;
+    }
+    let count = e.get(this, BGSIdleCollection::cIdleCount).wrapping_sub(1);
+    e.set(this, BGSIdleCollection::cIdleCount, count);
+    let array = e
+        .call(ALLOCATE, &args![array_bytes(u32::from(count))])
+        .u32();
+    if (index as i32) > 0 {
+        let old = e.get(this, BGSIdleCollection::pIdleArray);
+        e.call(MEMCPY, &args![array, old, index << 2]);
+    }
+    let after = u32::from(e.get(this, BGSIdleCollection::cIdleCount)).wrapping_sub(index) as i32;
+    if after > 0 {
+        let old = e.get(this, BGSIdleCollection::pIdleArray);
+        let from = old.wrapping_add(index.wrapping_mul(4)).wrapping_add(4);
+        let to = array.wrapping_add(index.wrapping_mul(4));
+        e.call(MEMCPY, &args![to, from, (after as u32) << 2]);
+    }
+    let old = e.get(this, BGSIdleCollection::pIdleArray);
+    e.call(FREE, &args![old]);
+    e.set(this, BGSIdleCollection::pIdleArray, array);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -357,6 +546,19 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0047_a030,
             bgs_idle_collection_get_idles_for_actor(Ptr<BGSIdleCollection>, Ptr, u32, Ptr) -> u32
         ),
+        entry!(
+            0x0047_9850,
+            bgs_idle_collection_copy_component(Ptr<BGSIdleCollection>, Ptr)
+        ),
+        entry!(
+            0x0047_9930,
+            bgs_idle_collection_compare_component(Ptr<BGSIdleCollection>, Ptr) -> bool
+        ),
+        entry!(
+            0x0047_99f0,
+            bgs_idle_collection_save(Ptr<BGSIdleCollection>)
+        ),
+        entry!(0x0047_9ea0, fn_00479ea0(Ptr<BGSIdleCollection>, u32)),
     ]
 }
 
@@ -629,5 +831,180 @@ mod b025_tests {
             e.call(0x0047_a030, &args![this, 0u32, 7u32, array]).u32(),
             0
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    /// An engine whose allocator hands out blocks, whose free does nothing and whose
+    /// copy and compare work on the memory.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0].max(4)).into_ret());
+        e.register(FREE, |_, _| Ret::default());
+        e.register(MEMCPY, |e, a| {
+            for i in 0..a[2] {
+                let byte = e.mem.u8(a[1] + i);
+                e.mem.set_u8(a[0] + i, byte);
+            }
+            Ret::default()
+        });
+        e.register(MEMCMP, |e, a| {
+            let differs = (0..a[2]).any(|i| e.mem.u8(a[0] + i) != e.mem.u8(a[1] + i));
+            u32::from(differs).into_ret()
+        });
+        e
+    }
+
+    fn collection(e: &mut Engine, flags: u8, idles: &[u32], timer: f32) -> u32 {
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u8(this + 4, flags);
+        e.mem.set_u8(this + 5, idles.len() as u8);
+        if !idles.is_empty() {
+            let array = e.mem.alloc(idles.len() as u32 * 4);
+            for (i, idle) in idles.iter().enumerate() {
+                e.mem.set_u32(array + i as u32 * 4, *idle);
+            }
+            e.mem.set_u32(this + 8, array);
+        }
+        e.mem.set_u32(this + 0xc, timer.to_bits());
+        this
+    }
+
+    #[test]
+    fn copy_component_copies_flags_idles_and_timer() {
+        let mut e = engine();
+        let this = collection(&mut e, 0, &[7], 0.0);
+        let old = e.mem.u32(this + 8);
+        let other = collection(&mut e, 3, &[0x10, 0x20], 2.5);
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_9850, &args![this, other]);
+        assert_eq!(calls(&e, FREE), vec![vec![old]]);
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![8]]);
+        assert_eq!(e.mem.u8(this + 4), 3);
+        assert_eq!(e.mem.u8(this + 5), 2);
+        let array = e.mem.u32(this + 8);
+        assert_eq!((e.mem.u32(array), e.mem.u32(array + 4)), (0x10, 0x20));
+        assert_eq!(e.mem.u32(this + 0xc), 2.5f32.to_bits());
+    }
+
+    #[test]
+    fn copy_component_of_an_empty_collection_clears_and_quiets_the_timer() {
+        let mut e = engine();
+        let this = collection(&mut e, 0, &[7], 0.0);
+        let other = collection(&mut e, 1, &[], 0.0);
+        e.mem.set_u32(other + 0xc, 0x7f80_0001);
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_9850, &args![this, other]);
+        assert!(calls(&e, ALLOCATE).is_empty());
+        assert_eq!(e.mem.u8(this + 5), 0);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(e.mem.u32(this + 0xc), 0x7fc0_0001);
+        let untouched = collection(&mut e, 0, &[7], 1.0);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_9850, &args![untouched, other]);
+        assert!(calls(&e, FREE).is_empty());
+        assert_eq!(e.mem.u8(untouched + 5), 1);
+    }
+
+    #[test]
+    fn compare_component_checks_flags_count_timer_and_idles() {
+        let mut e = engine();
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        let this = collection(&mut e, 1, &[0x10, 0x20], 1.0);
+        let same = collection(&mut e, 1, &[0x10, 0x20], 1.0);
+        assert!(!e.call(0x0047_9930, &args![this, same]).bool());
+        let other_idle = collection(&mut e, 1, &[0x10, 0x21], 1.0);
+        assert!(e.call(0x0047_9930, &args![this, other_idle]).bool());
+        let other_flags = collection(&mut e, 2, &[0x10, 0x20], 1.0);
+        assert!(e.call(0x0047_9930, &args![this, other_flags]).bool());
+        let other_count = collection(&mut e, 1, &[0x10], 1.0);
+        assert!(e.call(0x0047_9930, &args![this, other_count]).bool());
+        let other_timer = collection(&mut e, 1, &[0x10, 0x20], 1.5);
+        assert!(e.call(0x0047_9930, &args![this, other_timer]).bool());
+        let nan = collection(&mut e, 1, &[0x10, 0x20], f32::NAN);
+        assert!(e.call(0x0047_9930, &args![nan, nan]).bool());
+        let no_array = collection(&mut e, 1, &[0x10, 0x21], 1.0);
+        e.mem.set_u32(no_array + 8, 0);
+        assert!(!e.call(0x0047_9930, &args![this, no_array]).bool());
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0047_9930, &args![this, same]).bool());
+    }
+
+    #[test]
+    fn save_writes_the_chunks_and_the_idle_ids() {
+        let mut e = engine();
+        e.register(WORD_AT_0C, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(ADD_CHUNK_BYTE, |_, _| Ret::default());
+        e.register(ADD_CHUNK_WORD, |_, _| Ret::default());
+        e.register_double(ADD_CHUNK_ARRAY, |e, a| {
+            let ids: Vec<u32> = (0..a[2]).map(|i| e.mem.u32(a[1] + i * 4)).collect();
+            e.mem.set_u32(0x0003_0000, ids[0]);
+            e.mem.set_u32(0x0003_0004, ids[1]);
+            Ret::default()
+        });
+        e.mem.map(0x0003_0000, 8);
+        let idle = e.mem.alloc(0x18);
+        e.mem.set_u32(idle + 0xc, 0x0001_2345);
+        let this = collection(&mut e, 5, &[idle, 0], 3.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_99f0, &args![this]);
+        assert_eq!(
+            calls(&e, ADD_CHUNK_BYTE),
+            vec![vec![CHUNK_IDLF, 5], vec![CHUNK_IDLC, 2]]
+        );
+        assert_eq!(
+            calls(&e, ADD_CHUNK_WORD),
+            vec![vec![CHUNK_IDLT, 3.0f32.to_bits()]]
+        );
+        let array_call = calls(&e, ADD_CHUNK_ARRAY);
+        assert_eq!(array_call.len(), 1);
+        assert_eq!((array_call[0][0], array_call[0][2]), (CHUNK_IDLA, 2));
+        assert_eq!(e.mem.u32(0x0003_0000), 0x0001_2345);
+        assert_eq!(e.mem.u32(0x0003_0004), 0);
+        let empty = collection(&mut e, 5, &[], 3.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_99f0, &args![empty]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn remove_idle_at_rebuilds_the_array_without_it() {
+        let mut e = engine();
+        let this = collection(&mut e, 0, &[1, 2, 3], 0.0);
+        let old = e.mem.u32(this + 8);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_9ea0, &args![this, 1u32]);
+        assert_eq!(calls(&e, ALLOCATE), vec![vec![8]]);
+        assert_eq!(calls(&e, FREE), vec![vec![old]]);
+        let array = e.mem.u32(this + 8);
+        assert_eq!(e.mem.u8(this + 5), 2);
+        assert_eq!((e.mem.u32(array), e.mem.u32(array + 4)), (1, 3));
+        e.call_log = Some(vec![]);
+        e.call(0x0047_9ea0, &args![this, 0u32]);
+        assert_eq!(calls(&e, MEMCPY).len(), 1);
+        let array = e.mem.u32(this + 8);
+        assert_eq!(e.mem.u32(array), 3);
+        e.call(0x0047_9ea0, &args![this, 1u32]);
+        assert_eq!(e.mem.u8(this + 5), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_9ea0, &args![this, 0u32]);
+        assert_eq!(calls(&e, FREE), vec![vec![array]]);
+        assert_eq!((e.mem.u8(this + 5), e.mem.u32(this + 8)), (0, 0));
     }
 }

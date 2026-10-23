@@ -3674,13 +3674,16 @@ pub fn fn_005695a0(e: &mut Engine, this: Ptr<TESObjectREFR>, other: Ptr) -> bool
 
 // Translated from 00569620 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Not named in the Xbox PDB: copies the position (virtual `+0x1f4`) of the
-/// reference to a local and hands it to `other`'s virtual `+0x8c`.
-pub fn fn_00569620(e: &mut Engine, this: Ptr<TESObjectREFR>, other: Ptr) {
+/// reference to a local and hands it to `other`'s virtual `+0x8c`, answering
+/// that virtual's value (the exe ends on that call and leaves its `EAX`; the
+/// caller tests `AL`).
+pub fn fn_00569620(e: &mut Engine, this: Ptr<TESObjectREFR>, other: Ptr) -> u32 {
     let position = e.vcall(this.addr(), SLOT_POSITION, &args![]).u32();
     e.with_stack(0xc, |e, copy| {
         copy_vector(e, position, copy.addr());
-        e.vcall(other.addr(), SLOT_VISIT_POINT, &args![copy.addr()]);
-    });
+        e.vcall(other.addr(), SLOT_VISIT_POINT, &args![copy.addr()])
+            .u32()
+    })
 }
 
 // Translated from 00569670 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4609,7 +4612,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00569580, fn_00569580(Ptr<TESObjectREFR>) -> u32),
         entry!(0x005695a0, fn_005695a0(Ptr<TESObjectREFR>, Ptr) -> bool),
-        entry!(0x00569620, fn_00569620(Ptr<TESObjectREFR>, Ptr)),
+        entry!(0x00569620, fn_00569620(Ptr<TESObjectREFR>, Ptr) -> u32),
         entry!(0x00569670, fn_00569670(Ptr, Ptr, Ptr, u8) -> u8),
         entry!(0x00569840, fn_00569840(Ptr<TESObjectREFR>) -> u32),
         entry!(
@@ -10447,5 +10450,13 @@ mod tests {
         returns(&mut e, HOLDER_FLAG_C, 0);
         e.call(0x0056_a4a0, &args![refr]);
         assert_eq!(e.mem.u8(kept + DECAL_BYTE_73), 0);
+    }
+
+    #[test]
+    fn position_visit_answers_the_visitors_value() {
+        let mut e = third_engine();
+        let refr = third_refr(&mut e, 0x40);
+        let other = object_with_vtable(&mut e, 0x100, &[(0x8c, |_, _| 1u32.into_ret())]);
+        assert_eq!(e.call(0x0056_9620, &args![refr, other]).u32(), 1);
     }
 }

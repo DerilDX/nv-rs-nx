@@ -228,18 +228,21 @@ pub fn bhk_bv_tree_shape_link_object(e: &mut Engine, this: Ptr<BhkBvTreeShape>, 
 }
 
 // Translated from 00ca4f40 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `bhkBvTreeShape::RegisterStreamables` (engine map name): registers the wrapped shape
-/// (virtual `+0x54` on it) when there is one, then the base registration (`00aa0ad0`).
+/// `bhkBvTreeShape::RegisterStreamables` (engine map name; a `bool` in the Xbox PDB):
+/// registers the wrapped shape (virtual `+0x54` on it) when there is one, then the base
+/// registration (`00aa0ad0`), whose answer it answers (the exe ends on that call and leaves
+/// its `EAX`).
 pub fn bhk_bv_tree_shape_register_streamables(
     e: &mut Engine,
     this: Ptr<BhkBvTreeShape>,
     stream: Ptr,
-) {
+) -> bool {
     let wrapped = wrapped_shape(e, this.addr());
     if wrapped != 0 {
         e.vcall(wrapped, 0x54, &args![stream]);
     }
-    e.call(BASE_REGISTER_STREAMABLES, &args![this, stream]);
+    e.call(BASE_REGISTER_STREAMABLES, &args![this, stream])
+        .bool()
 }
 
 // Translated from 00ca4f80 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -367,7 +370,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x00ca4f40,
-            bhk_bv_tree_shape_register_streamables(Ptr<BhkBvTreeShape>, Ptr)
+            bhk_bv_tree_shape_register_streamables(Ptr<BhkBvTreeShape>, Ptr) -> bool
         ),
         entry!(
             0x00ca4f80,
@@ -787,5 +790,16 @@ mod tests {
         e.call(0x00ca_5190, &args![tree.this, array]);
         assert_eq!(calls_to(&e, SHAPE_SLOT).len(), 1);
         assert_eq!(calls_to(&e, GET_VIEWER_STRING).len(), 2);
+    }
+
+    #[test]
+    fn bhk_bv_tree_shape_register_streamables_answers_the_base_registration() {
+        let mut e = logged_engine();
+        e.register(BASE_REGISTER_STREAMABLES, |_, _| true.into_ret());
+        e.register(SHAPE_SLOT, |_, _| Ret::default());
+        let tree = tree(&mut e, &[(0x54, SHAPE_SLOT)]);
+        assert!(e.call(0x00ca_4f40, &args![tree.this, 0x2000u32]).bool());
+        e.register(BASE_REGISTER_STREAMABLES, |_, _| false.into_ret());
+        assert!(!e.call(0x00ca_4f40, &args![tree.this, 0x2000u32]).bool());
     }
 }

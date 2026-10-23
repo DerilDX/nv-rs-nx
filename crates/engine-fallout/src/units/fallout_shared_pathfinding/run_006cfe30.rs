@@ -116,6 +116,121 @@ pub fn fn_006d0140(e: &mut Engine, this: Ptr, size: u32, used: u32) {
     }
 }
 
+/// The callees of [`fn_006cff60`] (0x28-byte `PathingLocation`s) and
+/// [`fn_006d01d0`] (0x18-byte elements), all `thiscall` on the array:
+/// emptying it (`RET 4`: the byte), growing the buffer (`RET 8`: capacity,
+/// size) and destroying a range (`RET 8`: first, count).
+const EMPTY_006AC010: u32 = 0x006a_c010;
+const GROW_005EFA80: u32 = 0x005e_fa80;
+const DESTROY_RANGE_006AC070: u32 = 0x006a_c070;
+const EMPTY_008454F0: u32 = 0x0084_54f0;
+const GROW_006D0680: u32 = 0x006d_0680;
+const CONSTRUCT_RANGE_006D05E0: u32 = 0x006d_05e0;
+const VISIT_RANGE_0072BA80: u32 = 0x0072_ba80;
+
+/// The shared body of [`fn_006cff60`] and [`fn_006d01d0`]: sets the size of
+/// the array whose buffer is at `+4`, size at `+8` and capacity at `+0xc`
+/// to `size`, with elements of `stride` bytes.
+fn set_size(
+    e: &mut Engine,
+    this: Ptr,
+    size: u32,
+    shrink: u8,
+    stride: u32,
+    empty: u32,
+    grow: u32,
+    construct: fn(&mut Engine, Ptr, u32, u32),
+    destroy: u32,
+) {
+    let base = this.addr();
+    if size == 0 {
+        e.call(empty, &args![this, u32::from(shrink)]);
+    } else if size > e.mem.u32(base + 0xc) {
+        if e.mem.u32(base + 0xc) == 0 {
+            let buffer = e.vcall(base, 4, &args![size]).u32();
+            e.mem.set_u32(base + 4, buffer);
+            e.mem.set_u32(base + 0xc, size);
+        } else {
+            let count = e.mem.u32(base + 8);
+            e.call(grow, &args![this, size, count]);
+            e.mem.set_u32(base + 0xc, size);
+        }
+        let added = size.wrapping_sub(e.mem.u32(base + 8));
+        let first = e
+            .mem
+            .u32(base + 8)
+            .wrapping_mul(stride)
+            .wrapping_add(e.mem.u32(base + 4));
+        construct(e, this, first, added);
+        e.mem.set_u32(base + 8, size);
+    } else if size < e.mem.u32(base + 8) {
+        let removed = e.mem.u32(base + 8).wrapping_sub(size);
+        let first = size.wrapping_mul(stride).wrapping_add(e.mem.u32(base + 4));
+        e.call(destroy, &args![this, first, removed]);
+        e.mem.set_u32(base + 8, size);
+        if shrink != 0 && size <= e.mem.u32(base + 0xc) >> 2 {
+            e.call(grow, &args![this, size, size]);
+            e.mem.set_u32(base + 0xc, size);
+        }
+    } else {
+        let added = size.wrapping_sub(e.mem.u32(base + 8));
+        let first = e
+            .mem
+            .u32(base + 8)
+            .wrapping_mul(stride)
+            .wrapping_add(e.mem.u32(base + 4));
+        construct(e, this, first, added);
+        e.mem.set_u32(base + 8, size);
+    }
+}
+
+// Translated from 006cff60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the size of the `PathingLocation` array (`thiscall`; size, a
+/// byte; `RET 8`; no name in the engine map): size 0 empties it
+/// (`006ac010` with the byte); a size above the capacity first gets a
+/// buffer (slot +4, when the capacity is 0) or grows it (`005efa80` with
+/// the size and the old count), the capacity becoming the size; growing
+/// constructs the new locations (`006d00a0`); shrinking destroys the
+/// dropped ones (`006ac070`) and, when the byte is set and the size is at
+/// most a quarter of the capacity, reallocates to the size (`005efa80`).
+pub fn fn_006cff60(e: &mut Engine, this: Ptr, size: u32, shrink: u8) {
+    set_size(
+        e,
+        this,
+        size,
+        shrink,
+        0x28,
+        EMPTY_006AC010,
+        GROW_005EFA80,
+        fn_006d00a0,
+        DESTROY_RANGE_006AC070,
+    );
+}
+
+/// `006d05e0` by address, as [`set_size`] calls a constructor.
+fn construct_range_006d05e0(e: &mut Engine, this: Ptr, first: u32, count: u32) {
+    e.call(CONSTRUCT_RANGE_006D05E0, &args![this, first, count]);
+}
+
+// Translated from 006d01d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The same for an array of 0x18-byte elements (`thiscall`; size, a byte;
+/// `RET 8`; no name in the engine map): emptying through `008454f0`,
+/// growing through `006d0680`, constructing through `006d05e0` and the
+/// dropped range through `0072ba80`.
+pub fn fn_006d01d0(e: &mut Engine, this: Ptr, size: u32, shrink: u8) {
+    set_size(
+        e,
+        this,
+        size,
+        shrink,
+        0x18,
+        EMPTY_008454F0,
+        GROW_006D0680,
+        construct_range_006d05e0,
+        VISIT_RANGE_0072BA80,
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -124,6 +239,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006c_ff20, fn_006cff20(Ptr, u32, u32)),
         entry!(0x006d_00a0, fn_006d00a0(Ptr, u32, u32)),
         entry!(0x006d_0140, fn_006d0140(Ptr, u32, u32)),
+        entry!(0x006c_ff60, fn_006cff60(Ptr, u32, u8)),
+        entry!(0x006d_01d0, fn_006d01d0(Ptr, u32, u8)),
     ]
 }
 
@@ -244,5 +361,126 @@ mod tests {
         assert_eq!(e.mem.u32(this + 4), 0);
         assert_eq!(e.mem.u32(this + 0xc), 0);
         assert!(calls_to(&e, 0x0300_1000).is_empty());
+    }
+
+    /// An array with slot 4 (`0f00_0004`) handing out `0x9000 + count`,
+    /// the given buffer, size and capacity, and doubles for every callee
+    /// of the two size setters.
+    fn sized_array(e: &mut Engine, buffer: u32, size: u32, capacity: u32) -> u32 {
+        e.register(0x0f00_0004, |_, a| word(0x9000 + a[1]));
+        e.put_vtable(0x0f00_1000, &[0, 0x0f00_0004]);
+        for callee in [
+            EMPTY_006AC010,
+            GROW_005EFA80,
+            DESTROY_RANGE_006AC070,
+            EMPTY_008454F0,
+            GROW_006D0680,
+            CONSTRUCT_RANGE_006D05E0,
+            VISIT_RANGE_0072BA80,
+            LOCATION_CONSTRUCT,
+        ] {
+            e.register(callee, |_, _| word(0));
+        }
+        e.register(PLACEMENT_NEW, |_, a| word(a[1]));
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, 0x0f00_1000);
+        e.mem.set_u32(this + 4, buffer);
+        e.mem.set_u32(this + 8, size);
+        e.mem.set_u32(this + 0xc, capacity);
+        this
+    }
+
+    fn header(e: &Engine, this: u32) -> [u32; 3] {
+        [
+            e.mem.u32(this + 4),
+            e.mem.u32(this + 8),
+            e.mem.u32(this + 0xc),
+        ]
+    }
+
+    #[test]
+    fn fn_006cff60_empties_grows_and_shrinks() {
+        let mut e = Engine::new();
+        // Size 0: emptied with the byte (zero-extended).
+        let this = sized_array(&mut e, 0x5000, 3, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x006c_ff60, &args![this, 0u32, 0x101u32]);
+        assert_eq!(calls_to(&e, EMPTY_006AC010), vec![vec![this, 1]]);
+        // Above a zero capacity: a buffer from slot 4, two locations.
+        let this = sized_array(&mut e, 0, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x006c_ff60, &args![this, 2u32, 0u32]);
+        assert_eq!(header(&e, this), [0x9002, 2, 2]);
+        assert_eq!(
+            calls_to(&e, LOCATION_CONSTRUCT),
+            vec![vec![0x9002], vec![0x902a]]
+        );
+        // Above a non-zero capacity: grown, the new locations constructed
+        // after the old ones.
+        let this = sized_array(&mut e, 0x5000, 1, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x006c_ff60, &args![this, 3u32, 0u32]);
+        assert_eq!(calls_to(&e, GROW_005EFA80), vec![vec![this, 3, 1]]);
+        assert_eq!(
+            calls_to(&e, PLACEMENT_NEW),
+            vec![vec![0x28, 0x5028], vec![0x28, 0x5050]]
+        );
+        assert_eq!(header(&e, this), [0x5000, 3, 3]);
+        // Below the size: the dropped ones destroyed; with the byte and at
+        // most a quarter of the capacity, reallocated to the size.
+        let this = sized_array(&mut e, 0x5000, 6, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x006c_ff60, &args![this, 2u32, 1u32]);
+        assert_eq!(
+            calls_to(&e, DESTROY_RANGE_006AC070),
+            vec![vec![this, 0x5050, 4]]
+        );
+        assert_eq!(calls_to(&e, GROW_005EFA80), vec![vec![this, 2, 2]]);
+        assert_eq!(header(&e, this), [0x5000, 2, 2]);
+        // Without the byte, or above a quarter, the capacity stays.
+        let this = sized_array(&mut e, 0x5000, 6, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x006c_ff60, &args![this, 3u32, 1u32]);
+        assert!(calls_to(&e, GROW_005EFA80).is_empty());
+        assert_eq!(header(&e, this), [0x5000, 3, 8]);
+        // Between the size and the capacity: constructed in place.
+        let this = sized_array(&mut e, 0x5000, 1, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x006c_ff60, &args![this, 2u32, 1u32]);
+        assert_eq!(calls_to(&e, PLACEMENT_NEW), vec![vec![0x28, 0x5028]]);
+        assert_eq!(header(&e, this), [0x5000, 2, 8]);
+    }
+
+    #[test]
+    fn fn_006d01d0_uses_0x18_byte_elements() {
+        let mut e = Engine::new();
+        let this = sized_array(&mut e, 0x5000, 3, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x006d_01d0, &args![this, 0u32, 1u32]);
+        assert_eq!(calls_to(&e, EMPTY_008454F0), vec![vec![this, 1]]);
+        let this = sized_array(&mut e, 0x5000, 1, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x006d_01d0, &args![this, 3u32, 0u32]);
+        assert_eq!(calls_to(&e, GROW_006D0680), vec![vec![this, 3, 1]]);
+        assert_eq!(
+            calls_to(&e, CONSTRUCT_RANGE_006D05E0),
+            vec![vec![this, 0x5018, 2]]
+        );
+        let this = sized_array(&mut e, 0x5000, 8, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x006d_01d0, &args![this, 2u32, 1u32]);
+        assert_eq!(
+            calls_to(&e, VISIT_RANGE_0072BA80),
+            vec![vec![this, 0x5030, 6]]
+        );
+        assert_eq!(calls_to(&e, GROW_006D0680), vec![vec![this, 2, 2]]);
+        assert_eq!(header(&e, this), [0x5000, 2, 2]);
+        let this = sized_array(&mut e, 0x5000, 2, 8);
+        e.call_log = Some(vec![]);
+        e.call(0x006d_01d0, &args![this, 2u32, 0u32]);
+        assert_eq!(
+            calls_to(&e, CONSTRUCT_RANGE_006D05E0),
+            vec![vec![this, 0x5030, 0]]
+        );
     }
 }

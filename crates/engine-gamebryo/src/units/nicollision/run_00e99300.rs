@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::nicollision::nicollisiondata::float_operand;
 
 /// The use counter (`.data`): its first increment, from 0, registers the exit handler.
 const USE_COUNT_0126FA60: u32 = 0x0126_fa60;
@@ -283,9 +284,204 @@ pub fn fn_00e99330(e: &mut Engine, this: u32, value: u32) -> u32 {
     element
 }
 
+/// The bound test of a pick ray (`00eada70`, cdecl: the object, the ray origin and direction).
+const RAY_HITS_BOUND: u32 = 0x00ea_da70;
+/// The pick of a tri-based geometry (`00e9b4f0`, cdecl, the same four words).
+const PICK_GEOMETRY: u32 = 0x00e9_b4f0;
+/// `0043b300` (cdecl: an `NiRTTI` record, an object; no Xbox name): whether the object's class
+/// is that one or derives from it (by its use here).
+const IS_KIND_OF: u32 = 0x0043_b300;
+/// The two flags (bytes) that let the pick take objects of the classes whose `NiRTTI` records
+/// are at `011f4a48` and `011f5f64` by their world translation.
+const PICK_CLASS_FLAG_0126FA65: u32 = 0x0126_fa65;
+const PICK_CLASS_FLAG_0126FA64: u32 = 0x0126_fa64;
+const PICK_CLASS_RTTI_011F4A48: u32 = 0x011f_4a48;
+const PICK_CLASS_RTTI_011F5F64: u32 = 0x011f_5f64;
+/// The `NiRTTI` record at `011f5eb4`, the class `fn_00e9c6f0` hands to `fn_00e9c680` (a node
+/// with an active child index at +0xb0, `NiSwitchNode::m_iIndex` by the Xbox PDB's layout).
+const SWITCH_NODE_RTTI_011F5EB4: u32 = 0x011f_5eb4;
+/// `00439ef0` (thiscall on a point: the out point, the other point): the difference into the
+/// out point; answers it.
+const POINT_MINUS_POINT: u32 = 0x0043_9ef0;
+/// `00439e90` (thiscall on a point: the out point, the other point): the sum; answers it.
+const POINT_PLUS_POINT: u32 = 0x0043_9e90;
+/// `NiPoint3::Dot` (`004b6190`, thiscall on one point, the other point), in ST0.
+const NI_POINT3_DOT: u32 = 0x004b_6190;
+/// `00457990` (thiscall on a point): its length, in ST0.
+const POINT_LENGTH: u32 = 0x0045_7990;
+/// `0045bb20` (thiscall on a point: the out point, a float): the scaled point; answers it.
+const POINT_TIMES_SCALAR: u32 = 0x0045_bb20;
+/// The `float` 0.0 at `01011d78` the ray's direction dot product is compared with.
+const ZERO_01011D78: u32 = 0x0101_1d78;
+
+/// Whether the pick is a "find first" that already has a result: pick type (+0) 1, sort type
+/// (+4) 1 and a valid result count (+0x28) other than 0.
+fn pick_is_done(e: &Engine, pick: u32) -> bool {
+    e.mem.u32(pick) == 1 && e.mem.u32(pick + 4) == 1 && e.mem.u32(pick + 0x28) != 0
+}
+
+// Translated from 00e9c490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`: the ray origin and direction, the `NiPick`, the object):
+/// the recursive pick of one scene graph object. False for a null object, or an app-culled one
+/// (flags +0x30 bit 0) when the pick observes the cull flag (+0x11). With `node` the object's
+/// `IsNode` (virtual slot +0xc): false when the node's flags have bit 21; false when the ray
+/// misses the object's bound (`00eada70`) unless the node's flags have bit 13. Then a node is
+/// picked through its children (`fn_00e9c6f0`), a tri-based geometry (`IsTriBasedGeom`, slot
+/// +0x1c) through `00e9b4f0`. Otherwise, for an object of one of two classes (each enabled by
+/// its flag byte, `0126fa65` with the `NiRTTI` at `011f4a48` first, then `0126fa64` with
+/// `011f5f64`; `0043b300`): when the vector from the origin to the object's world translation
+/// (+0x8c, `00439ef0`) is not behind the ray (`NiPoint3::Dot`, compared with the float at
+/// `01011d78`, unordered counts as in front), a record is added (`fn_00e99330` on the results at
+/// pick +0x18) with that vector's length (`00457990`) as its distance; for the second class,
+/// with an intersect type (+8) of 1, its point (+8) is the origin plus the direction times the
+/// length (`0045bb20`, `00439e90`). Those cases answer false.
+pub fn fn_00e9c490(e: &mut Engine, origin: Ptr, direction: Ptr, pick: Ptr, object: Ptr) -> bool {
+    if object.is_null() {
+        return false;
+    }
+    let p = pick.addr();
+    let o = object.addr();
+    if e.mem.u8(p + 0x11) != 0 && e.mem.u8(o + 0x30) & 1 != 0 {
+        return false;
+    }
+    let node = e.vcall(o, 0xc, &args![]).u32();
+    if node != 0 && (e.mem.u32(node + 0x30) >> 21) & 1 != 0 {
+        return false;
+    }
+    let hit = e
+        .call(RAY_HITS_BOUND, &args![object, origin, direction])
+        .bool();
+    if !hit && !(node != 0 && (e.mem.u32(node + 0x30) >> 13) & 1 != 0) {
+        return false;
+    }
+    if node != 0 {
+        return fn_00e9c6f0(e, origin, direction, pick, object);
+    }
+    if e.vcall(o, 0x1c, &args![]).u32() != 0 {
+        return e
+            .call(PICK_GEOMETRY, &args![origin, direction, pick, object])
+            .bool();
+    }
+    let first_class = e.mem.u8(PICK_CLASS_FLAG_0126FA65) != 0
+        && e.call(IS_KIND_OF, &args![PICK_CLASS_RTTI_011F4A48, object])
+            .bool();
+    let second_class = !first_class
+        && e.mem.u8(PICK_CLASS_FLAG_0126FA64) != 0
+        && e.call(IS_KIND_OF, &args![PICK_CLASS_RTTI_011F5F64, object])
+            .bool();
+    if !first_class && !second_class {
+        return false;
+    }
+    e.with_stack(0x18, |e, locals| {
+        let offset = locals.addr();
+        let sum = offset + 0xc;
+        e.call(
+            POINT_MINUS_POINT,
+            &args![o.wrapping_add(0x8c), offset, origin],
+        );
+        let along = e.call(NI_POINT3_DOT, &args![direction, offset]).f64();
+        if along < float_operand(e, ZERO_01011D78) {
+            return false;
+        }
+        if first_class {
+            let length = x87_store32(e.call(POINT_LENGTH, &args![offset]).f64());
+            let record = fn_00e99330(e, p + 0x18, o);
+            e.mem
+                .set_u32(record.wrapping_add(0x14), x87_quiet_bits(length));
+            return false;
+        }
+        let record = fn_00e99330(e, p + 0x18, o);
+        let length = x87_quiet_bits(x87_store32(e.call(POINT_LENGTH, &args![offset]).f64()));
+        e.mem.set_u32(record.wrapping_add(0x14), length);
+        if e.mem.u32(p + 8) == 1 {
+            let scaled = e
+                .call(POINT_TIMES_SCALAR, &args![direction, offset, length])
+                .u32();
+            let point = e.call(POINT_PLUS_POINT, &args![origin, sum, scaled]).u32();
+            for word in [0u32, 4, 8] {
+                let value = e.mem.u32(point.wrapping_add(word));
+                e.mem.set_u32(record.wrapping_add(8 + word), value);
+            }
+        }
+        false
+    })
+}
+
+// Translated from 00e9c680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the pick traversal's four words): the pick of a switch
+/// node (the active index at +0xb0, `NiSwitchNode::m_iIndex` by the Xbox PDB's layout). False for
+/// a negative index; true when the pick is a finished "find first" (`pick_is_done`); otherwise
+/// the active child (the children's `m_pBase` at +0xa0, `m_usSize` at +0xa6; an index past the
+/// size or a null child answers false) is picked (`fn_00e9c490`) and its answer returned.
+pub fn fn_00e9c680(e: &mut Engine, origin: Ptr, direction: Ptr, pick: Ptr, node: Ptr) -> bool {
+    let n = node.addr();
+    let index = e.mem.u32(n + 0xb0) as i32;
+    if index < 0 {
+        return false;
+    }
+    if pick_is_done(e, pick.addr()) {
+        return true;
+    }
+    if index >= i32::from(e.mem.u16(n + 0xa6)) {
+        return false;
+    }
+    let children = e.mem.u32(n + 0xa0);
+    let child = e
+        .mem
+        .u32(children.wrapping_add((index as u32).wrapping_mul(4)));
+    if child == 0 {
+        return false;
+    }
+    fn_00e9c490(e, origin, direction, pick, Ptr::new(child))
+}
+
+// Translated from 00e9c6f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`cdecl`, the pick traversal's four words): the pick of a node. A
+/// pick of intersect type (+8) 0 and pick type (+0) 1 just adds the node as a record
+/// (`fn_00e99330`) and answers true. A node whose class chain (`GetRTTI`, slot +8, then each
+/// record's parent at +4) reaches the record at `011f5eb4` is picked as a switch node
+/// (`fn_00e9c680`). Otherwise every non-null child (`m_pBase` +0xa0, `m_usSize` +0xa6, read
+/// again each step) is picked in order, answering true as soon as the pick is a finished "find
+/// first" and otherwise whether any child answered true. A null node is read through (the exe
+/// faults there).
+pub fn fn_00e9c6f0(e: &mut Engine, origin: Ptr, direction: Ptr, pick: Ptr, node: Ptr) -> bool {
+    let p = pick.addr();
+    if e.mem.u32(p + 8) == 0 && e.mem.u32(p) == 1 {
+        fn_00e99330(e, p + 0x18, node.addr());
+        return true;
+    }
+    let n = node.addr();
+    if n != 0 {
+        let mut rtti = e.vcall(n, 8, &args![]).u32();
+        while rtti != 0 {
+            if rtti == SWITCH_NODE_RTTI_011F5EB4 {
+                return fn_00e9c680(e, origin, direction, pick, node);
+            }
+            rtti = e.mem.u32(rtti.wrapping_add(4));
+        }
+    }
+    let mut found = false;
+    let mut index = 0u32;
+    while index < u32::from(e.mem.u16(n.wrapping_add(0xa6))) {
+        if pick_is_done(e, p) {
+            return true;
+        }
+        let children = e.mem.u32(n.wrapping_add(0xa0));
+        let child = e.mem.u32(children.wrapping_add(index.wrapping_mul(4)));
+        if child != 0 && fn_00e9c490(e, origin, direction, pick, Ptr::new(child)) {
+            found = true;
+        }
+        index += 1;
+    }
+    found
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e9_c490, fn_00e9c490(Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x00e9_c680, fn_00e9c680(Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x00e9_c6f0, fn_00e9c6f0(Ptr, Ptr, Ptr, Ptr) -> bool),
         entry!(0x00e9_9300, fn_00e99300(Ptr) -> Ptr),
         entry!(0x00e9_8ff0, fn_00e98ff0()),
         entry!(0x00e9_9260, fn_00e99260()),
@@ -468,5 +664,261 @@ mod start_up_tests {
         e.call_log = Some(vec![]);
         e.call(0x00e9_8ff0, &args![]);
         assert_eq!(e.call_log.as_ref().map(Vec::len), Some(1));
+    }
+}
+
+#[cfg(test)]
+mod n034_pick_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    /// Test functions for the virtual slots: answer 0, answer the object itself, answer 1.
+    const ANSWER_ZERO: u32 = 0x00ab_1000;
+    const ANSWER_SELF: u32 = 0x00ab_1001;
+    const ANSWER_ONE: u32 = 0x00ab_1002;
+    const ANSWER_SWITCH_RTTI: u32 = 0x00ab_1003;
+
+    fn doubles(e: &mut Engine) {
+        e.register(ANSWER_ZERO, |_, _| Ret::default());
+        e.register(ANSWER_SELF, |_, a| a[0].into_ret());
+        e.register(ANSWER_ONE, |_, _| 1u32.into_ret());
+        e.register(ANSWER_SWITCH_RTTI, |_, _| {
+            SWITCH_NODE_RTTI_011F5EB4.into_ret()
+        });
+        e.register(ELEMENT_SET, |_, _| Ret::default());
+        e.register(RAY_HITS_BOUND, |_, _| 1u32.into_ret());
+        e.map(0x011f_5000, 0x1000);
+        e.map(0x0126_f000, 0x1000);
+    }
+
+    /// An object whose `GetRTTI`, `IsNode` and `IsTriBasedGeom` are the given functions.
+    fn object(e: &mut Engine, rtti: u32, is_node: u32, is_geometry: u32) -> u32 {
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 8, rtti);
+        e.mem.set_u32(vtable + 0xc, is_node);
+        e.mem.set_u32(vtable + 0x1c, is_geometry);
+        let o = e.mem.alloc(0xc0);
+        e.mem.set_u32(o, vtable);
+        o
+    }
+
+    /// A pick (type, sort, intersect) with a results pool of four ready elements at +0x18.
+    fn pick(e: &mut Engine, kind: u32, sort: u32, intersect: u32) -> (u32, Vec<u32>) {
+        let p = e.mem.alloc(0x40);
+        e.mem.set_u32(p, kind);
+        e.mem.set_u32(p + 4, sort);
+        e.mem.set_u32(p + 8, intersect);
+        let array = e.mem.alloc(0x10);
+        let mut records = vec![];
+        for i in 0..4 {
+            let r = e.mem.alloc(0x44);
+            e.mem.set_u32(array + 4 * i, r);
+            records.push(r);
+        }
+        e.mem.set_u32(p + 0x18 + 4, array);
+        e.mem.set_u16(p + 0x18 + 0xa, 4);
+        (p, records)
+    }
+
+    fn with_children(e: &mut Engine, node: u32, children: &[u32]) {
+        let array = e.mem.alloc(4 * children.len() as u32 + 4);
+        for (i, c) in children.iter().enumerate() {
+            e.mem.set_u32(array + 4 * i as u32, *c);
+        }
+        e.mem.set_u32(node + 0xa0, array);
+        e.mem.set_u16(node + 0xa6, children.len() as u16);
+    }
+
+    #[test]
+    fn traversal_rejects_null_culled_and_missed_objects() {
+        let mut e = Engine::new();
+        doubles(&mut e);
+        let (p, _) = pick(&mut e, 0, 0, 1);
+        assert!(!fn_00e9c490(
+            &mut e,
+            Ptr::new(0x10),
+            Ptr::new(0x20),
+            Ptr::new(p),
+            Ptr::NULL
+        ));
+        let geometry = object(&mut e, ANSWER_ZERO, ANSWER_ZERO, ANSWER_ONE);
+        e.mem.set_u32(geometry + 0x30, 1);
+        e.mem.set_u8(p + 0x11, 1);
+        e.register(PICK_GEOMETRY, |_, _| 1u32.into_ret());
+        let r = e.call(0x00e9_c490, &args![0x10u32, 0x20u32, p, geometry]);
+        assert!(!r.bool());
+        e.mem.set_u8(p + 0x11, 0);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x00e9_c490, &args![0x10u32, 0x20u32, p, geometry])
+            .bool());
+        assert_eq!(
+            calls_to(&e, PICK_GEOMETRY),
+            vec![vec![0x10, 0x20, p, geometry]]
+        );
+        assert_eq!(
+            calls_to(&e, RAY_HITS_BOUND),
+            vec![vec![geometry, 0x10, 0x20]]
+        );
+        // A missed bound stops the pick.
+        e.register(RAY_HITS_BOUND, |_, _| Ret::default());
+        assert!(!e
+            .call(0x00e9_c490, &args![0x10u32, 0x20u32, p, geometry])
+            .bool());
+        // A node with flag bit 21 is skipped before the bound test; bit 13 picks it anyway.
+        let node = object(&mut e, ANSWER_ZERO, ANSWER_SELF, ANSWER_ZERO);
+        with_children(&mut e, node, &[geometry]);
+        e.mem.set_u32(node + 0x30, 1 << 21);
+        e.call_log = Some(vec![]);
+        assert!(!e
+            .call(0x00e9_c490, &args![0x10u32, 0x20u32, p, node])
+            .bool());
+        assert!(calls_to(&e, RAY_HITS_BOUND).is_empty());
+        e.mem.set_u32(node + 0x30, 1 << 13);
+        e.mem.set_u32(geometry + 0x30, 0);
+        e.register_double(RAY_HITS_BOUND, move |_, a| (a[0] == geometry).into_ret());
+        assert!(e
+            .call(0x00e9_c490, &args![0x10u32, 0x20u32, p, node])
+            .bool());
+    }
+
+    #[test]
+    fn nodes_pick_each_child_and_stop_when_done() {
+        let mut e = Engine::new();
+        doubles(&mut e);
+        e.register(PICK_GEOMETRY, |e, a| {
+            // The pick finds a result on its first geometry.
+            e.mem.set_u32(a[2] + 0x28, 1);
+            1u32.into_ret()
+        });
+        let first = object(&mut e, ANSWER_ZERO, ANSWER_ZERO, ANSWER_ONE);
+        let second = object(&mut e, ANSWER_ZERO, ANSWER_ZERO, ANSWER_ONE);
+        let node = object(&mut e, ANSWER_ZERO, ANSWER_SELF, ANSWER_ZERO);
+        with_children(&mut e, node, &[first, 0, second]);
+        // Find all: every child.
+        let (p, _) = pick(&mut e, 0, 0, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00e9_c6f0, &args![1u32, 2u32, p, node]).bool());
+        assert_eq!(calls_to(&e, PICK_GEOMETRY).len(), 2);
+        // Find first, no sort: stops after the first result.
+        let (p, _) = pick(&mut e, 1, 1, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00e9_c6f0, &args![1u32, 2u32, p, node]).bool());
+        assert_eq!(calls_to(&e, PICK_GEOMETRY).len(), 1);
+        // Bound-only find first: the node itself becomes a record.
+        let (p, r) = pick(&mut e, 1, 0, 0);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x00e9_c6f0, &args![1u32, 2u32, p, node]).bool());
+        assert_eq!(calls_to(&e, ELEMENT_SET), vec![vec![r[0], node]]);
+        assert!(calls_to(&e, PICK_GEOMETRY).is_empty());
+    }
+
+    #[test]
+    fn switch_nodes_pick_only_the_active_child() {
+        let mut e = Engine::new();
+        doubles(&mut e);
+        e.register(PICK_GEOMETRY, |_, a| (a[3] & 0xff).into_ret());
+        let first = object(&mut e, ANSWER_ZERO, ANSWER_ZERO, ANSWER_ONE);
+        let second = object(&mut e, ANSWER_ZERO, ANSWER_ZERO, ANSWER_ONE);
+        let node = object(&mut e, ANSWER_SWITCH_RTTI, ANSWER_SELF, ANSWER_ZERO);
+        with_children(&mut e, node, &[first, second]);
+        let (p, _) = pick(&mut e, 0, 0, 1);
+        e.mem.set_u32(node + 0xb0, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_c6f0, &args![1u32, 2u32, p, node]);
+        assert_eq!(calls_to(&e, PICK_GEOMETRY), vec![vec![1, 2, p, second]]);
+        for index in [-1i32, 2] {
+            e.mem.set_u32(node + 0xb0, index as u32);
+            e.call_log = Some(vec![]);
+            assert!(!e.call(0x00e9_c680, &args![1u32, 2u32, p, node]).bool());
+            assert!(calls_to(&e, PICK_GEOMETRY).is_empty());
+        }
+        // A finished find first answers true before the index is checked against the size.
+        let (p, _) = pick(&mut e, 1, 1, 1);
+        e.mem.set_u32(p + 0x28, 1);
+        assert!(e.call(0x00e9_c680, &args![1u32, 2u32, p, node]).bool());
+    }
+
+    #[test]
+    fn class_picks_add_a_record_in_front_of_the_ray() {
+        let mut e = Engine::new();
+        doubles(&mut e);
+        e.register(IS_KIND_OF, |_, a| {
+            (a[0] == PICK_CLASS_RTTI_011F5F64).into_ret()
+        });
+        e.register(POINT_MINUS_POINT, |e, a| {
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) - e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, v);
+            }
+            a[1].into_ret()
+        });
+        e.register(NI_POINT3_DOT, |e, a| Ret {
+            st0: (0..3)
+                .map(|i| f64::from(e.mem.f32(a[0] + 4 * i) * e.mem.f32(a[1] + 4 * i)))
+                .sum(),
+            ..Ret::default()
+        });
+        e.register(POINT_LENGTH, |e, a| Ret {
+            st0: (0..3)
+                .map(|i| f64::from(e.mem.f32(a[0] + 4 * i).powi(2)))
+                .sum::<f64>()
+                .sqrt(),
+            ..Ret::default()
+        });
+        e.register(POINT_TIMES_SCALAR, |e, a| {
+            let s = f32::from_bits(a[2]);
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) * s;
+                e.mem.set_f32(a[1] + 4 * i, v);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_PLUS_POINT, |e, a| {
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + 4 * i) + e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, v);
+            }
+            a[1].into_ret()
+        });
+        e.map(0x0101_1000, 0x1000);
+        let leaf = object(&mut e, ANSWER_ZERO, ANSWER_ZERO, ANSWER_ZERO);
+        e.mem.set_f32(leaf + 0x8c + 8, 4.0);
+        let origin = e.mem.alloc(12);
+        let up = e.mem.alloc(12);
+        e.mem.set_f32(up + 8, 1.0);
+        let down = e.mem.alloc(12);
+        e.mem.set_f32(down + 8, -1.0);
+        // No class flag: nothing.
+        let (p, r) = pick(&mut e, 0, 0, 1);
+        assert!(!e.call(0x00e9_c490, &args![origin, up, p, leaf]).bool());
+        assert_eq!(e.mem.u32(p + 0x18 + 0x10), 0);
+        // The second class: a record 4 along the ray, with its point.
+        e.mem.set_u8(PICK_CLASS_FLAG_0126FA64, 1);
+        e.mem.set_u8(PICK_CLASS_FLAG_0126FA65, 1);
+        assert!(!e.call(0x00e9_c490, &args![origin, up, p, leaf]).bool());
+        assert_eq!(e.mem.u32(p + 0x18 + 0x10), 1);
+        assert_eq!(e.mem.f32(r[0] + 0x14), 4.0);
+        assert_eq!(e.mem.f32(r[0] + 0x10), 4.0);
+        // Behind the ray: no record.
+        assert!(!e.call(0x00e9_c490, &args![origin, down, p, leaf]).bool());
+        assert_eq!(e.mem.u32(p + 0x18 + 0x10), 1);
+        // The first class: the distance only.
+        e.register(IS_KIND_OF, |_, a| {
+            (a[0] == PICK_CLASS_RTTI_011F4A48).into_ret()
+        });
+        e.mem.set_u32(r[1] + 0x10, 0x1234);
+        assert!(!e.call(0x00e9_c490, &args![origin, up, p, leaf]).bool());
+        assert_eq!(e.mem.f32(r[1] + 0x14), 4.0);
+        assert_eq!(e.mem.u32(r[1] + 0x10), 0x1234);
     }
 }

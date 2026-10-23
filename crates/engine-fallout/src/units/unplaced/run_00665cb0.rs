@@ -165,11 +165,12 @@ pub fn fn_00665f10(_e: &mut Engine, _this: Ptr<LockFreeMap>, key: u32) -> u32 {
 // Translated from 00665f20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`thiscall(key)`, `RET 4`): calls slot 0x24 of
 /// the object `this` points to with `key`, then `00666080(this, result,
-/// key)`.
-pub fn fn_00665f20(e: &mut Engine, this: Ptr, key: u32) {
+/// key)`, whose answer it answers (the exe ends on that call and leaves its
+/// `EAX`; the callers keep `AL`).
+pub fn fn_00665f20(e: &mut Engine, this: Ptr, key: u32) -> bool {
     let map = e.mem.u32(this.addr());
     let result = e.vcall(map, 0x24, &args![key]).u32();
-    e.call(KEY_HELPER, &args![this, result, key]);
+    e.call(KEY_HELPER, &args![this, result, key]).bool()
 }
 
 /// This unit's translated functions, by exe address.
@@ -181,7 +182,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x0066_5e30, fn_00665e30(Ptr<LockFreeMap>, u32) -> u32),
         entry!(0x0066_5f10, fn_00665f10(Ptr<LockFreeMap>, u32) -> u32),
-        entry!(0x0066_5f20, fn_00665f20(Ptr, u32)),
+        entry!(0x0066_5f20, fn_00665f20(Ptr, u32) -> bool),
     ]
 }
 
@@ -308,5 +309,19 @@ mod tests {
         e.call(0x0066_5f20, &args![this, 0x21u32]);
         assert_eq!(calls(&e, 0x0066_0000), vec![vec![map, 0x21]]);
         assert_eq!(calls(&e, KEY_HELPER), vec![vec![this, 0x42, 0x21]]);
+    }
+
+    #[test]
+    fn helper_answer_is_passed_back() {
+        let mut e = Engine::new();
+        let map = e.mem.alloc(4);
+        let vtable = e.mem.alloc(0x28);
+        e.mem.set_u32(map, vtable);
+        e.mem.set_u32(vtable + 0x24, 0x0066_0000);
+        e.register(0x0066_0000, |_, a| (a[1] * 2).into_ret());
+        e.register(KEY_HELPER, |_, _| true.into_ret());
+        let this = e.mem.alloc(4);
+        e.mem.set_u32(this, map);
+        assert!(e.call(0x0066_5f20, &args![this, 0x21u32]).bool());
     }
 }

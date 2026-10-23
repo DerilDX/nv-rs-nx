@@ -185,9 +185,29 @@ pub fn conversation_precache_sounds(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 0083b9f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Conversation::NextItem` (engine map; `ECX` only, the answer in `AL`): moves
+/// `pCurrentItem` to the next node (`00726070`) when there is one, then answers whether
+/// there is a node whose item (`006815c0`, the word it points at) is not null.
+pub fn conversation_next_item(e: &mut Engine, this: Ptr) -> bool {
+    let at = this.addr() + CURRENT_ITEM;
+    if e.mem.u32(at) != 0 {
+        let node = e.mem.u32(at);
+        let next = e.call(LIST_NODE_NEXT, &args![node]).u32();
+        e.mem.set_u32(at, next);
+    }
+    if e.mem.u32(at) == 0 {
+        return false;
+    }
+    let node = e.mem.u32(at);
+    let item = e.call(LIST_NODE_ITEM, &args![node]).u32();
+    e.mem.u32(item) != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0083_b9f0, conversation_next_item(Ptr) -> bool),
         entry!(
             0x0083b850,
             conversation_conversation_ov2(Ptr, u32, u32, u32) -> Ptr
@@ -358,5 +378,43 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0083_c470, &args![this]);
         assert_eq!(calls(&e, PRECACHE_RESPONSES), vec![vec![0x10], vec![0x30]]);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    /// List nodes of two words (item, next): `006815c0` answers the node itself (the item
+    /// word's address), `00726070` its next word.
+    fn list_engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(LIST_NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(LIST_NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e
+    }
+
+    #[test]
+    fn next_item_moves_on_and_answers_whether_it_has_an_item() {
+        let mut e = list_engine();
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        let third = e.mem.alloc(8);
+        e.mem.set_u32(first + 4, second);
+        e.mem.set_u32(second, 0x7000);
+        e.mem.set_u32(second + 4, third);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 8, first);
+        assert!(e.call(0x0083_b9f0, &args![this]).bool());
+        assert_eq!(e.mem.u32(this + 8), second);
+        // The third node has a null item.
+        assert!(!e.call(0x0083_b9f0, &args![this]).bool());
+        assert_eq!(e.mem.u32(this + 8), third);
+        // Past the end: no node.
+        assert!(!e.call(0x0083_b9f0, &args![this]).bool());
+        assert_eq!(e.mem.u32(this + 8), 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0083_b9f0, &args![this]).bool());
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
     }
 }

@@ -1922,11 +1922,12 @@ fn player_pointer(e: &Engine) -> u32 {
 }
 
 // Translated from 008bb630 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `Actor::SetPathfindingFlee` (Xbox PDB): forwards its word to the actor
-/// mover (`Actor + 0x190`).
-pub fn actor_set_pathfinding_flee(e: &mut Engine, this: Ptr<Actor>, value: u32) {
+/// `Actor::SetPathfindingFlee` (Xbox PDB; `bool` there): forwards its word to
+/// the actor mover (`Actor + 0x190`) and answers the mover's value (the exe
+/// ends on that call and leaves its `EAX`; the callers test `AL`).
+pub fn actor_set_pathfinding_flee(e: &mut Engine, this: Ptr<Actor>, value: u32) -> bool {
     let mover = e.get(this, Actor::pActorMover);
-    e.call(ACTOR_MOVER_SET_FLEE, &args![mover, value]);
+    e.call(ACTOR_MOVER_SET_FLEE, &args![mover, value]).bool()
 }
 
 // Translated from 008bbbd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2613,10 +2614,13 @@ pub fn actor_add_follower(e: &mut Engine, this: Ptr<Actor>, follower: u32) {
 }
 
 // Translated from 008bc7d0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Calls `00422550` with the word on the reference's extra data list.
-pub fn fn_008bc7d0(e: &mut Engine, this: Ptr, value: u32) {
+/// Calls `00422550` with the word on the reference's extra data list and
+/// answers its value (the exe ends on that call and leaves its `EAX`; the
+/// callers test `AL`).
+pub fn fn_008bc7d0(e: &mut Engine, this: Ptr, value: u32) -> bool {
     let list = e.call(EXTRA_LIST_OF_REFERENCE, &args![this]).u32();
-    e.call(EXTRA_LIST_REMOVE_00422550, &args![list, value]);
+    e.call(EXTRA_LIST_REMOVE_00422550, &args![list, value])
+        .bool()
 }
 
 /// True when the package's type number (`0041ca90`) is `1` or `7` (the
@@ -4132,7 +4136,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x008bb5a0, fn_008bb5a0(Ptr) -> u32),
         entry!(0x008bb5c0, fn_008bb5c0(Ptr<Actor>, f32, bool) -> bool),
-        entry!(0x008bb630, actor_set_pathfinding_flee(Ptr<Actor>, u32)),
+        entry!(
+            0x008bb630,
+            actor_set_pathfinding_flee(Ptr<Actor>, u32) -> bool
+        ),
         entry!(0x008bb650, actor_set_iron_sights(Ptr<Actor>, u8, u8, u8)),
         entry!(0x008bbbd0, fn_008bbbd0(Ptr) -> u8),
         entry!(0x008bbbf0, fn_008bbbf0(Ptr, u32)),
@@ -4166,7 +4173,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x008bc750, fn_008bc750(Ptr, u32, u8)),
         entry!(0x008bc790, actor_add_follower(Ptr<Actor>, u32)),
-        entry!(0x008bc7d0, fn_008bc7d0(Ptr, u32)),
+        entry!(0x008bc7d0, fn_008bc7d0(Ptr, u32) -> bool),
         entry!(0x008bc7f0, actor_is_following_ov2(Ptr<Actor>, u32) -> bool),
         entry!(
             0x008bc860,
@@ -8636,5 +8643,19 @@ mod tests {
         addresses.sort_unstable();
         addresses.dedup();
         assert_eq!(addresses.len(), 120);
+    }
+
+    #[test]
+    fn flee_and_extra_list_wrappers_answer_their_callees() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        e.set(actor, Actor::pActorMover, Ptr::new(0x7700));
+        double(&mut e, ACTOR_MOVER_SET_FLEE, eax(1));
+        assert!(e.call(0x008bb630, &args![actor, 5u32]).bool());
+        double(&mut e, EXTRA_LIST_OF_REFERENCE, eax(0x5000));
+        double(&mut e, EXTRA_LIST_REMOVE_00422550, eax(1));
+        assert!(e.call(0x008bc7d0, &args![actor, 0x30u32]).bool());
+        double(&mut e, EXTRA_LIST_REMOVE_00422550, eax(0));
+        assert!(!e.call(0x008bc7d0, &args![actor, 0x30u32]).bool());
     }
 }

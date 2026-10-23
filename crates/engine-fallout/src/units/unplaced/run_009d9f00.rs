@@ -18,9 +18,16 @@ pub fn fn_009d9f20(e: &mut Engine, this: Ptr) -> u32 {
     e.call(0x0055_9450, &args![this.byte_add(0xd4)]).u32()
 }
 
+// Translated from 009d9f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name (fastcall, `ECX` = `this`): the word at `this + 0x144`.
+pub fn fn_009d9f00(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr().wrapping_add(0x144))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x009d_9f00, fn_009d9f00(Ptr) -> u32),
         entry!(0x009d_9f40, fn_009d9f40(Ptr) -> Ptr),
         entry!(0x009d_9f20, fn_009d9f20(Ptr) -> u32),
     ]
@@ -52,5 +59,18 @@ mod tests {
         let this = e.mem.alloc(0xd8);
         e.mem.set_u32(this + 0xd4, 0x1234_5678);
         assert_eq!(e.call(0x009d_9f20, &args![this]).u32(), 0x1234_5678);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_009d9f00_reads_the_word_at_0x144() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x148);
+        e.mem.set_u32(this + 0x144, 0xdead_beef);
+        assert_eq!(e.call(0x009d_9f00, &args![this]).u32(), 0xdead_beef);
     }
 }

@@ -260,6 +260,169 @@ pub fn nav_mesh_math_segment_circle_intersection(
     })
 }
 
+/// `1.0` (`double`).
+const ONE: u32 = 0x0101_2070;
+/// `004019b0` (cdecl, a `float`): its square root in ST0.
+const SQUARE_ROOT: u32 = 0x0040_19b0;
+
+/// `FLD p.x; FMUL q.y; FLD p.y; FMUL q.x; FSUBP` (`DE E9`, ST1 - ST0), then
+/// `FSTP dword`: the 2D cross product of the vectors at `p` and `q`, as the
+/// bits of the stored `float`.
+fn cross_of(e: &Engine, p: u32, q: u32) -> u32 {
+    let m = |a: u32| e.mem.u32(a);
+    let first = x87_mul(x87_load32(m(p)), x87_m32(m(q + 4)));
+    let second = x87_mul(x87_load32(m(p + 4)), x87_m32(m(q)));
+    x87_store32(x87_sub(first, second))
+}
+
+/// `FLD t; FCOMP 0.0; TEST AH,5; JNP` then `FLD t; FCOMP 1.0; TEST AH,0x41;
+/// JNZ`: false when `t` is below 0 or above 1 (ordered); a NaN passes.
+fn in_unit_range(e: &Engine, t: u32) -> bool {
+    let zero: f64 = e.global(ZERO);
+    let one: f64 = e.global(ONE);
+    let value = x87_load32(t);
+    !(value < zero) && !(value > one)
+}
+
+// Translated from 006ba6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`navmeshmath.cpp`), `cdecl`, five words: where
+/// segment `c`-`d` meets the line through `a` and `b` in the XY plane. With
+/// `ab = b - a`, `cd = d - c` and `ac = c - a` (`00439ef0`), the cross product
+/// `ab x cd` exactly 0 gives false (a NaN goes on); the parameter on `c`-`d`,
+/// `(ac x ab) / (ab x cd)`, outside [0, 1] gives false. Otherwise, when `out`
+/// is set, `a + ab * ((ac x cd) / (ab x cd))` (`004a3760`, `00439e90`) goes
+/// to `out` (three floats); returns true.
+pub fn fn_006ba6e0(e: &mut Engine, a: Ptr, b: Ptr, c: Ptr, d: Ptr, out: Ptr) -> bool {
+    let (a, b, c, d) = (a.addr(), b.addr(), c.addr(), d.addr());
+    // The frame is EBP-0x4C: `ab` at +0x28, `cd` at +0x38, `ac` at +0x1C,
+    // the scaled vector at +0xC and the sum at +0.
+    e.with_stack(0x4c, |e, frame| {
+        let frame = frame.addr();
+        let (ab, cd, ac) = (frame + 0x28, frame + 0x38, frame + 0x1c);
+        e.call(POINT_SUBTRACT, &args![b, ab, a]);
+        e.call(POINT_SUBTRACT, &args![d, cd, c]);
+        let denominator = cross_of(e, ab, cd);
+        // `TEST AH,0x44; JP`: false only when exactly 0.
+        if x87_load32(denominator) == e.global::<f64>(ZERO) {
+            return false;
+        }
+        e.call(POINT_SUBTRACT, &args![c, ac, a]);
+        let along_cd = cross_of(e, ac, ab);
+        let t = x87_store32(x87_div(x87_load32(along_cd), x87_m32(denominator)));
+        if !in_unit_range(e, t) {
+            return false;
+        }
+        let along_ab = cross_of(e, ac, cd);
+        let s = x87_store32(x87_div(x87_load32(along_ab), x87_m32(denominator)));
+        if !out.is_null() {
+            let scaled = e
+                .call(POINT_SCALE, &args![frame + 0xc, x87_quiet_bits(s), ab])
+                .u32();
+            let point = e.call(POINT_ADD, &args![a, frame, scaled]).u32();
+            copy_words(e, out.addr(), point, 3);
+        }
+        true
+    })
+}
+
+// Translated from 006ba7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`navmeshmath.cpp`), `cdecl`, five words: where
+/// segment `a`-`b` meets the line through `c` and `d` in the XY plane. With
+/// `cd = d - c`, `ab = b - a` and `ca = a - c` (`00439ef0`), the cross product
+/// `cd x ab` exactly 0 gives false (a NaN goes on); the parameter on `a`-`b`,
+/// `t = (ca x cd) / (cd x ab)`, outside [0, 1] gives false. Otherwise, when
+/// `out` is set, `a + ab * t` (`004a3760`, `00439e90`) goes to `out` (three
+/// floats); returns true.
+pub fn fn_006ba7e0(e: &mut Engine, a: Ptr, b: Ptr, c: Ptr, d: Ptr, out: Ptr) -> bool {
+    let (a, b, c, d) = (a.addr(), b.addr(), c.addr(), d.addr());
+    // The frame is EBP-0x48: `cd` at +0x28, `ab` at +0x34, `ca` at +0x1C,
+    // the scaled vector at +0xC and the sum at +0.
+    e.with_stack(0x48, |e, frame| {
+        let frame = frame.addr();
+        let (cd, ab, ca) = (frame + 0x28, frame + 0x34, frame + 0x1c);
+        e.call(POINT_SUBTRACT, &args![d, cd, c]);
+        e.call(POINT_SUBTRACT, &args![b, ab, a]);
+        let denominator = cross_of(e, cd, ab);
+        if x87_load32(denominator) == e.global::<f64>(ZERO) {
+            return false;
+        }
+        e.call(POINT_SUBTRACT, &args![a, ca, c]);
+        let along = cross_of(e, ca, cd);
+        let t = x87_store32(x87_div(x87_load32(along), x87_m32(denominator)));
+        if !in_unit_range(e, t) {
+            return false;
+        }
+        if !out.is_null() {
+            let scaled = e
+                .call(POINT_SCALE, &args![frame + 0xc, x87_quiet_bits(t), ab])
+                .u32();
+            let point = e.call(POINT_ADD, &args![a, frame, scaled]).u32();
+            copy_words(e, out.addr(), point, 3);
+        }
+        true
+    })
+}
+
+// Translated from 006ba8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`navmeshmath.cpp`), `cdecl`, five words: the
+/// two tangent points from `point` to the circle of `radius` around `center`
+/// in the XY plane. With `v = point - center` (`00439ef0`) and `l` its squared
+/// 2D length (`00595c80`): false unless `radius * radius <= l` (ordered).
+/// Else `h = sqrt(l - r * r)` (`004019b0`), both outputs start as `center`
+/// (three words) and get
+/// `first += ((r * v.x - v.y * h) * r / l, (r * v.y + v.x * h) * r / l)`,
+/// `second += ((r * v.x + v.y * h) * r / l, (r * v.y - v.x * h) * r / l)`
+/// (each product times `r`, then times `1 / l`, in the exe's order); true.
+pub fn fn_006ba8c0(
+    e: &mut Engine,
+    center: Ptr,
+    radius: f32,
+    point: Ptr,
+    first: Ptr,
+    second: Ptr,
+) -> bool {
+    let (center, point, first, second) = (center.addr(), point.addr(), first.addr(), second.addr());
+    let r = radius.to_bits();
+    // The frame is EBP-0x20: `v` at +0x14.
+    let (v_x, v_y, length) = e.with_stack(0x20, |e, frame| {
+        let v = frame.addr() + 0x14;
+        e.call(POINT_SUBTRACT, &args![point, v, center]);
+        let length = e.call(POINT2_LENGTH_SQUARED, &args![v]).f64();
+        (e.mem.u32(v), e.mem.u32(v + 4), x87_store32(length))
+    });
+    let r_squared = x87_store32(x87_mul(x87_load32(r), x87_m32(r)));
+    // `FLD l; FLD r2; FCOMPP; TEST AH,0x41; JP`: on unless `r2 <= l`.
+    if !(x87_load32(r_squared) <= x87_load32(length)) {
+        return false;
+    }
+    // `FLD l; FLD1; FDIVRP` (`DE F1`): 1 / l.
+    let inverse = x87_store32(x87_div(1.0, x87_load32(length)));
+    let difference = x87_store32(x87_sub(x87_load32(length), x87_m32(r_squared)));
+    let root = e.call(SQUARE_ROOT, &args![difference]).f64();
+    let h = x87_store32(root);
+    copy_words(e, first, center, 3);
+    copy_words(e, second, center, 3);
+    // One coordinate: `FLD r; FMUL p; FLD q; FMUL h; FSUBP`/`FADDP`, then
+    // `FMUL r; FMUL inverse; FADD [target]; FSTP [target]`.
+    let update = |e: &mut Engine, p: u32, q: u32, add: bool, target: u32| {
+        let left = x87_mul(x87_load32(r), x87_m32(p));
+        let right = x87_mul(x87_load32(q), x87_m32(h));
+        let combined = if add {
+            x87_add(left, right)
+        } else {
+            x87_sub(left, right)
+        };
+        let scaled = x87_mul(x87_mul(combined, x87_m32(r)), x87_m32(inverse));
+        let value = x87_add(scaled, x87_m32(e.mem.u32(target)));
+        e.mem.set_u32(target, x87_store32(value));
+    };
+    update(e, v_x, v_y, false, first);
+    update(e, v_y, v_x, true, first + 4);
+    update(e, v_x, v_y, true, second);
+    update(e, v_y, v_x, false, second + 4);
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -267,6 +430,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006b_a3d0, fn_006ba3d0(Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x006b_a550, fn_006ba550(Ptr, Ptr, Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x006b_a9e0, nav_mesh_math_segment_circle_intersection(Ptr, Ptr, Ptr, f32) -> bool),
+        entry!(0x006b_a6e0, fn_006ba6e0(Ptr, Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x006b_a7e0, fn_006ba7e0(Ptr, Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x006b_a8c0, fn_006ba8c0(Ptr, f32, Ptr, Ptr, Ptr) -> bool),
     ]
 }
 
@@ -411,5 +577,135 @@ mod tests {
         assert!(!hit(&mut e, &[-2.0, 0.0, 0.0], 1.5));
         assert!(hit(&mut e, &[11.0, 0.0, 0.0], 1.5));
         assert!(!hit(&mut e, &[12.0, 0.0, 0.0], 1.5));
+    }
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    fn point(e: &mut Engine, values: &[f32]) -> u32 {
+        let p = e.mem.alloc(12);
+        for (i, v) in values.iter().enumerate() {
+            e.mem.set_f32(p + 4 * i as u32, *v);
+        }
+        p
+    }
+
+    fn read(e: &Engine, p: u32) -> Vec<f32> {
+        (0..3).map(|i| e.mem.f32(p + 4 * i)).collect()
+    }
+
+    /// Doubles of the point helpers over plain floats, and the constants.
+    fn points(e: &mut Engine) {
+        e.map(0x0101_2000, 0x1000);
+        e.set_global(ZERO, 0.0f64);
+        e.set_global(ONE, 1.0f64);
+        e.register(POINT_SUBTRACT, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) - e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_ADD, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) + e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            a[1].into_ret()
+        });
+        e.register(POINT_SCALE, |e, a| {
+            let scale = f32::from_bits(a[1]);
+            for i in 0..3 {
+                let value = e.mem.f32(a[2] + 4 * i) * scale;
+                e.mem.set_f32(a[0] + 4 * i, value);
+            }
+            a[0].into_ret()
+        });
+        e.register(POINT2_LENGTH_SQUARED, |e, a| {
+            let (x, y) = (f64::from(e.mem.f32(a[0])), f64::from(e.mem.f32(a[0] + 4)));
+            Ret {
+                st0: x * x + y * y,
+                ..Ret::default()
+            }
+        });
+        e.register(SQUARE_ROOT, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])).sqrt(),
+            ..Ret::default()
+        });
+    }
+
+    #[test]
+    fn at_006ba6e0_a_segment_meets_the_line_inside_its_range() {
+        let mut e = Engine::new();
+        points(&mut e);
+        let a = point(&mut e, &[0.0, 0.0, 0.0]);
+        let b = point(&mut e, &[4.0, 4.0, 8.0]);
+        let c = point(&mut e, &[0.0, 4.0, 0.0]);
+        let d = point(&mut e, &[4.0, 0.0, 0.0]);
+        let out = point(&mut e, &[9.0, 9.0, 9.0]);
+        assert!(e.call(0x006b_a6e0, &args![a, b, c, d, out]).bool());
+        assert_eq!(read(&e, out), vec![2.0, 2.0, 4.0]);
+        // A null output: true, nothing written.
+        assert!(e.call(0x006b_a6e0, &args![a, b, c, d, 0u32]).bool());
+        // `c`-`d` stops short of the line (parameter -0.5): false.
+        let c2 = point(&mut e, &[5.0, 0.0, 0.0]);
+        let d2 = point(&mut e, &[10.0, -5.0, 0.0]);
+        assert!(!e.call(0x006b_a6e0, &args![a, b, c2, d2, out]).bool());
+        // Parallel: the cross product is 0.
+        let c3 = point(&mut e, &[0.0, 1.0, 0.0]);
+        let d3 = point(&mut e, &[1.0, 2.0, 0.0]);
+        assert!(!e.call(0x006b_a6e0, &args![a, b, c3, d3, out]).bool());
+        assert_eq!(read(&e, out), vec![2.0, 2.0, 4.0]);
+    }
+
+    #[test]
+    fn at_006ba7e0_the_line_meets_the_segment_inside_its_range() {
+        let mut e = Engine::new();
+        points(&mut e);
+        let a = point(&mut e, &[0.0, 0.0, 1.0]);
+        let b = point(&mut e, &[4.0, 4.0, 1.0]);
+        let c = point(&mut e, &[0.0, 4.0, 0.0]);
+        let d = point(&mut e, &[4.0, 0.0, 0.0]);
+        let out = e.mem.alloc(12);
+        assert!(e.call(0x006b_a7e0, &args![a, b, c, d, out]).bool());
+        assert_eq!(read(&e, out), vec![2.0, 2.0, 1.0]);
+        // A segment that ends before the line (parameter 2): false.
+        let short = point(&mut e, &[1.0, 1.0, 1.0]);
+        assert!(!e.call(0x006b_a7e0, &args![a, short, c, d, out]).bool());
+        // Parallel to the line: false.
+        let parallel = point(&mut e, &[4.0, -4.0, 1.0]);
+        assert!(!e.call(0x006b_a7e0, &args![a, parallel, c, d, out]).bool());
+    }
+
+    #[test]
+    fn at_006ba8c0_the_tangent_points_of_an_outside_point() {
+        let mut e = Engine::new();
+        points(&mut e);
+        let center = point(&mut e, &[0.0, 0.0, 7.0]);
+        let from = point(&mut e, &[5.0, 0.0, 0.0]);
+        let first = e.mem.alloc(12);
+        let second = e.mem.alloc(12);
+        assert!(e
+            .call(0x006b_a8c0, &args![center, 3.0f32, from, first, second])
+            .bool());
+        let near = |got: Vec<f32>, want: [f32; 3]| {
+            for (g, w) in got.iter().zip(want) {
+                assert!((g - w).abs() < 1e-5, "{got:?} vs {want:?}");
+            }
+        };
+        near(read(&e, first), [1.8, 2.4, 7.0]);
+        near(read(&e, second), [1.8, -2.4, 7.0]);
+        // A point inside the circle: false, the outputs untouched.
+        let inside = point(&mut e, &[1.0, 0.0, 0.0]);
+        let untouched = point(&mut e, &[9.0, 9.0, 9.0]);
+        assert!(!e
+            .call(
+                0x006b_a8c0,
+                &args![center, 3.0f32, inside, untouched, untouched]
+            )
+            .bool());
+        assert_eq!(read(&e, untouched), vec![9.0, 9.0, 9.0]);
     }
 }

@@ -1808,10 +1808,11 @@ pub fn fn_00863d60(e: &mut Engine, this: Ptr<NiTLargePrimitiveArray>) {
 // Translated from 00863d90 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Add` of the `NiTLargePrimitiveArray<FormAndFlags *>` (the engine map has
 /// no name for it): `00864240(this, m_uiSize, item)` appends `item` at the
-/// current size.
-pub fn fn_00863d90(e: &mut Engine, this: Ptr<NiTLargePrimitiveArray>, item: u32) {
+/// current size, answering what that gives (the index: the exe ends on that
+/// call and leaves its `EAX`, which the callers keep).
+pub fn fn_00863d90(e: &mut Engine, this: Ptr<NiTLargePrimitiveArray>, item: u32) -> u32 {
     let size = e.get(this, NiTLargePrimitiveArray::m_uiSize);
-    e.call(ARRAY_ADD_AT, &args![this, size, item]);
+    e.call(ARRAY_ADD_AT, &args![this, size, item]).u32()
 }
 
 // Translated from 00863db0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2180,7 +2181,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00863cd0, fn_00863cd0(Ptr<NiTPointerMap>)),
         entry!(0x00863d30, fn_00863d30(Ptr<NiTPointerMap>)),
         entry!(0x00863d60, fn_00863d60(Ptr<NiTLargePrimitiveArray>)),
-        entry!(0x00863d90, fn_00863d90(Ptr<NiTLargePrimitiveArray>, u32)),
+        entry!(0x00863d90, fn_00863d90(Ptr<NiTLargePrimitiveArray>, u32) -> u32),
         entry!(0x00863db0, fn_00863db0(Ptr<NiTLargePrimitiveArray>)),
         entry!(
             0x00863e00,
@@ -4361,5 +4362,14 @@ mod tests {
         let array = large_array(&mut e);
         fn_008640e0(&mut e, array);
         assert_eq!(calls_to(&e, ARRAY_DESTRUCT_BODY), vec![vec![array.addr()]]);
+    }
+
+    #[test]
+    fn the_array_add_answers_the_index() {
+        let mut e = game();
+        e.register(ARRAY_ADD_AT, |_, a| a[1].into_ret());
+        let array = large_array(&mut e);
+        e.set(array, NiTLargePrimitiveArray::m_uiSize, 3);
+        assert_eq!(fn_00863d90(&mut e, array, 0x99), 3);
     }
 }

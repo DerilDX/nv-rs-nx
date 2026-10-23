@@ -141,9 +141,42 @@ pub fn strnicmp_l(e: &mut Engine, first: Ptr, second: Ptr, count: u32, locale: u
     })
 }
 
+/// `__aulldiv` (`00ecc590`, four words: the low and high words of the dividend, then of the
+/// divisor; `RET 0x10`; the quotient in `EDX:EAX`).
+const AULLDIV: u32 = 0x00ec_c590;
+/// Ticks of a `FILETIME` (100 ns) per millisecond.
+const TICKS_PER_MILLISECOND: u32 = 10_000;
+
+// Translated from 00ec7d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `clock` (Ghidra library match; cdecl, no arguments): the milliseconds since `___inittime`.
+/// Reads the system time as a `FILETIME` (8 bytes on the stack), forms
+/// `__allmul(dwHighDateTime, 0, 0, 1)` minus the start time (`0126fda0`, 64-bit with
+/// borrow) plus `dwLowDateTime` (64-bit with carry), and answers the low word of
+/// `__aulldiv(that, 10000)`.
+pub fn clock(e: &mut Engine) -> u32 {
+    e.with_stack(8, |e, file_time| {
+        e.call(GET_SYSTEM_TIME_AS_FILE_TIME, &args![file_time]);
+        let high = e.mem.u32(file_time.addr() + 4);
+        let product = e.call(ALLMUL, &args![high, 0u32, 0u32, 1u32]);
+        let start_low = e.mem.u32(START_TIME_0126FDA0);
+        let (low, borrow) = product.eax.overflowing_sub(start_low);
+        let start_high = e.mem.u32(START_TIME_0126FDA0 + 4);
+        let high = product
+            .edx
+            .wrapping_sub(start_high)
+            .wrapping_sub(u32::from(borrow));
+        let time_low = e.mem.u32(file_time.addr());
+        let (low, carry) = low.overflowing_add(time_low);
+        let high = high.wrapping_add(u32::from(carry));
+        e.call(AULLDIV, &args![low, high, TICKS_PER_MILLISECOND, 0u32])
+            .u32()
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ec_7d50, clock() -> u32),
         entry!(0x00ec7ce3, checked_move(Ptr, u32, Ptr, u32) -> u32),
         entry!(0x00ec_7d40, fn_00ec7d40(i32) -> i32),
         entry!(0x00ec_7d95, inittime() -> u32),
@@ -341,5 +374,47 @@ mod tests {
                 .iter()
                 .any(|(address, _)| *address == 0x00ec7c30));
         }
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn clock_divides_the_ticks_since_the_start_by_10000() {
+        let mut e = Engine::new();
+        e.map(0x0126_f000, 0x1000);
+        // FILETIME 0x0000_0002_0000_0010; start time 0x0000_0001_FFFF_FFF0.
+        e.register(GET_SYSTEM_TIME_AS_FILE_TIME, |e, a| {
+            e.mem.set_u32(a[0], 0x10);
+            e.mem.set_u32(a[0] + 4, 2);
+            Ret::default()
+        });
+        e.register(ALLMUL, |_, a| {
+            let product = (u64::from(a[0]) | u64::from(a[1]) << 32)
+                .wrapping_mul(u64::from(a[2]) | u64::from(a[3]) << 32);
+            product.into_ret()
+        });
+        e.register(AULLDIV, |_, a| {
+            let dividend = u64::from(a[0]) | u64::from(a[1]) << 32;
+            let divisor = u64::from(a[2]) | u64::from(a[3]) << 32;
+            (dividend / divisor).into_ret()
+        });
+        e.mem.set_u32(START_TIME_0126FDA0, 0xffff_fff0);
+        e.mem.set_u32(START_TIME_0126FDA0 + 4, 1);
+        e.call_log = Some(vec![]);
+        // (0x2_0000_0000 - 0x1_FFFF_FFF0) + 0x10 = 0x20 ticks: 0 ms.
+        assert_eq!(e.call(0x00ec_7d50, &args![]).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        let multiply = log.iter().find(|(a, _)| *a == ALLMUL).unwrap();
+        assert_eq!(multiply.1, vec![2, 0, 0, 1]);
+        let divide = log.iter().find(|(a, _)| *a == AULLDIV).unwrap();
+        assert_eq!(divide.1, vec![0x20, 0, 10_000, 0]);
+        // A start one second (10,000,000 ticks) earlier: 1000 ms.
+        let start = 0x2_0000_0010u64 - 10_000_000;
+        e.mem.set_u32(START_TIME_0126FDA0, start as u32);
+        e.mem.set_u32(START_TIME_0126FDA0 + 4, (start >> 32) as u32);
+        assert_eq!(e.call(0x00ec_7d50, &args![]).u32(), 1000);
     }
 }

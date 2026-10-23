@@ -216,6 +216,19 @@ pub fn fn_006ad4c0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 006ad180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scales the 2D point at `this` by `scale` in place (`thiscall`; one
+/// `float`; `RET 4`): each coordinate is `FLD`, `FMUL` by the argument and
+/// `FSTP`. Returns `this`. The engine map gives it no name.
+pub fn fn_006ad180(e: &mut Engine, this: Ptr, scale: f32) -> Ptr {
+    let base = this.addr();
+    let x = x87_mul(x87_load32(e.mem.u32(base)), x87_m32(scale.to_bits()));
+    e.mem.set_u32(base, x87_store32(x));
+    let y = x87_mul(x87_load32(e.mem.u32(base + 4)), x87_m32(scale.to_bits()));
+    e.mem.set_u32(base + 4, x87_store32(y));
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -224,6 +237,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006a_d2f0, fn_006ad2f0(Ptr, u16, u16, u8, u8)),
         entry!(0x006a_d3b0, fn_006ad3b0(f32, bool, bool) -> u32),
         entry!(0x006a_d4c0, fn_006ad4c0(Ptr) -> Ptr),
+        entry!(0x006a_d180, fn_006ad180(Ptr, f32) -> Ptr),
     ]
 }
 
@@ -359,5 +373,26 @@ mod tests {
             calls_to(&e, MEMBER_CONSTRUCT_006B36E0),
             vec![vec![this + 0x20ec], vec![this + 0x20fc]]
         );
+    }
+
+    #[test]
+    fn fn_006ad180_scales_both_coordinates() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xc);
+        e.mem.set_f32(this, 1.5);
+        e.mem.set_f32(this + 4, -3.0);
+        e.mem.set_f32(this + 8, 7.0);
+        assert_eq!(e.call(0x006a_d180, &args![this, 2.0f32]).u32(), this);
+        assert_eq!(e.mem.f32(this), 3.0);
+        assert_eq!(e.mem.f32(this + 4), -6.0);
+        assert_eq!(e.mem.f32(this + 8), 7.0);
+        // The product rounds to a float at the store.
+        e.mem.set_f32(this, f32::MAX);
+        e.call(0x006a_d180, &args![this, 2.0f32]);
+        assert_eq!(e.mem.f32(this), f32::INFINITY);
+        // A NaN coordinate stays a NaN, quieted.
+        e.mem.set_u32(this + 4, 0x7f80_0001);
+        e.call(0x006a_d180, &args![this, 2.0f32]);
+        assert_eq!(e.mem.u32(this + 4), 0x7fc0_0001);
     }
 }

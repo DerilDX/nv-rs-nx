@@ -86,9 +86,58 @@ pub fn fn_0084fda0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+/// `0084fd70` (thiscall, one word: the delete flags; `RET 4`): the object's deleting
+/// destructor (`0084fe50`, then `operator delete` when bit 0 is set).
+const OBJECT_DELETE: u32 = 0x0084_fd70;
+
+// Translated from 0084fd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): the counterpart of [`fn_0084fc70`]. Deletes the
+/// object in `011de134` (`0084fd70` with 1) when there is one, then clears the global.
+pub fn fn_0084fd30(e: &mut Engine) {
+    let object = e.mem.u32(SAVE_LOAD_OBJECT);
+    if object != 0 {
+        e.call(OBJECT_DELETE, &args![object, 1u32]);
+    }
+    e.mem.set_u32(SAVE_LOAD_OBJECT, 0);
+}
+
+/// The base path (`004dc110`, no arguments: answers `01202fa0`).
+const BASE_PATH: u32 = 0x004d_c110;
+/// `strcpy_s` and `strcat_s` wrappers (`00406d30`, `00406d50`; cdecl: buffer, size, text).
+const STRING_COPY: u32 = 0x0040_6d30;
+const STRING_APPEND: u32 = 0x0040_6d50;
+/// The `sLocalSavePath:General` setting (`011c3f74`; its initializer passes that name and
+/// `"Saves\"`), its string through `00403df0` (thiscall, no stack words) and `00464f30`
+/// (cdecl, two words: answers the first).
+const LOCAL_SAVE_PATH_SETTING: u32 = 0x011c_3f74;
+const SETTING_STRING: u32 = 0x0040_3df0;
+const FIRST_ARGUMENT: u32 = 0x0046_4f30;
+/// `CreateDirectoryA` (KERNEL32 import slot; stdcall: path, security attributes).
+const CREATE_DIRECTORY: u32 = 0x00fd_f0b8;
+/// The size of the path buffer (`MAX_PATH`).
+const PATH_SIZE: u32 = 0x104;
+
+// Translated from 0084ff30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, one word: the path buffer; `RET 4`; `this` is not
+/// read): writes the base path (`004dc110`) into `path` with `strcpy_s`, appends the
+/// `sLocalSavePath:General` string with `strcat_s` (both with size 0x104), and creates that
+/// directory (`CreateDirectoryA(path, null)`).
+pub fn fn_0084ff30(e: &mut Engine, _this: Ptr, path: u32) {
+    let base = e.call(BASE_PATH, &args![]).u32();
+    e.call(STRING_COPY, &args![path, PATH_SIZE, base]);
+    let text = e
+        .call(SETTING_STRING, &args![LOCAL_SAVE_PATH_SETTING])
+        .u32();
+    let text = e.call(FIRST_ARGUMENT, &args![text, 0u32]).u32();
+    e.call(STRING_APPEND, &args![path, PATH_SIZE, text]);
+    e.call(CREATE_DIRECTORY, &args![path, 0u32]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0084_fd30, fn_0084fd30()),
+        entry!(0x0084_ff30, fn_0084ff30(Ptr, u32)),
         entry!(0x0084fc70, fn_0084fc70()),
         entry!(0x0084fda0, fn_0084fda0(Ptr) -> Ptr),
     ]
@@ -207,5 +256,55 @@ mod tests {
         assert_eq!(e.mem.u16(this + 0x12), 0xcccc);
         assert_eq!(e.mem.u8(this + 0x27), 0xcc);
         assert_eq!(calls(&log, STRING_CTOR), [vec![this + 0x30]]);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_0084fd30_deletes_and_clears_the_object() {
+        let mut e = Engine::new();
+        e.map(0x011d_e000, 0x1000);
+        e.register(OBJECT_DELETE, |_, _| Ret::default());
+        e.mem.set_u32(SAVE_LOAD_OBJECT, 0x5000);
+        e.call_log = Some(vec![]);
+        e.call(0x0084_fd30, &args![]);
+        let log = e.call_log.take().unwrap();
+        let deletes: Vec<_> = log.iter().filter(|(a, _)| *a == OBJECT_DELETE).collect();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].1, vec![0x5000, 1]);
+        assert_eq!(e.mem.u32(SAVE_LOAD_OBJECT), 0);
+        // Without an object only the clear.
+        e.call_log = Some(vec![]);
+        e.call(0x0084_fd30, &args![]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fn_0084ff30_builds_and_creates_the_save_directory() {
+        let mut e = Engine::new();
+        e.register(BASE_PATH, |_, _| 0x0120_2fa0u32.into_ret());
+        e.register(SETTING_STRING, |_, _| 0x0300_0000u32.into_ret());
+        e.register(FIRST_ARGUMENT, |_, a| a[0].into_ret());
+        for callee in [STRING_COPY, STRING_APPEND, CREATE_DIRECTORY] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.call_log = Some(vec![]);
+        e.call(0x0084_ff30, &args![0x1111u32, 0x7000u32]);
+        let log = e.call_log.take().unwrap();
+        let calls: Vec<(u32, Vec<u32>)> = log.into_iter().skip(1).collect();
+        assert_eq!(
+            calls,
+            vec![
+                (BASE_PATH, vec![]),
+                (STRING_COPY, vec![0x7000, 0x104, 0x0120_2fa0]),
+                (SETTING_STRING, vec![LOCAL_SAVE_PATH_SETTING]),
+                (FIRST_ARGUMENT, vec![0x0300_0000, 0]),
+                (STRING_APPEND, vec![0x7000, 0x104, 0x0300_0000]),
+                (CREATE_DIRECTORY, vec![0x7000, 0]),
+            ]
+        );
     }
 }

@@ -3259,10 +3259,11 @@ pub fn fn_0057b4b0(e: &mut Engine, this: Ptr) -> bool {
 }
 
 // Translated from 0057b500 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Runs `0042f2d0` on the reference's extra data list.
-pub fn fn_0057b500(e: &mut Engine, this: Ptr) {
+/// Runs `0042f2d0` on the reference's extra data list and answers its value
+/// (the exe ends on that call and leaves its `EAX`; the caller tests `AL`).
+pub fn fn_0057b500(e: &mut Engine, this: Ptr) -> bool {
     let list = extra_list_of(e, this.addr());
-    e.call(0x0042_f2d0, &args![list]);
+    e.call(0x0042_f2d0, &args![list]).bool()
 }
 
 // Translated from 0057b520 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4201,7 +4202,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0057b410, fn_0057b410(Ptr) -> bool),
         entry!(0x0057b460, fn_0057b460(Ptr) -> bool),
         entry!(0x0057b4b0, fn_0057b4b0(Ptr) -> bool),
-        entry!(0x0057b500, fn_0057b500(Ptr)),
+        entry!(0x0057b500, fn_0057b500(Ptr) -> bool),
         entry!(0x0057b520, tes_object_refr_remove_from_all_water(Ptr, u8)),
         entry!(0x0057b700, fn_0057b700(Ptr, u32)),
         entry!(0x0057b730, fn_0057b730(Ptr, u32) -> u32),
@@ -9491,5 +9492,13 @@ mod tests {
         assert!(!e.call(0x0057_c850, &args![this, 13u32, out]).bool());
         assert!(!e.call(0x0057_c850, &args![this, 2u32, out]).bool());
         assert_eq!(e.mem.u8(out), 0x77);
+    }
+
+    #[test]
+    fn fn_0057b500_answers_0042f2d0s_value() {
+        let mut e = engine3();
+        e.register(0x0042_f2d0, |_, _| true.into_ret());
+        let this = e.mem.alloc(0x100);
+        assert!(e.call(0x0057_b500, &args![this]).bool());
     }
 }

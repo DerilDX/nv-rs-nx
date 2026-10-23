@@ -1718,10 +1718,11 @@ pub fn bhk_world_object_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
 }
 
 // Translated from 0056d490 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `bhkWorldObject::ForceAdd` (Xbox PDB): calls virtual `+0x9c` of `this`
-/// with `argument`.
-pub fn bhk_world_object_force_add(e: &mut Engine, this: Ptr, argument: u32) {
-    e.vcall(this.addr(), 0x9c, &args![argument]);
+/// `bhkWorldObject::ForceAdd` (Xbox PDB; `bool` there): calls virtual `+0x9c`
+/// of `this` with `argument` and answers its value (the exe ends on that call
+/// and leaves its `EAX`).
+pub fn bhk_world_object_force_add(e: &mut Engine, this: Ptr, argument: u32) -> bool {
+    e.vcall(this.addr(), 0x9c, &args![argument]).bool()
 }
 
 // Translated from 0056d4c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2741,7 +2742,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0056d410, fn_0056d410(Ptr) -> Ptr),
         entry!(0x0056d440, fn_0056d440(Ptr) -> Ptr),
         entry!(0x0056d480, bhk_world_object_get_rtti(Ptr) -> u32),
-        entry!(0x0056d490, bhk_world_object_force_add(Ptr, u32)),
+        entry!(0x0056d490, bhk_world_object_force_add(Ptr, u32) -> bool),
         entry!(
             0x0056d4c0,
             bhk_world_object_scalar_deleting_destructor(Ptr, u32) -> Ptr
@@ -6006,5 +6007,13 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(calls_to(&log, 0x0056_ea40).len(), 1);
         assert_eq!(f32::from_bits(seen.get()), 1.5);
+    }
+
+    #[test]
+    fn bhk_world_object_force_add_answers_the_virtual() {
+        let mut e = havok_engine();
+        e.register(0x00fe_009c, |_, _| true.into_ret());
+        let this = object_with_vtable(&mut e, 0x20, &[(0x9c, 0x00fe_009c)]);
+        assert!(e.call(0x0056_d490, &args![this, 0x42u32]).bool());
     }
 }

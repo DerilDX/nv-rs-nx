@@ -2330,9 +2330,103 @@ pub fn fn_0083e110(e: &mut Engine, this: Ptr) -> bool {
     node != 0 && node_item(e, node) != 0
 }
 
+/// `TESTopic::GetMatchingInfo` (engine map, `0061a720`; `thiscall` on a topic, two words:
+/// speaker and target).
+const TOPIC_GET_MATCHING_INFO: u32 = 0x0061_a720;
+/// `00619d00` (`thiscall` on a topic, one word: an info; no engine-map name).
+const TOPIC_INFO_VALUE_00619D00: u32 = 0x0061_9d00;
+/// The `MenuTopic` deleting destructor (`00425ff0`, the map's `MenuTopic::~MenuTopic`;
+/// `thiscall`, one word: the flags).
+const MENU_TOPIC_DELETE: u32 = 0x0042_5ff0;
+/// `Menu::StartFadeIn` (engine map, `00a1db20`; `thiscall`, no stack words).
+const MENU_START_FADE_IN: u32 = 0x00a1_db20;
+/// `BSSoundHandle::Play` (engine map, `00ad8830`; `thiscall`, one word) and
+/// `BSSoundHandle::Pause` (`00ad88b0`, `thiscall`, no stack words).
+const SOUND_HANDLE_PLAY: u32 = 0x00ad_8830;
+const SOUND_HANDLE_PAUSE: u32 = 0x00ad_88b0;
+
+/// The speaker of the open dialogue menu (`pSpeaker` of the menu in `011d9510`, read again
+/// at each use as the exe does).
+fn open_menu_speaker(e: &mut Engine) -> u32 {
+    let menu: u32 = e.global(OPEN_MENU_011D9510);
+    e.get(Ptr::<DialogMenu>::new(menu), DialogMenu::pSpeaker)
+}
+
+// Translated from 007640a0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 007640a0 - the compiler's exception frame (FS:[0] chain, handler 00ef2e1b, state 0 that frees the 0x2c-byte block when the `MenuTopic` constructor throws) is not translated
+/// `DialogMenu::ServiceEnd` (engine map; `cdecl`, one word: a topic). With an open dialogue
+/// menu (`011d9510`): clears `bInServiceMenu`; with a topic, finds its info for the speaker
+/// and the player (`GetMatchingInfo`), builds a 0x2C-byte `MenuTopic` from them
+/// (`0083db00` with `00619d00(info)`, the topic, the info, the speaker and 0; null when the
+/// allocation fails), starts its responses ([`fn_0083e0c0`]), has the speaker say the
+/// current response (vtable +0x264 with 0.0, the response and 0), sets the speaker's byte
+/// +0x7C and deletes the `MenuTopic` again (`00425ff0` with 1) when there is one. Last, the
+/// menu fades in (`Menu::StartFadeIn`).
+pub fn dialog_menu_service_end(e: &mut Engine, topic: u32) {
+    let menu: u32 = e.global(OPEN_MENU_011D9510);
+    if menu == 0 {
+        return;
+    }
+    e.set(Ptr::<DialogMenu>::new(menu), DialogMenu::bInServiceMenu, 0);
+    if topic != 0 {
+        let player: u32 = e.global(PLAYER_011DEA3C);
+        let speaker = open_menu_speaker(e);
+        let info = e
+            .call(TOPIC_GET_MATCHING_INFO, &args![topic, speaker, player])
+            .u32();
+        let block = e.call(ALLOCATE, &args![0x2cu32]).u32();
+        let menu_topic = if block != 0 {
+            let speaker = open_menu_speaker(e);
+            let value = e.call(TOPIC_INFO_VALUE_00619D00, &args![topic, info]).u32();
+            e.call(
+                TOPIC_CONSTRUCT_0083DB00,
+                &args![block, value, topic, info, speaker, 0u32],
+            )
+            .u32()
+        } else {
+            0
+        };
+        fn_0083e0c0(e, Ptr::new(menu_topic));
+        let response = e.call(TOPIC_GET_CURRENT_RESPONSE, &args![menu_topic]).u32();
+        let speaker = open_menu_speaker(e);
+        e.vcall(speaker, 0x264, &args![0.0f32, response, 0u32]);
+        let speaker = open_menu_speaker(e);
+        e.mem.set_u8(speaker.wrapping_add(0x7c), 1);
+        if menu_topic != 0 {
+            e.call(MENU_TOPIC_DELETE, &args![menu_topic, 1u32]);
+        }
+    }
+    let menu: u32 = e.global(OPEN_MENU_011D9510);
+    e.call(MENU_START_FADE_IN, &args![menu]);
+}
+
+// Translated from 00764200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DialogMenu::SetPause` (engine map; `thiscall`, one word, `RET 4`). Paused and asked to
+/// go on: plays the speech again (`BSSoundHandle::Play(0)` on `hSpeechFile`), clears
+/// `bPaused` and restores `eDialogState` from `ePausedState`. Not paused and asked to
+/// pause: pauses the speech, sets `bPaused`, keeps `eDialogState` in `ePausedState` and
+/// sets the state to 2. Otherwise nothing.
+pub fn dialog_menu_set_pause(e: &mut Engine, this: Ptr<DialogMenu>, pause: u8) {
+    let speech = this.addr() + 0x74;
+    if e.get(this, DialogMenu::bPaused) != 0 && pause == 0 {
+        e.call(SOUND_HANDLE_PLAY, &args![speech, 0u32]);
+        e.set(this, DialogMenu::bPaused, 0);
+        let state = e.get(this, DialogMenu::ePausedState);
+        e.set(this, DialogMenu::eDialogState, state);
+    } else if e.get(this, DialogMenu::bPaused) == 0 && pause != 0 {
+        e.call(SOUND_HANDLE_PAUSE, &args![speech]);
+        e.set(this, DialogMenu::bPaused, 1);
+        let state = e.get(this, DialogMenu::eDialogState);
+        e.set(this, DialogMenu::ePausedState, state);
+        e.set(this, DialogMenu::eDialogState, 2);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0076_40a0, dialog_menu_service_end(u32)),
+        entry!(0x0076_4200, dialog_menu_set_pause(Ptr<DialogMenu>, u8)),
         entry!(0x0076_18f0, dialog_menu_get_class(Ptr<DialogMenu>) -> u32),
         entry!(
             0x0076_1900,
@@ -3755,5 +3849,132 @@ mod dialog_menu_tests {
             [0x200, ONE_STRING_FORMAT, SETTING_011D27FC + 1]
         );
         assert_eq!(e.get(this, DialogMenu::eDialogState), 3);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    /// The speaker's say slot (vtable +0x264) as the tests place it.
+    const SAY_SLOT: u32 = 0x0090_0264;
+
+    fn calls(log: &[(u32, Vec<u32>)], address: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == address)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// An open menu with a speaker; `block` is what the 0x2C-byte allocation answers.
+    fn service_rig(block: u32) -> (Engine, Ptr<DialogMenu>, u32) {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        let menu: Ptr<DialogMenu> = e.new_object();
+        e.set(menu, DialogMenu::bInServiceMenu, 1);
+        let speaker = e.mem.alloc(0x80);
+        let vtable = e.mem.alloc(0x268);
+        e.mem.set_u32(vtable + 0x264, SAY_SLOT);
+        e.mem.set_u32(speaker, vtable);
+        e.set(menu, DialogMenu::pSpeaker, speaker);
+        e.set_global(OPEN_MENU_011D9510, menu.addr());
+        e.set_global(PLAYER_011DEA3C, 0x0c10_0000u32);
+        e.register(TOPIC_GET_MATCHING_INFO, |_, _| 0x0c20_0000u32.into_ret());
+        e.register_double(ALLOCATE, move |_, a| {
+            assert_eq!(a[0], 0x2c);
+            block.into_ret()
+        });
+        e.register(TOPIC_INFO_VALUE_00619D00, |_, _| 0x55u32.into_ret());
+        e.register(TOPIC_CONSTRUCT_0083DB00, |_, a| a[0].into_ret());
+        // The topic's embedded list node has no item.
+        e.register(NODE_SELF, |_, a| a[0].into_ret());
+        e.register(TOPIC_GET_CURRENT_RESPONSE, |_, _| 0x0c30_0000u32.into_ret());
+        for callee in [SAY_SLOT, MENU_TOPIC_DELETE, MENU_START_FADE_IN] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        (e, menu, speaker)
+    }
+
+    #[test]
+    fn service_end_says_the_matching_response() {
+        let block = 0x0d00_0000;
+        let (mut e, menu, speaker) = service_rig(block);
+        e.map(block, 0x1000);
+        e.call_log = Some(vec![]);
+        e.call(0x0076_40a0, &args![0x0c40_0000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.get(menu, DialogMenu::bInServiceMenu), 0);
+        assert_eq!(
+            calls(&log, TOPIC_GET_MATCHING_INFO),
+            vec![vec![0x0c40_0000, speaker, 0x0c10_0000]]
+        );
+        assert_eq!(
+            calls(&log, TOPIC_INFO_VALUE_00619D00),
+            vec![vec![0x0c40_0000, 0x0c20_0000]]
+        );
+        assert_eq!(
+            calls(&log, TOPIC_CONSTRUCT_0083DB00),
+            vec![vec![block, 0x55, 0x0c40_0000, 0x0c20_0000, speaker, 0]]
+        );
+        // The response iteration starts at the topic's embedded list.
+        assert_eq!(e.mem.u32(block + 0x20), block + 0xc);
+        assert_eq!(
+            calls(&log, SAY_SLOT),
+            vec![vec![speaker, 0.0f32.to_bits(), 0x0c30_0000, 0]]
+        );
+        assert_eq!(e.mem.u8(speaker + 0x7c), 1);
+        assert_eq!(calls(&log, MENU_TOPIC_DELETE), vec![vec![block, 1]]);
+        assert_eq!(calls(&log, MENU_START_FADE_IN), vec![vec![menu.addr()]]);
+    }
+
+    #[test]
+    fn service_end_without_a_topic_only_fades_in() {
+        let (mut e, menu, _) = service_rig(0);
+        e.call_log = Some(vec![]);
+        e.call(0x0076_40a0, &args![0u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.get(menu, DialogMenu::bInServiceMenu), 0);
+        assert!(calls(&log, TOPIC_GET_MATCHING_INFO).is_empty());
+        assert_eq!(calls(&log, MENU_START_FADE_IN), vec![vec![menu.addr()]]);
+    }
+
+    #[test]
+    fn service_end_without_an_open_menu_does_nothing() {
+        let (mut e, _, _) = service_rig(0);
+        e.set_global(OPEN_MENU_011D9510, 0u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0076_40a0, &args![0x0c40_0000u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn set_pause_pauses_and_resumes() {
+        let mut e = Engine::new();
+        e.register(SOUND_HANDLE_PLAY, |_, _| Ret::default());
+        e.register(SOUND_HANDLE_PAUSE, |_, _| Ret::default());
+        let menu: Ptr<DialogMenu> = e.new_object();
+        e.set(menu, DialogMenu::eDialogState, 5);
+        e.call_log = Some(vec![]);
+        // Not paused, go on: nothing.
+        e.call(0x0076_4200, &args![menu, 0u32]);
+        // Pause (only the low byte of the word counts).
+        e.call(0x0076_4200, &args![menu, 0x100u32]);
+        assert_eq!(e.get(menu, DialogMenu::bPaused), 0);
+        e.call(0x0076_4200, &args![menu, 1u32]);
+        assert_eq!(e.get(menu, DialogMenu::bPaused), 1);
+        assert_eq!(e.get(menu, DialogMenu::ePausedState), 5);
+        assert_eq!(e.get(menu, DialogMenu::eDialogState), 2);
+        // Paused, pause again: nothing.
+        e.call(0x0076_4200, &args![menu, 1u32]);
+        assert_eq!(e.get(menu, DialogMenu::ePausedState), 5);
+        // Resume.
+        e.call(0x0076_4200, &args![menu, 0u32]);
+        assert_eq!(e.get(menu, DialogMenu::bPaused), 0);
+        assert_eq!(e.get(menu, DialogMenu::eDialogState), 5);
+        let log = e.call_log.take().unwrap();
+        let speech = menu.addr() + 0x74;
+        assert_eq!(calls(&log, SOUND_HANDLE_PAUSE), vec![vec![speech]]);
+        assert_eq!(calls(&log, SOUND_HANDLE_PLAY), vec![vec![speech, 0]]);
     }
 }

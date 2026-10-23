@@ -14,9 +14,22 @@ pub fn fn_004564f0(e: &mut Engine, first: Ptr, second: Ptr, count: u32) -> i32 {
     e.call(STRNICMP, &args![first, second, count]).i32()
 }
 
+/// The word `00456510` answers (`011f4500`; read by the map's `TestAllCells`,
+/// `DumpTextures`, `OutputMemStats` and `DumpTexturePalette` through it).
+const VALUE_011F4500: u32 = 0x011f_4500;
+
+// Translated from 00456510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): the word at `011f4500`.
+pub fn fn_00456510(e: &mut Engine) -> u32 {
+    e.global(VALUE_011F4500)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x0045_64f0, fn_004564f0(Ptr, Ptr, u32) -> i32)]
+    vec![
+        entry!(0x0045_64f0, fn_004564f0(Ptr, Ptr, u32) -> i32),
+        entry!(0x0045_6510, fn_00456510() -> u32),
+    ]
 }
 
 #[cfg(test)]
@@ -37,5 +50,18 @@ mod tests {
             .filter(|(a, _)| *a == STRNICMP)
             .collect();
         assert_eq!(calls, vec![(STRNICMP, vec![0x100, 0x200, 5])]);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00456510_answers_the_global() {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        e.set_global(VALUE_011F4500, 0x0bad_f00du32);
+        assert_eq!(e.call(0x0045_6510, &args![]).u32(), 0x0bad_f00d);
     }
 }

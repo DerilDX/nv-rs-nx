@@ -343,15 +343,16 @@ pub fn bhk_transform_shape_link_object(e: &mut Engine, this: Ptr, stream: u32) {
 }
 
 // Translated from 00c8c390 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `bhkTransformShape::RegisterStreamables` (Xbox PDB): registers the child's Havok object
-/// through its virtual slot `0x54` with the stream, when there is one; then
-/// `NiObject::RegisterStreamables` (through `00aa0ad0`).
-pub fn bhk_transform_shape_register_streamables(e: &mut Engine, this: Ptr, stream: u32) {
+/// `bhkTransformShape::RegisterStreamables` (Xbox PDB; a `bool` there): registers the
+/// child's Havok object through its virtual slot `0x54` with the stream, when there is one;
+/// then `NiObject::RegisterStreamables` (through `00aa0ad0`), whose answer it answers (the
+/// exe ends on that call and leaves its `EAX`).
+pub fn bhk_transform_shape_register_streamables(e: &mut Engine, this: Ptr, stream: u32) -> bool {
     let child = child_object(e, this);
     if child != 0 {
         e.vcall(child, 0x54, &args![stream]);
     }
-    e.call(REGISTER_STREAMABLES, &args![this, stream]);
+    e.call(REGISTER_STREAMABLES, &args![this, stream]).bool()
 }
 
 // Translated from 00c8c3d0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -615,7 +616,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c8_c330, bhk_transform_shape_link_object(Ptr, u32)),
         entry!(
             0x00c8_c390,
-            bhk_transform_shape_register_streamables(Ptr, u32)
+            bhk_transform_shape_register_streamables(Ptr, u32) -> bool
         ),
         entry!(0x00c8_c3d0, bhk_transform_shape_can_share(Ptr, u32) -> bool),
         entry!(0x00c8_c410, bhk_transform_shape_copy_cinfo(Ptr, u32)),
@@ -1492,5 +1493,15 @@ mod movement_tests {
         e.call(0x00c8_cb20, &args![this, list]);
         assert_eq!(calls_to(&e, MATRIX_TO_ROTATION)[0][1], DEFAULT_TRANSFORM);
         assert!(calls_to(&e, 0x0900_01a0).is_empty());
+    }
+
+    #[test]
+    fn register_streamables_answers_the_base_registration() {
+        let mut e = Engine::new();
+        e.register(REGISTER_STREAMABLES, |_, _| true.into_ret());
+        let this = e.mem.alloc(0x40);
+        assert!(e.call(0x00c8c390, &args![this, 0x5000u32]).bool());
+        e.register(REGISTER_STREAMABLES, |_, _| false.into_ret());
+        assert!(!e.call(0x00c8c390, &args![this, 0x5000u32]).bool());
     }
 }

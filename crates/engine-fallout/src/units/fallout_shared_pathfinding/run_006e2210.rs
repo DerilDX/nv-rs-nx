@@ -76,6 +76,65 @@ pub fn fn_006e2350(e: &mut Engine, this: Ptr, buffer: u32) {
     e.vcall(base + 4, 0, &args![buffer]);
 }
 
+/// `PathingLocation::PathingLocation` (engine map, `006dcbb0`; `thiscall`).
+const PATHING_LOCATION_DEFAULT: u32 = 0x006d_cbb0;
+/// `006815c0` (`thiscall`): returns `this` (the point's trivial
+/// constructor).
+const SELF_006815C0: u32 = 0x0068_15c0;
+/// `00864980` (`thiscall` on the load buffer, `RET 8`: destination, size):
+/// reads bytes from the buffer.
+const LOAD_BYTES: u32 = 0x0086_4980;
+/// `BGSLoadGameBuffer::LoadFormID` (engine map, `008648a0`; `thiscall`, no
+/// stack words).
+const LOAD_FORM_ID: u32 = 0x0086_48a0;
+/// `004839c0` (cdecl: a form id): the form.
+const LOOKUP_FORM_004839C0: u32 = 0x0048_39c0;
+/// `__RTDynamicCast` (`00ec43fb`, cdecl: object, 0, source type, target
+/// type, 0).
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// The RTTI type descriptors of `TESForm` (`01183028`) and `TESObjectREFR`
+/// (`011841cc`).
+const TES_FORM_TYPE: u32 = 0x0118_3028;
+const TES_OBJECT_REFR_TYPE: u32 = 0x0118_41cc;
+
+// Translated from 006e2210 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006e2210 - the exception-unwinding frame (FS:[0]) is not translated.
+/// The default constructor (`thiscall`, plain `RET`; no map name): the
+/// pathing location at `+4` (`PathingLocation::PathingLocation`), the point
+/// at `+0x2c` (`006815c0`), then the flags word at `+0` and the reference
+/// at `+0x38` cleared. Returns `this`.
+pub fn fn_006e2210(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(PATHING_LOCATION_DEFAULT, &args![base + 4]);
+    e.call(SELF_006815C0, &args![base + 0x2c]);
+    e.mem.set_u32(base, 0);
+    e.mem.set_u32(base + 0x38, 0);
+    this
+}
+
+// Translated from 006e23b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads the object from `buffer` (`thiscall`; one word; `RET 4`; no map
+/// name), the counterpart of [`fn_006e2350`]: the flags word (4 bytes),
+/// the point at `+0x2c` (12 bytes), a form id (`LoadFormID`) whose form
+/// (`004839c0`) is cast to `TESObjectREFR` (`__RTDynamicCast` from
+/// `TESForm`) into `+0x38`, then the pathing location at `+4` loads itself
+/// through its vtable slot 4.
+pub fn fn_006e23b0(e: &mut Engine, this: Ptr, buffer: u32) {
+    let base = this.addr();
+    e.call(LOAD_BYTES, &args![buffer, base, 4u32]);
+    e.call(LOAD_BYTES, &args![buffer, base + 0x2c, 0xcu32]);
+    let id = e.call(LOAD_FORM_ID, &args![buffer]).u32();
+    let form = e.call(LOOKUP_FORM_004839C0, &args![id]).u32();
+    let reference = e
+        .call(
+            RT_DYNAMIC_CAST,
+            &args![form, 0u32, TES_FORM_TYPE, TES_OBJECT_REFR_TYPE, 0u32],
+        )
+        .u32();
+    e.mem.set_u32(base + 0x38, reference);
+    e.vcall(base + 4, 4, &args![buffer]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -84,6 +143,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006e_22f0, fn_006e22f0(Ptr, u32) -> bool),
         entry!(0x006e_2330, fn_006e2330(Ptr) -> bool),
         entry!(0x006e_2350, fn_006e2350(Ptr, u32)),
+        entry!(0x006e_2210, fn_006e2210(Ptr) -> Ptr),
+        entry!(0x006e_23b0, fn_006e23b0(Ptr, u32)),
     ]
 }
 
@@ -185,5 +246,65 @@ mod b040_tests {
                 (0x7b00_0000, vec![this + 4, 0x9900]),
             ]
         );
+    }
+
+    fn others(e: &mut Engine, addr: u32) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .take()
+            .unwrap()
+            .into_iter()
+            .filter(|(a, _)| *a != addr)
+            .collect()
+    }
+
+    #[test]
+    fn fn_006e2210_constructs_the_members_and_clears() {
+        let mut e = Engine::new();
+        e.register(PATHING_LOCATION_DEFAULT, |_, a| a[0].into_ret());
+        e.register(SELF_006815C0, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(0x3c);
+        e.mem.set_u32(this, 7);
+        e.mem.set_u32(this + 0x38, 8);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006e_2210, &args![this]).u32(), this);
+        assert_eq!(
+            others(&mut e, 0x006e_2210),
+            vec![
+                (PATHING_LOCATION_DEFAULT, vec![this + 4]),
+                (SELF_006815C0, vec![this + 0x2c]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this), 0);
+        assert_eq!(e.mem.u32(this + 0x38), 0);
+    }
+
+    #[test]
+    fn fn_006e23b0_loads_the_fields_and_the_reference() {
+        let mut e = Engine::new();
+        e.register(LOAD_BYTES, |_, _| Ret::default());
+        e.register(LOAD_FORM_ID, |_, _| 0x1234u32.into_ret());
+        e.register(LOOKUP_FORM_004839C0, |_, a| (a[0] + 0x10).into_ret());
+        e.register(RT_DYNAMIC_CAST, |_, a| (a[0] + 0x20).into_ret());
+        e.register(0x0f00_0004, |_, _| Ret::default());
+        e.put_vtable(0x0f00_1000, &[0, 0x0f00_0004]);
+        let this = e.mem.alloc(0x3c);
+        e.mem.set_u32(this + 4, 0x0f00_1000);
+        e.call_log = Some(vec![]);
+        e.call(0x006e_23b0, &args![this, 0x7000u32]);
+        assert_eq!(
+            others(&mut e, 0x006e_23b0),
+            vec![
+                (LOAD_BYTES, vec![0x7000, this, 4]),
+                (LOAD_BYTES, vec![0x7000, this + 0x2c, 0xc]),
+                (LOAD_FORM_ID, vec![0x7000]),
+                (LOOKUP_FORM_004839C0, vec![0x1234]),
+                (
+                    RT_DYNAMIC_CAST,
+                    vec![0x1244, 0, TES_FORM_TYPE, TES_OBJECT_REFR_TYPE, 0]
+                ),
+                (0x0f00_0004, vec![this + 4, 0x7000]),
+            ]
+        );
+        assert_eq!(e.mem.u32(this + 0x38), 0x1264);
     }
 }

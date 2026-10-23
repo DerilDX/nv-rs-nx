@@ -738,9 +738,33 @@ fn store_light_state(e: &mut Engine, this: Ptr<FOPipboyManager>, third_person: u
     }
 }
 
+// Translated from 007f7f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FOPipboyManager::ResetColors` (engine map; `thiscall`, no stack words): builds a zero
+/// `NiColorA` on the stack (`00414430` with four `0.0`), and when
+/// `SystemColorManager::GetColor(4, &color)` answers true, copies it with `007f7fe0` and
+/// `007f7fb0` and runs `InitLight`.
+pub fn fo_pipboy_manager_reset_colors(e: &mut Engine, this: Ptr<FOPipboyManager>) {
+    e.with_stack(0x10, |e, color| {
+        e.call(
+            COLOR_CONSTRUCT,
+            &args![color, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
+        );
+        let colors = e.call(SYSTEM_COLORS, &args![]).u32();
+        if e.call(SYSTEM_COLOR, &args![colors, 4u32, color]).bool() {
+            fn_007f7fe0(e, this, color.addr());
+            fn_007f7fb0(e, this, color.addr());
+            fo_pipboy_manager_init_light(e, this);
+        }
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x007f_7f40,
+            fo_pipboy_manager_reset_colors(Ptr<FOPipboyManager>)
+        ),
         entry!(0x007f_a200, fn_007fa200(Ptr)),
         entry!(0x007f_7fb0, fn_007f7fb0(Ptr<FOPipboyManager>, u32)),
         entry!(0x007f_7fe0, fn_007f7fe0(Ptr<FOPipboyManager>, u32)),
@@ -1326,5 +1350,65 @@ mod b070_tests {
         );
         assert_eq!(e.get(this, FOPipboyManager::bDoScanlines), 1);
         assert_eq!(calls_to(&e, SET_FLAG_00810530), vec![vec![me_addr, 1]]);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    fn reset_engine(found: u32) -> Engine {
+        let mut e = Engine::new();
+        e.register(COLOR_CONSTRUCT, |e, a| {
+            for i in 0..4 {
+                e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+            }
+            Ret::default()
+        });
+        e.register(SYSTEM_COLORS, |_, _| 0x0c00_0000u32.into_ret());
+        e.register_double(SYSTEM_COLOR, move |e, a| {
+            e.mem.set_f32(a[2], 0.25);
+            e.mem.set_f32(a[2] + 4, 0.5);
+            e.mem.set_f32(a[2] + 8, 0.75);
+            e.mem.set_f32(a[2] + 12, 1.0);
+            found.into_ret()
+        });
+        // `InitLight` stops at once without a light.
+        e.register(RENDERED_MENU_CREATE_LIGHT, |_, _| Ret::default());
+        e.register(MENU_LIGHT, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn reset_colors_copies_system_colour_4_and_inits_the_light() {
+        let mut e = reset_engine(0x1234_5601);
+        let this = e.new_object::<FOPipboyManager>();
+        e.call_log = Some(vec![]);
+        e.call(0x007f_7f40, &args![this]);
+        let log = e.call_log.take().unwrap();
+        let construct = log.iter().find(|(a, _)| *a == COLOR_CONSTRUCT).unwrap();
+        assert_eq!(&construct.1[1..], &[0, 0, 0, 0]);
+        let query = log.iter().find(|(a, _)| *a == SYSTEM_COLOR).unwrap();
+        assert_eq!(query.1[..2], [0x0c00_0000, 4]);
+        assert_eq!(query.1[2], construct.1[0]);
+        for base in [0xa8u32, 0xc0] {
+            let got: Vec<f32> = (0..4)
+                .map(|i| e.mem.f32(this.addr() + base + 4 * i))
+                .collect();
+            assert_eq!(got, vec![0.25, 0.5, 0.75, 1.0]);
+        }
+        assert_eq!(log.iter().filter(|(a, _)| *a == MENU_LIGHT).count(), 1);
+    }
+
+    #[test]
+    fn reset_colors_without_the_colour_does_nothing_more() {
+        let mut e = reset_engine(0x1234_5600);
+        let this = e.new_object::<FOPipboyManager>();
+        e.call_log = Some(vec![]);
+        e.call(0x007f_7f40, &args![this]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.f32(this.addr() + 0xa8), 0.0);
+        assert_eq!(e.mem.f32(this.addr() + 0xc0), 0.0);
+        assert!(log.iter().all(|(a, _)| *a != MENU_LIGHT));
     }
 }

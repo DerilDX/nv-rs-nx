@@ -5865,18 +5865,20 @@ pub fn bs_simple_array_combat_target_allocate(e: &mut Engine, _this: Ptr, count:
 
 // Translated from 0098efd0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSSimpleArray<CombatTarget, 1024>::_Reallocate` (Xbox PDB): calls the
-/// reallocation primitive `0042f5d0(buffer, count * 0x68)`. `this` is not
+/// reallocation primitive `0042f5d0(buffer, count * 0x68)` and answers the
+/// new buffer (the exe ends on that call and leaves its `EAX`). `this` is not
 /// read.
 pub fn bs_simple_array_combat_target_reallocate(
     e: &mut Engine,
     _this: Ptr,
     buffer: u32,
     count: u32,
-) {
+) -> u32 {
     e.call(
         ARRAY_REALLOC_BYTES,
         &args![buffer, count.wrapping_mul(0x68)],
-    );
+    )
+    .u32()
 }
 
 // Translated from 0098eff0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5930,12 +5932,14 @@ pub fn fn_0098f1f0(e: &mut Engine, this: Ptr<BSSimpleArray>, index: u32, count: 
 
 // Translated from 0098f280 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSSimpleArray<CombatMember, 1024>::_Reallocate`: calls the reallocation
-/// primitive `0042f5d0(buffer, count * 0x14)`. `this` is not read.
-pub fn fn_0098f280(e: &mut Engine, _this: Ptr, buffer: u32, count: u32) {
+/// primitive `0042f5d0(buffer, count * 0x14)` and answers the new buffer (the
+/// exe ends on that call and leaves its `EAX`). `this` is not read.
+pub fn fn_0098f280(e: &mut Engine, _this: Ptr, buffer: u32, count: u32) -> u32 {
     e.call(
         ARRAY_REALLOC_BYTES,
         &args![buffer, count.wrapping_mul(0x14)],
-    );
+    )
+    .u32()
 }
 
 // Translated from 0098f2a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6477,7 +6481,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(
             0x0098efd0,
-            bs_simple_array_combat_target_reallocate(Ptr, u32, u32)
+            bs_simple_array_combat_target_reallocate(Ptr, u32, u32) -> u32
         ),
         entry!(
             0x0098eff0,
@@ -6490,7 +6494,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_0098f180(Ptr<BSSimpleArray>, Ptr<CombatMember>) -> u32
         ),
         entry!(0x0098f1f0, fn_0098f1f0(Ptr<BSSimpleArray>, u32, u32)),
-        entry!(0x0098f280, fn_0098f280(Ptr, u32, u32)),
+        entry!(0x0098f280, fn_0098f280(Ptr, u32, u32) -> u32),
         entry!(
             0x0098f2a0,
             fn_0098f2a0(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
@@ -12168,5 +12172,16 @@ mod tests {
         assert!(calls(&e, OPERATOR_NEW).is_empty());
         assert!(calls(&e, LOS_GRID_MAP_LOAD).is_empty());
         assert!(e.get(group, CombatGroup::bUpdateSearchDebugGeometry));
+    }
+
+    #[test]
+    fn target_and_member_reallocations_answer_the_new_buffer() {
+        let mut e = engine();
+        e.register(ARRAY_REALLOC_BYTES, |_, a| (a[0] + a[1]).into_ret());
+        assert_eq!(
+            bs_simple_array_combat_target_reallocate(&mut e, Ptr::NULL, 0x5000, 2),
+            0x50d0
+        );
+        assert_eq!(fn_0098f280(&mut e, Ptr::NULL, 0x6000, 2), 0x6028);
     }
 }

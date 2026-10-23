@@ -232,8 +232,10 @@ pub fn fn_0060c3c0(
 /// last, destination, a fourth word). Asks the category of the first and
 /// destination iterators (`0065e750` with their addresses), unwraps last and
 /// first (`0065fe40` with their addresses, last first) and copies through
-/// `0060c3c0(first, last, destination, fourth, category, 0)`.
-pub fn fn_0060c320(e: &mut Engine, first: u32, last: u32, destination: u32, fourth: u32) {
+/// `0060c3c0(first, last, destination, fourth, category, 0)`, answering its
+/// value (the destination past the copy: the exe ends on that call and leaves
+/// its `EAX`).
+pub fn fn_0060c320(e: &mut Engine, first: u32, last: u32, destination: u32, fourth: u32) -> u32 {
     e.with_stack(0x10, |e, frame| {
         // The argument slots the exe passes by address: first (+0), last
         // (+4), destination (+8).
@@ -255,13 +257,14 @@ pub fn fn_0060c320(e: &mut Engine, first: u32, last: u32, destination: u32, four
             fourth,
             u32::from(category),
             0,
-        );
-    });
+        )
+    })
 }
 
 // Translated from 0060c270 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: forwards its first four words to `0060c320`
-/// (`cdecl`; its callers push six words, the last two not read).
+/// (`cdecl`; its callers push six words, the last two not read) and answers
+/// its value (the exe ends on that call and leaves its `EAX`).
 #[allow(clippy::too_many_arguments)] // the callers' six stack words
 pub fn fn_0060c270(
     e: &mut Engine,
@@ -271,8 +274,8 @@ pub fn fn_0060c270(
     fourth: u32,
     _unused_4: u32,
     _unused_5: u32,
-) {
-    fn_0060c320(e, first, last, destination, fourth);
+) -> u32 {
+    fn_0060c320(e, first, last, destination, fourth)
 }
 
 // Translated from 0060c410 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -604,8 +607,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0060_c4a0, fn_0060c4a0(Ptr, u32)),
         entry!(0x0060_bef0, fn_0060bef0(Ptr<crate::types::NiTArray>, u32)),
         entry!(0x0060_c3c0, fn_0060c3c0(u32, u32, u32, u32, u32, u32) -> u32),
-        entry!(0x0060_c320, fn_0060c320(u32, u32, u32, u32)),
-        entry!(0x0060_c270, fn_0060c270(u32, u32, u32, u32, u32, u32)),
+        entry!(0x0060_c320, fn_0060c320(u32, u32, u32, u32) -> u32),
+        entry!(0x0060_c270, fn_0060c270(u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x0060_c410, fn_0060c410(u32, u32, u32, u32)),
         entry!(0x0060_c380, fn_0060c380(u32, u32, u32, u32, u32)),
         entry!(0x0060_c2e0, fn_0060c2e0(u32, u32, u32)),
@@ -1296,5 +1299,20 @@ mod b008_tests {
         e.call(0x0060_c120, &args![array, 1u32, empty]);
         assert_eq!(e.mem.u16(array + 0xc), 1);
         assert!(calls(&mut e).iter().all(|c| c.0 != NI_POINTER_FROM_RAW));
+    }
+
+    #[test]
+    fn fn_0060c270_answers_the_destination_past_the_copy() {
+        let mut e = Engine::new();
+        e.register(MEMMOVE_S, |_, _| Ret::default());
+        e.register(ITERATOR_CATEGORY_0065E750, |_, _| 7u32.into_ret());
+        e.register(ITERATOR_BASE_0065FE40, |e, a| e.mem.u32(a[0]).into_ret());
+        let end = e.call(
+            0x0060_c270,
+            &args![0x100u32, 0x108u32, 0x300u32, 9u32, 0u32, 0u32],
+        );
+        assert_eq!(end.u32(), 0x308);
+        let end = e.call(0x0060_c320, &args![0x100u32, 0x10cu32, 0x400u32, 9u32]);
+        assert_eq!(end.u32(), 0x40c);
     }
 }

@@ -106,9 +106,41 @@ pub fn fn_00619c50(e: &mut Engine, this: Ptr, info: u32) -> u32 {
     }
 }
 
+// Translated from 00619bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall` on a topic, two words: a quest and a flag; `RET 8`;
+/// the answer in `AL`): false for a null quest. Otherwise walks the topic's per-quest
+/// entries (`005d8a70`'s list, stopping at a null node or a node without an item) to the
+/// first whose first word is `quest`, and answers true when its info array (`00717e50`)
+/// has a count (`0084e3a0`) above 0 or `flag` is clear, false when it is empty and `flag`
+/// is set. False when no entry is the quest's.
+pub fn fn_00619bc0(e: &mut Engine, this: Ptr, quest: u32, flag: u8) -> bool {
+    if quest == 0 {
+        return false;
+    }
+    let mut node = e.call(TOPIC_QUEST_LIST, &args![this]).u32();
+    loop {
+        if node == 0 {
+            return false;
+        }
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        if e.mem.u32(item) == 0 {
+            return false;
+        }
+        let item = e.call(NODE_ITEM, &args![node]).u32();
+        let entry = e.mem.u32(item);
+        node = e.call(NODE_NEXT, &args![node]).u32();
+        if e.mem.u32(entry) == quest {
+            let infos = e.call(PLUS_FOUR, &args![entry]).u32();
+            let count = e.call(WORD_AT_0XC, &args![infos]).u32();
+            return count > 0 || flag == 0;
+        }
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0061_9bc0, fn_00619bc0(Ptr, u32, u8) -> bool),
         entry!(0x0061_9d00, fn_00619d00(Ptr, u32) -> u32),
         entry!(0x0061_9df0, fn_00619df0(Ptr) -> bool),
         entry!(0x0061_9c50, fn_00619c50(Ptr, u32) -> u32),
@@ -235,5 +267,49 @@ mod tests {
         assert_eq!(e.call(0x0061_9c50, &args![t, 0u32]).u32(), held);
         let log = e.call_log.take().unwrap();
         assert!(log.iter().all(|call| call.0 != GET_TOPIC));
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    /// A topic whose per-quest list (at +0x2C, two-word nodes: item, next) holds entries
+    /// for the quests 0x100 (two infos) and 0x200 (none).
+    fn topic_engine() -> (Engine, u32) {
+        let mut e = Engine::new();
+        e.register(TOPIC_QUEST_LIST, |_, a| (a[0] + 0x2c).into_ret());
+        e.register(NODE_ITEM, |_, a| a[0].into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(PLUS_FOUR, |_, a| (a[0] + 4).into_ret());
+        e.register(WORD_AT_0XC, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        let topic = e.mem.alloc(0x34);
+        let second_node = e.mem.alloc(8);
+        let first = e.mem.alloc(0x14);
+        let second = e.mem.alloc(0x14);
+        e.mem.set_u32(first, 0x100);
+        e.mem.set_u32(first + 4 + 0xc, 2);
+        e.mem.set_u32(second, 0x200);
+        e.mem.set_u32(topic + 0x2c, first);
+        e.mem.set_u32(topic + 0x30, second_node);
+        e.mem.set_u32(second_node, second);
+        (e, topic)
+    }
+
+    #[test]
+    fn fn_00619bc0_answers_by_the_quest_entry() {
+        let (mut e, topic) = topic_engine();
+        let ask = |e: &mut Engine, quest: u32, flag: u32| {
+            e.call(0x0061_9bc0, &args![topic, quest, flag]).bool()
+        };
+        assert!(!ask(&mut e, 0, 0));
+        // The quest with infos: true whatever the flag.
+        assert!(ask(&mut e, 0x100, 1));
+        assert!(ask(&mut e, 0x100, 0));
+        // The empty entry: true only without the flag (its low byte).
+        assert!(!ask(&mut e, 0x200, 1));
+        assert!(ask(&mut e, 0x200, 0x100));
+        // No entry for the quest: the walk ends at the null next node.
+        assert!(!ask(&mut e, 0x300, 0));
     }
 }

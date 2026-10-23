@@ -1302,9 +1302,10 @@ pub fn fn_0097fc70(e: &mut Engine, this: Ptr<CombatController>) -> i32 {
 }
 
 // Translated from 0097fd40 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Runs `00461580(3)` on `this`.
-pub fn fn_0097fd40(e: &mut Engine, this: Ptr) {
-    e.call(0x0046_1580, &args![this, 3u32]);
+/// Runs `00461580(3)` on `this` and answers its value (the exe ends on that
+/// call and leaves its `EAX`; the callers test `AL`).
+pub fn fn_0097fd40(e: &mut Engine, this: Ptr) -> bool {
+    e.call(0x0046_1580, &args![this, 3u32]).bool()
 }
 
 // Translated from 0097fd60 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2890,7 +2891,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0097fb80, fn_0097fb80(Ptr<CombatController>)),
         entry!(0x0097fc40, fn_0097fc40(Ptr, u32) -> Ptr),
         entry!(0x0097fc70, fn_0097fc70(Ptr<CombatController>) -> i32),
-        entry!(0x0097fd40, fn_0097fd40(Ptr)),
+        entry!(0x0097fd40, fn_0097fd40(Ptr) -> bool),
         entry!(0x0097fd60, fn_0097fd60(Ptr<CombatController>, u32)),
         entry!(0x0097fd80, fn_0097fd80(Ptr, u32, Ptr<NiPoint3>) -> bool),
         entry!(0x0097feb0, fn_0097feb0(Ptr, u32) -> f32),
@@ -5604,5 +5605,14 @@ mod tests {
         );
         assert_eq!(calls(&log, 0x0098_2610), vec![vec![search + 4]]);
         assert_eq!(calls(&log, OPERATOR_DELETE), vec![vec![search]]);
+    }
+
+    #[test]
+    fn forwards_00461580s_answer() {
+        let mut e = engine();
+        stub(&mut e, 0x0046_1580, 1);
+        assert!(e.call(0x0097_fd40, &args![0x88u32]).bool());
+        stub(&mut e, 0x0046_1580, 0);
+        assert!(!e.call(0x0097_fd40, &args![0x88u32]).bool());
     }
 }

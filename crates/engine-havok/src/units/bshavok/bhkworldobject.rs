@@ -282,15 +282,18 @@ pub fn bhk_world_object_link_object(e: &mut Engine, this: Ptr, stream: u32) {
 }
 
 // Translated from 00c85ac0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `bhkWorldObject::RegisterStreamables` (Xbox PDB): takes the stream. When the chain
-/// `[[[this + 8] + 0x10] + 8]` leads to an object, runs its virtual slot 0x54 on the stream;
-/// then the base `NiObject::RegisterStreamables` thunk (`00a81fe0`) on `(this, stream)`.
-pub fn bhk_world_object_register_streamables(e: &mut Engine, this: Ptr, stream: u32) {
+/// `bhkWorldObject::RegisterStreamables` (Xbox PDB; a `bool` there): takes the stream. When
+/// the chain `[[[this + 8] + 0x10] + 8]` leads to an object, runs its virtual slot 0x54 on
+/// the stream; then the base `NiObject::RegisterStreamables` thunk (`00a81fe0`) on `(this,
+/// stream)`, whose value it answers (the exe ends on that call and leaves its `EAX`, which
+/// the callers test).
+pub fn bhk_world_object_register_streamables(e: &mut Engine, this: Ptr, stream: u32) -> u32 {
     let linked = linked_object(e, this.addr());
     if linked != 0 {
         e.vcall(linked, 0x54, &args![stream]);
     }
-    e.call(NI_OBJECT_REGISTER_STREAMABLES, &args![this, stream]);
+    e.call(NI_OBJECT_REGISTER_STREAMABLES, &args![this, stream])
+        .u32()
 }
 
 // Translated from 00c85b00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -627,7 +630,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c85880, bhk_world_object_copy_cinfo(Ptr, u32)),
         entry!(0x00c85900, bhk_world_object_copy_members(Ptr, u32, u32)),
         entry!(0x00c859e0, bhk_world_object_link_object(Ptr, u32)),
-        entry!(0x00c85ac0, bhk_world_object_register_streamables(Ptr, u32)),
+        entry!(0x00c85ac0, bhk_world_object_register_streamables(Ptr, u32) -> u32),
         entry!(0x00c85b00, fn_00c85b00(Ptr)),
         entry!(0x00c85ba0, bhk_world_object_link(Ptr, u32)),
         entry!(0x00c85c10, bhk_world_object_set_av_object(Ptr, u32, u32)),
@@ -1459,5 +1462,15 @@ mod tests {
         e.mem.set_u32(this + 8, havok);
         assert_eq!(e.call(0x00c8_7a50, &args![this]).u32(), 0x4321);
         assert_eq!(e.call(0x00c8_7a50, &args![0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn register_streamables_answers_the_base_registration() {
+        let mut e = Engine::new();
+        e.register(NI_OBJECT_REGISTER_STREAMABLES, |_, _| 1u32.into_ret());
+        let this = e.mem.alloc(0x20);
+        assert_eq!(e.call(0x00c85ac0, &args![this, 0x5000u32]).u32(), 1);
+        e.register(NI_OBJECT_REGISTER_STREAMABLES, |_, _| Ret::default());
+        assert_eq!(e.call(0x00c85ac0, &args![this, 0x5000u32]).u32(), 0);
     }
 }

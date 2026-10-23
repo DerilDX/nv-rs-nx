@@ -173,9 +173,10 @@ pub fn fn_00528560(e: &mut Engine, this: Ptr, x: u16, y: u16) {
 }
 
 // Translated from 005285a0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Calls the object's vtable slot at byte offset `0x44`.
-pub fn fn_005285a0(e: &mut Engine, this: Ptr) {
-    e.vcall(this.addr(), 0x44, &args![]);
+/// Calls the object's vtable slot at byte offset `0x44` and answers its value
+/// (the exe ends on that call and leaves its `EAX`, which the callers test).
+pub fn fn_005285a0(e: &mut Engine, this: Ptr) -> u32 {
+    e.vcall(this.addr(), 0x44, &args![]).u32()
 }
 
 // Translated from 005285c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -518,11 +519,14 @@ pub fn fn_00528b60(e: &mut Engine, this: Ptr, first: u32, second: u32, mode: u8)
 
 // Translated from 00528bb0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Obtains the coordinate's map key through the object's vtable and passes it
-/// to the map insertion helper.
-pub fn fn_00528bb0(e: &mut Engine, this: Ptr, key: u32) {
+/// to the map insertion helper, answering the helper's result (the exe ends on
+/// that call and leaves its `EAX`; the callers keep `AL`). The exe pushes
+/// `key` twice: the second push is the virtual's one word, the first stays for
+/// `00528ce0`.
+pub fn fn_00528bb0(e: &mut Engine, this: Ptr, key: u32) -> bool {
     let object = e.mem.u32(this.addr());
-    let result = e.vcall(object, 0x24, &args![key, key]).u32();
-    fn_00528ce0(e, this, result, key);
+    let result = e.vcall(object, 0x24, &args![key]).u32();
+    fn_00528ce0(e, this, result, key)
 }
 
 // Translated from 00528be0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -677,7 +681,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00527f90, fn_00527f90(Ptr, u32) -> Ptr),
         entry!(0x00528540, exterior_cell_loader_cancel_all_cell_loads(Ptr)),
         entry!(0x00528560, fn_00528560(Ptr, u16, u16)),
-        entry!(0x005285a0, fn_005285a0(Ptr)),
+        entry!(0x005285a0, fn_005285a0(Ptr) -> u32),
         entry!(0x005285c0, fn_005285c0(Ptr, u32, u32, u32) -> Ptr),
         entry!(0x00528620, fn_00528620(Ptr, Ptr)),
         entry!(0x00528790, fn_00528790(Ptr) -> bool),
@@ -692,7 +696,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00528870, fn_00528870(Ptr, Ptr, u32) -> bool),
         entry!(0x005289b0, fn_005289b0(Ptr, Ptr)),
         entry!(0x00528b60, fn_00528b60(Ptr, u32, u32, u8) -> bool),
-        entry!(0x00528bb0, fn_00528bb0(Ptr, u32)),
+        entry!(0x00528bb0, fn_00528bb0(Ptr, u32) -> bool),
         entry!(0x00528be0, fn_00528be0(Ptr)),
         entry!(0x00528c70, fn_00528c70(Ptr) -> Ptr),
         entry!(0x005289e0, fn_005289e0(Ptr, u32, u32, u32) -> Ptr),
@@ -1398,5 +1402,41 @@ mod tests {
             [0x0054_5cf0, 0x0054_6fb0, 0x0045_1cd0, 0x0055_71a0]
         );
         assert_eq!(log[3].1, vec![0x0600_0500, 1]);
+    }
+
+    #[test]
+    fn virtual_slot_forty_four_answer_is_passed_back() {
+        let mut e = engine();
+        let object = Ptr::new(e.mem.alloc(4));
+        let vtable = 0x0600_0300;
+        let mut slots = vec![0; 18];
+        slots[17] = 0x0600_0400;
+        e.put_vtable(vtable, &slots);
+        e.mem.set_u32(object.addr(), vtable);
+        returning(&mut e, 0x0600_0400, 9);
+        assert_eq!(fn_005285a0(&mut e, object), 9);
+    }
+
+    #[test]
+    fn map_insertion_answers_the_helper_and_gives_the_virtual_one_word() {
+        let mut e = engine();
+        let object = Ptr::<()>::new(e.mem.alloc(4));
+        let map = Ptr::<()>::new(e.mem.alloc(4));
+        let vtable = 0x0600_0300;
+        let mut slots = vec![0; 10];
+        slots[9] = 0x0600_0400;
+        e.put_vtable(vtable, &slots);
+        e.mem.set_u32(object.addr(), map.addr());
+        e.mem.set_u32(map.addr(), vtable);
+        returning(&mut e, 0x0600_0400, 5);
+        returning(&mut e, 0x0052_9030, 0);
+        stub(&mut e, 0x0052_9000);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0052_8bb0, &args![object, 7u32]).bool());
+        let log = e.call_log.take().unwrap();
+        let key = log.iter().find(|(a, _)| *a == 0x0600_0400).unwrap();
+        assert_eq!(key.1, vec![map.addr(), 7]);
+        let insert = log.iter().find(|(a, _)| *a == 0x0052_9030).unwrap();
+        assert_eq!(insert.1, vec![object.addr(), 5, 7]);
     }
 }

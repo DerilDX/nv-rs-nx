@@ -2910,9 +2910,77 @@ pub fn fn_004de100(e: &mut Engine) {
     })
 }
 
+// Translated from 004de0e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: the `float` at `01189494` (the view width `004de100` sets), loaded with
+/// `FLD dword` and returned in ST0 (a signalling NaN comes out quiet).
+pub fn fn_004de0e0(e: &mut Engine) -> f32 {
+    x87_quiet(e.global::<f32>(EYEFINITY_VIEW_WIDTH_01189494))
+}
+
+/// `004ed780` (no map name): thiscall on the `fGamma:Display` setting (`011c71ac`), one
+/// `float` word.
+const GAMMA_SETTING_SET_004ED780: u32 = 0x004e_d780;
+/// `255.0` (`double`): the gamma ramp's step divisor.
+const RAMP_STEPS_0101E568: u32 = 0x0101_e568;
+/// `65535.0` (`double`): the ramp's full scale.
+const RAMP_SCALE_010217D0: u32 = 0x0102_17d0;
+/// `0.5` (`double`): added before the truncating store.
+const HALF_01011588: u32 = 0x0101_1588;
+/// The gamma ramp the code builds on its stack: 256 `u16` each for red, green and blue,
+/// one after the other (0x600 bytes).
+const GAMMA_RAMP_SIZE: u32 = 0x600;
+
+/// One entry of the gamma ramp: `004dd130(i / 255.0, gamma) * 65535.0 + 0.5`, truncated
+/// (`FISTP` under round toward zero) and kept as its low 16 bits.
+fn gamma_ramp_entry(e: &mut Engine, index: u16) -> u16 {
+    let gamma = f32::from_bits(x87_quiet_bits(e.global::<u32>(GAMMA)));
+    let steps: f64 = e.global(RAMP_STEPS_0101E568);
+    let level = x87_store32(x87_div(f64::from(index), steps));
+    let curve = fn_004dd130(e, f32::from_bits(x87_quiet_bits(level)), gamma);
+    let scale: f64 = e.global(RAMP_SCALE_010217D0);
+    let half: f64 = e.global(HALF_01011588);
+    let value = x87_add(x87_mul(f64::from(curve), scale), half);
+    crate::x87::fistp_chop(value) as u16
+}
+
+// Translated from 004dcef0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 004dcef0 - the /GS stack cookie (011c16bc, checked by 00ec408c) is not translated
+/// No map name: applies the gamma. Clears the gamma-changed byte (`011c6fb8`), hands the
+/// gamma (`0118945c`) to the `fGamma:Display` setting (`004ed780`), builds the 256-entry
+/// red, green and blue ramps on its stack (each entry computed three times, once per
+/// colour, by the same expression), then gives the ramp to the renderer's Direct3D device
+/// (`004dc020` of the renderer in `011c73b4`) through its vtable +0x54 with (0, 1, ramp),
+/// in the COM form (the device is also the first stack word).
+pub fn fn_004dcef0(e: &mut Engine) {
+    e.set_global(GAMMA_CHANGED, 0u8);
+    let gamma = x87_quiet_bits(e.global::<u32>(GAMMA));
+    e.call(GAMMA_SETTING_SET_004ED780, &args![F_GAMMA, gamma]);
+    e.with_stack(GAMMA_RAMP_SIZE, |e, ramp| {
+        let base = ramp.addr();
+        let mut index = 0u16;
+        while u32::from(index) < 0x100 {
+            let slot = 2 * u32::from(index);
+            let red = gamma_ramp_entry(e, index);
+            e.mem.set_u16(base + slot, red);
+            let green = gamma_ramp_entry(e, index);
+            e.mem.set_u16(base + 0x200 + slot, green);
+            let blue = gamma_ramp_entry(e, index);
+            e.mem.set_u16(base + 0x400 + slot, blue);
+            index = index.wrapping_add(1);
+        }
+        let renderer = e
+            .call(SMART_POINTER_GET, &args![RENDERER_POINTER])
+            .ptr::<()>();
+        let device = fn_004dc020(e, renderer);
+        e.vcall(device.addr(), 0x54, &args![0u32, 1u32, ramp]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004d_e0e0, fn_004de0e0() -> f32),
+        entry!(0x004d_cef0, fn_004dcef0()),
         entry!(0x004d_c5c0, fn_004dc5c0()),
         entry!(0x004d_c650, fn_004dc650()),
         entry!(0x004d_e290, fn_004de290(Ptr, f32) -> Ptr),
@@ -5449,5 +5517,86 @@ mod b000s_tests {
         assert_eq!(e.global::<u32>(EYEFINITY_TOTAL_WIDTH_0118948C), 0);
         assert_eq!(e.global::<u8>(EYEFINITY_FLAG), 0);
         assert_eq!(calls(&e, ADL_FREE_SLOT).len(), 13);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_004de0e0_returns_the_view_width() {
+        let mut e = Engine::new();
+        e.map(0x0118_9000, 0x1000);
+        e.set_global(EYEFINITY_VIEW_WIDTH_01189494, 1920.0f32);
+        assert_eq!(e.call(0x004d_e0e0, &args![]).f32(), 1920.0);
+        // A signalling NaN comes back quiet.
+        e.set_global(EYEFINITY_VIEW_WIDTH_01189494, 0x7f80_0001u32);
+        assert_eq!(e.call(0x004d_e0e0, &args![]).f32().to_bits(), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn fn_004dcef0_builds_three_ramps_and_hands_them_to_the_device() {
+        let mut e = Engine::new();
+        for page in [0x0101_1000, 0x0101_e000, 0x0102_1000, 0x0118_9000] {
+            e.map(page, 0x1000);
+        }
+        e.map(0x011c_6000, 0x2000);
+        e.set_global(RAMP_STEPS_0101E568, 255.0f64);
+        e.set_global(RAMP_SCALE_010217D0, 65535.0f64);
+        e.set_global(HALF_01011588, 0.5f64);
+        e.set_global(GAMMA, 1.0f32);
+        e.set_global(GAMMA_CHANGED, 1u8);
+        e.register(GAMMA_SETTING_SET_004ED780, |_, _| Ret::default());
+        // `powf` double: base to the exponent.
+        e.register(POWF, |_, a| {
+            let base = f32::from_bits(a[0]);
+            let exponent = f32::from_bits(a[1]);
+            base.powf(exponent).into_ret()
+        });
+        e.register(SMART_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        let renderer = e.mem.alloc(0x290);
+        e.set_global(RENDERER_POINTER, renderer);
+        let device = e.mem.alloc(4);
+        e.mem.set_u32(renderer + RENDERER_OBJECT_OFFSET, device);
+        let vtable = e.mem.alloc(0x58);
+        e.mem.set_u32(device, vtable);
+        e.mem.set_u32(vtable + 0x54, 0x0090_0054);
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = seen.clone();
+        e.register_double(0x0090_0054, move |e, a| {
+            // The ramp's red, green and blue entries 0, 1, 128 and 255.
+            let ramp = a[3];
+            let mut words = vec![a[0], a[1], a[2]];
+            for colour in 0..3u32 {
+                for index in [0u32, 1, 128, 255] {
+                    words.push(u32::from(e.mem.u16(ramp + colour * 0x200 + 2 * index)));
+                }
+            }
+            *record.borrow_mut() = words;
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x004d_cef0, &args![]);
+        assert_eq!(e.global::<u8>(GAMMA_CHANGED), 0);
+        let log = e.call_log.take().unwrap();
+        let setting: Vec<_> = log
+            .iter()
+            .filter(|(a, _)| *a == GAMMA_SETTING_SET_004ED780)
+            .collect();
+        assert_eq!(setting.len(), 1);
+        assert_eq!(setting[0].1, vec![F_GAMMA, 1.0f32.to_bits()]);
+        // Each entry is computed once per colour.
+        assert_eq!(log.iter().filter(|(a, _)| *a == POWF).count(), 3 * 256);
+        let seen = seen.borrow();
+        let word = |i: u32| seen[i as usize];
+        assert_eq!([word(0), word(1), word(2)], [device, 0, 1]);
+        for colour in 0..3u32 {
+            let at = 3 + 4 * colour;
+            assert_eq!(
+                [word(at), word(at + 1), word(at + 2), word(at + 3)],
+                [0, 257, 32896, 65535]
+            );
+        }
     }
 }

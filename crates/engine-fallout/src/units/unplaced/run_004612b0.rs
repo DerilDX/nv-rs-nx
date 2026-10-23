@@ -46,9 +46,16 @@ pub fn fn_00461300(e: &mut Engine) {
     e.mem.set_u8(FLAG_01202D63, 1);
 }
 
+// Translated from 00461310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the map (`thiscall`, one word; `RET 4`): stores its low byte at `this + 0x24`.
+pub fn fn_00461310(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr().wrapping_add(0x24), value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0046_1310, fn_00461310(Ptr, u8)),
         entry!(0x004612b0, fn_004612b0(u8) -> u32),
         entry!(0x004612e0, fn_004612e0(Ptr) -> Ptr),
         entry!(0x00461300, fn_00461300()),
@@ -90,5 +97,20 @@ mod tests {
         assert_eq!(e.mem.u8(FLAG_01202D63), 1);
         assert_eq!(e.mem.u32(FLAG_01202D63 - 3), 0x0100_0000);
         assert_eq!(e.mem.u8(FLAG_01202D63 + 1), 0x77);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00461310_stores_the_byte_at_0x24() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x28);
+        e.call(0x0046_1310, &args![this, 0x1234_5601u32]);
+        assert_eq!(e.mem.u8(this + 0x24), 1);
+        assert_eq!(e.mem.u8(this + 0x25), 0);
+        assert_eq!(e.mem.u8(this + 0x23), 0);
     }
 }

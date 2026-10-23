@@ -17,12 +17,28 @@ pub fn bs_simple_array_ni_frustum_planes_deallocate(e: &mut Engine, _this: Ptr, 
     e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, buffer]);
 }
 
+// Translated from 00c3c220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MessageHandler::Output` (engine map): a variadic `cdecl` function (its callers push a
+/// handler word, a format and its values, and clean the stack themselves) whose body only
+/// answers 0; none of its words is read.
+pub fn message_handler_output(_e: &mut Engine, _words: &[u32]) -> u32 {
+    0
+}
+
+/// The uniform form of [`message_handler_output`]: every word the caller pushed.
+fn message_handler_output_entry(e: &mut Engine, words: &[u32]) -> Ret {
+    message_handler_output(e, words).into_ret()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(
-        0x00c4_a890,
-        bs_simple_array_ni_frustum_planes_deallocate(Ptr, u32)
-    )]
+    vec![
+        entry!(
+            0x00c4_a890,
+            bs_simple_array_ni_frustum_planes_deallocate(Ptr, u32)
+        ),
+        (0x00c3_c220, message_handler_output_entry as AbiFn),
+    ]
 }
 
 #[cfg(test)]
@@ -42,5 +58,18 @@ mod tests {
             .collect();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, [MEMORY_MANAGER, 0x2000]);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn output_answers_zero_whatever_it_is_given() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x00c3_c220, &args![]).u32(), 0);
+        let words = args![0x0118_6084u32, 0x0101_7acc_u32, 1u32, 2u32, 3u32];
+        assert_eq!(e.call(0x00c3_c220, &words).u32(), 0);
     }
 }

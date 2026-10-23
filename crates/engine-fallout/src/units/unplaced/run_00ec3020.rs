@@ -432,9 +432,70 @@ pub fn locimp_ctor(e: &mut Engine, this: Ptr, transparent: u32) -> Ptr {
     this
 }
 
+/// `std::out_of_range::out_of_range(const std::string &)` (Ghidra library match of
+/// `00ec3093`, which stores `.?AVout_of_range@std@@`'s vtable `010a57fc`; thiscall, one word).
+const OUT_OF_RANGE_CONSTRUCT: u32 = 0x00ec_3093;
+/// `std::length_error::length_error(const std::string &)` (Ghidra library match of
+/// `0044a2e0`, which stores `.?AVlength_error@std@@`'s vtable `010173dc`; thiscall, one word).
+const LENGTH_ERROR_CONSTRUCT: u32 = 0x0044_a2e0;
+/// `_CxxThrowException(object, throw_info)` (`00ec7894`, stdcall).
+const CXX_THROW_EXCEPTION: u32 = 0x00ec_7894;
+/// `"invalid string position"` and `"string too long"`.
+const INVALID_STRING_POSITION: u32 = 0x010f_1e28;
+const STRING_TOO_LONG: u32 = 0x010f_1e18;
+/// The throw information of `std::out_of_range` and of `std::length_error`.
+const OUT_OF_RANGE_THROW_INFO: u32 = 0x0117_327c;
+const LENGTH_ERROR_THROW_INFO: u32 = 0x0114_0cb0;
+/// The frame's slots for the message string (`EBP-0x28`) and the exception (`EBP-0x50`).
+const STRING_SLOT_SIZE: u32 = 0x28;
+const EXCEPTION_SLOT_SIZE: u32 = 0x28;
+
+/// Builds the message string from `text`, the exception from the string (`construct`) and
+/// throws it with `throw_info`. Does not return.
+fn throw_string_error(e: &mut Engine, text: u32, construct: u32, throw_info: u32) {
+    e.with_stack(STRING_SLOT_SIZE, |e, message| {
+        e.call(STRING_CTOR_0044A4C0, &args![message, text]);
+        e.with_stack(EXCEPTION_SLOT_SIZE, |e, exception| {
+            e.call(construct, &args![exception, message]);
+            e.call(CXX_THROW_EXCEPTION, &args![exception, throw_info]);
+        });
+    });
+    unreachable!("_CxxThrowException does not return (00ec7894)")
+}
+
+// Translated from 00ec30e8 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec30e8 - the compiler's exception frame (`__EH_prolog3` at 00ece255: FS:[0] chain) is not translated
+/// `std::_Xran` shape (no map name; no arguments): throws `std::out_of_range("invalid string
+/// position")` (the string `0044a4c0`, the exception `00ec3093`, `_CxxThrowException` with
+/// `0117327c`). Does not return.
+pub fn fn_00ec30e8(e: &mut Engine) {
+    throw_string_error(
+        e,
+        INVALID_STRING_POSITION,
+        OUT_OF_RANGE_CONSTRUCT,
+        OUT_OF_RANGE_THROW_INFO,
+    );
+}
+
+// Translated from 00ec30b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 00ec30b0 - the compiler's exception frame (`__EH_prolog3` at 00ece255: FS:[0] chain) is not translated
+/// `std::_Xlen` shape (no map name; no arguments): throws `std::length_error("string too
+/// long")` (the string `0044a4c0`, the exception `0044a2e0`, `_CxxThrowException` with
+/// `01140cb0`). Does not return.
+pub fn fn_00ec30b0(e: &mut Engine) {
+    throw_string_error(
+        e,
+        STRING_TOO_LONG,
+        LENGTH_ERROR_CONSTRUCT,
+        LENGTH_ERROR_THROW_INFO,
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00ec_30e8, fn_00ec30e8()),
+        entry!(0x00ec_30b0, fn_00ec30b0()),
         entry!(0x00ec_3289, fn_00ec3289(Ptr) -> Ptr),
         entry!(0x00ec_3020, fn_00ec3020(Ptr, u32) -> Ptr),
         entry!(0x00ec_3120, ios_base_callfns(Ptr, u32)),
@@ -903,5 +964,67 @@ mod b001_tests {
             calls_to(&e, STRING_CTOR_0044A4C0),
             vec![vec![this + 0x18, STAR_0101FFBC]]
         );
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    /// Runs `address` with doubles for the string, both exception constructors and a
+    /// `_CxxThrowException` that panics with "thrown"; answers the logged calls.
+    fn throw_calls(address: u32) -> Vec<(u32, Vec<u32>)> {
+        let mut e = Engine::new();
+        for callee in [
+            STRING_CTOR_0044A4C0,
+            OUT_OF_RANGE_CONSTRUCT,
+            LENGTH_ERROR_CONSTRUCT,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(CXX_THROW_EXCEPTION, |_, _| panic!("thrown"));
+        e.call_log = Some(vec![]);
+        let thrown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(address, &args![]);
+        }));
+        let payload = thrown.expect_err("the function does not return");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"thrown"));
+        e.call_log.take().unwrap()
+    }
+
+    #[test]
+    fn fn_00ec30e8_throws_out_of_range() {
+        let log = throw_calls(0x00ec_30e8);
+        let string = log
+            .iter()
+            .find(|(a, _)| *a == STRING_CTOR_0044A4C0)
+            .unwrap();
+        assert_eq!(string.1[1], INVALID_STRING_POSITION);
+        let built = log
+            .iter()
+            .find(|(a, _)| *a == OUT_OF_RANGE_CONSTRUCT)
+            .unwrap();
+        assert_eq!(built.1[1], string.1[0]);
+        let thrown = log.iter().find(|(a, _)| *a == CXX_THROW_EXCEPTION).unwrap();
+        assert_eq!(thrown.1, vec![built.1[0], OUT_OF_RANGE_THROW_INFO]);
+        assert!(log.iter().all(|(a, _)| *a != LENGTH_ERROR_CONSTRUCT));
+    }
+
+    #[test]
+    fn fn_00ec30b0_throws_length_error() {
+        let log = throw_calls(0x00ec_30b0);
+        let string = log
+            .iter()
+            .find(|(a, _)| *a == STRING_CTOR_0044A4C0)
+            .unwrap();
+        assert_eq!(string.1[1], STRING_TOO_LONG);
+        let built = log
+            .iter()
+            .find(|(a, _)| *a == LENGTH_ERROR_CONSTRUCT)
+            .unwrap();
+        assert_eq!(built.1[1], string.1[0]);
+        let thrown = log.iter().find(|(a, _)| *a == CXX_THROW_EXCEPTION).unwrap();
+        assert_eq!(thrown.1, vec![built.1[0], LENGTH_ERROR_THROW_INFO]);
+        assert!(log.iter().all(|(a, _)| *a != OUT_OF_RANGE_CONSTRUCT));
     }
 }

@@ -24,9 +24,25 @@ pub fn fn_006f4d00(e: &mut Engine, this: Ptr, location: u32) -> Ptr {
     this
 }
 
+// Translated from 006f4cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `VirtualPathingNode` default constructor (no name in the engine
+/// map; `thiscall`, plain `RET`): the location at +4 constructed
+/// (`006dcbb0`), the flags (+0) and the door reference (+0x2c) cleared.
+/// Returns `this`.
+pub fn fn_006f4cd0(e: &mut Engine, this: Ptr) -> Ptr {
+    let base = this.addr();
+    e.call(0x006d_cbb0, &args![base + 4]);
+    e.mem.set_u32(base, 0);
+    e.mem.set_u32(base + 0x2c, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x006f_4d00, fn_006f4d00(Ptr, u32) -> Ptr)]
+    vec![
+        entry!(0x006f_4d00, fn_006f4d00(Ptr, u32) -> Ptr),
+        entry!(0x006f_4cd0, fn_006f4cd0(Ptr) -> Ptr),
+    ]
 }
 
 #[cfg(test)]
@@ -55,5 +71,23 @@ mod tests {
             assert_eq!(e.mem.u32(node), if resolves { 3 } else { 2 });
             assert_eq!(e.mem.u32(node + 0x2c), 0);
         }
+    }
+
+    #[test]
+    fn fn_006f4cd0_constructs_an_empty_node() {
+        use super::*;
+        let mut e = Engine::new();
+        e.register(0x006d_cbb0, |_, _| Ret::default());
+        let node = e.mem.alloc(0x30);
+        e.mem.set_u32(node, 7);
+        e.mem.set_u32(node + 0x2c, 8);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006f_4cd0, &args![node]).u32(), node);
+        let log = e.call_log.take().unwrap();
+        let built: Vec<_> = log.iter().filter(|c| c.0 == 0x006d_cbb0).collect();
+        assert_eq!(built.len(), 1);
+        assert_eq!(built[0].1, vec![node + 4]);
+        assert_eq!(e.mem.u32(node), 0);
+        assert_eq!(e.mem.u32(node + 0x2c), 0);
     }
 }

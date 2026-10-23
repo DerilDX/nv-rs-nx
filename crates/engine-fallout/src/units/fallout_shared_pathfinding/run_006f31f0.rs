@@ -39,9 +39,65 @@ pub fn fn_006f31f0(e: &mut Engine, this: Ptr) -> u32 {
     e.mem.u32(array + 8).wrapping_sub(1)
 }
 
+/// `006e6da0` (cdecl: size, memory): placement new, returns the memory.
+const PLACEMENT_NEW: u32 = 0x006e_6da0;
+/// `006240d0` (`thiscall`): the 16-byte element's constructor.
+const ELEMENT_CONSTRUCT_006240D0: u32 = 0x0062_40d0;
+
+// Translated from 006f3280 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 006f3280 - the exception-unwinding frame (FS:[0]) is not translated.
+/// Constructs `count` 16-byte elements at `first` (`thiscall`, `ECX` not
+/// read; first, count; `RET 8`; no name in the engine map): each through
+/// placement new (`006e6da0` with 0x10) and, when that gives memory,
+/// `006240d0`.
+pub fn fn_006f3280(e: &mut Engine, _unused_0: Ptr, first: u32, count: u32) {
+    let mut index = 0u32;
+    while index < count {
+        let place = e
+            .call(
+                PLACEMENT_NEW,
+                &args![0x10u32, (index << 4).wrapping_add(first)],
+            )
+            .u32();
+        if place != 0 {
+            e.call(ELEMENT_CONSTRUCT_006240D0, &args![place]);
+        }
+        index += 1;
+    }
+}
+
+// Translated from 006f3320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initialises the array (`thiscall`; reserve, size; `RET 8`; no name in
+/// the engine map): data, count and capacity cleared; the reserve raised
+/// to `size` (unsigned); with a non-zero reserve the data comes from the
+/// array's virtual slot 4 and the capacity is the reserve; with a non-zero
+/// size that many elements are constructed ([`fn_006f3280`]) and the count
+/// is `size`.
+pub fn fn_006f3320(e: &mut Engine, this: Ptr, reserve: u32, size: u32) {
+    let array = this.addr();
+    e.mem.set_u32(array + 4, 0);
+    e.mem.set_u32(array + 8, 0);
+    e.mem.set_u32(array + 0xc, 0);
+    let reserve = if size > reserve { size } else { reserve };
+    if reserve > 0 {
+        let data = e.vcall(array, 4, &args![reserve]).u32();
+        e.mem.set_u32(array + 4, data);
+        e.mem.set_u32(array + 0xc, reserve);
+    }
+    if size > 0 {
+        let data = e.mem.u32(array + 4);
+        fn_006f3280(e, this, data, size);
+        e.mem.set_u32(array + 8, size);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![entry!(0x006f_31f0, fn_006f31f0(Ptr) -> u32)]
+    vec![
+        entry!(0x006f_31f0, fn_006f31f0(Ptr) -> u32),
+        entry!(0x006f_3280, fn_006f3280(Ptr, u32, u32)),
+        entry!(0x006f_3320, fn_006f3320(Ptr, u32, u32)),
+    ]
 }
 
 #[cfg(test)]
@@ -79,5 +135,53 @@ mod tests {
         assert!(log
             .iter()
             .any(|call| call.0 == RESIZE && call.1 == vec![this, 8, 4]));
+    }
+
+    #[test]
+    fn fn_006f3320_reserves_and_constructs() {
+        let mut e = Engine::new();
+        e.register(0x0f00_0004, |e, a| e.mem.alloc(a[1] * 0x10).into_ret());
+        e.put_vtable(0x0f00_1000, &[0, 0x0f00_0004]);
+        let mut placed = 0u32;
+        e.register_double(PLACEMENT_NEW, move |_, a| {
+            placed += 1;
+            (if placed == 2 { 0 } else { a[1] }).into_ret()
+        });
+        e.register(ELEMENT_CONSTRUCT_006240D0, |_, a| a[0].into_ret());
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this, 0x0f00_1000);
+        e.mem.set_u32(this + 8, 9);
+        // Reserve 1, size 2: the reserve is raised to 2.
+        e.call_log = Some(vec![]);
+        e.call(0x006f_3320, &args![this, 1u32, 2u32]);
+        let log = e.call_log.take().unwrap();
+        let data = e.mem.u32(this + 4);
+        assert_eq!(e.mem.u32(this + 8), 2);
+        assert_eq!(e.mem.u32(this + 0xc), 2);
+        let calls = |addr: u32| -> Vec<Vec<u32>> {
+            log.iter()
+                .filter(|c| c.0 == addr)
+                .map(|c| c.1.clone())
+                .collect()
+        };
+        assert_eq!(calls(0x0f00_0004), vec![vec![this, 2]]);
+        assert_eq!(
+            calls(PLACEMENT_NEW),
+            vec![vec![0x10, data], vec![0x10, data + 0x10]]
+        );
+        // The second placement gives nothing.
+        assert_eq!(calls(ELEMENT_CONSTRUCT_006240D0), vec![vec![data]]);
+        // Nothing at all: everything cleared, no calls.
+        e.call_log = Some(vec![]);
+        e.call(0x006f_3320, &args![this, 0u32, 0u32]);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+        assert_eq!(
+            [
+                e.mem.u32(this + 4),
+                e.mem.u32(this + 8),
+                e.mem.u32(this + 0xc)
+            ],
+            [0, 0, 0]
+        );
     }
 }

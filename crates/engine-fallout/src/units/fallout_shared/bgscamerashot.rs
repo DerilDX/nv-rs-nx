@@ -278,9 +278,31 @@ pub fn bgs_camera_shot_free_camera(e: &mut Engine, this: Ptr<BgsCameraShot>) {
     }
 }
 
+/// `0048cee0` (`thiscall` on a `TESModel`: its file name's length, 0 without one).
+const MODEL_NAME_LENGTH: u32 = 0x0048_cee0;
+
+// Translated from 0058d630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSCameraShot::IsInitialized` (engine map; `ECX` only, the answer in `AL`): false for
+/// camera action 3; true when the shot has no model file name; otherwise whether the
+/// camera node (`NiPointer` at +0x6C) is set.
+pub fn bgs_camera_shot_is_initialized(e: &mut Engine, this: Ptr<BgsCameraShot>) -> bool {
+    if e.get(this, BgsCameraShot::eCameraAction) == 3 {
+        return false;
+    }
+    let base = this.addr();
+    if e.call(MODEL_NAME_LENGTH, &args![base + MODEL]).u32() == 0 {
+        return true;
+    }
+    e.call(NI_POINTER_GET, &args![base + CAMERA_NODE]).u32() != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(
+            0x0058_d630,
+            bgs_camera_shot_is_initialized(Ptr<BgsCameraShot>) -> bool
+        ),
         entry!(0x0058_be90, bgs_camera_shot_destructor(Ptr<BgsCameraShot>)),
         entry!(0x0058_bf50, fn_0058bf50(Ptr<BgsCameraShot>)),
         entry!(0x0058_c090, fn_0058c090(Ptr<BgsCameraShot>, Ptr) -> bool),
@@ -631,5 +653,29 @@ mod tests {
         e.call_log = Some(vec![]);
         assert!(!e.call(0x0058_c090, &args![this, f]).bool());
         assert!(calls(&e, 0x0048_5110).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn is_initialized_checks_the_action_the_model_and_the_node() {
+        let mut e = Engine::new();
+        e.register(MODEL_NAME_LENGTH, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(NI_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        let shot: Ptr<BgsCameraShot> = e.new_object();
+        let ask = |e: &mut Engine| e.call(0x0058_d630, &args![shot]).bool();
+        // No model name: initialized.
+        assert!(ask(&mut e));
+        // A model without its node: not yet.
+        e.mem.set_u32(shot.addr() + MODEL + 4, 5);
+        assert!(!ask(&mut e));
+        e.mem.set_u32(shot.addr() + CAMERA_NODE, 0x7000);
+        assert!(ask(&mut e));
+        // Action 3 is never initialized.
+        e.set(shot, BgsCameraShot::eCameraAction, 3);
+        assert!(!ask(&mut e));
     }
 }

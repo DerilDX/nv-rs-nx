@@ -2222,9 +2222,12 @@ pub fn fn_00699690(e: &mut Engine, this: Ptr<NavMesh>, obstacle: Ptr) -> u32 {
 
 // Translated from 006997b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Looks up a 16-bit key in the embedded map at `this + 0xe0`, writing the
-/// mapped value to `out`.
-pub fn fn_006997b0(e: &mut Engine, this: Ptr, key: u16, out: Ptr) {
-    e.call(0x0069_afb0, &args![this.byte_add(0xe0), key, out]);
+/// mapped value to `out`, and answers whether it was found (the lookup's
+/// value: the exe ends on that call and leaves its `EAX`; the callers test
+/// `AL`).
+pub fn fn_006997b0(e: &mut Engine, this: Ptr, key: u16, out: Ptr) -> bool {
+    e.call(0x0069_afb0, &args![this.byte_add(0xe0), key, out])
+        .bool()
 }
 
 // Translated from 006997e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2402,13 +2405,14 @@ pub fn fn_0069a940(e: &mut Engine, this: Ptr<NavMesh>, triangle: u16, edge_list:
 
 // Translated from 0069a9d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Ensures the obstacle map at `this + 0x88` is not at end, then forwards
-/// the key and value to its insertion helper.
-pub fn fn_0069a9d0(e: &mut Engine, this: Ptr, key: u16, value: Ptr) {
+/// the key and value to its insertion helper and answers the helper's value
+/// (the exe ends on that call and leaves its `EAX`; the caller tests `AL`).
+pub fn fn_0069a9d0(e: &mut Engine, this: Ptr, key: u16, value: Ptr) -> bool {
     let map = this.byte_add(0x88);
     if e.call(0x0069_b080, &args![map]).bool() {
         e.call(0x0069_9b60, &args![]);
     }
-    e.call(0x0069_b0a0, &args![map, key, value]);
+    e.call(0x0069_b0a0, &args![map, key, value]).bool()
 }
 
 // Translated from 0069a730 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2925,10 +2929,12 @@ pub fn fn_0069b1f0(e: &mut Engine, _this: Ptr, count: u32) -> Ptr {
 }
 
 // Translated from 0069b220 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Forwards both values to the native memory-move helper; ECX (`this`) is
-/// unused by the body.
-pub fn fn_0069b220(e: &mut Engine, _this: Ptr, first: Ptr, second: Ptr) {
-    e.call(0x0042_f5d0, &args![first, second]);
+/// A `BSSimpleArray` reallocation (its vtable slot `+0xC`, `_Reallocate` in
+/// the Xbox PDB): forwards the block and the byte size to the reallocation
+/// `0042f5d0` and answers the new block (the exe ends on that call and leaves
+/// its `EAX`); ECX (`this`) is unused by the body.
+pub fn fn_0069b220(e: &mut Engine, _this: Ptr, first: Ptr, second: Ptr) -> Ptr {
+    e.call(0x0042_f5d0, &args![first, second]).ptr()
 }
 
 // Translated from 0069b240 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3928,7 +3934,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00699690, fn_00699690(Ptr<NavMesh>, Ptr) -> u32),
         entry!(0x00699760, fn_00699760(u32, u16) -> u32),
         entry!(0x00699790, fn_00699790(Ptr) -> u32),
-        entry!(0x006997b0, fn_006997b0(Ptr, u16, Ptr)),
+        entry!(0x006997b0, fn_006997b0(Ptr, u16, Ptr) -> bool),
         entry!(0x00699a30, fn_00699a30(Ptr<NavMesh>, u32) -> bool),
         entry!(
             0x00699af0,
@@ -3943,7 +3949,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069a7d0, fn_0069a7d0(Ptr)),
         entry!(0x0069a830, fn_0069a830(Ptr<NavMesh>, u16, Ptr) -> u32),
         entry!(0x0069a940, fn_0069a940(Ptr<NavMesh>, u16, Ptr) -> u32),
-        entry!(0x0069a9d0, fn_0069a9d0(Ptr, u16, Ptr)),
+        entry!(0x0069a9d0, fn_0069a9d0(Ptr, u16, Ptr) -> bool),
         entry!(0x0069ad00, fn_0069ad00(Ptr, Ptr) -> bool),
         entry!(0x0069ad40, fn_0069ad40(Ptr, u32) -> Ptr),
         entry!(0x0069ad70, fn_0069ad70(Ptr, u32) -> Ptr),
@@ -3964,7 +3970,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069b1b0, fn_0069b1b0(Ptr, Ptr) -> bool),
         entry!(0x0069b1d0, fn_0069b1d0(Ptr)),
         entry!(0x0069b1f0, fn_0069b1f0(Ptr, u32) -> Ptr),
-        entry!(0x0069b220, fn_0069b220(Ptr, Ptr, Ptr)),
+        entry!(0x0069b220, fn_0069b220(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x0069b240, fn_0069b240(Ptr, Ptr, u32, u32) -> i32),
         entry!(0x0069b2a0, fn_0069b2a0(Ptr, Ptr) -> bool),
         entry!(0x0069b2c0, fn_0069b2c0(Ptr) -> Ptr),
@@ -8076,5 +8082,21 @@ mod tests {
         assert_eq!(fn_0069b8a0(&mut e, Ptr::NULL), Ptr::new(item));
         assert_eq!(&*allocation.borrow(), &[vec![16]]);
         assert_eq!(&*constructor.borrow(), &[vec![item]]);
+    }
+
+    #[test]
+    fn obstacle_map_wrappers_answer_their_helpers() {
+        let mut e = Engine::new();
+        let this = Ptr::<()>::new(0x3300);
+        recorder(&mut e, 0x0069_afb0, 1);
+        assert!(fn_006997b0(&mut e, this, 7, Ptr::new(0x4400)));
+        recorder(&mut e, 0x0069_b080, 0);
+        recorder(&mut e, 0x0069_b0a0, 1);
+        assert!(fn_0069a9d0(&mut e, this, 0x1234, Ptr::new(0x4400)));
+        recorder(&mut e, 0x0042_f5d0, 0x7000);
+        assert_eq!(
+            fn_0069b220(&mut e, Ptr::NULL, Ptr::new(0x12), Ptr::new(0x34)),
+            Ptr::new(0x7000)
+        );
     }
 }

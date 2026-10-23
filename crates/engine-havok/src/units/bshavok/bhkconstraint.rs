@@ -264,15 +264,16 @@ pub fn bhk_constraint_copy_members(e: &mut Engine, this: Ptr, source: u32, proce
 }
 
 // Translated from 00c89810 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `bhkConstraint::LoadCInfo` (Xbox PDB): asks the cinfo's virtual slot 8 to load from
-/// `source`, clears the word at `+8` of the object at cinfo `+4`, then calls the
-/// constraint's own virtual slot `0xA8`.
-pub fn bhk_constraint_load_c_info(e: &mut Engine, this: Ptr, source: u32) {
+/// `bhkConstraint::LoadCInfo` (Xbox PDB; an `int` there): asks the cinfo's virtual slot 8
+/// to load from `source`, clears the word at `+8` of the object at cinfo `+4`, then calls
+/// the constraint's own virtual slot `0xA8` and answers its value (the exe ends on that
+/// call and leaves its `EAX`).
+pub fn bhk_constraint_load_c_info(e: &mut Engine, this: Ptr, source: u32) -> i32 {
     let cinfo = cinfo_of(e, this);
     e.vcall(cinfo, 8, &args![source]);
     let data = e.mem.u32(cinfo + 4);
     e.mem.set_u32(data + 8, 0);
-    e.vcall(this.addr(), 0xa8, &args![]);
+    e.vcall(this.addr(), 0xa8, &args![]).i32()
 }
 
 // Translated from 00c89860 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -298,10 +299,11 @@ pub fn bhk_constraint_link_object(e: &mut Engine, this: Ptr, stream: u32) {
 }
 
 // Translated from 00c898e0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `bhkConstraint::RegisterStreamables` (Xbox PDB): when virtual slot `0xD0` answers an
-/// object whose `+0xC` is set, that one's virtual slot `0x54` registers with the stream;
-/// then `NiObject::RegisterStreamables`.
-pub fn bhk_constraint_register_streamables(e: &mut Engine, this: Ptr, stream: u32) {
+/// `bhkConstraint::RegisterStreamables` (Xbox PDB; a `bool` there): when virtual slot `0xD0`
+/// answers an object whose `+0xC` is set, that one's virtual slot `0x54` registers with the
+/// stream; then `NiObject::RegisterStreamables`, whose value it answers (the exe ends on that
+/// call and leaves its `EAX`).
+pub fn bhk_constraint_register_streamables(e: &mut Engine, this: Ptr, stream: u32) -> u32 {
     let first = e.vcall(this.addr(), 0xd0, &args![]).u32();
     if first != 0 {
         let owner = e.mem.u32(first + 0xc);
@@ -309,7 +311,8 @@ pub fn bhk_constraint_register_streamables(e: &mut Engine, this: Ptr, stream: u3
             e.vcall(owner, 0x54, &args![stream]);
         }
     }
-    e.call(NI_OBJECT_REGISTER_STREAMABLES, &args![this, stream]);
+    e.call(NI_OBJECT_REGISTER_STREAMABLES, &args![this, stream])
+        .u32()
 }
 
 // Translated from 00c89920 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -891,9 +894,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c896b0, bhk_constraint_load_binary(Ptr, u32)),
         entry!(0x00c896c0, bhk_constraint_is_equal(Ptr, Ptr) -> bool),
         entry!(0x00c89730, bhk_constraint_copy_members(Ptr, u32, u32)),
-        entry!(0x00c89810, bhk_constraint_load_c_info(Ptr, u32)),
+        entry!(0x00c89810, bhk_constraint_load_c_info(Ptr, u32) -> i32),
         entry!(0x00c89860, bhk_constraint_link_object(Ptr, u32)),
-        entry!(0x00c898e0, bhk_constraint_register_streamables(Ptr, u32)),
+        entry!(0x00c898e0, bhk_constraint_register_streamables(Ptr, u32) -> u32),
         entry!(0x00c89920, bhk_constraint_save_binary(Ptr, u32)),
         entry!(0x00c89960, bhk_constraint_get_viewer_strings(Ptr, u32)),
         entry!(
@@ -2002,5 +2005,20 @@ mod tests {
             e.call(0x00c8_9720, &args![this, 5u32, 7u32]).u32(),
             this + 12
         );
+    }
+
+    #[test]
+    fn load_c_info_and_register_streamables_answer_their_last_calls() {
+        let mut e = Engine::new();
+        let cinfo = object(&mut e, 0x0200_1200, &[(8, 0x0900_0002)]);
+        let data = e.mem.alloc(0x20);
+        e.mem.set_u32(cinfo + 4, data);
+        let this =
+            constraint_with_cinfo(&mut e, cinfo, &[(0xa8, 0x0900_0004), (0xd0, 0x0900_0006)]);
+        quiet(&mut e, &[0x0900_0002, 0x0900_0006]);
+        e.register(0x0900_0004, |_, _| 7u32.into_ret());
+        assert_eq!(e.call(0x00c89810, &args![this, 0x4242u32]).i32(), 7);
+        e.register(NI_OBJECT_REGISTER_STREAMABLES, |_, _| 1u32.into_ret());
+        assert_eq!(e.call(0x00c898e0, &args![this, 0x5000u32]).u32(), 1);
     }
 }

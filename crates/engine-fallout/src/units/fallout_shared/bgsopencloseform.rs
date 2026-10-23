@@ -737,6 +737,71 @@ pub fn bgs_open_close_form_get_open_state(e: &mut Engine, reference: u32) -> u32
     state
 }
 
+/// `00633c90` (`ECX` = smart pointer, `RET 4`): `NiPointer` construction from an object
+/// (takes a reference when non-null).
+const SMART_POINTER_CONSTRUCT: u32 = 0x0063_3c90;
+/// `00559450` (`ECX` = smart pointer): the object it holds.
+const SMART_POINTER_GET: u32 = 0x0055_9450;
+/// `0045cec0` (`ECX` = smart pointer): `NiPointer` destruction (drops the reference).
+const SMART_POINTER_DESTRUCT: u32 = 0x0045_cec0;
+/// `bhkUtilFunctions::FindNextCollisionObject` (`00c802d0`, `cdecl`, a node).
+const FIND_NEXT_COLLISION_OBJECT: u32 = 0x00c8_02d0;
+/// `0047b470` (`ECX` = collision object, `AL`): true when bit 0x20 of the word at +0xC is
+/// set and `0047b4b0` answers false.
+const COLLISION_OBJECT_USES_VELOCITY: u32 = 0x0047_b470;
+/// `bhkUtilFunctions::SetCOUseVel` (`00c80330`, `cdecl`: flag, node).
+const SET_CO_USE_VEL: u32 = 0x00c8_0330;
+/// `0043d410` (`ECX` = 12-byte update record, `RET 0xc`: a `float` time and two bytes):
+/// fills the record (the remaining three bytes cleared).
+const UPDATE_RECORD_CONSTRUCT: u32 = 0x0043_d410;
+/// `00a59c60` (`ECX` = node, `RET 4`: the update record): runs the node's update (its
+/// virtual slot 0xA4, then slot 0xFC of the object at +0x18 when there is one).
+const NODE_UPDATE: u32 = 0x00a5_9c60;
+/// The reference's virtual slot returning its 3D root node.
+const SLOT_GET_3D: u32 = 0x1d0;
+
+// Translated from 0047b360 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translation incomplete: 0047b360 - the C++ exception frame (FS:[0], unwinding the NiPointer temporary) is not translated
+/// `BGSOpenCloseForm::SnapHavokTo3D` (Xbox PDB; `cdecl`, the reference): holds the
+/// reference's 3D (virtual slot 0x1D0) in an `NiPointer` temporary; when there is one, a
+/// collision object found under it (`FindNextCollisionObject`) that uses velocity
+/// (`0047b470`) has that turned off (`SetCOUseVel(0, node)`) around an update of the node
+/// (`00a59c60` with an update record of time 0.0 and flags 0, `0043d410`) and turned
+/// back on afterwards (`SetCOUseVel(1, node)`). The temporary is released at the end.
+pub fn bgs_open_close_form_snap_havok_to_3d(e: &mut Engine, reference: Ptr) {
+    let root = e.vcall(reference.addr(), SLOT_GET_3D, &[]).u32();
+    e.with_stack(0x10, |e, frame| {
+        let record = frame.addr();
+        let holder = frame.addr() + 0xc;
+        e.call(SMART_POINTER_CONSTRUCT, &args![holder, root]);
+        if e.call(SMART_POINTER_GET, &args![holder]).u32() != 0 {
+            let node = e.call(SMART_POINTER_GET, &args![holder]).u32();
+            let collision = e.call(FIND_NEXT_COLLISION_OBJECT, &args![node]).u32();
+            let uses_velocity = if collision != 0 {
+                e.call(COLLISION_OBJECT_USES_VELOCITY, &args![collision])
+                    .u8()
+            } else {
+                0
+            };
+            if uses_velocity != 0 {
+                let node = e.call(SMART_POINTER_GET, &args![holder]).u32();
+                e.call(SET_CO_USE_VEL, &args![0u32, node]);
+            }
+            e.call(
+                UPDATE_RECORD_CONSTRUCT,
+                &args![record, 0.0f32.to_bits(), 0u32, 0u32],
+            );
+            let node = e.call(SMART_POINTER_GET, &args![holder]).u32();
+            e.call(NODE_UPDATE, &args![node, record]);
+            if uses_velocity != 0 {
+                let node = e.call(SMART_POINTER_GET, &args![holder]).u32();
+                e.call(SET_CO_USE_VEL, &args![u32::from(uses_velocity), node]);
+            }
+        }
+        e.call(SMART_POINTER_DESTRUCT, &args![holder]);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -765,6 +830,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x0047b200, fn_0047b200() -> u32),
         entry!(0x0047b250, bgs_open_close_form_get_open_state(u32) -> u32),
+        entry!(0x0047_b360, bgs_open_close_form_snap_havok_to_3d(Ptr)),
     ]
 }
 
@@ -1208,5 +1274,71 @@ mod open_close_tests {
         assert!(calls_to(&e, SET_ACTION_FLAG).is_empty());
         assert_eq!(e.call(0x0047_ab40, &args![door, sequence]).u8(), 0);
         assert_eq!(e.call(0x0047_ab40, &args![0u32, sequence]).u8(), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    fn run(root: u32, collision: u32, uses_velocity: u8) -> Vec<(u32, Vec<u32>)> {
+        let mut e = Engine::new();
+        let reference = e.mem.alloc(0x10);
+        e.put_vtable(0x0160_0000, &[0; 0x76]);
+        e.mem.set_u32(0x0160_0000 + SLOT_GET_3D, 0x0000_2000);
+        e.register_double(0x0000_2000, move |_, _| root.into_ret());
+        e.mem.set_u32(reference, 0x0160_0000);
+        e.register(SMART_POINTER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            a[0].into_ret()
+        });
+        e.register(SMART_POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(SMART_POINTER_DESTRUCT, |_, _| Ret::default());
+        e.register_double(FIND_NEXT_COLLISION_OBJECT, move |_, _| collision.into_ret());
+        e.register_double(COLLISION_OBJECT_USES_VELOCITY, move |_, _| {
+            u32::from(uses_velocity).into_ret()
+        });
+        e.register(SET_CO_USE_VEL, |_, _| Ret::default());
+        e.register(UPDATE_RECORD_CONSTRUCT, |_, _| Ret::default());
+        e.register(NODE_UPDATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_b360, &args![reference]);
+        e.call_log.take().unwrap()
+    }
+
+    fn to(log: &[(u32, Vec<u32>)], addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn snap_havok_turns_velocity_off_around_the_update() {
+        let log = run(0x7000, 0x7100, 1);
+        assert_eq!(to(&log, FIND_NEXT_COLLISION_OBJECT), vec![vec![0x7000]]);
+        assert_eq!(
+            to(&log, SET_CO_USE_VEL),
+            vec![vec![0, 0x7000], vec![1, 0x7000]]
+        );
+        let record = to(&log, UPDATE_RECORD_CONSTRUCT);
+        assert_eq!(record.len(), 1);
+        assert_eq!(&record[0][1..], &[0, 0, 0]);
+        assert_eq!(to(&log, NODE_UPDATE), vec![vec![0x7000, record[0][0]]]);
+        assert_eq!(to(&log, SMART_POINTER_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn snap_havok_without_velocity_or_3d() {
+        let log = run(0x7000, 0x7100, 0);
+        assert!(to(&log, SET_CO_USE_VEL).is_empty());
+        assert_eq!(to(&log, NODE_UPDATE).len(), 1);
+        let log = run(0x7000, 0, 1);
+        assert!(to(&log, COLLISION_OBJECT_USES_VELOCITY).is_empty());
+        assert!(to(&log, SET_CO_USE_VEL).is_empty());
+        let log = run(0, 0x7100, 1);
+        assert!(to(&log, FIND_NEXT_COLLISION_OBJECT).is_empty());
+        assert!(to(&log, NODE_UPDATE).is_empty());
+        assert_eq!(to(&log, SMART_POINTER_DESTRUCT).len(), 1);
     }
 }

@@ -180,6 +180,21 @@ pub fn fn_006a8b60(
     u32::from(!found)
 }
 
+/// `00401030` (cdecl: block): frees a block.
+const FREE_BLOCK: u32 = 0x0040_1030;
+
+// Translated from 006a8b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of `NavMeshSearchClosePoint` (`thiscall`;
+/// flags; `RET 4`): the destructor `006a8b40`, then the block is freed
+/// (`00401030`) when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_006a8b10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006a8b40(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_BLOCK, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -187,6 +202,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006a_8a30, fn_006a8a30(Ptr, u32, u32)),
         entry!(0x006a_8a80, fn_006a8a80(Ptr) -> Ptr),
         entry!(0x006a_8b60, fn_006a8b60(Ptr, u32, Ptr, u32, u32) -> u32),
+        entry!(0x006a_8b10, fn_006a8b10(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -362,5 +378,21 @@ mod b040_tests {
         assert_eq!(e.mem.f32(this + 0x2098), 0.0);
         assert!(calls_to(&e, OBJECT_VALUE_006DC9F0).is_empty());
         assert_eq!(calls_to(&e, ADD_START_NODE)[0][3], 0);
+    }
+
+    #[test]
+    fn at_006a8b10_destroys_and_frees_on_bit_0() {
+        let mut e = Engine::new();
+        e.register(0x006a_7bc0, |_, _| Ret::default());
+        e.register(FREE_BLOCK, |_, _| Ret::default());
+        let this = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006a_8b10, &args![this, 2u32]).u32(), this);
+        assert_eq!(e.mem.u32(this), VTABLE_CLOSE_POINT);
+        assert!(calls_to(&e, FREE_BLOCK).is_empty());
+        assert_eq!(calls_to(&e, 0x006a_7bc0), vec![vec![this]]);
+        e.call_log = Some(vec![]);
+        e.call(0x006a_8b10, &args![this, 3u32]);
+        assert_eq!(calls_to(&e, FREE_BLOCK), vec![vec![this]]);
     }
 }

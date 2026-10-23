@@ -199,11 +199,67 @@ pub fn fn_004f8d50(e: &mut Engine, this: Ptr<BgsAddonNode>, file: Ptr) -> bool {
     true
 }
 
+/// `TESForm::StartForm` and `TESForm::CloseForm` (Xbox PDB; `004855a0`, `00485680`,
+/// `thiscall` on the form).
+const FORM_START_FORM: u32 = 0x0048_55a0;
+const FORM_CLOSE_FORM: u32 = 0x0048_5680;
+/// `TESModelTextureSwap::Save` (Xbox PDB name of `0048a520`; `RET 0xc`: the model,
+/// texture and texture-swap chunk signatures).
+const MODEL_TEXTURE_SWAP_SAVE: u32 = 0x0048_a520;
+/// `00485910` (`cdecl`: chunk signature, word): saves a chunk holding one word.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// `TESForm::__AddChunkData` (Xbox PDB name of `00485990`; `cdecl`: chunk signature,
+/// address, size).
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// `0084e3a0` (`ECX` = form): the word at +0xC (`TESForm::iFormID`).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `00401500` (`cdecl`, no arguments, `AL`): whether saved data is byte-swapped.
+const SWAP_ON_SAVE: u32 = 0x0040_1500;
+/// `00512810` (`ECX` = the four `ADDON_DATA` bytes): swaps their byte order.
+const SWAP_ADDON_DATA: u32 = 0x0051_2810;
+/// The size of the `ADDON_DATA` bytes saved in the `DNAM` chunk.
+const ADDON_DATA_SIZE: u32 = 4;
+
+// Translated from 004f8fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSAddonNode::Save` (Xbox PDB; `thiscall`, no stack word): starts the form record,
+/// saves the model (`MODL`, `MODT`, `MODS`), the index (`DATA`), the sound's form id
+/// (`SNAM`, only when a sound is set), then the four `ADDON_DATA` bytes (`DNAM`), byte
+/// swapped before and swapped back after when `00401500` says so, and closes the record.
+pub fn bgs_addon_node_save(e: &mut Engine, this: Ptr<BgsAddonNode>) {
+    e.call(FORM_START_FORM, &args![this]);
+    e.call(
+        MODEL_TEXTURE_SWAP_SAVE,
+        &args![
+            this.addr() + MODEL_TEXTURE_SWAP,
+            CHUNK_MODL,
+            CHUNK_MODT,
+            CHUNK_MODS
+        ],
+    );
+    let index = e.get(this, BgsAddonNode::iIndex);
+    e.call(ADD_CHUNK_WORD, &args![CHUNK_DATA, index]);
+    let sound = e.get(this, BgsAddonNode::pSound);
+    if sound != 0 {
+        let id = e.call(FORM_ID, &args![sound]).u32();
+        e.call(ADD_CHUNK_WORD, &args![CHUNK_SNAM, id]);
+    }
+    let data = this.addr() + 0x58;
+    if e.call(SWAP_ON_SAVE, &[]).u8() != 0 {
+        e.call(SWAP_ADDON_DATA, &args![data]);
+    }
+    e.call(ADD_CHUNK_DATA, &args![CHUNK_DNAM, data, ADDON_DATA_SIZE]);
+    if e.call(SWAP_ON_SAVE, &[]).u8() != 0 {
+        e.call(SWAP_ADDON_DATA, &args![data]);
+    }
+    e.call(FORM_CLOSE_FORM, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x004f_8c90, bgs_addon_node_init_item(Ptr<BgsAddonNode>)),
         entry!(0x004f_8d50, fn_004f8d50(Ptr<BgsAddonNode>, Ptr) -> bool),
+        entry!(0x004f_8fe0, bgs_addon_node_save(Ptr<BgsAddonNode>)),
     ]
 }
 
@@ -426,5 +482,71 @@ mod tests {
         assert_eq!(e.get(this, BgsAddonNode::Data), 5);
         assert_eq!(e.get(this, BgsAddonNode::iMasterParticleSystemIndex), 0);
         assert_eq!(e.global::<u32>(MASTER_PARTICLE_SYSTEM_COUNT), 7);
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    fn run(sound: u32, swap: bool) -> (u32, Vec<(u32, Vec<u32>)>) {
+        let mut e = Engine::new();
+        for addr in [
+            FORM_START_FORM,
+            FORM_CLOSE_FORM,
+            MODEL_TEXTURE_SWAP_SAVE,
+            ADD_CHUNK_WORD,
+            ADD_CHUNK_DATA,
+            SWAP_ADDON_DATA,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(FORM_ID, |_, a| (a[0] + 1).into_ret());
+        e.register_double(SWAP_ON_SAVE, move |_, _| u32::from(swap).into_ret());
+        let this = e.mem.alloc(0x60);
+        e.mem.set_u32(this + 0x50, 7);
+        e.mem.set_u32(this + 0x54, sound);
+        e.call_log = Some(vec![]);
+        e.call(0x004f_8fe0, &args![this]);
+        let log = e.call_log.take().unwrap();
+        (
+            this,
+            log.into_iter().filter(|c| c.0 != SWAP_ON_SAVE).collect(),
+        )
+    }
+
+    #[test]
+    fn save_writes_the_chunks_in_order() {
+        let (this, log) = run(0x9000, true);
+        assert_eq!(
+            log[1..],
+            [
+                (FORM_START_FORM, vec![this]),
+                (
+                    MODEL_TEXTURE_SWAP_SAVE,
+                    vec![this + 0x30, CHUNK_MODL, CHUNK_MODT, CHUNK_MODS]
+                ),
+                (ADD_CHUNK_WORD, vec![CHUNK_DATA, 7]),
+                (FORM_ID, vec![0x9000]),
+                (ADD_CHUNK_WORD, vec![CHUNK_SNAM, 0x9001]),
+                (SWAP_ADDON_DATA, vec![this + 0x58]),
+                (ADD_CHUNK_DATA, vec![CHUNK_DNAM, this + 0x58, 4]),
+                (SWAP_ADDON_DATA, vec![this + 0x58]),
+                (FORM_CLOSE_FORM, vec![this]),
+            ]
+        );
+    }
+
+    #[test]
+    fn save_skips_the_sound_and_the_swaps() {
+        let (this, log) = run(0, false);
+        assert_eq!(
+            log[4..],
+            [
+                (ADD_CHUNK_DATA, vec![CHUNK_DNAM, this + 0x58, 4]),
+                (FORM_CLOSE_FORM, vec![this]),
+            ]
+        );
+        assert!(!log.iter().any(|c| c.0 == FORM_ID));
     }
 }

@@ -141,10 +141,10 @@ pub fn std_string_inside(e: &mut Engine, this: Ptr<DebugString>, text: Ptr) -> b
 }
 
 // Translated from 0044abd0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// A `thiscall` member that ignores `this` and calls the cdecl `0044d670`
-/// with its argument and 0.
-pub fn fn_0044abd0(e: &mut Engine, _this: Ptr, value: u32) {
-    e.call(FORWARD_TARGET, &args![value, 0u32]);
+/// A `thiscall` member that ignores `this` and calls the cdecl `0044d670` (the allocator's
+/// allocate) with its argument and 0, answering its `EAX` (untouched after the call).
+pub fn fn_0044abd0(e: &mut Engine, _this: Ptr, value: u32) -> u32 {
+    e.call(FORWARD_TARGET, &args![value, 0u32]).u32()
 }
 
 // Translated from 0044abf0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -180,7 +180,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0044a9d0, std_string_max_size(Ptr<DebugString>) -> u32),
         entry!(0x0044aa10, std_string_copy(Ptr<DebugString>, u32, u32)),
         entry!(0x0044ab90, std_string_inside(Ptr<DebugString>, Ptr) -> bool),
-        entry!(0x0044abd0, fn_0044abd0(Ptr, u32)),
+        entry!(0x0044abd0, fn_0044abd0(Ptr, u32) -> u32),
         entry!(0x0044abf0, fn_0044abf0(Ptr) -> u32),
         entry!(0x0044ac20, fn_0044ac20(Ptr, Ptr)),
     ]
@@ -332,9 +332,9 @@ mod tests {
     #[test]
     fn forwarder_passes_the_value_and_zero() {
         let mut e = engine();
-        e.register(FORWARD_TARGET, |_, _| Ret::default());
+        e.register(FORWARD_TARGET, |_, _| 0x5000u32.into_ret());
         e.call_log = Some(vec![]);
-        e.call(0x0044_abd0, &args![0x10u32, 0x77u32]);
+        assert_eq!(e.call(0x0044_abd0, &args![0x10u32, 0x77u32]).u32(), 0x5000);
         let log = e.call_log.take().unwrap();
         let call = log.iter().find(|(a, _)| *a == FORWARD_TARGET).unwrap();
         assert_eq!(call.1, vec![0x77, 0]);
@@ -353,5 +353,12 @@ mod tests {
         e.mem.set_u32(a + 4, 0xdead_beef);
         e.call(0x0044_ac20, &args![a, a + 4]);
         assert_eq!(e.mem.u32(a), 0xdead_beef);
+    }
+
+    #[test]
+    fn forwarder_answers_the_allocation() {
+        let mut e = engine();
+        e.register(FORWARD_TARGET, |_, _| 0x6000u32.into_ret());
+        assert_eq!(e.call(0x0044_abd0, &args![0x10u32, 0x77u32]).u32(), 0x6000);
     }
 }

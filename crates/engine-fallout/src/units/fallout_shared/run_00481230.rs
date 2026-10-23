@@ -25,9 +25,36 @@ pub fn fn_004812f0(e: &mut Engine, text: u32, pattern: u32) -> u32 {
     e.call(FIND_SUBSTRING_00EC7750, &args![text, pattern]).u32()
 }
 
+/// `00408da0` (`thiscall`, no stack words; the map's `MapMarkerData::GetLocationName`, a
+/// shared body): the text of the string pointer at `this`, `""` (`01011584`) when null.
+const STRING_TEXT_OR_EMPTY: u32 = 0x0040_8da0;
+
+// Translated from 00481230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (`thiscall`, one word: the sex; `RET 4`): the 0xC-byte
+/// component `this + 0x8C + sex * 0xC` (by `TESBipedModelForm`'s PDB layout its
+/// `inventoryIcon[sex]`; not confirmed for this caller), sex 1 falling back to 0 when that
+/// component has no file name (`0048cee0`); answers `00408da0` on the chosen component
+/// (its file name's text, or `""`).
+pub fn fn_00481230(e: &mut Engine, this: Ptr, sex: u32) -> u32 {
+    let mut sex = sex;
+    let icon = this
+        .addr()
+        .wrapping_add(sex.wrapping_mul(0xc))
+        .wrapping_add(0x8c);
+    if e.call(CALLEE_0048CEE0, &args![icon]).u32() == 0 && sex == 1 {
+        sex = 0;
+    }
+    let icon = this
+        .addr()
+        .wrapping_add(sex.wrapping_mul(0xc))
+        .wrapping_add(0x8c);
+    e.call(STRING_TEXT_OR_EMPTY, &args![icon]).u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0048_1230, fn_00481230(Ptr, u32) -> u32),
         entry!(0x0048_12d0, fn_004812d0(Ptr) -> u32),
         entry!(0x0048_12f0, fn_004812f0(u32, u32) -> u32),
     ]
@@ -70,5 +97,23 @@ mod wrapper_tests {
             e.call_log.take().unwrap()[1],
             (FIND_SUBSTRING_00EC7750, vec![0x100, 0x20])
         );
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00481230_answers_the_icon_text_with_the_fallback() {
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0xb0);
+        e.register(CALLEE_0048CEE0, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(STRING_TEXT_OR_EMPTY, |_, a| (a[0] | 0x8000_0000).into_ret());
+        let text = |e: &mut Engine, sex: u32| e.call(0x0048_1230, &args![this, sex]).u32();
+        assert_eq!(text(&mut e, 0), (this + 0x8c) | 0x8000_0000);
+        assert_eq!(text(&mut e, 1), (this + 0x8c) | 0x8000_0000);
+        e.mem.set_u32(this + 0x98 + 4, 1);
+        assert_eq!(text(&mut e, 1), (this + 0x98) | 0x8000_0000);
     }
 }

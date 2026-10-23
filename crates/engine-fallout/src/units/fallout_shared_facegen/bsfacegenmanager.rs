@@ -2910,9 +2910,16 @@ pub fn fn_00659ae0(e: &mut Engine, this: Ptr) -> Ptr {
     this
 }
 
+// Translated from 00652130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// No map name: the face-gen lock's depth counter (`011d59dc`). No arguments.
+pub fn fn_00652130(e: &mut Engine) -> u32 {
+    e.global(FACE_GEN_LOCK_DEPTH)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0065_2130, fn_00652130() -> u32),
         entry!(0x00b9_fcc0, ni_t_pointer_list_base_remove(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x0065_8bb0, fn_00658bb0(Ptr)),
         entry!(0x00653290, fn_00653290(Ptr, u32) -> Ptr),
@@ -5583,5 +5590,18 @@ mod b049_tests {
         assert_eq!(e.mem.u32(this), 0x0106_5af4);
         assert_eq!(e.mem.u32(this + 8), 0);
         assert_eq!(e.mem.u32(this + 0xc), 0);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_00652130_answers_the_lock_depth() {
+        let mut e = Engine::new();
+        e.map(0x011d_5000, 0x1000);
+        e.set_global(FACE_GEN_LOCK_DEPTH, 3u32);
+        assert_eq!(e.call(0x0065_2130, &args![]).u32(), 3);
     }
 }

@@ -2571,9 +2571,10 @@ fn lowercase_into_buffer<R>(
 
 // Translated from 004491f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Forwards to `009611e0(this)` (filed under `playercharacter.cpp` in the
-/// engine map).
-pub fn fn_004491f0(e: &mut Engine, this: Ptr) {
-    e.call(0x0096_11e0, &args![this]);
+/// engine map) and answers its value: the exe ends on that call, leaving its
+/// `EAX` (the callers read it as the task count).
+pub fn fn_004491f0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x0096_11e0, &args![this]).u32()
 }
 
 // Translated from 00449210 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3083,7 +3084,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00449170, fn_00449170(Ptr)),
         entry!(0x00449190, fn_00449190(Ptr, u32, u32) -> bool),
         entry!(0x004491c0, fn_004491c0(Ptr, u32, u32) -> bool),
-        entry!(0x004491f0, fn_004491f0(Ptr)),
+        entry!(0x004491f0, fn_004491f0(Ptr) -> u32),
         entry!(0x00449210, fn_00449210(Ptr, u32, u32)),
         entry!(0x00449240, fn_00449240(Ptr, u32)),
         entry!(0x00449280, fn_00449280(Ptr, u32) -> u8),
@@ -6234,5 +6235,12 @@ mod tests {
             e.call(address, &args![this, 1u32]);
             assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![this]]);
         }
+    }
+
+    #[test]
+    fn fn_004491f0_answers_the_callees_value() {
+        let mut e = engine();
+        constant(&mut e, 0x0096_11e0, 7);
+        assert_eq!(e.call(0x0044_91f0, &args![0x1234u32]).u32(), 7);
     }
 }

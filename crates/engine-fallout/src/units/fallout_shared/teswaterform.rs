@@ -619,9 +619,57 @@ pub fn teswaterform_get_placeable_lod_water(e: &mut Engine, this: Ptr<TESWaterFo
     e.get(this, TESWaterForm::pPlaceableLODWater)
 }
 
+/// `0048cee0` (thiscall, no stack words): the length of the `BSStringT` at +4 of a
+/// `TESTexture` (`004048e0`), in `EAX`.
+const TEXTURE_NAME_LENGTH: u32 = 0x0048_cee0;
+/// `00408da0` (thiscall, no stack words; the map's `MapMarkerData::GetLocationName`, a
+/// shared body): the text of the string pointer at `this`, `""` (`01011584`) when null.
+const STRING_TEXT_OR_EMPTY: u32 = 0x0040_8da0;
+/// `NiPointer` assignment (`0066b0d0`, thiscall, one word; answers `this`).
+const POINTER_ASSIGN: u32 = 0x0066_b0d0;
+/// The `NiPointer` member at +0x17C (released last by the destructor).
+const WATER_POINTER_17C: u32 = 0x17c;
+
+// Translated from 00580080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, no stack words): `0048cee0` on the noise texture
+/// (`this + 0x64`); `EAX` is what that call left (the texture name's length).
+pub fn fn_00580080(e: &mut Engine, this: Ptr<TESWaterForm>) -> u32 {
+    e.call(
+        TEXTURE_NAME_LENGTH,
+        &args![this.byte_add(WATER_NOISE_TEXTURE)],
+    )
+    .u32()
+}
+
+// Translated from 005800a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, no stack words): `00408da0` on the noise texture
+/// (`this + 0x64`); `EAX` is what that call left (the texture name's text, or `""`).
+pub fn fn_005800a0(e: &mut Engine, this: Ptr<TESWaterForm>) -> u32 {
+    e.call(
+        STRING_TEXT_OR_EMPTY,
+        &args![this.byte_add(WATER_NOISE_TEXTURE)],
+    )
+    .u32()
+}
+
+// Translated from 005800c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (thiscall, one word; `RET 4`): assigns `object` to the
+/// `NiPointer` at `this + 0x17C` (`0066b0d0`); `EAX` is what that call left (the pointer's
+/// address).
+pub fn fn_005800c0(e: &mut Engine, this: Ptr<TESWaterForm>, object: u32) -> u32 {
+    e.call(
+        POINTER_ASSIGN,
+        &args![this.byte_add(WATER_POINTER_17C), object],
+    )
+    .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x0058_0080, fn_00580080(Ptr<TESWaterForm>) -> u32),
+        entry!(0x0058_00a0, fn_005800a0(Ptr<TESWaterForm>) -> u32),
+        entry!(0x0058_00c0, fn_005800c0(Ptr<TESWaterForm>, u32) -> u32),
         entry!(0x0057_eba0, fn_0057eba0(Ptr) -> Ptr),
         entry!(0x0057_ede0, fn_0057ede0(Ptr, u32) -> Ptr),
         entry!(0x0057_eef0, fn_0057eef0(Ptr<TESWaterForm>) -> Ptr),
@@ -1260,5 +1308,34 @@ mod b020_tests {
             e.call(0x0058_0330, &args![this]);
         }));
         assert!(r.is_err());
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn noise_texture_thunks_pass_the_member_and_the_result_on() {
+        let mut e = Engine::new();
+        e.register(TEXTURE_NAME_LENGTH, |_, a| (a[0] ^ 0x5555).into_ret());
+        e.register(STRING_TEXT_OR_EMPTY, |_, a| (a[0] ^ 0xaaaa).into_ret());
+        let this: Ptr<TESWaterForm> = e.new_object();
+        let texture = this.addr() + 0x64;
+        assert_eq!(e.call(0x0058_0080, &args![this]).u32(), texture ^ 0x5555);
+        assert_eq!(e.call(0x0058_00a0, &args![this]).u32(), texture ^ 0xaaaa);
+    }
+
+    #[test]
+    fn fn_005800c0_assigns_the_pointer_at_0x17c() {
+        let mut e = Engine::new();
+        e.register(POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            a[0].into_ret()
+        });
+        let this: Ptr<TESWaterForm> = e.new_object();
+        let back = e.call(0x0058_00c0, &args![this, 0x7000u32]).u32();
+        assert_eq!(back, this.addr() + 0x17c);
+        assert_eq!(e.mem.u32(this.addr() + 0x17c), 0x7000);
     }
 }

@@ -153,9 +153,17 @@ pub fn fn_004e0110(e: &mut Engine) {
     }
 }
 
+// Translated from 004e0320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unnamed in the engine map (no arguments): the word at `011c7830` (the tag `004e0050`
+/// makes).
+pub fn fn_004e0320(e: &mut Engine) -> u32 {
+    e.global(SPD_TAG)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x004e_0320, fn_004e0320() -> u32),
         entry!(0x004e_0050, fn_004e0050()),
         entry!(0x004e_00d0, fn_004e00d0()),
         entry!(0x004e_0110, fn_004e0110()),
@@ -298,5 +306,18 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x004e_0110, &[]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod la1_tests {
+    use super::*;
+
+    #[test]
+    fn fn_004e0320_answers_the_word() {
+        let mut e = Engine::new();
+        e.map(0x011c_7000, 0x1000);
+        e.set_global(SPD_TAG, 0x00c0_ffeeu32);
+        assert_eq!(e.call(0x004e_0320, &args![]).u32(), 0x00c0_ffee);
     }
 }

@@ -884,9 +884,79 @@ fn add_door_connection(
     });
 }
 
+/// `MemoryManager` deallocation (`00401030`, cdecl, the block).
+const DEALLOCATE: u32 = 0x0040_1030;
+
+// Translated from 006b83f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NavMeshInfoSearch` scalar deleting destructor (engine map, from the
+/// vtable; `RET 4`): the destructor body `006b8420`, then `00401030(this)`
+/// when bit 0 of `flags` is set. Returns `this`.
+pub fn nav_mesh_info_search_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006b8420(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006b9150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `AStarSearch<const NavMeshInfo *, TESObjectREFR *>` scalar deleting
+/// destructor (engine map, from the vtable; `RET 4`): the destructor body
+/// `006b8e40`, then `00401030(this)` when bit 0 of `flags` is set. Returns
+/// `this`.
+pub fn a_star_search_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006b8e40(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006b9630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<AStarNode<const NavMeshInfo *, TESObjectREFR *> *,1024>`
+/// scalar deleting destructor (engine map, from the vtable; `RET 4`): the
+/// destructor body `006b9610`, then `00401030(this)` when bit 0 of `flags`
+/// is set. Returns `this`.
+pub fn bs_simple_array_a_star_node_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006b9610(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 006b9730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<AStarNode<const NavMeshInfo *, TESObjectREFR *> *,1024>`
+/// scalar deleting destructor (engine map, from the vtable; `RET 4`): the
+/// destructor body `006b9660`, then `00401030(this)` when bit 0 of `flags`
+/// is set. Returns `this`.
+pub fn bs_scrap_array_a_star_node_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006b9660(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x006b_83f0, nav_mesh_info_search_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x006b_9150, a_star_search_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x006b_9630, bs_simple_array_a_star_node_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x006b_9730, bs_scrap_array_a_star_node_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x006b_9610, fn_006b9610(Ptr)),
         entry!(0x006b_9130, fn_006b9130(Ptr) -> f64),
         entry!(0x006b_9710, fn_006b9710(Ptr) -> f64),
@@ -1463,5 +1533,59 @@ mod b025_tests {
         e.call(0x006b_8490, &args![s2, current, out]);
         let made = e.mem.u32(e.mem.u32(out + 4) + 8);
         assert_eq!(e.mem.f32(made), 409910.0);
+    }
+}
+
+#[cfg(test)]
+mod deleting_destructor_tests {
+    use super::*;
+
+    /// Runs a scalar deleting destructor with `flags` over an object big
+    /// enough for `NavMeshInfoSearch`, with every outside callee of the
+    /// destructor bodies doubled: checks the result, the vtable the body
+    /// leaves and whether `00401030` frees the object.
+    fn check(address: u32, vtable: u32) {
+        for (flags, frees) in [(0u32, false), (1, true), (2, false), (3, true)] {
+            let mut e = Engine::new();
+            for callee in [
+                ARRAY_RELEASE_008454F0,
+                DOOR_LOCK_DESTRUCT,
+                NODE_MAP_DESTRUCT,
+                NODE_HEAP_DESTRUCT,
+                DEALLOCATE,
+            ] {
+                e.register(callee, |_, _| Ret::default());
+            }
+            let this = e.mem.alloc(0x2100);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![this, flags]).u32(), this);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(e.mem.u32(this), vtable);
+            let freed: Vec<_> = log.iter().filter(|c| c.0 == DEALLOCATE).collect();
+            assert_eq!(freed.len(), usize::from(frees));
+            if frees {
+                assert_eq!(freed[0].1, vec![this]);
+            }
+        }
+    }
+
+    #[test]
+    fn at_006b83f0_runs_the_search_destructor_then_frees_on_bit_zero() {
+        check(0x006b_83f0, A_STAR_SEARCH_VTABLE);
+    }
+
+    #[test]
+    fn at_006b9150_runs_the_a_star_destructor_then_frees_on_bit_zero() {
+        check(0x006b_9150, A_STAR_SEARCH_VTABLE);
+    }
+
+    #[test]
+    fn at_006b9630_runs_the_array_destructor_then_frees_on_bit_zero() {
+        check(0x006b_9630, ARRAY_VTABLE_0106C264);
+    }
+
+    #[test]
+    fn at_006b9730_runs_the_scrap_array_destructor_then_frees_on_bit_zero() {
+        check(0x006b_9730, ARRAY_VTABLE_0106C264);
     }
 }

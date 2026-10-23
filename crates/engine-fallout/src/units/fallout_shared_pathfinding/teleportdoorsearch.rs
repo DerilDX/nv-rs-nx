@@ -845,6 +845,72 @@ pub fn teleport_door_search_get_node_connections(
     true
 }
 
+/// `00401030` (cdecl: block): frees a block.
+const FREE_BLOCK: u32 = 0x0040_1030;
+
+// Translated from 006f3430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TeleportDoorSearch::scalar deleting destructor` (engine map;
+/// `thiscall`; flags; `RET 4`): [`teleport_door_search_destructor`], then
+/// the block is freed (`00401030`) when bit 0 of `flags` is set. Returns
+/// `this`.
+pub fn teleport_door_search_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    teleport_door_search_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_BLOCK, &args![this]);
+    }
+    this
+}
+
+// Translated from 006f3f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `AStarSearch<ParentSpaceNode,TeleportLink>::scalar deleting destructor`
+/// (engine map; `thiscall`; flags; `RET 4`): [`fn_006f3c80`], then the
+/// block is freed when bit 0 of `flags` is set. Returns `this`.
+pub fn a_star_search_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006f3c80(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_BLOCK, &args![this]);
+    }
+    this
+}
+
+// Translated from 006f4660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<AStarNode<ParentSpaceNode,TeleportLink>*,1024>::scalar
+/// deleting destructor` (engine map; `thiscall`; flags; `RET 4`):
+/// [`fn_006f4640`], then the block is freed when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn bs_simple_array_node_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006f4640(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_BLOCK, &args![this]);
+    }
+    this
+}
+
+// Translated from 006f4850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<AStarNode<ParentSpaceNode,TeleportLink>*,1024>::scalar
+/// deleting destructor` (engine map; `thiscall`; flags; `RET 4`):
+/// [`fn_006f4690`], then the block is freed when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn bs_scrap_array_node_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_006f4690(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_BLOCK, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -872,6 +938,22 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006f_3fb0, fn_006f3fb0(Ptr) -> u32),
         entry!(0x006f_34e0, teleport_door_search_build_node_path(Ptr, Ptr, Ptr, Ptr, u32, f32, u32, u32) -> bool),
         entry!(0x006f_36d0, teleport_door_search_get_node_connections(Ptr, u32, Ptr) -> bool),
+        entry!(
+            0x006f_3430,
+            teleport_door_search_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x006f_3f80,
+            a_star_search_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x006f_4660,
+            bs_simple_array_node_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x006f_4850,
+            bs_scrap_array_node_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -1497,5 +1579,39 @@ mod tests {
         e.call(0x006f_36d0, &args![search, node, 0x8000u32]);
         assert!(tds_calls(&e, 0x007c_b2e0).is_empty());
         assert_eq!(tds_calls(&e, DOOR_LOCK_DESTRUCTOR).len(), 1);
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_destroy_then_free_on_bit_0() {
+        // (destructor, the call its body makes first)
+        for (addr, first) in [
+            (0x006f_3430u32, 0x005e_04f0u32),
+            (0x006f_3f80, 0x0048_3710),
+            (0x006f_4660, ARRAY_RELEASE_008454F0),
+            (0x006f_4850, ARRAY_RELEASE_008454F0),
+        ] {
+            for flags in [0u32, 1, 2, 3] {
+                let mut e = tds_engine(&[
+                    0x005e_04f0,
+                    0x004f_f7e0,
+                    0x0048_3710,
+                    0x0098_2610,
+                    ARRAY_RELEASE_008454F0,
+                    FREE_BLOCK,
+                ]);
+                let this = e.mem.alloc(0x20c0);
+                assert_eq!(e.call(addr, &args![this, flags]).u32(), this);
+                let log = e.call_log.take().unwrap();
+                assert_eq!(log[1].0, first);
+                let freed: Vec<_> = log.iter().filter(|c| c.0 == FREE_BLOCK).collect();
+                if flags & 1 != 0 {
+                    assert_eq!(freed.len(), 1);
+                    assert_eq!(freed[0].1, vec![this]);
+                    assert_eq!(log.last().unwrap().0, FREE_BLOCK);
+                } else {
+                    assert!(freed.is_empty());
+                }
+            }
+        }
     }
 }

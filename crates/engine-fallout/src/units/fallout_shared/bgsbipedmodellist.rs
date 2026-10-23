@@ -176,6 +176,80 @@ pub fn bgs_biped_model_list_get_form_as_biped_model_list(e: &mut Engine, form: P
     Ptr::new(result)
 }
 
+/// `00485910` (`cdecl`: chunk signature, word): saves a chunk holding one word.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// The chunk signature `BIPL` (`0x4c504942`).
+const CHUNK_BIPL: u32 = 0x4c50_4942;
+/// The `BaseFormComponent` and `BGSBipedModelList` type descriptors (`01183040`,
+/// `011868b0`).
+const TYPE_BASE_FORM_COMPONENT: u32 = 0x0118_3040;
+const TYPE_BGS_BIPED_MODEL_LIST: u32 = 0x0118_68b0;
+/// `006ecd40` (`ECX` = object, `RET 4`): stores its argument at +4 (the engine map names it
+/// `CombatProcedureAttackMelee::Initialize`, a folded body).
+const SET_WORD_4: u32 = 0x006e_cd40;
+
+/// `__RTDynamicCast` of `other` from `BaseFormComponent` to `BGSBipedModelList`.
+fn cast_to_biped_model_list(e: &mut Engine, other: Ptr) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![
+            other,
+            0u32,
+            TYPE_BASE_FORM_COMPONENT,
+            TYPE_BGS_BIPED_MODEL_LIST,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+// Translated from 00474d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSBipedModelList::Save` (Xbox PDB; `thiscall`, no stack word): when a list is set,
+/// saves its form id (`0084e3a0`) in a `BIPL` chunk (`00485910`).
+pub fn bgs_biped_model_list_save(e: &mut Engine, this: Ptr<BGSBipedModelList>) {
+    let list = e.get(this, BGSBipedModelList::pListForm);
+    if list == 0 {
+        return;
+    }
+    let id = e.call(FORM_ID, &args![list]).u32();
+    e.call(ADD_CHUNK_WORD, &args![CHUNK_BIPL, id]);
+}
+
+// Translated from 00474f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSBipedModelList::CopyComponent` (Xbox PDB; `RET 4`): casts `other` to a
+/// `BGSBipedModelList` and, when it is one, copies its list: the word at +4 read through
+/// `00726070` and stored through `006ecd40`.
+pub fn bgs_biped_model_list_copy_component(
+    e: &mut Engine,
+    this: Ptr<BGSBipedModelList>,
+    other: Ptr,
+) {
+    let cast = cast_to_biped_model_list(e, other);
+    if cast == 0 {
+        return;
+    }
+    let list = e.call(NODE_NEXT, &args![cast]).u32();
+    e.call(SET_WORD_4, &args![this, list]);
+}
+
+// Translated from 00474fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSBipedModelList::CompareComponent` (Xbox PDB; `RET 4`, result in `AL`): true
+/// ("differs") when `other` is not a `BGSBipedModelList` or its list (the word at +4,
+/// through `00726070`) is another than this one's.
+pub fn bgs_biped_model_list_compare_component(
+    e: &mut Engine,
+    this: Ptr<BGSBipedModelList>,
+    other: Ptr,
+) -> bool {
+    let cast = cast_to_biped_model_list(e, other);
+    if cast == 0 {
+        return true;
+    }
+    let theirs = e.call(NODE_NEXT, &args![cast]).u32();
+    let ours = e.call(NODE_NEXT, &args![this]).u32();
+    theirs != ours
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -183,6 +257,18 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00474da0,
             bgs_biped_model_list_init_item(Ptr<BGSBipedModelList>, Ptr)
+        ),
+        entry!(
+            0x0047_4d60,
+            bgs_biped_model_list_save(Ptr<BGSBipedModelList>)
+        ),
+        entry!(
+            0x0047_4f70,
+            bgs_biped_model_list_copy_component(Ptr<BGSBipedModelList>, Ptr)
+        ),
+        entry!(
+            0x0047_4fc0,
+            bgs_biped_model_list_compare_component(Ptr<BGSBipedModelList>, Ptr) -> bool
         ),
     ]
 }
@@ -425,5 +511,89 @@ mod physics_work_ahead_tests {
             assert_eq!(e.call(0x0047_5020, &args![form]).u32(), 0, "{kind:#x}");
         }
         assert_eq!(e.call(0x0047_5020, &args![0u32]).u32(), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_n036 {
+    use super::*;
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1.clone())
+            .collect()
+    }
+
+    #[test]
+    fn save_writes_the_list_form_id_only_when_set() {
+        let mut e = Engine::new();
+        e.register(FORM_ID, |_, a| (a[0] + 1).into_ret());
+        e.register(ADD_CHUNK_WORD, |_, _| Ret::default());
+        let this = e.mem.alloc(8);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_4d60, &args![this]);
+        assert!(calls(&e, ADD_CHUNK_WORD).is_empty());
+        e.mem.set_u32(this + 4, 0x5000);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_4d60, &args![this]);
+        assert_eq!(calls(&e, FORM_ID), vec![vec![0x5000]]);
+        assert_eq!(calls(&e, ADD_CHUNK_WORD), vec![vec![CHUNK_BIPL, 0x5001]]);
+    }
+
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(SET_WORD_4, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e
+    }
+
+    #[test]
+    fn copy_component_copies_the_list_of_a_biped_model_list() {
+        let mut e = engine();
+        let this = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(other + 4, 0x6000);
+        e.register(RT_DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_4f70, &args![this, other]);
+        assert_eq!(e.mem.u32(this + 4), 0);
+        assert_eq!(
+            calls(&e, RT_DYNAMIC_CAST),
+            vec![vec![
+                other,
+                0,
+                TYPE_BASE_FORM_COMPONENT,
+                TYPE_BGS_BIPED_MODEL_LIST,
+                0
+            ]]
+        );
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_4f70, &args![this, other]);
+        assert_eq!(calls(&e, SET_WORD_4), vec![vec![this, 0x6000]]);
+        assert_eq!(e.mem.u32(this + 4), 0x6000);
+    }
+
+    #[test]
+    fn compare_component_differs_unless_the_same_list() {
+        let mut e = engine();
+        let this = e.mem.alloc(8);
+        let other = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0x6000);
+        e.mem.set_u32(other + 4, 0x6000);
+        e.register(RT_DYNAMIC_CAST, |_, a| a[0].into_ret());
+        assert!(!e.call(0x0047_4fc0, &args![this, other]).bool());
+        e.mem.set_u32(other + 4, 0x6100);
+        assert!(e.call(0x0047_4fc0, &args![this, other]).bool());
+        e.mem.set_u32(other + 4, 0x6000);
+        e.register(RT_DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        assert!(e.call(0x0047_4fc0, &args![this, other]).bool());
     }
 }

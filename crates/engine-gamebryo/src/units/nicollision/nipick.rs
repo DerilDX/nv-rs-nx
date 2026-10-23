@@ -256,9 +256,90 @@ pub fn ni_pick_destructor(e: &mut Engine, this: Ptr) {
     }
 }
 
+// Translated from 00e98be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Keeps only the nearest pick result (`this` is the `NiPick::Results` array; the other
+/// "sort" `NiPick::PickObjects` uses when the pick type is not 0). With no valid results
+/// (`m_uiValidResults`, +0x10) nothing happens. Otherwise it finds the record with the
+/// smallest `m_fDistance` (+0x14): a later record replaces the best one only when the best
+/// one's distance is greater (`FCOMPP` with C0/C3 tested: equal or unordered keeps it). The
+/// first record goes to the best one's slot through `SetAt` (`00ba3aa0`, thiscall: index,
+/// address of the pointer), and the best record is stored in slot 0 by the inlined `SetAt`:
+/// with `m_usSize` (+0xa) 0 the size becomes 1 and a non-null record counts one more element
+/// in `m_usESize` (+0xc); otherwise a non-null record over a null slot counts one more, a
+/// null record over a non-null slot one less. The valid count becomes 1.
+pub fn fn_00e98be0(e: &mut Engine, this: Ptr) {
+    const SET_AT: u32 = 0x00ba_3aa0;
+    let base = this.addr();
+    let valid = e.mem.u32(base + 0x10);
+    if valid == 0 {
+        return;
+    }
+    let data = e.mem.u32(base + 4);
+    let first = e.mem.u32(data);
+    let mut best = first;
+    let mut best_index = 0u32;
+    let mut index = 1u32;
+    if valid > index {
+        loop {
+            let candidate = e.mem.u32(data.wrapping_add(index * 4));
+            let candidate_distance = f32::from_bits(e.mem.u32(candidate.wrapping_add(0x14)));
+            let best_distance = f32::from_bits(e.mem.u32(best.wrapping_add(0x14)));
+            if best_distance > candidate_distance {
+                best = candidate;
+                best_index = index;
+            }
+            index += 1;
+            if index >= e.mem.u32(base + 0x10) {
+                break;
+            }
+        }
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), first);
+        e.call(SET_AT, &args![base, best_index, slot]);
+    });
+    if e.mem.u16(base + 0xa) == 0 {
+        e.mem.set_u16(base + 0xa, 1);
+        if best != 0 {
+            count_element(e, base);
+        }
+    } else if best != 0 {
+        let data = e.mem.u32(base + 4);
+        if e.mem.u32(data) == 0 {
+            count_element(e, base);
+        }
+    } else {
+        let data = e.mem.u32(base + 4);
+        if e.mem.u32(data) != 0 {
+            let count = e.mem.u16(base + 0xc);
+            e.mem.set_u16(base + 0xc, count.wrapping_add(0xffff));
+        }
+    }
+    let data = e.mem.u32(base + 4);
+    e.mem.set_u32(data, best);
+    e.mem.set_u32(base + 0x10, 1);
+}
+
+// Translated from 00e98fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPick::Results::_scalar_deleting_destructor_` (Xbox PDB): runs the destructor
+/// (`00e98e90`) and, when bit 0 of `flags` is set, frees `this` through the memory manager
+/// (`00aa4060`). Answers `this`.
+pub fn ni_pick_results_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    ni_pick_results_destructor(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_MANAGER_DEALLOCATE, &args![MEMORY_MANAGER, this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
+        entry!(0x00e9_8be0, fn_00e98be0(Ptr)),
+        entry!(
+            0x00e9_8fd0,
+            ni_pick_results_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
         entry!(0x00e9_8f20, ni_pick_ni_pick(Ptr, u32, u32) -> Ptr),
         entry!(0x00e9_8b40, fn_00e98b40(Ptr)),
         entry!(
@@ -622,6 +703,115 @@ mod b004_tests {
             assert_eq!(
                 calls_to(&e, 0x00aa_0003),
                 if destroyed { vec![vec![root]] } else { vec![] }
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod n034_tests {
+    use super::*;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, words)| words)
+            .collect()
+    }
+
+    /// A results array with records of those distances (`m_usSize`, `m_usESize` given).
+    fn results(e: &mut Engine, distances: &[f32], size: u16, esize: u16) -> (u32, Vec<u32>) {
+        let base = e.mem.alloc(0x14);
+        let data = e.mem.alloc(0x20);
+        e.mem.set_u32(base + 4, data);
+        e.mem.set_u16(base + 0xa, size);
+        e.mem.set_u16(base + 0xc, esize);
+        e.mem.set_u32(base + 0x10, distances.len() as u32);
+        let mut records = vec![];
+        for (i, d) in distances.iter().enumerate() {
+            let record = e.mem.alloc(0x44);
+            e.mem.set_u32(record + 0x14, d.to_bits());
+            e.mem.set_u32(data + i as u32 * 4, record);
+            records.push(record);
+        }
+        (base, records)
+    }
+
+    #[test]
+    fn keeps_the_nearest_result_in_slot_zero() {
+        let mut e = Engine::new();
+        e.register(0x00ba_3aa0, |e, a| {
+            let data = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(data + a[1] * 4, value);
+            Ret::default()
+        });
+        let (base, r) = results(&mut e, &[3.0, 1.0, 1.0, f32::NAN, 2.0], 5, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_8be0, &args![base]);
+        // The first of the equal nearest records wins; the first record goes to its slot.
+        let set_at = calls_to(&e, 0x00ba_3aa0);
+        assert_eq!(set_at.len(), 1);
+        assert_eq!(&set_at[0][..2], &[base, 1]);
+        let data = e.mem.u32(base + 4);
+        assert_eq!(e.mem.u32(data), r[1]);
+        assert_eq!(e.mem.u32(data + 4), r[0]);
+        assert_eq!(e.mem.u32(base + 0x10), 1);
+        // Slot 0 held a record: the element count stays.
+        assert_eq!(e.mem.u16(base + 0xc), 5);
+    }
+
+    #[test]
+    fn counts_elements_like_set_at() {
+        let mut e = Engine::new();
+        e.register(0x00ba_3aa0, |_, _| Ret::default());
+        // Size 0: becomes 1, a non-null record counts one more.
+        let (base, r) = results(&mut e, &[2.0], 0, 4);
+        e.call(0x00e9_8be0, &args![base]);
+        assert_eq!(e.mem.u16(base + 0xa), 1);
+        assert_eq!(e.mem.u16(base + 0xc), 5);
+        assert_eq!(e.mem.u32(e.mem.u32(base + 4)), r[0]);
+        // A null best record over a non-null slot counts one less.
+        let (base, _) = results(&mut e, &[2.0], 1, 4);
+        let data = e.mem.u32(base + 4);
+        e.mem.set_u32(data, 0);
+        e.register(0x00ba_3aa0, |e, a| {
+            let data = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(data, 0x7777);
+            Ret::default()
+        });
+        e.call(0x00e9_8be0, &args![base]);
+        assert_eq!(e.mem.u16(base + 0xc), 3);
+        assert_eq!(e.mem.u32(data), 0);
+        // No valid results: nothing is touched.
+        let (base, _) = results(&mut e, &[], 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00e9_8be0, &args![base]);
+        assert_eq!(e.call_log.as_ref().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn deleting_destructor_frees_only_with_bit_zero() {
+        for flags in [0u32, 1] {
+            let mut e = Engine::new();
+            e.register(FREE, |_, _| Ret::default());
+            e.register(MEMORY_MANAGER_DEALLOCATE, |_, _| Ret::default());
+            let this = e.mem.alloc(0x14);
+            e.mem.set_u32(this + 4, 0x4444);
+            e.call_log = Some(vec![]);
+            let r = e.call(0x00e9_8fd0, &args![this, flags]).u32();
+            assert_eq!(r, this);
+            assert_eq!(calls_to(&e, FREE), vec![vec![0x4444]]);
+            assert_eq!(
+                calls_to(&e, MEMORY_MANAGER_DEALLOCATE),
+                if flags == 1 {
+                    vec![vec![MEMORY_MANAGER, this]]
+                } else {
+                    vec![]
+                }
             );
         }
     }

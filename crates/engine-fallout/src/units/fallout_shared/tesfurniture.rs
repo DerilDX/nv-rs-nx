@@ -402,9 +402,11 @@ pub fn tes_furniture_get_marker_enabled(
 // Translated from 00509490 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Forwards to `009938b0` on the member at `this + 0xc`. The exe names no
 /// class for this body; the callers are the furniture-marker code
-/// (`GetClosestFreeMarker`, `GetMarkerAtIndex`, `FinishInitLoadGame`).
-pub fn fn_00509490(e: &mut Engine, this: Ptr) {
-    e.call(FORWARD_009938B0, &args![this.addr() + 0xc]);
+/// (`GetClosestFreeMarker`, `GetMarkerAtIndex`, `FinishInitLoadGame`). Answers
+/// `009938b0`'s value: the exe ends on that call and leaves its `EAX`, which
+/// those callers read.
+pub fn fn_00509490(e: &mut Engine, this: Ptr) -> u16 {
+    e.call(FORWARD_009938B0, &args![this.addr() + 0xc]).u16()
 }
 
 // Translated from 005094b0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -415,9 +417,12 @@ pub fn fn_005094b0(e: &mut Engine, this: Ptr) -> u8 {
 }
 
 // Translated from 005094d0 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Forwards its stack word to `00558dd0` on the member at `this + 0xc`.
-pub fn fn_005094d0(e: &mut Engine, this: Ptr, argument: u32) {
-    e.call(FORWARD_00558DD0, &args![this.addr() + 0xc, argument]);
+/// Forwards its stack word to `00558dd0` on the member at `this + 0xc` and
+/// answers its value (the exe ends on that call and leaves its `EAX`, which
+/// the callers use as the marker).
+pub fn fn_005094d0(e: &mut Engine, this: Ptr, argument: u32) -> Ptr {
+    e.call(FORWARD_00558DD0, &args![this.addr() + 0xc, argument])
+        .ptr()
 }
 
 // Translated from 005094f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -671,9 +676,9 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00509450,
             tes_furniture_get_marker_enabled(Ptr<TESFurniture>, u32) -> bool
         ),
-        entry!(0x00509490, fn_00509490(Ptr)),
+        entry!(0x00509490, fn_00509490(Ptr) -> u16),
         entry!(0x005094b0, fn_005094b0(Ptr) -> u8),
-        entry!(0x005094d0, fn_005094d0(Ptr, u32)),
+        entry!(0x005094d0, fn_005094d0(Ptr, u32) -> Ptr),
         entry!(0x005094f0, tes_furniture_is_sleep_marker(u32) -> bool),
         entry!(0x00509510, tes_furniture_is_sit_marker(u32) -> bool),
         entry!(0x00509540, fn_00509540(Ptr<TESFurniture>, Ptr) -> bool),
@@ -1511,5 +1516,15 @@ mod tests {
                 assert_eq!(calls_to(&e, PLAYER_STATE_TEST), [[player.addr() + 0x94]]);
             }
         }
+    }
+
+    #[test]
+    fn small_forwarders_answer_their_callees_values() {
+        let mut e = Engine::new();
+        let object = Ptr::<()>::new(e.mem.alloc(0x700));
+        stub(&mut e, FORWARD_009938B0, 3);
+        stub(&mut e, FORWARD_00558DD0, 0x7000);
+        assert_eq!(e.call(0x0050_9490, &args![object]).u16(), 3);
+        assert_eq!(e.call(0x0050_94d0, &args![object, 77u32]).u32(), 0x7000);
     }
 }
