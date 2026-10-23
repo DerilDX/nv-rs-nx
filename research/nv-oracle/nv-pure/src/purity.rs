@@ -29,6 +29,9 @@ pub struct Facts {
     /// LOADs / STOREs whose address no input explains; -1 unknown.
     pub untracked_loads: i64,
     pub untracked_stores: i64,
+    /// Instructions whose result no input determines (RDTSC, CPUID, ...);
+    /// 0 when the table has no such column.
+    pub hidden_in: u32,
 }
 
 /// The accesses through one pointer input (NvPurity `arg_access`).
@@ -149,6 +152,7 @@ pub fn parse(text: &str) -> Result<BTreeMap<u32, Facts>, String> {
     let c_aa = header.iter().position(|h| *h == "arg_access");
     let c_ul = header.iter().position(|h| *h == "untracked_loads");
     let c_us = header.iter().position(|h| *h == "untracked_stores");
+    let c_hi = header.iter().position(|h| *h == "hidden_in");
     let mut out = BTreeMap::new();
     for (n, l) in lines.enumerate() {
         let c: Vec<&str> = l.split('\t').collect();
@@ -209,6 +213,7 @@ pub fn parse(text: &str) -> Result<BTreeMap<u32, Facts>, String> {
                 },
                 untracked_loads: c_ul.map(num).transpose()?.unwrap_or(-1),
                 untracked_stores: c_us.map(num).transpose()?.unwrap_or(-1),
+                hidden_in: c_hi.map(num).transpose()?.unwrap_or(0) as u32,
             },
         );
     }
@@ -277,6 +282,21 @@ mod tests {
         assert!(r["eax"].used && !r["eax"].dereferenced() && !r["ecx"].used);
         assert!(parse_access("-").is_none());
         assert_eq!(parse_access("").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn hidden_inputs() {
+        assert_eq!(parse(T).unwrap()[&0x0040_1000].hidden_in, 0, "no column: 0");
+        let t: String = T
+            .lines()
+            .enumerate()
+            .map(|(i, l)| match i {
+                0 => format!("{l}\thidden_in\n"),
+                1 => format!("{l}\t2\n"),
+                _ => format!("{l}\t0\n"),
+            })
+            .collect();
+        assert_eq!(parse(&t).unwrap()[&0x0040_1000].hidden_in, 2);
     }
 
     #[test]

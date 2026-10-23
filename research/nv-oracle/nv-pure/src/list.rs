@@ -114,6 +114,12 @@ pub enum Skip {
     /// An argument in a register other than ECX/EDX (EAX, EBX, ESI, EDI,
     /// EBP), which nv-call cannot pass.
     RegisterInput,
+    /// It or a callee executes an instruction whose result no input
+    /// determines (RDTSC, CPUID, ...): the exe and the engine can't agree.
+    HiddenInput,
+    /// It reaches itself and reads through a pointer: a recursive call may
+    /// dereference a pointer loaded from the buffers.
+    RecursivePointer,
     /// No RET in the body (a thunk that tail-jumps): the stack cleanup, and
     /// so the convention, can't be checked.
     NoRet,
@@ -230,6 +236,15 @@ pub fn build(src: &Source, facts: &BTreeMap<u32, Facts>) -> Listing {
             skip(Skip::Impure);
             continue;
         }
+        // The clock and the like (hkSystemClock 00dd8e00 reads RDTSC): the two
+        // sides can never agree.
+        if std::iter::once(&addr)
+            .chain(purity::callees(facts, addr).iter())
+            .any(|c| facts.get(c).is_some_and(|g| g.hidden_in > 0))
+        {
+            skip(Skip::HiddenInput);
+            continue;
+        }
         if sig.ret == Ty::Void {
             skip(Skip::VoidResult);
             continue;
@@ -245,6 +260,16 @@ pub fn build(src: &Source, facts: &BTreeMap<u32, Facts>) -> Listing {
             .any(|c| facts.get(c).is_none_or(|g| g.r_pointer > 0));
         if callees_read_pointer || (!pointer_tier && f.r_pointer > 0) {
             skip(Skip::ReadsThroughPointer);
+            continue;
+        }
+        // A function that reaches itself is its own callee, which the callee
+        // check above leaves out: a recursive call may walk a pointer loaded from
+        // the buffers (00b15110 recurses on `m_pParent`, 00e3ec00 likewise).
+        let recursive = std::iter::once(&addr)
+            .chain(callees.iter())
+            .any(|c| facts.get(c).is_some_and(|g| g.calls.contains(&addr)));
+        if recursive && f.r_pointer > 0 {
+            skip(Skip::RecursivePointer);
             continue;
         }
         if sig.params.first() == Some(&Ty::F64)
@@ -516,6 +541,7 @@ mod tests {
             args: None,
             untracked_loads: 0,
             untracked_stores: 0,
+            hidden_in: 0,
         }
     }
 

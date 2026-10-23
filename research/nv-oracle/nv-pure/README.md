@@ -28,11 +28,16 @@ A translation is on the list when all of these hold:
   `entry!` registration whose types the check knows;
 - in the exe it is pure, transitively: it and everything it calls store only to
   their own stack frame, make no indirect or imported calls and don't touch FS
-  (TLS, SEH frames);
+  (TLS, SEH frames), and none executes an instruction whose result no input
+  determines (`RDTSC`, `RDTSCP`, `RDPMC`, `RDRAND`, `RDSEED`, `CPUID`: the clock
+  and the like, skipped as `HiddenInput`; hkSystemClock 00dd8e00);
 - its arguments and result are scalars (`u8`..`u64`, `bool`, `f32`, `f64`), and
   neither it nor its callees read through a pointer (so no object has to be built
   for it); **or** (pointer tier, phase 1 of #193) it takes pointer arguments that
-  are only read, at offsets the data flow pins down (see below);
+  are only read, at offsets the data flow pins down (see below). A pointer
+  function that reaches itself is skipped as `RecursivePointer`: the callee
+  check can't cover a function's own recursive call, which may walk a pointer
+  loaded from its buffers (00b15110 recurses on `m_pParent`);
 - the calling convention follows from the exe and agrees with the signature:
   ECX/EDX read on entry (thiscall, fastcall), the `RET n` size (stdcall/thiscall
   pop exactly the stack words the signature leaves), and the stack-argument bytes
@@ -41,7 +46,7 @@ A translation is on the list when all of these hold:
   since a missing or extra parameter in a translation shows up this way. A body
   with no `RET` (a thunk that tail-jumps) has no checkable convention and is
   skipped as `NoRet`, not listed as a mismatch; one that takes an argument in
-  EAX, EBX, ESI or EDI (read on entry before any write) is skipped as
+  EAX, EBX, ESI, EDI or EBP (from the decompiler's data flow) is skipped as
   `RegisterInput`, since nv-call passes only ECX and EDX;
 - it doesn't take a leading `f64` in x87 ST0 (`nv-call` can't preset ST0).
 

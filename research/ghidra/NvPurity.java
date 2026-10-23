@@ -45,6 +45,8 @@
 //               reads is not counted); -1 without an EBP frame.
 //   consts_int  immediate operands that are not addresses or stack
 //               adjustments (CMP EAX,0x14 -> 20), signed decimal, ','.
+//   hidden_in   instructions whose result no input determines (RDTSC, RDTSCP,
+//               RDPMC, RDRAND, RDSEED, CPUID): the clock and the like.
 //   consts_float the values x87/SSE instructions load from absolute
 //               addresses: f<8 hex> (dword) or d<16 hex> (qword), ','.
 //               Both are test inputs for the oracle check (boundaries).
@@ -135,7 +137,7 @@ public class NvPurity extends GhidraScript {
         List<String> lines = new ArrayList<>();
         lines.add("entry\tsize\tret_pop\tebp_frame\tcalls\ttail_calls\tindirect\timports\t"
             + "w_stack\tw_global\tw_pointer\tw_implicit\tr_pointer\tfs\treg_in\tstack_args\t"
-            + "consts_int\tconsts_float\targ_access\tuntracked_loads\tuntracked_stores");
+            + "consts_int\tconsts_float\thidden_in\targ_access\tuntracked_loads\tuntracked_stores");
         List<Function> order = new ArrayList<>();
         List<String> base = new ArrayList<>();
         for (Function f : fm.getFunctions(true)) {
@@ -186,7 +188,7 @@ public class NvPurity extends GhidraScript {
         List<String> calls = new ArrayList<>();
         List<String> tails = new ArrayList<>();
         int indirect = 0, imports = 0;
-        int wStack = 0, wGlobal = 0, wPointer = 0, wImplicit = 0, rPointer = 0, fs = 0;
+        int wStack = 0, wGlobal = 0, wPointer = 0, wImplicit = 0, rPointer = 0, fs = 0, hidden = 0;
         java.util.LinkedHashSet<Long> intConsts = new java.util.LinkedHashSet<>();
         java.util.LinkedHashSet<String> floatConsts = new java.util.LinkedHashSet<>();
 
@@ -194,6 +196,9 @@ public class NvPurity extends GhidraScript {
             String mnem = ins.getMnemonicString().toUpperCase();
             FlowType ft = ins.getFlowType();
             collectConstants(ins, mnem, intConsts, floatConsts);
+            if (HIDDEN_INPUTS.contains(mnem)) {
+                hidden++;
+            }
 
             if (mnem.startsWith("RET")) {
                 long pop = 0;
@@ -300,8 +305,12 @@ public class NvPurity extends GhidraScript {
             + indirect + "\t" + imports + "\t" + wStack + "\t" + wGlobal + "\t" + wPointer + "\t"
             + wImplicit + "\t" + rPointer + "\t" + fs + "\t" + registersIn(listing, f.getEntryPoint(), body)
             + "\t" + stackArgBytes(listing, body, ebpFrame)
-            + "\t" + joinLongs(intConsts) + "\t" + String.join(",", floatConsts);
+            + "\t" + joinLongs(intConsts) + "\t" + String.join(",", floatConsts) + "\t" + hidden;
     }
+
+    /** Instructions whose result no input determines: the clock, counters, random numbers, CPUID. */
+    private static final java.util.Set<String> HIDDEN_INPUTS =
+        java.util.Set.of("RDTSC", "RDTSCP", "RDPMC", "RDRAND", "RDSEED", "CPUID");
 
     // ---- per-argument accesses from the decompiler's data flow ----
 
